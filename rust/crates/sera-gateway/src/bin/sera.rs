@@ -44,6 +44,7 @@ use sera_db::sqlite::SqliteDb;
 use sera_db::pgvector_store::PgVectorStore;
 #[allow(unused_imports)]
 use sera_db::{SqliteMemoryStore, DEFAULT_SQLITE_VEC_DIMENSIONS};
+use sera_runtime::skill_dispatch::SkillDispatchEngine;
 use sera_types::SemanticMemoryStore;
 // sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +
 // SERA-issued nonce fallback). Wired into AppState + `/api/mail/inbound`.
@@ -437,6 +438,35 @@ struct TurnEvents {
     usage: UsageInfo,
 }
 
+// ── HITL flagged-operation pattern gate ─────────────────────────────────────
+//
+// FIXME: MVS HITL gate — pattern-match only. Full ApprovalRouter wiring
+// (sera-hitl crate) requires deeper audit of the approval-token round-trip
+// and DomainEvent surface; tracked as a follow-up in CHAT_HARNESS.md.
+//
+// These substrings are scanned case-insensitively against inbound chat
+// messages before dispatch. Hits short-circuit with 403
+// `hitl_approval_required`.
+const FLAGGED_OPERATIONS: &[&str] = &[
+    "rm -rf",
+    "sudo ",
+    "drop table",
+    "git push --force",
+    "docker system prune",
+];
+
+/// Scan `msg` for any flagged operation substring (case-insensitive) and
+/// return the matching pattern if found.
+fn detect_flagged_operation(msg: &str) -> Option<&'static str> {
+    let lower = msg.to_ascii_lowercase();
+    for pat in FLAGGED_OPERATIONS {
+        if lower.contains(pat) {
+            return Some(pat);
+        }
+    }
+    None
+}
+
 // ── Shared state ────────────────────────────────────────────────────────────
 
 struct AppState {
@@ -490,6 +520,15 @@ struct AppState {
     agui_hub: Arc<RwLock<AguiHub>>,
     /// Plugin registry — backing store for `/api/plugins` routes.
     plugin_registry: Arc<InMemoryPluginRegistry>,
+    /// Runtime-side skill dispatch engine. Loaded at boot from
+    /// `$SERA_SKILLS_DIR` (default `./skills`); consulted in `execute_turn`
+    /// to fire trigger-matched skills and inject their `context_injection`
+    /// into the outgoing system prompt.
+    skill_engine: Arc<SkillDispatchEngine>,
+    /// Tier-2 semantic memory store. Built at boot (SPEC-memory §13) and
+    /// threaded into `execute_turn` for best-effort memory recall. A failure
+    /// to recall must never fail the turn — we log and continue.
+    semantic_store: Arc<dyn SemanticMemoryStore>,
 }
 
 // ── Phase-3 trait impls ──────────────────────────────────────────────────────
@@ -837,6 +876,20 @@ async fn chat_handler(
         lq.complete_run(session_key);
     }
 
+    // ── HITL pattern gate ────────────────────────────────────────────────
+    // FIXME: MVS HITL gate — pattern-match only. Full ApprovalRouter
+    // wiring (sera-hitl crate) requires deeper audit; tracked as follow-up
+    // in CHAT_HARNESS.md.
+    if let Some(flag) = detect_flagged_operation(&req.message) {
+        release_lane(&state, &session_key).await;
+        let body = serde_json::json!({
+            "error": "hitl_approval_required",
+            "reason": format!("flagged operation detected: {flag}"),
+            "message": "This request touches a flagged operation and requires human approval. Re-submit with approval or a safer phrasing.",
+        });
+        return Ok((StatusCode::FORBIDDEN, Json(body)).into_response());
+    }
+
     let db = state.db.lock().await;
     // Save the user message to transcript.
     if let Err(e) = db.append_transcript(&session.id, "user", Some(&req.message), None, None) {
@@ -868,12 +921,23 @@ async fn chat_handler(
         let mid = format!("msg_{:08x}", rand::random::<u32>());
         let mid_clone = mid.clone();
 
+        let aname = agent_name.clone();
         let sse_stream = stream::unfold(
-            StreamState::Pending { agent_spec, transcript, message, state: state_clone, harness: harness_clone, session_id: sid, session_key: skey, message_id: mid_clone },
+            StreamState::Pending { agent_spec, transcript, message, state: state_clone, harness: harness_clone, session_id: sid, session_key: skey, message_id: mid_clone, agent_name: aname },
             |fold_state| async move {
                 match fold_state {
-                    StreamState::Pending { agent_spec, transcript, message, state, harness, session_id, session_key, message_id } => {
-                        let result = execute_turn(&agent_spec, &transcript, &message, &harness, &session_key).await;
+                    StreamState::Pending { agent_spec, transcript, message, state, harness, session_id, session_key, message_id, agent_name } => {
+                        let result = execute_turn(
+                            &agent_spec,
+                            &transcript,
+                            &message,
+                            &harness,
+                            &session_key,
+                            &state.skill_engine,
+                            &state.semantic_store,
+                            &agent_name,
+                        )
+                        .await;
 
                         // Release the lane slot — the turn is complete even
                         // though we still need to stream the reply back out.
@@ -942,8 +1006,17 @@ async fn chat_handler(
         Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response())
     } else {
         // Synchronous JSON mode (existing behavior).
-        let result =
-            execute_turn(&agent_spec, &transcript, &req.message, &harness, &session_key).await;
+        let result = execute_turn(
+            &agent_spec,
+            &transcript,
+            &req.message,
+            &harness,
+            &session_key,
+            &state.skill_engine,
+            &state.semantic_store,
+            &agent_name,
+        )
+        .await;
 
         // Release the lane slot now that the turn has completed. Mirrors the
         // `complete_run` call in the Discord message loop after `execute_turn`.
@@ -1129,6 +1202,7 @@ enum StreamState {
         session_id: String,
         session_key: String,
         message_id: String,
+        agent_name: String,
     },
     Streaming {
         chunks: Vec<String>,
@@ -1169,6 +1243,9 @@ async fn execute_turn(
     user_message: &str,
     harness: &StdioHarness,
     session_key: &str,
+    skill_engine: &SkillDispatchEngine,
+    semantic_store: &Arc<dyn SemanticMemoryStore>,
+    agent_name: &str,
 ) -> MvsTurnResult {
     let mut messages: Vec<serde_json::Value> = Vec::new();
 
@@ -1180,6 +1257,52 @@ async fn execute_turn(
             "role": "system",
             "content": anchor,
         }));
+    }
+
+    // ── Skill dispatch: fire trigger-matched skills for this turn and
+    // prepend their active `context_injection` strings as system messages.
+    // Injected BEFORE transcript replay so the skill guidance frames the
+    // history instead of being buried after it.
+    let _ = skill_engine.on_turn(user_message);
+    for injection in skill_engine.active_context_injections() {
+        if injection.trim().is_empty() {
+            continue;
+        }
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": injection,
+        }));
+    }
+
+    // ── Memory recall: text-only SemanticMemoryStore query. Best-effort —
+    // any backend error is logged and skipped; a failed recall must never
+    // fail the turn.
+    let recall_query = sera_types::semantic_memory::SemanticQuery {
+        agent_id: agent_name.to_string(),
+        scope: None,
+        tier_filter: None,
+        text: Some(user_message.to_string()),
+        query_embedding: None,
+        top_k: 3,
+        similarity_threshold: None,
+    };
+    match semantic_store.query(recall_query).await {
+        Ok(hits) if !hits.is_empty() => {
+            let recalled = hits
+                .iter()
+                .take(3)
+                .map(|h| format!("- {}", h.entry.content))
+                .collect::<Vec<_>>()
+                .join("\n");
+            messages.push(serde_json::json!({
+                "role": "system",
+                "content": format!("Relevant memories:\n{recalled}"),
+            }));
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!(error = %e, "semantic recall failed; continuing without memory");
+        }
     }
 
     // Add transcript history (including tool_calls and tool results).
@@ -1661,7 +1784,17 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
     }
 
     // Execute the agent turn via the pre-connected harness.
-    let result = execute_turn(&agent_spec, &transcript, &msg.content, &harness, &session_key).await;
+    let result = execute_turn(
+        &agent_spec,
+        &transcript,
+        &msg.content,
+        &harness,
+        &session_key,
+        &state.skill_engine,
+        &state.semantic_store,
+        &agent_name,
+    )
+    .await;
 
     // Persist tool call events to transcript before the final response.
     {
@@ -1789,7 +1922,17 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             db.get_transcript_recent(&session.id, 20).unwrap_or_default()
         };
 
-        let follow_up = execute_turn(&agent_spec, &transcript, &user_content, &harness, &session_key).await;
+        let follow_up = execute_turn(
+            &agent_spec,
+            &transcript,
+            &user_content,
+            &harness,
+            &session_key,
+            &state.skill_engine,
+            &state.semantic_store,
+            &agent_name,
+        )
+        .await;
 
         {
             let db = state.db.lock().await;
@@ -2213,7 +2356,28 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     let _transcript_indexer: Arc<dyn sera_session::TranscriptIndexer> = Arc::new(
         sera_session::SemanticTranscriptIndexer::new(semantic_store.clone()),
     );
-    let _semantic_store = semantic_store;
+
+    // Skill dispatch engine: load every `*.md` under $SERA_SKILLS_DIR
+    // (default `./skills`) at boot. Missing directory is tolerated — the
+    // engine just starts empty.
+    let skill_engine = Arc::new(SkillDispatchEngine::new());
+    {
+        let skills_dir = std::env::var("SERA_SKILLS_DIR")
+            .unwrap_or_else(|_| "skills".to_string());
+        let path = PathBuf::from(&skills_dir);
+        match skill_engine.load_dir(&path).await {
+            Ok(count) => tracing::info!(
+                path = %path.display(),
+                count,
+                "skill dispatch engine loaded"
+            ),
+            Err(e) => tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "skill dispatch engine load failed; continuing with empty registry"
+            ),
+        }
+    }
 
     // 3. Resolve Discord connector if configured.  We create a shared Arc so
     //    the gateway listener and the event-loop response sender use the same
@@ -2405,6 +2569,8 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         })),
         agui_hub: Arc::new(RwLock::new(AguiHub::new())),
         plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+        skill_engine,
+        semantic_store,
     });
 
     // 4. Start event processing loop.
@@ -2788,6 +2954,10 @@ mod tests {
             })),
             agui_hub: Arc::new(RwLock::new(AguiHub::new())),
             plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+            skill_engine: Arc::new(SkillDispatchEngine::new()),
+            semantic_store: Arc::new(
+                SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+            ),
         })
     }
 
@@ -2816,6 +2986,10 @@ mod tests {
             })),
             agui_hub: Arc::new(RwLock::new(AguiHub::new())),
             plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+            skill_engine: Arc::new(SkillDispatchEngine::new()),
+            semantic_store: Arc::new(
+                SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+            ),
         })
     }
 
@@ -2844,6 +3018,10 @@ mod tests {
             })),
             agui_hub: Arc::new(RwLock::new(AguiHub::new())),
             plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+            skill_engine: Arc::new(SkillDispatchEngine::new()),
+            semantic_store: Arc::new(
+                SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+            ),
         })
     }
 
@@ -2872,6 +3050,10 @@ mod tests {
             })),
             agui_hub: Arc::new(RwLock::new(AguiHub::new())),
             plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+            skill_engine: Arc::new(SkillDispatchEngine::new()),
+            semantic_store: Arc::new(
+                SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+            ),
         })
     }
 
@@ -3243,6 +3425,92 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
+    // -- HITL pattern gate --
+
+    #[test]
+    fn detect_flagged_operation_hits_rm_rf() {
+        assert_eq!(detect_flagged_operation("please rm -rf /"), Some("rm -rf"));
+    }
+
+    #[test]
+    fn detect_flagged_operation_is_case_insensitive() {
+        assert_eq!(
+            detect_flagged_operation("Please DROP TABLE users;"),
+            Some("drop table")
+        );
+    }
+
+    #[test]
+    fn detect_flagged_operation_misses_benign_text() {
+        assert!(detect_flagged_operation("remove this line").is_none());
+        assert!(detect_flagged_operation("hello world").is_none());
+    }
+
+    #[tokio::test]
+    async fn hitl_gate_blocks_rm_rf() {
+        let state = test_state_async().await;
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "please rm -rf /" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "hitl_approval_required");
+        assert!(
+            json["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("rm -rf"),
+            "reason should mention the matched pattern"
+        );
+    }
+
+    // -- Skill dispatch injection --
+
+    #[test]
+    fn skill_injection_adds_system_message() {
+        use sera_types::skill::{SkillConfig, SkillMode, SkillTrigger};
+
+        let engine = SkillDispatchEngine::new();
+        engine.register(
+            SkillConfig {
+                name: "reviewer".into(),
+                version: "1.0.0".into(),
+                description: "code reviewer".into(),
+                mode: SkillMode::OnDemand,
+                trigger: SkillTrigger::Event("review".into()),
+                tools: vec![],
+                context_injection: Some("You review code.".into()),
+                config: serde_json::json!({}),
+            },
+            None,
+        );
+
+        // Trigger the skill by firing its event keyword.
+        let fired = engine.on_turn("please review this diff");
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].name, "reviewer");
+
+        // The active context_injection must now be exposed.
+        let injections = engine.active_context_injections();
+        assert_eq!(injections, vec!["You review code.".to_string()]);
+    }
+
     // -- Chat endpoint --
 
     #[tokio::test]
@@ -3564,6 +3832,10 @@ mod tests {
             })),
             agui_hub: Arc::new(RwLock::new(AguiHub::new())),
             plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+            skill_engine: Arc::new(SkillDispatchEngine::new()),
+            semantic_store: Arc::new(
+                SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+            ),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -3595,6 +3867,10 @@ mod tests {
             })),
             agui_hub: Arc::new(RwLock::new(AguiHub::new())),
             plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+            skill_engine: Arc::new(SkillDispatchEngine::new()),
+            semantic_store: Arc::new(
+                SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+            ),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -3627,6 +3903,10 @@ mod tests {
             })),
             agui_hub: Arc::new(RwLock::new(AguiHub::new())),
             plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+            skill_engine: Arc::new(SkillDispatchEngine::new()),
+            semantic_store: Arc::new(
+                SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+            ),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -3659,6 +3939,10 @@ mod tests {
             })),
             agui_hub: Arc::new(RwLock::new(AguiHub::new())),
             plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+            skill_engine: Arc::new(SkillDispatchEngine::new()),
+            semantic_store: Arc::new(
+                SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+            ),
         };
         let headers = HeaderMap::new();
         assert_eq!(validate_api_key(&state, &headers), Err(StatusCode::UNAUTHORIZED));
@@ -4170,6 +4454,10 @@ mod tests {
             })),
             agui_hub: Arc::new(RwLock::new(AguiHub::new())),
             plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+            skill_engine: Arc::new(SkillDispatchEngine::new()),
+            semantic_store: Arc::new(
+                SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+            ),
         });
 
         let app = build_router(Arc::clone(&state));
@@ -4230,6 +4518,10 @@ mod tests {
                 })),
                 agui_hub: Arc::new(RwLock::new(AguiHub::new())),
                 plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+                skill_engine: Arc::new(SkillDispatchEngine::new()),
+                semantic_store: Arc::new(
+                    SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+                ),
             })
         };
         let app = build_router(state);

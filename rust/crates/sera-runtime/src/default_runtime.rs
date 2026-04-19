@@ -18,7 +18,9 @@ use sera_types::tool::AuthzProviderHandle;
 
 use crate::context_engine::ContextEnricher;
 use crate::memory_assembler::MemoryBlockAssembler;
+use crate::signal_emit::SignalEmitter;
 use crate::turn::{self, LlmProvider, ReactMode, ToolDispatcher};
+use sera_types::signal::Signal;
 
 // ── TurnTimer ────────────────────────────────────────────────────────────────
 
@@ -78,6 +80,13 @@ pub struct DefaultRuntime {
     /// from `sera-types`; replaced with a `RoleBasedAuthzProvider` wrapped in
     /// `AuthzProviderAdapter` when `tool_authz_enabled = true` in config.
     authz_provider: Arc<dyn AuthzProviderHandle>,
+    /// Optional lifecycle signal emitter. When set, `execute_turn` emits
+    /// [`Signal::Started`] at the top of the turn, [`Signal::Progress`] on
+    /// each tool-call iteration, and one of
+    /// [`Signal::Done`] / [`Signal::Failed`] / [`Signal::Blocked`] /
+    /// [`Signal::Review`] at the terminal outcome. See
+    /// `docs/signal-system-design.md`.
+    signal_emitter: Option<SignalEmitter>,
 }
 
 impl std::fmt::Debug for DefaultRuntime {
@@ -90,6 +99,7 @@ impl std::fmt::Debug for DefaultRuntime {
             .field("failure_threshold", &self.failure_threshold)
             .field("has_memory_assembler", &self.memory_assembler.is_some())
             .field("has_enricher", &self.enricher.is_some())
+            .field("has_signal_emitter", &self.signal_emitter.is_some())
             .finish()
     }
 }
@@ -108,7 +118,21 @@ impl DefaultRuntime {
             memory_assembler: None,
             enricher: None,
             authz_provider: Arc::new(sera_types::tool::DefaultAuthzProviderStub),
+            signal_emitter: None,
         }
+    }
+
+    /// Install a lifecycle [`SignalEmitter`].
+    ///
+    /// When set, `execute_turn` emits `Started` at the top of the turn,
+    /// `Progress` on each tool-call iteration, and a terminal signal
+    /// (`Done` / `Failed` / `Blocked` / `Review`) before returning. Routing
+    /// is driven by the emitter's [`sera_types::signal::SignalTarget`], with
+    /// the invariant that `Blocked` and `Review` always reach HITL regardless
+    /// of the target. See `docs/signal-system-design.md` and PR #947.
+    pub fn with_signal_emitter(mut self, emitter: SignalEmitter) -> Self {
+        self.signal_emitter = Some(emitter);
+        self
     }
 
     /// Install an authorization provider that will be threaded into every
@@ -202,6 +226,21 @@ impl AgentRuntime for DefaultRuntime {
 
         let original_message_count = ctx.messages.len();
 
+        // Snapshot for lifecycle signal emission. The `task_id` / `artifact_id`
+        // used by the signal system is the turn id — stable across the turn
+        // and easy to correlate with the runtime's own tracing spans.
+        let turn_id = uuid::Uuid::new_v4();
+        let turn_task_id = turn_id.to_string();
+        if let Some(emitter) = self.signal_emitter.as_ref() {
+            let description = extract_last_user_message(&ctx.messages);
+            emitter
+                .emit(&Signal::Started {
+                    task_id: turn_task_id.clone(),
+                    description,
+                })
+                .await;
+        }
+
         // Build a fresh ToolContext for this turn. Populated from session +
         // agent identity; no principal is available on `sera_types::TurnContext`
         // yet, so we fall back to a Default-sourced allow-all authz handle and
@@ -235,7 +274,7 @@ impl AgentRuntime for DefaultRuntime {
             .unwrap_or(ReactMode::Default);
 
         let mut turn_ctx = turn::TurnContext {
-            turn_id: uuid::Uuid::new_v4(),
+            turn_id,
             session_key: ctx.session_key,
             agent_id: ctx.agent_id,
             messages: ctx.messages,
@@ -261,7 +300,8 @@ impl AgentRuntime for DefaultRuntime {
         // execution separation as two distinct iterations sharing one turn.
         let mut pending_plan: Option<turn::Plan> = None;
 
-        for _iteration in 0..self.max_tool_iterations {
+        let max_iterations = self.max_tool_iterations;
+        for _iteration in 0..max_iterations {
             // 1. Observe — filter messages, run ConstitutionalGate hooks on input
             let observed = match turn::observe(&turn_ctx, None, &[]).await {
                 Ok(msgs) => msgs,
@@ -492,10 +532,34 @@ impl AgentRuntime for DefaultRuntime {
                         tokens = tokens_used.total_tokens,
                         "tool-call loop: re-entering think with tool results"
                     );
+
+                    if let Some(emitter) = self.signal_emitter.as_ref() {
+                        let pct = progress_pct(_iteration + 1, max_iterations);
+                        emitter
+                            .emit(&Signal::Progress {
+                                task_id: turn_task_id.clone(),
+                                pct,
+                                note: format!(
+                                    "tool iteration {}/{}",
+                                    _iteration + 1,
+                                    max_iterations
+                                ),
+                            })
+                            .await;
+                    }
                 }
                 // Inject accumulated transcript into FinalOutput before returning
                 TurnOutcome::FinalOutput { response, tool_calls, tokens_used, duration_ms, .. } => {
                     let transcript = turn_ctx.messages[original_message_count..].to_vec();
+                    if let Some(emitter) = self.signal_emitter.as_ref() {
+                        emitter
+                            .emit(&Signal::Done {
+                                artifact_id: turn_task_id.clone(),
+                                summary: summarize(&response),
+                                duration_ms,
+                            })
+                            .await;
+                    }
                     return Ok(TurnOutcome::FinalOutput {
                         response,
                         tool_calls,
@@ -544,20 +608,50 @@ impl AgentRuntime for DefaultRuntime {
                         });
                     pending_plan = Some(staged);
                     turn_ctx.doom_loop_count += 1;
+
+                    if let Some(emitter) = self.signal_emitter.as_ref() {
+                        let pct = progress_pct(_iteration + 1, max_iterations);
+                        emitter
+                            .emit(&Signal::Progress {
+                                task_id: turn_task_id.clone(),
+                                pct,
+                                note: "plan emitted".into(),
+                            })
+                            .await;
+                    }
                 }
-                // Any other outcome (Handoff, Interruption, etc.) — return immediately
-                other => return Ok(other),
+                // Any other outcome (Handoff, Interruption, WaitingForApproval, etc.)
+                // — emit the matching terminal signal and return.
+                other => {
+                    if let Some(emitter) = self.signal_emitter.as_ref()
+                        && let Some(sig) = terminal_signal_for(&other, &turn_task_id)
+                    {
+                        emitter.emit(&sig).await;
+                    }
+                    return Ok(other);
+                }
             }
         }
 
-        // Exhausted max_tool_iterations
+        // Exhausted max_tool_iterations — this is a Failed terminal state.
+        let duration_ms = timer.elapsed_ms();
+        let reason = format!(
+            "max tool iterations ({}) exceeded",
+            self.max_tool_iterations
+        );
+        if let Some(emitter) = self.signal_emitter.as_ref() {
+            emitter
+                .emit(&Signal::Failed {
+                    artifact_id: turn_task_id.clone(),
+                    error: reason.clone(),
+                    retries: 0,
+                })
+                .await;
+        }
         Ok(TurnOutcome::Interruption {
             hook_point: "tool_loop".to_string(),
-            reason: format!(
-                "max tool iterations ({}) exceeded",
-                self.max_tool_iterations
-            ),
-            duration_ms: timer.elapsed_ms(),
+            reason,
+            duration_ms,
         })
     }
 
@@ -591,6 +685,94 @@ fn extract_last_user_message(messages: &[serde_json::Value]) -> String {
         }
     }
     String::new()
+}
+
+/// Map a terminal [`TurnOutcome`] to the matching lifecycle [`Signal`].
+///
+/// * `FinalOutput` → emitted inline at the return site as `Signal::Done`; not
+///   produced here (returns `None`).
+/// * `Handoff` → `Signal::Handoff { from_agent, to_agent, artifact_id }`. The
+///   `from_agent` is left empty because [`TurnOutcome::Handoff`] only carries
+///   the target; callers who need the full pair can derive it from their
+///   session context.
+/// * `WaitingForApproval` → `Signal::Review` (attention-required, always HITL).
+/// * `Interruption` with `hook_point == "constitutional_gate"` or
+///   `hook_point == "permission"` → `Signal::Blocked` (attention-required).
+/// * Any other `Interruption`, `Stop`, or `Compact` → `Signal::Failed` /
+///   `Signal::Done` as appropriate.
+/// * `RunAgain` / `PlanEmitted` → no terminal signal (handled by the caller).
+fn terminal_signal_for(outcome: &TurnOutcome, artifact_id: &str) -> Option<Signal> {
+    match outcome {
+        TurnOutcome::FinalOutput { .. } | TurnOutcome::RunAgain { .. } | TurnOutcome::PlanEmitted { .. } => None,
+        TurnOutcome::Handoff { target_agent_id, .. } => Some(Signal::Handoff {
+            from_agent: String::new(),
+            to_agent: target_agent_id.clone(),
+            artifact_id: artifact_id.to_string(),
+        }),
+        TurnOutcome::WaitingForApproval { tool_call, ticket_id, .. } => {
+            let tool_name = tool_call
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("unknown");
+            Some(Signal::Review {
+                artifact_id: artifact_id.to_string(),
+                prompt: format!(
+                    "approval required for tool `{tool_name}` (ticket {ticket_id})"
+                ),
+            })
+        }
+        TurnOutcome::Interruption { hook_point, reason, .. } => {
+            // Constitutional gate / permission refusals are capability blocks —
+            // they require human attention per the design doc invariant.
+            if hook_point == "constitutional_gate" || hook_point == "permission" {
+                Some(Signal::Blocked {
+                    reason: reason.clone(),
+                    requires: Vec::new(),
+                })
+            } else {
+                Some(Signal::Failed {
+                    artifact_id: artifact_id.to_string(),
+                    error: reason.clone(),
+                    retries: 0,
+                })
+            }
+        }
+        TurnOutcome::Stop { summary, duration_ms, .. } => Some(Signal::Done {
+            artifact_id: artifact_id.to_string(),
+            summary: summary.clone(),
+            duration_ms: *duration_ms,
+        }),
+        TurnOutcome::Compact { duration_ms, .. } => Some(Signal::Done {
+            artifact_id: artifact_id.to_string(),
+            summary: "context compacted".into(),
+            duration_ms: *duration_ms,
+        }),
+    }
+}
+
+/// Clamp a fractional progress ratio into the `0..=100` range expected by
+/// [`Signal::Progress::pct`].
+fn progress_pct(done: u32, total: u32) -> u8 {
+    if total == 0 {
+        return 0;
+    }
+    let raw = (done.saturating_mul(100) / total).min(100);
+    raw as u8
+}
+
+/// Truncate a response string to a short summary suitable for
+/// [`Signal::Done::summary`]. Keeps the first 240 chars — enough for a
+/// human glance without bloating the inbox row.
+fn summarize(response: &str) -> String {
+    const MAX: usize = 240;
+    if response.chars().count() <= MAX {
+        response.to_string()
+    } else {
+        let mut s: String = response.chars().take(MAX).collect();
+        s.push('…');
+        s
+    }
 }
 
 /// Compute the character budget remaining in the Tier-1 `MemoryBlock` after

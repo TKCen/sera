@@ -47,6 +47,7 @@ pub mod permissions;
 pub mod sera_errors;
 pub mod semantic;
 pub mod shadow;
+pub mod signal_emit;
 pub mod skill_dispatch;
 pub mod tool_hooks;
 

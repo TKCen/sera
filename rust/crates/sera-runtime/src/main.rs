@@ -21,7 +21,7 @@ use sera_runtime::llm_client::LlmClient;
 use sera_runtime::tools::TraitToolRegistry;
 use sera_runtime::tools::dispatcher::RegistryDispatcher;
 use sera_types::principal::PrincipalId;
-use sera_types::runtime::{AgentRuntime, TurnContext, TurnOutcome};
+use sera_types::runtime::{AgentRuntime, TokenUsage, TurnContext, TurnOutcome};
 use sera_types::tool::AuthzProviderHandle;
 use serde::{Deserialize, Serialize};
 
@@ -158,7 +158,14 @@ enum EventMsg {
         agent_id: String,
     },
     TurnStarted { turn_id: uuid::Uuid },
-    TurnCompleted { turn_id: uuid::Uuid },
+    /// Terminal turn frame carrying the provider-reported token usage for this
+    /// turn. Consumers (e.g. the gateway) parse `tokens` to report usage back
+    /// through `/api/chat` responses.
+    TurnCompleted {
+        turn_id: uuid::Uuid,
+        #[serde(default)]
+        tokens: TokenUsage,
+    },
     StreamingDelta { delta: String },
     /// Tool call started — emitted for each tool invocation during the turn.
     ToolCallBegin {
@@ -541,6 +548,20 @@ async fn run_ndjson_loop(
         let turn_ctx = submission_to_turn_context(&submission, &config.agent_id, turn_id, tool_defs);
         let outcome = runtime.execute_turn(turn_ctx).await;
 
+        // Extract tokens_used for the terminal TurnCompleted frame. `Interruption`
+        // is the only outcome variant without a `tokens_used` field; errors and
+        // the `Err` arm report zeroed usage (the LLM call never completed).
+        let tokens_for_completion = match &outcome {
+            Ok(TurnOutcome::FinalOutput { tokens_used, .. })
+            | Ok(TurnOutcome::RunAgain { tokens_used, .. })
+            | Ok(TurnOutcome::Handoff { tokens_used, .. })
+            | Ok(TurnOutcome::Compact { tokens_used, .. })
+            | Ok(TurnOutcome::Stop { tokens_used, .. })
+            | Ok(TurnOutcome::WaitingForApproval { tokens_used, .. })
+            | Ok(TurnOutcome::PlanEmitted { tokens_used, .. }) => tokens_used.clone(),
+            Ok(TurnOutcome::Interruption { .. }) | Err(_) => TokenUsage::default(),
+        };
+
         // Convert TurnOutcome to Event messages
         match outcome {
             Ok(TurnOutcome::FinalOutput { response, transcript, .. }) => {
@@ -732,11 +753,14 @@ async fn run_ndjson_loop(
             }
         }
 
-        // Emit TurnCompleted
+        // Emit TurnCompleted with the usage the LLM reported for this turn.
         let completed = Event {
             id: uuid::Uuid::new_v4(),
             submission_id: submission.id,
-            msg: EventMsg::TurnCompleted { turn_id },
+            msg: EventMsg::TurnCompleted {
+                turn_id,
+                tokens: tokens_for_completion,
+            },
             timestamp: chrono::Utc::now(),
             parent_session_key: submission_parent_key,
         };

@@ -287,7 +287,28 @@ impl StdioHarness {
                         });
                     }
                 }
-                "turn_completed" => break,
+                "turn_completed" => {
+                    // The runtime emits the provider-reported usage on the
+                    // terminal TurnCompleted frame. Missing / malformed
+                    // `tokens` defaults to zero so older runtimes still parse.
+                    if let Some(tokens) = event.get("msg").and_then(|m| m.get("tokens")) {
+                        result.usage = UsageInfo {
+                            prompt_tokens: tokens
+                                .get("prompt_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0),
+                            completion_tokens: tokens
+                                .get("completion_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0),
+                            total_tokens: tokens
+                                .get("total_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0),
+                        };
+                    }
+                    break;
+                }
                 "error" => {
                     let code = event
                         .get("msg")
@@ -354,6 +375,30 @@ impl StdioHarness {
         Self::spawn_with_script("while IFS= read -r line; do :; done").await
     }
 
+    /// Spawn a mock runtime that replies with canned events whose
+    /// `turn_completed` frame carries the provider-reported token usage
+    /// (simulating an LM Studio response being parsed upstream in the runtime).
+    async fn spawn_mock_with_usage(
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        total_tokens: u64,
+    ) -> anyhow::Result<Self> {
+        let script = format!(
+            concat!(
+                r#"while IFS= read -r line; do "#,
+                r#"echo '{{"id":"00000000-0000-0000-0000-000000000001","submission_id":"00000000-0000-0000-0000-000000000000","msg":{{"type":"turn_started","turn_id":"00000000-0000-0000-0000-000000000002"}},"timestamp":"2024-01-01T00:00:00Z"}}'; "#,
+                r#"echo '{{"id":"00000000-0000-0000-0000-000000000003","submission_id":"00000000-0000-0000-0000-000000000000","msg":{{"type":"streaming_delta","delta":"mock response"}},"timestamp":"2024-01-01T00:00:00Z"}}'; "#,
+                r#"echo '{{"id":"00000000-0000-0000-0000-000000000004","submission_id":"00000000-0000-0000-0000-000000000000","msg":{{"type":"turn_completed","turn_id":"00000000-0000-0000-0000-000000000002","tokens":{{"prompt_tokens":{p},"completion_tokens":{c},"total_tokens":{t}}}}},"timestamp":"2024-01-01T00:00:00Z"}}'; "#,
+                r#"done"#,
+            ),
+            p = prompt_tokens,
+            c = completion_tokens,
+            t = total_tokens,
+        );
+
+        Self::spawn_with_script(&script).await
+    }
+
     async fn spawn_with_script(script: &str) -> anyhow::Result<Self> {
         let mut cmd = tokio::process::Command::new("bash");
         cmd.args(["-c", script])
@@ -382,11 +427,14 @@ enum ToolEvent {
     End { call_id: String, content: String },
 }
 
-/// Result from a harness turn — response text plus all tool call events.
+/// Result from a harness turn — response text, tool call events, and the
+/// provider-reported token usage extracted from the terminal `TurnCompleted`
+/// frame.
 #[derive(Debug, Default)]
 struct TurnEvents {
     response: String,
     tool_events: Vec<ToolEvent>,
+    usage: UsageInfo,
 }
 
 // ── Shared state ────────────────────────────────────────────────────────────
@@ -532,7 +580,7 @@ struct ChatRequest {
     stream: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone, Copy, Default)]
 struct UsageInfo {
     prompt_tokens: u64,
     completion_tokens: u64,
@@ -1178,11 +1226,7 @@ async fn execute_turn(
         Ok(Ok(events)) => MvsTurnResult {
             reply: events.response,
             tool_events: events.tool_events,
-            usage: UsageInfo {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                total_tokens: 0,
-            },
+            usage: events.usage,
         },
         Ok(Err(e)) => {
             tracing::error!(error = %e, "Runtime harness turn failed");
@@ -4009,6 +4053,40 @@ mod tests {
             start.elapsed() < std::time::Duration::from_secs(1),
             "timeout must fire near its bound, not after the test harness limit"
         );
+    }
+
+    /// The gateway must extract the provider-reported token usage from the
+    /// `turn_completed` NDJSON frame and surface it on `TurnEvents`, so the
+    /// downstream `/api/chat` response carries non-zero `usage` counts.
+    ///
+    /// This mock stands in for the real runtime, which extracts the same
+    /// `prompt_tokens` / `completion_tokens` / `total_tokens` fields from the
+    /// LM Studio `/v1/chat/completions` response body.
+    #[tokio::test]
+    async fn send_turn_parses_usage_from_turn_completed() {
+        let harness = StdioHarness::spawn_mock_with_usage(42, 17, 59).await.unwrap();
+        let events = harness
+            .send_turn(Vec::new(), "test-session")
+            .await
+            .unwrap();
+        assert_eq!(events.response, "mock response");
+        assert_eq!(events.usage.prompt_tokens, 42);
+        assert_eq!(events.usage.completion_tokens, 17);
+        assert_eq!(events.usage.total_tokens, 59);
+    }
+
+    /// Older runtimes that emit `turn_completed` without a `tokens` field must
+    /// still parse cleanly — the default is zero usage.
+    #[tokio::test]
+    async fn send_turn_defaults_usage_to_zero_when_tokens_missing() {
+        let harness = StdioHarness::spawn_mock().await.unwrap();
+        let events = harness
+            .send_turn(Vec::new(), "test-session")
+            .await
+            .unwrap();
+        assert_eq!(events.usage.prompt_tokens, 0);
+        assert_eq!(events.usage.completion_tokens, 0);
+        assert_eq!(events.usage.total_tokens, 0);
     }
 
     /// `turn_timeout` must fall back to [`DEFAULT_TURN_TIMEOUT`] when the

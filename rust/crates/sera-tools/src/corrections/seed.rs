@@ -119,6 +119,24 @@ pub fn bash_seed_rules() -> Vec<CorrectionRule> {
             hit_count: 0,
             last_hit: None,
         },
+        // Monitor anti-pattern: sleep N; followed by a file-read command (wc, tail, cat, head, ls).
+        // This is the Monitor's "wait for file" pattern — it burns cycles polling.
+        // Correct: use `until <check>; do sleep 2; done` or run_in_background with piped output.
+        CorrectionRule {
+            id: "monitor-sleep-file-poll".to_string(),
+            antipattern: "sleep N; <file-read command>".to_string(),
+            pattern: r"\bsleep\s+\d+\s*;\s*(?:wc|cat|head|tail|ls|stat|test)\s".to_string(),
+            matches: MatchKind::Regex,
+            severity: CorrectionSeverity::Block,
+            correction:
+                "Use Monitor with an until-loop (`until <condition>; do sleep 2; done`) for \
+                 file-existence polling. For watching background task output, use run_in_background: true \
+                 and pipe directly or read the output file when the task completes.".to_string(),
+            added_by: "seed".to_string(),
+            added_at: now,
+            hit_count: 0,
+            last_hit: None,
+        },
     ];
     // Stable ordering so reload is deterministic.
     rules.sort_by(|a, b| a.id.cmp(&b.id));
@@ -233,3 +251,4 @@ mod tests {
         assert!(!wrote_second, "seed must not clobber an existing catalog");
     }
 }
+

@@ -20,6 +20,18 @@ rusqlite = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+regex = { workspace = true }
+anyhow = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+# First-real-measurement binary — drives the existing sample task corpus
+# against LM Studio (raw) and the SERA `/api/chat` runtime (full) and writes
+# a markdown report to `docs/sera-eval-first-run.md`. See the companion doc
+# for results and limitations.
+[[bin]]
+name = "sera-eval-first-run"
+path = "src/bin/sera-eval-first-run.rs"

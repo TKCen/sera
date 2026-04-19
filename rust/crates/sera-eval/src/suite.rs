@@ -34,7 +34,12 @@ impl SuiteId {
         }
     }
 
-    pub fn from_str(value: &str) -> Self {
+    /// Parse a suite id string — infallible; unknown names fall through to
+    /// [`SuiteId::Custom`]. Named `parse` (not `from_str`) so clippy doesn't
+    /// flag a collision with [`std::str::FromStr`] — we deliberately want
+    /// infallible parsing so adding a `Result` return would misrepresent the
+    /// contract.
+    pub fn parse(value: &str) -> Self {
         match value {
             "sera-internal" => SuiteId::SeraInternal,
             "swe-bench-lite" => SuiteId::SweBenchLite,
@@ -100,10 +105,10 @@ mod tests {
             SuiteId::TauBenchRetail,
             SuiteId::TauBenchAirline,
         ] {
-            assert_eq!(SuiteId::from_str(id.as_str()), id);
+            assert_eq!(SuiteId::parse(id.as_str()), id);
         }
         assert_eq!(
-            SuiteId::from_str("my-private-suite"),
+            SuiteId::parse("my-private-suite"),
             SuiteId::Custom("my-private-suite".into())
         );
     }

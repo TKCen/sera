@@ -7,6 +7,7 @@
 //! New tools should implement `Tool` directly and be registered via
 //! [`TraitToolRegistry::register`].
 
+pub mod agent_tools;
 pub mod centrifugo;
 pub mod delegation;
 pub mod dispatcher;
@@ -136,6 +137,25 @@ impl TraitToolRegistry {
         self.register(Box::new(spawn_tool));
         self.register(Box::new(yield_tool));
         self.register(Box::new(send_tool));
+        self
+    }
+
+    /// Register the three agent-as-tool entries (`delegate-task`,
+    /// `ask-agent`, `background-task`) bound to the supplied
+    /// [`crate::agent_tool_registry::AgentToolRegistry`].
+    ///
+    /// Separate from [`Self::with_builtins`] because the registry holds a
+    /// pluggable [`crate::agent_tool_registry::AgentRouter`] and an optional
+    /// coordinator hook that the embedder must provide. See bead
+    /// `sera-8d1.1` (GH#144).
+    pub fn with_agent_tools(
+        mut self,
+        registry: std::sync::Arc<crate::agent_tool_registry::AgentToolRegistry>,
+    ) -> Self {
+        let (delegate, ask, background) = agent_tools::build_agent_tools(registry);
+        self.register(Box::new(delegate));
+        self.register(Box::new(ask));
+        self.register(Box::new(background));
         self
     }
 
@@ -525,6 +545,26 @@ mod trait_registry_tests {
                 registry.get(name).is_some(),
                 "{name} not registered"
             );
+        }
+    }
+
+    /// `with_agent_tools` adds exactly three agent-as-tool entries
+    /// (`delegate-task`, `ask-agent`, `background-task`) — bead
+    /// sera-8d1.1 (GH#144).
+    #[test]
+    fn with_agent_tools_adds_three_agent_tools() {
+        use crate::agent_tool_registry::AgentToolRegistry;
+        use std::sync::Arc;
+        let agents = Arc::new(AgentToolRegistry::new());
+        let registry = TraitToolRegistry::with_builtins().with_agent_tools(agents);
+        let list = registry.list();
+        assert_eq!(
+            list.len(),
+            14 + 3,
+            "expected 14 builtins + 3 agent-as-tool entries"
+        );
+        for name in ["delegate-task", "ask-agent", "background-task"] {
+            assert!(registry.get(name).is_some(), "{name} not registered");
         }
     }
 }

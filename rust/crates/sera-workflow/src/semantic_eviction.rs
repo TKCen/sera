@@ -180,6 +180,7 @@ impl DreamingCandidatePicker for StatsDreamingPicker {
                 query_embedding: Some(probe.clone()),
                 top_k: top_n,
                 similarity_threshold: None,
+                scope: None,
             };
             match store.query(q).await {
                 Ok(mut hits) => {
@@ -475,7 +476,7 @@ mod tests {
                 }
                 let mut to_remove: Vec<MemoryId> = Vec::new();
                 for (_agent, mut entries) in by_agent {
-                    entries.sort_by(|a, b| b.1.cmp(&a.1));
+                    entries.sort_by_key(|b| std::cmp::Reverse(b.1));
                     for (id, _ts, promoted) in entries.into_iter().skip(cap) {
                         if policy.promoted_exempt && promoted {
                             continue;
@@ -509,7 +510,7 @@ mod tests {
                 });
             }
             let mut per_agent_top: Vec<(String, usize)> = per_agent.into_iter().collect();
-            per_agent_top.sort_by(|a, b| b.1.cmp(&a.1));
+            per_agent_top.sort_by_key(|b| std::cmp::Reverse(b.1));
             let now = Utc::now();
             Ok(SemanticStats {
                 total_rows,
@@ -544,6 +545,7 @@ mod tests {
             created_at: Utc::now() - ChronoDuration::days(age_days),
             last_accessed_at: None,
             promoted,
+            scope: None,
         }
     }
 

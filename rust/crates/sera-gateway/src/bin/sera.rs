@@ -22,7 +22,7 @@ use clap::{Parser, Subcommand};
 use futures_util::stream;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -54,6 +54,30 @@ use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
 use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_types::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
+
+// ── Phase-3 SPEC-interop crates ──────────────────────────────────────────────
+use sera_a2a::{A2aClient, A2aRequest, A2aRouter, InProcRouter, LoopbackTransport};
+#[allow(unused_imports)]
+use sera_agui::AgUiEvent;
+use sera_plugins::InMemoryPluginRegistry;
+
+// Route modules for Phase-3 endpoints (included directly into the binary).
+#[path = "../routes/a2a.rs"]
+mod route_a2a;
+#[path = "../routes/agui.rs"]
+mod route_agui;
+#[path = "../routes/plugins.rs"]
+mod route_plugins;
+
+use route_a2a::{A2aAppState, A2aPeerRegistry};
+use route_agui::{AguiAppState, AguiHub};
+use route_plugins::PluginsAppState;
+
+// Party-mode handler (sera-8d1.2 / GH#145) — generic over PartyAppState trait
+// so the handler lives in the library without depending on the binary's AppState.
+#[path = "../party.rs"]
+mod party;
+use party::PartyAppState;
 
 // Re-use sera-core's Discord connector.
 #[path = "../discord.rs"]
@@ -306,6 +330,17 @@ impl StdioHarness {
             r#"done"#,
         );
 
+        Self::spawn_with_script(script).await
+    }
+
+    /// Spawn a mock runtime that consumes submissions but never emits events.
+    /// Used to exercise the turn timeout path — a live child with an open
+    /// stdout that simply never produces output.
+    async fn spawn_mock_hang() -> anyhow::Result<Self> {
+        Self::spawn_with_script("while IFS= read -r line; do :; done").await
+    }
+
+    async fn spawn_with_script(script: &str) -> anyhow::Result<Self> {
         let mut cmd = tokio::process::Command::new("bash");
         cmd.args(["-c", script])
             .stdin(std::process::Stdio::piped())
@@ -352,12 +387,12 @@ struct AppState {
     /// (autonomous mode — all access allowed per MVS §6.5).
     api_key: Option<String>,
     /// Lane-aware message queue for managing concurrent agent runs.
-    // TODO(sera-2q1d): wired into AppState; route handlers will consume this in a later phase.
-    #[allow(dead_code)]
+    /// Consumed by the Discord message loop (`process_message`) and the HTTP
+    /// `chat_handler` to admit turns and release lane slots on completion.
     lane_queue: Mutex<LaneQueue>,
-    /// Hook registry for lifecycle event hooks.
-    // TODO(sera-2q1d): wired into AppState; consumed via chain_executor, registry kept for direct lookup.
-    #[allow(dead_code)]
+    /// Hook registry for lifecycle event hooks. Chain-style execution runs
+    /// through `chain_executor`; direct lookup/introspection (e.g. the
+    /// `/api/hooks` listing route) goes through this handle.
     hook_registry: Arc<HookRegistry>,
     /// Chain executor for running hook pipelines.
     chain_executor: Arc<ChainExecutor>,
@@ -380,6 +415,71 @@ struct AppState {
     /// through here; the correlator pushes `ReplyReceived` events into it.
     #[allow(dead_code)]
     mail_lookup: Arc<InMemoryMailLookup>,
+    // ── Phase-3 SPEC-interop ─────────────────────────────────────────────────
+    /// Known A2A peers and the inbound router (SPEC-interop §4).
+    a2a_peers: Arc<RwLock<A2aPeerRegistry>>,
+    /// Inbound A2A JSON-RPC router — dispatches `tasks/*` methods.
+    a2a_router: Arc<InProcRouter>,
+    /// AG-UI broadcast hub — SSE subscribers for `/api/agui/stream`.
+    agui_hub: Arc<RwLock<AguiHub>>,
+    /// Plugin registry — backing store for `/api/plugins` routes.
+    plugin_registry: Arc<InMemoryPluginRegistry>,
+}
+
+// ── Phase-3 trait impls ──────────────────────────────────────────────────────
+
+impl A2aAppState for AppState {
+    fn api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+    fn a2a_peers(&self) -> Arc<RwLock<A2aPeerRegistry>> {
+        Arc::clone(&self.a2a_peers)
+    }
+    fn a2a_router(&self) -> Arc<dyn A2aRouter> {
+        Arc::clone(&self.a2a_router) as Arc<dyn A2aRouter>
+    }
+    fn a2a_client(&self) -> A2aClient {
+        A2aClient::new(LoopbackTransport::from_arc(Arc::clone(&self.a2a_router)))
+    }
+}
+
+impl AguiAppState for AppState {
+    fn api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+    fn agui_hub(&self) -> Arc<RwLock<AguiHub>> {
+        Arc::clone(&self.agui_hub)
+    }
+}
+
+impl PluginsAppState for AppState {
+    fn api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+    fn plugin_registry(&self) -> Arc<InMemoryPluginRegistry> {
+        Arc::clone(&self.plugin_registry)
+    }
+}
+
+// ── sera-8d1.2-follow: party-mode wiring ────────────────────────────────────
+//
+// The MVS AppState uses SqliteDb, so circle membership cannot be resolved from
+// the DB without a Postgres-backed CircleRepository. The stub below returns
+// `None` for every circle (→ 404) until the production member resolver lands.
+// Tracked as a follow-up: wire `resolve_party_members` to real LLM-backed
+// `sera_workflow::coordination::PartyMember` implementations once the
+// Postgres path is available in this binary.
+impl PartyAppState for AppState {
+    fn api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+    fn resolve_party_members(
+        &self,
+        _circle_id: &str,
+    ) -> Option<Vec<Arc<dyn sera_workflow::coordination::PartyMember>>> {
+        // Stub: production resolver not yet wired — always returns None (404).
+        None
+    }
 }
 
 // ── HTTP types ──────────────────────────────────────────────────────────────
@@ -520,10 +620,67 @@ async fn chat_handler(
     let session = db
         .get_or_create_session(&agent_name)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let session_id = session.id.clone();
+    let session_key = format!("http:{}:{}", agent_name, session_id);
+    drop(db); // Release DB lock before touching the lane queue.
 
+    // ── Lane queue admission ──────────────────────────────────────────────
+    // Mirrors the Discord `process_message` pattern: enqueue the event to
+    // check whether the lane is idle; if a run is already active for this
+    // session or the queue is closed, short-circuit before we touch the
+    // transcript or dispatch to the harness. On `Ready`/`Interrupt` we
+    // dequeue immediately so `active_run_count` tracks this in-flight turn,
+    // and we release the slot via `complete_run` once `execute_turn` returns.
+    let admission_event = DomainEvent::api_message(
+        &agent_name,
+        &session_key,
+        PrincipalRef {
+            id: PrincipalId::new("http-chat"),
+            kind: PrincipalKind::Human,
+        },
+        &req.message,
+    );
+    {
+        let mut lq = state.lane_queue.lock().await;
+        match lq.enqueue(admission_event) {
+            sera_db::lane_queue::EnqueueResult::Ready => {
+                let _ = lq.dequeue(&session_key);
+            }
+            sera_db::lane_queue::EnqueueResult::Interrupt => {
+                tracing::info!(session_key = %session_key, "Chat interrupt: active run should be aborted");
+                let _ = lq.dequeue(&session_key);
+            }
+            sera_db::lane_queue::EnqueueResult::Queued
+            | sera_db::lane_queue::EnqueueResult::Steer => {
+                tracing::info!(session_key = %session_key, "Chat message queued behind active turn");
+                return Err(StatusCode::TOO_MANY_REQUESTS);
+            }
+            sera_db::lane_queue::EnqueueResult::Closed => {
+                tracing::warn!(session_key = %session_key, "Chat rejected: lane queue is closed for shutdown");
+                return Err(StatusCode::SERVICE_UNAVAILABLE);
+            }
+        }
+    }
+
+    // Helper: release the lane slot we acquired above. Called on every exit
+    // path. The Discord loop does the equivalent explicitly (see
+    // `process_message` ~L1310); the HTTP chat handler follows the same
+    // pattern rather than the `LaneRunGuard` RAII pattern in
+    // `sera_gateway::routes::chat` because AppState is not cloneable into a
+    // guard without restructuring.
+    async fn release_lane(state: &Arc<AppState>, session_key: &str) {
+        let mut lq = state.lane_queue.lock().await;
+        lq.complete_run(session_key);
+    }
+
+    let db = state.db.lock().await;
     // Save the user message to transcript.
-    db.append_transcript(&session.id, "user", Some(&req.message), None, None)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Err(e) = db.append_transcript(&session.id, "user", Some(&req.message), None, None) {
+        drop(db);
+        tracing::error!(error = %e, "Failed to append user transcript");
+        release_lane(&state, &session_key).await;
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     // Audit: message received.
     let _ = db.append_audit(
@@ -535,8 +692,6 @@ async fn chat_handler(
 
     // Get recent transcript for context.
     let transcript = db.get_transcript_recent(&session.id, 20).unwrap_or_default();
-    let session_id = session.id.clone();
-    let session_key = format!("http:{}:{}", agent_name, session_id);
     drop(db); // Release lock before dispatching to harness.
 
     if req.stream {
@@ -555,6 +710,15 @@ async fn chat_handler(
                 match fold_state {
                     StreamState::Pending { agent_spec, transcript, message, state, harness, session_id, session_key, message_id } => {
                         let result = execute_turn(&agent_spec, &transcript, &message, &harness, &session_key).await;
+
+                        // Release the lane slot — the turn is complete even
+                        // though we still need to stream the reply back out.
+                        // This matches the Discord loop, which releases the
+                        // slot immediately after `execute_turn` returns.
+                        {
+                            let mut lq = state.lane_queue.lock().await;
+                            lq.complete_run(&session_key);
+                        }
 
                         // Save tool events and assistant response.
                         {
@@ -617,11 +781,17 @@ async fn chat_handler(
         let result =
             execute_turn(&agent_spec, &transcript, &req.message, &harness, &session_key).await;
 
+        // Release the lane slot now that the turn has completed. Mirrors the
+        // `complete_run` call in the Discord message loop after `execute_turn`.
+        release_lane(&state, &session_key).await;
+
         // Save tool events and assistant response.
         let db = state.db.lock().await;
         persist_tool_events(&db, &session_id, &result.tool_events);
-        db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if let Err(e) = db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None) {
+            tracing::error!(error = %e, "Failed to append assistant transcript");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
 
         let _ = db.append_audit(
             "response_sent",
@@ -808,6 +978,22 @@ enum StreamState {
 
 // ── Turn execution (dispatched to sera-runtime harness) ─────────────────────
 
+/// Upper bound on how long a single turn may block waiting on the runtime
+/// harness. Prevents a hung runtime from wedging the lane queue forever: the
+/// lane slot is released by the caller after `execute_turn` returns, so a
+/// timeout here guarantees the slot is eventually freed even if the harness
+/// never responds. Override with `SERA_TURN_TIMEOUT_SECS`.
+const DEFAULT_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+fn turn_timeout() -> std::time::Duration {
+    std::env::var("SERA_TURN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(DEFAULT_TURN_TIMEOUT)
+}
+
 /// Execute a turn by dispatching to a pre-connected sera-runtime harness.
 ///
 /// The gateway builds the conversation messages from the transcript and sends
@@ -871,8 +1057,9 @@ async fn execute_turn(
         }));
     }
 
-    match harness.send_turn(messages, session_key).await {
-        Ok(events) => MvsTurnResult {
+    let timeout = turn_timeout();
+    match tokio::time::timeout(timeout, harness.send_turn(messages, session_key)).await {
+        Ok(Ok(events)) => MvsTurnResult {
             reply: events.response,
             tool_events: events.tool_events,
             usage: UsageInfo {
@@ -881,10 +1068,29 @@ async fn execute_turn(
                 total_tokens: 0,
             },
         },
-        Err(e) => {
+        Ok(Err(e)) => {
             tracing::error!(error = %e, "Runtime harness turn failed");
             MvsTurnResult {
                 reply: format!("[sera] Runtime error: {e}"),
+                tool_events: vec![],
+                usage: UsageInfo {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    total_tokens: 0,
+                },
+            }
+        }
+        Err(_elapsed) => {
+            tracing::error!(
+                session_key = %session_key,
+                timeout_secs = timeout.as_secs(),
+                "Runtime harness turn timed out; releasing lane"
+            );
+            MvsTurnResult {
+                reply: format!(
+                    "[sera] Runtime timed out after {}s",
+                    timeout.as_secs()
+                ),
                 tool_events: vec![],
                 usage: UsageInfo {
                     prompt_tokens: 0,
@@ -1975,6 +2181,12 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         shutting_down: Arc::clone(&shutting_down),
         mail_correlator,
         mail_lookup,
+        a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+        a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+            Ok(serde_json::json!({"status": "no handler registered"}))
+        })),
+        agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+        plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
     });
 
     // 4. Start event processing loop.
@@ -2210,6 +2422,41 @@ async fn mail_inbound_handler(
     Ok(Json(resp))
 }
 
+/// `GET /api/hooks` — list every hook registered in the in-process
+/// [`HookRegistry`], grouped by [`HookPoint`]. Consumed by operators and the
+/// dashboard to introspect which hook modules are loaded without replaying a
+/// full chain via [`ChainExecutor`]. This is the direct-lookup entry point
+/// kept alongside the chain-executor path.
+async fn hooks_list_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    validate_api_key(&state, &headers)?;
+
+    let metadata = state.hook_registry.list();
+
+    // Group by hook point: for each hook, emit one entry under every point
+    // it declares as supported. Operators expect per-point breakdowns when
+    // debugging hook chains (see SPEC-hooks §registry introspection).
+    let mut by_point: std::collections::BTreeMap<String, Vec<&sera_types::hook::HookMetadata>> =
+        std::collections::BTreeMap::new();
+    for meta in &metadata {
+        for point in &meta.supported_points {
+            let key = serde_json::to_value(point)
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| format!("{:?}", point));
+            by_point.entry(key).or_default().push(meta);
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "hooks": metadata,
+        "by_point": by_point,
+        "count": metadata.len(),
+    })))
+}
+
 fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
@@ -2220,8 +2467,30 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/agents/{id}", get(agent_by_id_handler))
         .route("/api/sessions", get(sessions_handler))
         .route("/api/sessions/{id}/transcript", get(transcript_handler))
+        // sera-2q1d: read-only hook registry introspection — lists every hook
+        // registered with the in-process `HookRegistry`, grouped by `HookPoint`.
+        .route("/api/hooks", get(hooks_list_handler))
         // sera-uwk0: mail gate ingress correlator webhook.
         .route("/api/mail/inbound", post(mail_inbound_handler))
+        // ── Phase-3 SPEC-interop routes (sera-ne64) ──────────────────────────
+        .route("/api/a2a/send", post(route_a2a::send_message::<AppState>))
+        .route("/api/a2a/peers", get(route_a2a::list_peers::<AppState>))
+        .route("/api/a2a/accept", post(route_a2a::accept::<AppState>))
+        .route("/api/agui/stream", get(route_agui::stream_events::<AppState>))
+        .route("/api/agui/emit", post(route_agui::emit_event::<AppState>))
+        .route("/api/plugins", get(route_plugins::list_plugins::<AppState>))
+        .route("/api/plugins/{id}/call", post(route_plugins::call_plugin::<AppState>))
+        .route("/api/plugins/hot-reload", post(route_plugins::hot_reload::<AppState>))
+        // ── sera-8d1.2-follow: party mode (circles/{id}/party) ───────────────
+        .route(
+            "/api/circles/{id}/party",
+            post(party::start_party::<AppState>),
+        )
+        // TODO(sera-8d1.4-follow): wire GET/PUT /api/circles/{id}/constitution
+        // once routes/circles.rs constitution handlers are refactored to use a
+        // trait (they currently depend on the Postgres-backed `crate::state::AppState`
+        // and `crate::error::AppError` from the library, incompatible with this
+        // binary's SqliteDb-backed AppState).
         .with_state(state)
 }
 
@@ -2265,6 +2534,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         })
     }
 
@@ -2286,6 +2561,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         })
     }
 
@@ -2307,6 +2588,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         })
     }
 
@@ -2328,6 +2615,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         })
     }
 
@@ -2854,6 +3147,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -2878,6 +3177,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -2903,6 +3208,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -2928,6 +3239,12 @@ mod tests {
                 None,
             )),
             mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         };
         let headers = HeaderMap::new();
         assert_eq!(validate_api_key(&state, &headers), Err(StatusCode::UNAUTHORIZED));
@@ -3181,5 +3498,324 @@ mod tests {
         let channel_id = "ch_999";
         let key = format!("discord:{}:{}", agent_name, channel_id);
         assert_eq!(key, "discord:reviewer:ch_999");
+    }
+
+    // -- Lane-queue admission for the HTTP chat handler (sera-2q1d) --
+
+    /// Helper: pre-seed a session for the `sera` agent and mark its lane as
+    /// actively processing so the next chat call observes a busy lane. Returns
+    /// the session_key that was occupied.
+    async fn occupy_sera_lane(state: &Arc<AppState>) -> String {
+        // Create the session the handler would create, so we know the key
+        // ahead of time. get_or_create_session returns the same row on the
+        // handler's subsequent lookup for the same agent.
+        let session_id = {
+            let db = state.db.lock().await;
+            db.get_or_create_session("sera").unwrap().id
+        };
+        let session_key = format!("http:sera:{}", session_id);
+
+        let principal = PrincipalRef {
+            id: PrincipalId::new("http-chat"),
+            kind: PrincipalKind::Human,
+        };
+        let event = DomainEvent::api_message("sera", &session_key, principal, "occupying");
+        let mut lq = state.lane_queue.lock().await;
+        assert_eq!(lq.enqueue(event), sera_db::lane_queue::EnqueueResult::Ready);
+        let _ = lq.dequeue(&session_key);
+        assert_eq!(lq.active_runs(), 1);
+        session_key
+    }
+
+    /// When the same session already has an in-flight turn, a concurrent
+    /// `/api/chat` submission must be rejected at the admission boundary with
+    /// `429 Too Many Requests` rather than racing through to the harness.
+    #[tokio::test]
+    async fn turn_admission_rejects_when_lane_full() {
+        let state = test_state_async().await;
+        let _busy_key = occupy_sera_lane(&state).await;
+
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "second turn" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "second concurrent turn for the same session must be rejected by lane admission"
+        );
+
+        // The active run count must still reflect the pre-existing occupant —
+        // the rejected attempt did not consume an extra slot.
+        let active = state.lane_queue.lock().await.active_runs();
+        assert_eq!(active, 1, "admission rejection must not leak a run slot");
+    }
+
+    /// After a chat turn completes, the lane counter must return to its
+    /// baseline (zero active runs) so a later submission on the same session
+    /// can be admitted. Regression guard for the `complete_run` wiring on the
+    /// sync path of `chat_handler`.
+    #[tokio::test]
+    async fn turn_admission_decrements_on_completion() {
+        let state = test_state_async().await;
+
+        // Baseline: no active runs.
+        assert_eq!(state.lane_queue.lock().await.active_runs(), 0);
+
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "one turn" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Counter must be back to zero after the handler returns.
+        let active = state.lane_queue.lock().await.active_runs();
+        assert_eq!(
+            active, 0,
+            "lane counter must decrement back to baseline after turn completion"
+        );
+
+        // A follow-up submission should therefore be admitted (not 429).
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "follow up" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "follow-up turn must be admitted once the prior run has completed"
+        );
+    }
+
+    /// A hung runtime harness (alive stdio, no output) must not wedge the turn
+    /// indefinitely. Regression guard for the lane-wedge bug: if
+    /// `harness.send_turn` never completes, a bounded `tokio::time::timeout`
+    /// wrapper lets `execute_turn` return within the timeout so the caller can
+    /// release the lane slot.
+    #[tokio::test]
+    async fn send_turn_times_out_when_harness_hangs() {
+        let harness = StdioHarness::spawn_mock_hang().await.unwrap();
+        let start = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(150),
+            harness.send_turn(Vec::new(), "test-session"),
+        )
+        .await;
+
+        assert!(result.is_err(), "expected Elapsed when harness never responds");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(1),
+            "timeout must fire near its bound, not after the test harness limit"
+        );
+    }
+
+    /// `turn_timeout` must fall back to [`DEFAULT_TURN_TIMEOUT`] when the
+    /// `SERA_TURN_TIMEOUT_SECS` env var is absent or unparseable.
+    #[test]
+    fn turn_timeout_defaults_when_env_unset() {
+        // Snapshot, clear, restore — keep this test hermetic so parallel
+        // invocations do not observe each other's environment.
+        let prior = std::env::var("SERA_TURN_TIMEOUT_SECS").ok();
+        // SAFETY: test-only env mutation; no threads observe the transient
+        // unset state because the value is read inside `turn_timeout` below.
+        unsafe { std::env::remove_var("SERA_TURN_TIMEOUT_SECS") };
+        assert_eq!(turn_timeout(), DEFAULT_TURN_TIMEOUT);
+        if let Some(v) = prior {
+            // SAFETY: restoring the pre-test value; same caveat as above.
+            unsafe { std::env::set_var("SERA_TURN_TIMEOUT_SECS", v) };
+        }
+    }
+
+    /// `GET /api/hooks` must surface every hook registered in the in-process
+    /// [`HookRegistry`], grouped by the hook points each module declares as
+    /// supported. Exercises the direct-lookup path kept alongside chain
+    /// execution.
+    #[tokio::test]
+    async fn hooks_list_route_returns_registered_points() {
+        use sera_types::hook::{
+            HookContext, HookMetadata, HookPoint, HookResult,
+        };
+
+        // Minimal test hook that advertises two supported points so the
+        // `by_point` grouping in the handler exercises more than one key.
+        struct TestHook;
+        #[async_trait::async_trait]
+        impl sera_hooks::Hook for TestHook {
+            fn metadata(&self) -> HookMetadata {
+                HookMetadata {
+                    name: "test-hook".to_string(),
+                    description: "Hook registered for the /api/hooks list test".to_string(),
+                    version: "0.0.1".to_string(),
+                    supported_points: vec![HookPoint::PreTurn, HookPoint::PostTurn],
+                    author: None,
+                }
+            }
+            async fn init(&mut self, _config: serde_json::Value) -> Result<(), sera_hooks::HookError> {
+                Ok(())
+            }
+            async fn execute(
+                &self,
+                _ctx: &HookContext,
+            ) -> Result<HookResult, sera_hooks::HookError> {
+                Ok(HookResult::pass())
+            }
+        }
+
+        // Build a state where the HookRegistry has one hook registered. We
+        // can't mutate Arc<HookRegistry> after the fact, so build the state
+        // manually with a populated registry.
+        let mut registry = HookRegistry::new();
+        registry.register(Box::new(TestHook));
+        let hook_registry = Arc::new(registry);
+        let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
+        let state = Arc::new(AppState {
+            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            manifests: test_manifests(),
+            discord: None,
+            api_key: None,
+            lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+            hook_registry,
+            chain_executor,
+            harnesses: std::collections::HashMap::new(),
+            shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                Arc::new(InMemoryEnvelopeIndex::default()),
+                None,
+            )),
+            mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+        });
+
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/hooks")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["count"], 1);
+        let hooks = json["hooks"].as_array().expect("hooks is an array");
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0]["name"], "test-hook");
+
+        let by_point = json["by_point"].as_object().expect("by_point is an object");
+        assert!(by_point.contains_key("pre_turn"), "pre_turn point missing: {:?}", by_point);
+        assert!(by_point.contains_key("post_turn"), "post_turn point missing: {:?}", by_point);
+        assert_eq!(by_point["pre_turn"].as_array().unwrap().len(), 1);
+        assert_eq!(by_point["post_turn"].as_array().unwrap().len(), 1);
+    }
+
+    // ── sera-8d1.2-follow: party route smoke tests ────────────────────────────
+
+    /// Without a bearer token the party route must return 401.
+    #[tokio::test]
+    async fn party_route_requires_auth() {
+        let state = {
+            let hook_registry = Arc::new(HookRegistry::new());
+            let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
+            Arc::new(AppState {
+                db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+                manifests: test_manifests(),
+                discord: None,
+                api_key: Some("secret".to_owned()),
+                lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+                hook_registry,
+                chain_executor,
+                harnesses: std::collections::HashMap::new(),
+                shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                    Arc::new(InMemoryEnvelopeIndex::default()),
+                    None,
+                )),
+                mail_lookup: Arc::new(InMemoryMailLookup::new()),
+                a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+                a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                    Ok(serde_json::json!({"status": "test"}))
+                })),
+                agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+                plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+            })
+        };
+        let app = build_router(state);
+        let body = serde_json::json!({"prompt": "x", "synthesizer": "lead"});
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/circles/test-id/party")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// With no api_key configured (autonomous mode), missing bearer still gets
+    /// 404 (circle not found via stub) — proves the route IS registered.
+    #[tokio::test]
+    async fn party_route_registered_returns_404_for_unknown_circle() {
+        let app = build_router(test_state());
+        let body = serde_json::json!({"prompt": "x", "synthesizer": "lead"});
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/circles/no-such-circle/party")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 404 = route matched, circle not found via stub — NOT "no route matched"
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }

@@ -350,6 +350,7 @@ fn row_to_entry(row: Row, embedding: Vec<f32>) -> SemanticEntry {
         created_at: row.created_at,
         last_accessed_at: row.last_touched_at,
         promoted: row.promoted,
+        scope: None,
     }
 }
 
@@ -1139,6 +1140,7 @@ mod tests {
             created_at: Utc::now(),
             last_accessed_at: None,
             promoted: false,
+            scope: None,
         }
     }
 
@@ -1196,6 +1198,7 @@ mod tests {
                 query_embedding: None,
                 top_k: 3,
                 similarity_threshold: None,
+                scope: None,
             })
             .await
             .expect("query");
@@ -1225,6 +1228,7 @@ mod tests {
                 query_embedding: None,
                 top_k: 10,
                 similarity_threshold: None,
+                scope: None,
             })
             .await
             .unwrap();
@@ -1241,6 +1245,7 @@ mod tests {
                 query_embedding: None,
                 top_k: 10,
                 similarity_threshold: None,
+                scope: None,
             })
             .await
             .unwrap();
@@ -1393,6 +1398,7 @@ mod tests {
                 query_embedding: Some(hash_vec("alpha beta gamma", dims)),
                 top_k: 5,
                 similarity_threshold: None,
+                scope: None,
             })
             .await
             .unwrap();
@@ -1431,6 +1437,7 @@ mod tests {
                 query_embedding: None,
                 top_k: 3,
                 similarity_threshold: None,
+                scope: None,
             })
             .await
             .unwrap();
@@ -1493,6 +1500,7 @@ mod tests {
                 query_embedding: Some(hash_vec("rust systems", dims)),
                 top_k: 3,
                 similarity_threshold: None,
+                scope: None,
             })
             .await
             .unwrap();

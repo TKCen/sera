@@ -66,6 +66,8 @@ pub enum ProviderKind {
     Qwen,
     /// Anthropic Claude extended thinking (`thinking.type/budget_tokens`).
     Anthropic,
+    /// Google Gemini thinking (`thinking.enabled` + `thinking.budgetTokens`).
+    GoogleAi,
     /// Unknown / provider without a reasoning field — no-op.
     Generic,
 }
@@ -88,6 +90,11 @@ impl ProviderKind {
             || lower.contains("o4")
         {
             ProviderKind::OpenAi
+        } else if lower.contains("google")
+            || lower.contains("gemini")
+            || lower.contains("googleai")
+        {
+            ProviderKind::GoogleAi
         } else {
             ProviderKind::Generic
         }
@@ -186,8 +193,30 @@ impl ThinkingConfig {
                     }),
                 );
             }
+            ProviderKind::GoogleAi => {
+                // Google Gemini: `thinking.enabled` boolean + `thinking.budgetTokens`.
+                // When Off, explicitly disable so the model does not infer its own budget.
+                let enabled = !self.is_off();
+                let default_budget = match self.level {
+                    ReasoningLevel::Off => None,
+                    ReasoningLevel::Low => Some(512),
+                    ReasoningLevel::Medium => Some(2_048),
+                    ReasoningLevel::High => Some(8_192),
+                };
+                let budget = if enabled {
+                    self.budget_tokens.or(default_budget)
+                } else {
+                    None
+                };
+                let mut thinking_obj = serde_json::json!({ "enabled": enabled });
+                if let Some(b) = budget {
+                    thinking_obj["budgetTokens"] = serde_json::json!(b);
+                }
+                obj.insert("thinking".to_string(), thinking_obj);
+            }
             ProviderKind::Generic => {
                 // No-op — provider does not expose a reasoning field.
+                tracing::debug!("provider does not support thinking levels");
             }
         }
     }
@@ -404,6 +433,60 @@ mod tests {
         assert_eq!(parsed.budget_tokens, Some(2500));
     }
 
+    // ── apply_to_body: GoogleAi ──────────────────────────────────────────────
+
+    #[test]
+    fn google_ai_off_sets_enabled_false_and_no_budget() {
+        let mut body = json!({"model": "gemini-2.0-flash"});
+        ThinkingConfig::OFF.apply_to_body(&mut body, ProviderKind::GoogleAi);
+        assert_eq!(body["thinking"]["enabled"], false);
+        assert!(body["thinking"].get("budgetTokens").is_none());
+    }
+
+    #[test]
+    fn google_ai_low_sets_enabled_true_and_512_budget() {
+        let mut body = json!({});
+        ThinkingConfig::new(ReasoningLevel::Low).apply_to_body(&mut body, ProviderKind::GoogleAi);
+        assert_eq!(body["thinking"]["enabled"], true);
+        assert_eq!(body["thinking"]["budgetTokens"], serde_json::json!(512u32));
+    }
+
+    #[test]
+    fn google_ai_medium_sets_2048_budget() {
+        let mut body = json!({});
+        ThinkingConfig::new(ReasoningLevel::Medium).apply_to_body(&mut body, ProviderKind::GoogleAi);
+        assert_eq!(body["thinking"]["enabled"], true);
+        assert_eq!(body["thinking"]["budgetTokens"], serde_json::json!(2_048u32));
+    }
+
+    #[test]
+    fn google_ai_high_sets_8192_budget() {
+        let mut body = json!({});
+        ThinkingConfig::new(ReasoningLevel::High).apply_to_body(&mut body, ProviderKind::GoogleAi);
+        assert_eq!(body["thinking"]["enabled"], true);
+        assert_eq!(body["thinking"]["budgetTokens"], serde_json::json!(8_192u32));
+    }
+
+    #[test]
+    fn google_ai_explicit_budget_overrides_default() {
+        let mut body = json!({});
+        ThinkingConfig::new(ReasoningLevel::Low)
+            .with_budget(9_999)
+            .apply_to_body(&mut body, ProviderKind::GoogleAi);
+        assert_eq!(body["thinking"]["enabled"], true);
+        assert_eq!(body["thinking"]["budgetTokens"], serde_json::json!(9_999u32));
+    }
+
+    // ── ProviderKind::infer — GoogleAi family ────────────────────────────────
+
+    #[test]
+    fn infer_google_ai_family() {
+        assert_eq!(ProviderKind::infer("gemini-2.0-flash"), ProviderKind::GoogleAi);
+        assert_eq!(ProviderKind::infer("google-gemini-pro"), ProviderKind::GoogleAi);
+        assert_eq!(ProviderKind::infer("googleai"), ProviderKind::GoogleAi);
+        assert_eq!(ProviderKind::infer("GEMINI"), ProviderKind::GoogleAi);
+    }
+
     // ── Parametric: every level × every provider produces valid JSON ─────────
 
     #[test]
@@ -419,6 +502,7 @@ mod tests {
             ProviderKind::DeepSeek,
             ProviderKind::Qwen,
             ProviderKind::Anthropic,
+            ProviderKind::GoogleAi,
             ProviderKind::Generic,
         ];
 

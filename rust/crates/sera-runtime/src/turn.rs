@@ -22,6 +22,27 @@ pub enum ReactMode {
     Default,
     /// Deterministic ordering (P0 stub).
     ByOrder,
+    /// Planning-phase separation — the think step emits a [`Plan`] (tool
+    /// intents + rationale) without dispatching, and a subsequent act step
+    /// executes the plan's tool calls. Enables review/approval of the plan
+    /// mid-turn (future work).
+    PlanAndAct,
+}
+
+/// A plan produced during the think step under [`ReactMode::PlanAndAct`].
+///
+/// Plans capture the model's intended tool calls and the accompanying
+/// rationale, without triggering dispatch. They act as a mid-turn checkpoint
+/// that downstream review/approval surfaces can inspect or mutate before
+/// the runtime re-enters the act step to execute them.
+#[derive(Debug, Clone)]
+pub struct Plan {
+    /// Intended tool calls, in OpenAI tool_call wire format.
+    pub tool_calls: Vec<serde_json::Value>,
+    /// Model-authored rationale extracted from the assistant response content.
+    pub rationale: String,
+    /// Monotonic epoch millis when the plan was produced.
+    pub created_at_ms: u64,
 }
 
 // ── LlmProvider trait ────────────────────────────────────────────────────────
@@ -75,6 +96,13 @@ pub enum ToolError {
     ExecutionFailed(String),
     #[error("invalid arguments: {0}")]
     InvalidArguments(String),
+    /// A pre-tool hook aborted the call before execution.
+    #[error("tool call aborted by hook: {reason}")]
+    AbortedByHook { reason: String },
+    /// The caller's permission mode was insufficient and escalation was
+    /// denied by the [`crate::permissions::EscalationAuthority`].
+    #[error("permission denied for tool call: {reason}")]
+    PermissionDenied { reason: String },
 }
 
 /// Trait for dispatching tool calls from the act step.
@@ -218,11 +246,11 @@ pub async fn observe(
 pub async fn think(
     messages: &[serde_json::Value],
     tools: &[serde_json::Value],
-    _react_mode: &ReactMode,
+    react_mode: &ReactMode,
     llm: Option<&dyn LlmProvider>,
     tool_use_behavior: &ToolUseBehavior,
 ) -> ThinkResult {
-    match llm {
+    let raw = match llm {
         Some(provider) => match provider.chat_with_behavior(messages, tools, tool_use_behavior).await {
             Ok(result) => result,
             Err(e) => {
@@ -231,6 +259,7 @@ pub async fn think(
                     response: serde_json::json!({"role": "assistant", "content": format!("[LLM error: {e}]")}),
                     tool_calls: vec![],
                     tokens: TokenUsage::default(),
+                    plan: None,
                 }
             }
         },
@@ -238,8 +267,39 @@ pub async fn think(
             response: serde_json::json!({"role": "assistant", "content": "[think stub]"}),
             tool_calls: vec![],
             tokens: TokenUsage::default(),
+            plan: None,
         },
+    };
+
+    // PlanAndAct: capture intended tool calls into a Plan and defer dispatch
+    // to the next iteration. If the model emitted no tool calls, the mode is
+    // a no-op and we fall through to the normal FinalOutput path.
+    if matches!(react_mode, ReactMode::PlanAndAct) && !raw.tool_calls.is_empty() {
+        let rationale = raw
+            .response
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+        let created_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let plan = Plan {
+            tool_calls: raw.tool_calls.clone(),
+            rationale,
+            created_at_ms,
+        };
+        return ThinkResult {
+            response: raw.response,
+            // Empty tool_calls so act() does not dispatch in this iteration.
+            tool_calls: vec![],
+            tokens: raw.tokens,
+            plan: Some(plan),
+        };
     }
+
+    raw
 }
 
 /// Result of the think step.
@@ -247,6 +307,30 @@ pub struct ThinkResult {
     pub response: serde_json::Value,
     pub tool_calls: Vec<serde_json::Value>,
     pub tokens: TokenUsage,
+    /// Planning-phase output under [`ReactMode::PlanAndAct`].
+    ///
+    /// When `Some`, the think step captured the model's intended tool calls
+    /// as a [`Plan`] and intentionally left `tool_calls` empty so the
+    /// subsequent act step does not dispatch them. The runtime loop surfaces
+    /// a [`TurnOutcome::PlanEmitted`] at this point and re-enters the
+    /// dispatch path on the next iteration with the plan's tool calls.
+    pub plan: Option<Plan>,
+}
+
+impl ThinkResult {
+    /// Build a plain `ThinkResult` with no plan attached (default path).
+    pub fn new(
+        response: serde_json::Value,
+        tool_calls: Vec<serde_json::Value>,
+        tokens: TokenUsage,
+    ) -> Self {
+        Self {
+            response,
+            tool_calls,
+            tokens,
+            plan: None,
+        }
+    }
 }
 
 /// Act — dispatch tool calls, check for handoffs, doom-loop detection.
@@ -497,6 +581,28 @@ pub async fn react(
 ) -> TurnOutcome {
     let tokens = &think_result.tokens;
 
+    // PlanAndAct: think() produced a plan and deliberately suppressed the
+    // immediate dispatch. Surface it as a PlanEmitted checkpoint so the
+    // runtime loop can re-enter act() with the plan's tool calls on the
+    // next iteration. Runs before the ToolResults arm because act() will
+    // have returned an empty ToolResults vec for this iteration.
+    if let Some(plan) = think_result.plan.as_ref()
+        && matches!(act_result, ActResult::ToolResults(r) if r.is_empty())
+    {
+        let plan_tool_calls = plan
+            .tool_calls
+            .iter()
+            .map(json_to_tool_call)
+            .collect::<Vec<_>>();
+        return TurnOutcome::PlanEmitted {
+            plan_tool_calls,
+            rationale: plan.rationale.clone(),
+            created_at_ms: plan.created_at_ms,
+            tokens_used: tokens.clone(),
+            duration_ms: elapsed_ms,
+        };
+    }
+
     // Build a preliminary outcome from act results.
     let outcome = match act_result {
         ActResult::ToolResults(results) => {
@@ -617,6 +723,39 @@ pub async fn react(
     }
 
     outcome
+}
+
+// ── Plan helpers ─────────────────────────────────────────────────────────────
+
+/// Convert a wire-format tool_call JSON value into a typed [`ToolCall`].
+///
+/// Tolerates missing/malformed fields — unknown pieces degrade to empty
+/// strings / `Value::Null` so a misshapen plan never panics the runtime.
+/// `arguments` arrives as a JSON-encoded string on the OpenAI wire format;
+/// this helper attempts to re-parse it so the stored `ToolCall.arguments`
+/// is an actual JSON object when possible.
+fn json_to_tool_call(v: &serde_json::Value) -> sera_types::runtime::ToolCall {
+    let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let function = v.get("function");
+    let name = function
+        .and_then(|f| f.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("")
+        .to_string();
+    let arguments = function
+        .and_then(|f| f.get("arguments"))
+        .map(|a| match a {
+            serde_json::Value::String(s) => serde_json::from_str::<serde_json::Value>(s)
+                .unwrap_or_else(|_| serde_json::Value::String(s.clone())),
+            other => other.clone(),
+        })
+        .unwrap_or(serde_json::Value::Null);
+    sera_types::runtime::ToolCall {
+        id,
+        name,
+        arguments,
+        result: None,
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -806,6 +945,7 @@ mod tests {
             response: serde_json::json!({"role": "assistant", "content": content}),
             tool_calls: vec![],
             tokens: TokenUsage::default(),
+            plan: None,
         }
     }
 
@@ -899,6 +1039,7 @@ mod tests {
                 "function": { "name": "shell", "arguments": {"cmd": "ls"} }
             })],
             tokens: TokenUsage::default(),
+            plan: None,
         };
         let result = act(&mut ctx, &think_result, None).await;
         match result {
@@ -927,6 +1068,7 @@ mod tests {
                 "function": { "name": "noop", "arguments": "{}" }
             })],
             tokens: TokenUsage::default(),
+            plan: None,
         };
         let result = act(&mut ctx, &think_result, None).await;
         // Empty steer must be dropped — result is ToolResults not SteerInjected.
@@ -949,6 +1091,7 @@ mod tests {
                 "function": { "name": "noop", "arguments": "{}" }
             })],
             tokens: TokenUsage::default(),
+            plan: None,
         };
         let result = act(&mut ctx, &think_result, None).await;
         assert!(
@@ -969,6 +1112,7 @@ mod tests {
                 "function": { "name": "noop", "arguments": "{}" }
             })],
             tokens: TokenUsage::default(),
+            plan: None,
         };
         let result = act(&mut ctx, &think_result, None).await;
         match result {
@@ -1001,6 +1145,7 @@ mod tests {
             response: serde_json::json!({"role": "assistant", "content": "ok"}),
             tool_calls: vec![make_tool_call("any_tool")],
             tokens: TokenUsage::default(),
+            plan: None,
         };
         let result = act(&mut ctx, &think_result, None).await;
         match result {
@@ -1018,6 +1163,7 @@ mod tests {
             response: serde_json::json!({"role": "assistant", "content": "ok"}),
             tool_calls: vec![make_tool_call("shell")],
             tokens: TokenUsage::default(),
+            plan: None,
         };
         let result = act(&mut ctx, &think_result, None).await;
         match result {
@@ -1042,6 +1188,7 @@ mod tests {
             response: serde_json::json!({"role": "assistant", "content": "ok"}),
             tool_calls: vec![make_tool_call("shell")],
             tokens: TokenUsage::default(),
+            plan: None,
         };
         let result = act(&mut ctx, &think_result, None).await;
         match result {
@@ -1067,6 +1214,7 @@ mod tests {
             response: serde_json::json!({"role": "assistant", "content": "ok"}),
             tool_calls: vec![make_tool_call("read_file")],
             tokens: TokenUsage::default(),
+            plan: None,
         };
         let result = act(&mut ctx, &think_result, None).await;
         match result {
@@ -1096,6 +1244,7 @@ mod tests {
             response: serde_json::json!({"role": "assistant", "content": "plain text"}),
             tool_calls: vec![],
             tokens: TokenUsage::default(),
+            plan: None,
         };
         let result = act(&mut ctx, &think_result, None).await;
         match result {
@@ -1117,6 +1266,7 @@ mod tests {
                 "function": { "name": "shell", "arguments": {"cmd": "ls"} }
             })],
             tokens: TokenUsage::default(),
+            plan: None,
         };
         let result = act(&mut ctx, &think_result, None).await;
         match result {

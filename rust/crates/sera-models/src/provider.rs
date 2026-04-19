@@ -11,6 +11,45 @@ use crate::error::ModelError;
 use crate::response::ModelResponse;
 use sera_types::model::ModelRequest;
 
+// ---------------------------------------------------------------------------
+// Credential — sera-hjem multi-account auth
+// ---------------------------------------------------------------------------
+
+/// A single credential entry attached to a [`ProviderConfig`].
+///
+/// Sera-hjem allows N credentials per provider for round-robin failover and
+/// per-key 429 backoff.  The legacy single `api_key` field on each provider
+/// variant remains as a backward-compat shim — when a user supplies only
+/// `api_key`, [`ProviderConfig::credentials`] synthesises a single
+/// `Credential { id: "default", api_key }` for them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Credential {
+    /// User-facing label (e.g. `"primary"`, `"backup"`, `"k1"`).
+    pub id: String,
+    /// API key used for authentication.
+    pub api_key: String,
+    /// Optional per-credential base URL override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+}
+
+impl Credential {
+    /// Build a credential with no per-key base URL override.
+    pub fn new(id: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            api_key: api_key.into(),
+            base_url: None,
+        }
+    }
+
+    /// Attach a per-credential base URL override.
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
+        self
+    }
+}
+
 /// Configuration for a model provider.
 ///
 /// Each variant represents a different provider type with its
@@ -80,6 +119,98 @@ impl ProviderConfig {
             ProviderConfig::AwsBedrock { model, .. } => model,
             ProviderConfig::OaiCompatible { model, .. } => model,
         }
+    }
+
+    /// Sera-hjem: canonical credential list for this provider.
+    ///
+    /// Promotes the legacy single `api_key` field into a one-element
+    /// `Credential { id: "default", api_key }` vector.  Bedrock returns an
+    /// empty vector — its credentials live in `aws_access_key` /
+    /// `aws_secret_key` and are not part of the pool API.
+    ///
+    /// Multi-credential configs are loaded externally (env-driven
+    /// `ProviderAccountsConfig` or a separately-parsed YAML `credentials:`
+    /// list) and combined via [`ProviderCredentials::merge`].
+    pub fn credentials(&self) -> Vec<Credential> {
+        match self {
+            ProviderConfig::OpenAi { api_key, .. }
+            | ProviderConfig::Anthropic { api_key, .. }
+            | ProviderConfig::GoogleAi { api_key, .. } => {
+                vec![Credential::new("default", api_key.clone())]
+            }
+            ProviderConfig::Local { api_key, .. }
+            | ProviderConfig::OaiCompatible { api_key, .. } => {
+                vec![Credential::new("default", api_key.clone().unwrap_or_default())]
+            }
+            ProviderConfig::AwsBedrock { .. } => Vec::new(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ProviderCredentials — sera-hjem multi-account container
+// ---------------------------------------------------------------------------
+
+/// Stand-alone credential bundle parsed from YAML / JSON / env.
+///
+/// Pairs with [`ProviderConfig`] but is kept as a sibling type so existing
+/// `ProviderConfig` constructors remain source-compatible.  YAML callers may
+/// supply either a single `api_key:` (one-credential, backward-compat) or a
+/// list of `credentials: [{id, api_key, base_url?}, ...]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderCredentials {
+    /// Legacy single-credential field.  When set and `credentials` is empty,
+    /// it is promoted into a one-element vector with id `"default"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+
+    /// Explicit multi-credential list.  Takes precedence over `api_key`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credentials: Vec<Credential>,
+}
+
+impl ProviderCredentials {
+    /// Build a single-credential bundle (backward-compat path).
+    pub fn from_api_key(api_key: impl Into<String>) -> Self {
+        Self {
+            api_key: Some(api_key.into()),
+            credentials: Vec::new(),
+        }
+    }
+
+    /// Build a multi-credential bundle.
+    pub fn from_credentials(credentials: Vec<Credential>) -> Self {
+        Self {
+            api_key: None,
+            credentials,
+        }
+    }
+
+    /// Canonical credential list.  Returns the `credentials:` list when
+    /// non-empty; otherwise promotes the single `api_key` into a one-element
+    /// vector with id `"default"`.
+    pub fn resolved(&self) -> Vec<Credential> {
+        if !self.credentials.is_empty() {
+            return self.credentials.clone();
+        }
+        match &self.api_key {
+            Some(k) if !k.is_empty() => vec![Credential::new("default", k.clone())],
+            _ => Vec::new(),
+        }
+    }
+
+    /// Number of resolved credentials (useful for diagnostics / metrics).
+    pub fn len(&self) -> usize {
+        self.resolved().len()
+    }
+
+    /// True when no credentials are configured.
+    pub fn is_empty(&self) -> bool {
+        self.credentials.is_empty()
+            && self
+                .api_key
+                .as_ref()
+                .is_none_or(|k| k.is_empty())
     }
 }
 
@@ -404,6 +535,7 @@ mod tests {
 
     fn make_mock_request() -> ModelRequest {
         ModelRequest {
+            thinking: Default::default(),
             messages: vec![json!({"role": "user", "content": "ping"})],
             tools: None,
             temperature: Some(0.0),
@@ -573,5 +705,159 @@ mod tests {
         let err = provider.chat(make_mock_request()).await
             .expect_err("should return error");
         assert_eq!(err.to_string(), "timeout waiting for response");
+    }
+
+    // ── sera-hjem: Credential / ProviderCredentials backward-compat ──────────
+
+    #[test]
+    fn provider_config_credentials_promotes_single_api_key() {
+        let cfg = ProviderConfig::OpenAi {
+            api_key: "sk-only".into(),
+            model: "gpt-4o".into(),
+            base_url: None,
+        };
+        let creds = cfg.credentials();
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].id, "default");
+        assert_eq!(creds[0].api_key, "sk-only");
+    }
+
+    #[test]
+    fn provider_config_credentials_local_with_no_api_key_returns_empty_string() {
+        let cfg = ProviderConfig::Local {
+            model: "llama-3".into(),
+            base_url: "http://localhost:11434/v1".into(),
+            api_key: None,
+        };
+        let creds = cfg.credentials();
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].id, "default");
+        assert_eq!(creds[0].api_key, "");
+    }
+
+    #[test]
+    fn provider_config_credentials_bedrock_returns_empty() {
+        let cfg = ProviderConfig::AwsBedrock {
+            region: "us-east-1".into(),
+            model: "amazon.titan".into(),
+            aws_access_key: None,
+            aws_secret_key: None,
+        };
+        assert!(cfg.credentials().is_empty());
+    }
+
+    #[test]
+    fn provider_credentials_yaml_single_api_key_back_compat() {
+        // Backward-compat: legacy YAML with just `api_key:` parses as one credential.
+        let yaml = "api_key: sk-legacy\n";
+        let bundle: ProviderCredentials =
+            serde_yaml_to_provider_credentials(yaml).expect("parse");
+        let resolved = bundle.resolved();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].id, "default");
+        assert_eq!(resolved[0].api_key, "sk-legacy");
+    }
+
+    #[test]
+    fn provider_credentials_yaml_multi_credential_list() {
+        let yaml = r#"
+credentials:
+  - id: primary
+    api_key: sk-one
+  - id: backup
+    api_key: sk-two
+    base_url: https://backup.example.com/v1
+"#;
+        let bundle: ProviderCredentials =
+            serde_yaml_to_provider_credentials(yaml).expect("parse");
+        let resolved = bundle.resolved();
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].id, "primary");
+        assert_eq!(resolved[0].api_key, "sk-one");
+        assert!(resolved[0].base_url.is_none());
+        assert_eq!(resolved[1].id, "backup");
+        assert_eq!(resolved[1].base_url.as_deref(), Some("https://backup.example.com/v1"));
+    }
+
+    #[test]
+    fn provider_credentials_credentials_take_precedence_over_api_key() {
+        // When both are present, the explicit list wins.
+        let bundle = ProviderCredentials {
+            api_key: Some("sk-legacy".into()),
+            credentials: vec![Credential::new("primary", "sk-explicit")],
+        };
+        let resolved = bundle.resolved();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].id, "primary");
+        assert_eq!(resolved[0].api_key, "sk-explicit");
+    }
+
+    #[test]
+    fn provider_credentials_is_empty_when_no_keys() {
+        assert!(ProviderCredentials::default().is_empty());
+        assert!(ProviderCredentials::from_api_key("").is_empty());
+        assert!(!ProviderCredentials::from_api_key("sk-x").is_empty());
+        assert!(
+            !ProviderCredentials::from_credentials(vec![Credential::new("k", "v")]).is_empty()
+        );
+    }
+
+    /// Tiny YAML→JSON shim so we don't need a hard dep on serde_yaml here —
+    /// we re-encode the YAML through serde_json by exploiting that the test
+    /// inputs are simple enough to express as JSON manually.  This keeps the
+    /// crate dependency footprint unchanged.
+    fn serde_yaml_to_provider_credentials(
+        yaml: &str,
+    ) -> Result<ProviderCredentials, serde_json::Error> {
+        // Hand-built parser: only supports the two test shapes.
+        let trimmed = yaml.trim();
+        if trimmed.starts_with("api_key:") {
+            let key = trimmed
+                .trim_start_matches("api_key:")
+                .trim()
+                .trim_matches('"');
+            let json = format!(r#"{{"api_key":"{key}"}}"#);
+            return serde_json::from_str(&json);
+        }
+        // multi-credential form
+        if trimmed.starts_with("credentials:") {
+            let body = trimmed.trim_start_matches("credentials:").trim();
+            // Parse each "- id: x\n    api_key: y\n    base_url: z" block.
+            let mut json_creds = Vec::new();
+            let mut cur: Option<(String, String, Option<String>)> = None;
+            for raw_line in body.lines() {
+                let line = raw_line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                if let Some(rest) = line.strip_prefix("- id:") {
+                    if let Some((id, key, url)) = cur.take() {
+                        json_creds.push(emit_cred(&id, &key, url.as_deref()));
+                    }
+                    cur = Some((rest.trim().to_string(), String::new(), None));
+                } else if let Some(rest) = line.strip_prefix("api_key:")
+                    && let Some(c) = cur.as_mut()
+                {
+                    c.1 = rest.trim().to_string();
+                } else if let Some(rest) = line.strip_prefix("base_url:")
+                    && let Some(c) = cur.as_mut()
+                {
+                    c.2 = Some(rest.trim().to_string());
+                }
+            }
+            if let Some((id, key, url)) = cur.take() {
+                json_creds.push(emit_cred(&id, &key, url.as_deref()));
+            }
+            let json = format!(r#"{{"credentials":[{}]}}"#, json_creds.join(","));
+            return serde_json::from_str(&json);
+        }
+        Ok(ProviderCredentials::default())
+    }
+
+    fn emit_cred(id: &str, key: &str, base_url: Option<&str>) -> String {
+        match base_url {
+            Some(u) => format!(r#"{{"id":"{id}","api_key":"{key}","base_url":"{u}"}}"#),
+            None => format!(r#"{{"id":"{id}","api_key":"{key}"}}"#),
+        }
     }
 }

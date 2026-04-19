@@ -6,6 +6,7 @@ pub mod evolve_token;
 pub mod generation;
 pub mod harness_dispatch;
 pub mod kill_switch;
+pub mod party;
 pub mod plugin;
 pub mod process_manager;
 pub mod session_persist;

@@ -36,7 +36,7 @@ pub use account_pool::{
     ProviderAccount,
 };
 pub use error::ModelError;
-pub use provider::{ModelProvider, ProviderConfig};
+pub use provider::{Credential, ModelProvider, ProviderConfig, ProviderCredentials};
 pub use response::ModelResponse;
 pub use routing::{
     AgentPreferences, CatalogError, CatalogRefreshConfig, CircuitConfig, CircuitState,

@@ -16,13 +16,24 @@ services:
     volumes:
       - ./sera.yaml:/app/sera.yaml:ro
       - sera-data:/app/data
+      - /home/entity/.sera/secrets:/app/secrets:ro
     environment:
-      - DISCORD_TOKEN=${DISCORD_TOKEN}
       - SERA_API_KEY=${SERA_API_KEY:-}
       - RUST_LOG=${RUST_LOG:-info}
       - SERA_RUNTIME_BIN=/usr/local/bin/sera-runtime
-    # host network so the container can reach LM Studio on localhost:1234
-    network_mode: host
+    # Bridge networking so published ports reach the host on WSL2 Docker Desktop.
+    # (network_mode: host binds to the Docker Desktop VM netns, not the WSL2
+    # distro, so `ports:` is ignored and host curl to localhost:3001 times out.)
+    # LM Studio on the host is reached via host.docker.internal (see sera.yaml).
+    #
+    # Publish on both IPv4 and IPv6: Windows 11 resolves `localhost` to `::1`
+    # first, so an IPv4-only publish makes `curl localhost:3001` from the
+    # Windows host time out even though 127.0.0.1:3001 works.
+    ports:
+      - "0.0.0.0:3001:3001"
+      - "[::]:3001:3001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
 volumes:

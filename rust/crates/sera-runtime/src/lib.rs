@@ -31,6 +31,7 @@
 //! See `CLAUDE.md` for module map, environment variables, and protocol details.
 
 // New modules (Lane D, P0-6)
+pub mod agent_tool_registry;
 pub mod circle_activity;
 pub mod compaction;
 pub mod context_engine;
@@ -42,9 +43,11 @@ pub mod memory_assembler;
 pub mod subagent;
 pub mod turn;
 
+pub mod permissions;
 pub mod sera_errors;
 pub mod semantic;
 pub mod shadow;
+pub mod tool_hooks;
 
 // Retained modules
 pub mod config;

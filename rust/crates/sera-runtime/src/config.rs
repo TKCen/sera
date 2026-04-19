@@ -1,6 +1,8 @@
 //! Runtime configuration from environment variables.
 #![allow(dead_code)]
 
+use sera_types::llm::ThinkingLevel;
+
 /// Runtime configuration — read from env vars set by sera-core when spawning the container.
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
@@ -36,6 +38,16 @@ pub struct RuntimeConfig {
     /// milliseconds. Past this budget the enricher degrades silently to an
     /// empty segment list.
     pub semantic_enrichment_timeout_ms: u64,
+    /// GH#140 — toggle hierarchical scope recall in
+    /// [`crate::context_engine::ContextEnricher`].
+    ///
+    /// When `true`, the enricher calls
+    /// [`sera_types::SemanticMemoryStore::query_hierarchical`] with the
+    /// agent's scope chain (Agent → Circle → Org → Global). When `false`
+    /// (the default), the enricher keeps its pre-GH#140 agent-only
+    /// `query()` behaviour. Safe rollout kill-switch — no code path other
+    /// than the enricher branches on this flag.
+    pub hierarchical_scopes_enabled: bool,
     /// When `true`, `TraitToolRegistry::execute` runs a per-tool PDP check via
     /// `ToolContext::authz` before the `ToolPolicy` check.
     ///
@@ -50,6 +62,14 @@ pub struct RuntimeConfig {
     ///
     /// When absent, an allow-all `DefaultAuthzProvider` stub is installed.
     pub tool_authz_roles: Option<String>,
+    /// Provider-agnostic reasoning intensity (sera-1rv8).
+    ///
+    /// Reads `SERA_THINKING_LEVEL` env var (values: `none`, `low`, `medium`,
+    /// `high`, `xhigh`).  Defaults to `None` — no reasoning overhead.
+    ///
+    /// When `Some`, [`crate::llm_client::LlmClient`] applies the matching
+    /// provider-native parameter before sending each request.
+    pub thinking_level: Option<ThinkingLevel>,
 }
 
 impl RuntimeConfig {
@@ -99,10 +119,16 @@ impl RuntimeConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(150),
+            hierarchical_scopes_enabled: std::env::var("HIERARCHICAL_SCOPES_ENABLED")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false),
             tool_authz_enabled: std::env::var("TOOL_AUTHZ_ENABLED")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false),
             tool_authz_roles: std::env::var("TOOL_AUTHZ_ROLES").ok(),
+            thinking_level: std::env::var("SERA_THINKING_LEVEL")
+                .ok()
+                .and_then(|v| v.parse::<ThinkingLevel>().ok()),
         }
     }
 }

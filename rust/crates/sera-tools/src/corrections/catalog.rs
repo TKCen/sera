@@ -5,12 +5,14 @@
 //! ```text
 //! ~/.sera/tool-corrections/
 //!   bash/
-//!     active/corrections.yaml    # enforced rules
-//!     proposed/<id>.yaml         # agent-submitted, awaiting approval
+//!     active/corrections.yaml    # enforced rules (seed + agent-written)
 //!   runtime/
 //!     active/corrections.yaml
-//!     proposed/...
 //! ```
+//!
+//! Rules go live immediately on write — no approval step. The seed is the
+//! unbreakable floor; agent-written rules can shadow seed rules by ID.
+//! A circuit breaker auto-pauses rules with >50% block rate.
 //!
 //! The catalog watches the `active/` directory of every tool for changes and
 //! reloads the in-memory rule set on the next call — no restart needed.
@@ -233,65 +235,41 @@ impl CorrectionCatalog {
         &self.inner.root
     }
 
-    /// Write a proposed rule to `<tool>/proposed/<id>.yaml`. Does not modify
-    /// the enforced (`active`) set. The admin path promotes proposed → active
-    /// by moving the file into `active/corrections.yaml`.
-    pub fn propose(&self, tool: &str, rule: CorrectionRule) -> io::Result<PathBuf> {
+    /// Write a rule directly to `<tool>/active/corrections.yaml`. Rules go live
+    /// immediately — no approval step. The seed is the unbreakable floor; a rule
+    /// with the same `id` as a seed rule shadows it.
+    pub fn add_rule(&self, tool: &str, rule: CorrectionRule) -> io::Result<PathBuf> {
         validate_tool_name(tool)?;
-        let dir = self.inner.root.join(tool).join("proposed");
+        let dir = self.inner.root.join(tool).join("active");
         std::fs::create_dir_all(&dir)?;
-        let safe_id = sanitize_id(&rule.id);
-        let path = dir.join(format!("{safe_id}.yaml"));
-        let file = CorrectionFile { rules: vec![rule] };
-        let yaml = serde_yaml::to_string(&file)
-            .map_err(|e| io::Error::other(format!("serialize proposed rule: {e}")))?;
-        std::fs::write(&path, yaml)?;
-        info!(tool, path = %path.display(), "wrote proposed correction rule");
-        Ok(path)
-    }
+        let active_path = dir.join("corrections.yaml");
 
-    /// Move a proposed rule into the active set. Used by the admin CLI /
-    /// approval endpoint; the meta-tool does not call this directly.
-    pub fn approve(&self, tool: &str, rule_id: &str) -> io::Result<()> {
-        validate_tool_name(tool)?;
-        let safe_id = sanitize_id(rule_id);
-        let src = self.inner.root.join(tool).join("proposed").join(format!("{safe_id}.yaml"));
-        if !src.exists() {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("no proposed rule '{rule_id}' for tool '{tool}'"),
-            ));
-        }
-        let proposed_file: CorrectionFile = serde_yaml::from_str(&std::fs::read_to_string(&src)?)
-            .map_err(|e| io::Error::other(format!("parse proposed: {e}")))?;
-
-        let active_dir = self.inner.root.join(tool).join("active");
-        std::fs::create_dir_all(&active_dir)?;
-        let active_path = active_dir.join("corrections.yaml");
+        // Merge into existing active file if one exists.
         let mut current: CorrectionFile = if active_path.exists() {
             serde_yaml::from_str(&std::fs::read_to_string(&active_path)?)
                 .map_err(|e| io::Error::other(format!("parse active: {e}")))?
         } else {
             CorrectionFile::default()
         };
-        for rule in proposed_file.rules {
-            if current.rules.iter().any(|r| r.id == rule.id) {
-                continue;
+
+        // Replace existing rule with same id, or append.
+        if let Some(existing) = current.rules.iter_mut().find(|r| r.id == rule.id) {
+            *existing = rule;
+        } else {
+            if current.rules.len() >= MAX_ACTIVE_RULES_PER_TOOL {
+                return Err(io::Error::other(format!(
+                    "tool '{tool}' has reached cap of {MAX_ACTIVE_RULES_PER_TOOL} active rules"
+                )));
             }
             current.rules.push(rule);
         }
-        if current.rules.len() > MAX_ACTIVE_RULES_PER_TOOL {
-            return Err(io::Error::other(format!(
-                "tool '{tool}' would exceed cap of {MAX_ACTIVE_RULES_PER_TOOL} active rules"
-            )));
-        }
+
         let yaml = serde_yaml::to_string(&current)
             .map_err(|e| io::Error::other(format!("serialize active: {e}")))?;
         std::fs::write(&active_path, yaml)?;
-        std::fs::remove_file(&src)?;
         self.reload_tool(tool);
-        info!(tool, rule_id, "approved correction rule");
-        Ok(())
+        info!(tool, path = %active_path.display(), "wrote correction rule to active");
+        Ok(active_path)
     }
 }
 
@@ -432,26 +410,34 @@ mod tests {
     }
 
     #[test]
-    fn propose_writes_to_proposed_dir() {
+    fn add_rule_writes_to_active_and_enforces_immediately() {
         let dir = TempDir::new().unwrap();
         let cat = CorrectionCatalog::load(dir.path()).unwrap();
-        let rule = CorrectionRule::new("test-rule", "foo", "use bar", "agent");
-        let path = cat.propose("bash", rule).unwrap();
+        let rule = CorrectionRule::new("test-rule", r"foo", "use bar", "agent");
+        let path = cat.add_rule("bash", rule).unwrap();
         assert!(path.exists());
-        assert!(path.starts_with(dir.path().join("bash").join("proposed")));
-        // Proposed rules are NOT enforced.
-        assert!(cat.check("bash", "foo").is_none());
+        assert!(path.ends_with("active/corrections.yaml"));
+        // Rules are enforced immediately after add_rule.
+        assert!(cat.check("bash", "foo").is_some());
     }
 
     #[test]
-    fn approve_moves_proposed_to_active() {
+    fn add_rule_shadows_existing_rule_with_same_id() {
         let dir = TempDir::new().unwrap();
         let cat = CorrectionCatalog::load(dir.path()).unwrap();
-        let rule = CorrectionRule::new("sleep-chain", r"sleep\s+\d+\s*&&", "use until", "agent");
-        cat.propose("bash", rule).unwrap();
-        cat.approve("bash", "sleep-chain").unwrap();
+        let r1 = CorrectionRule::new("sleep-chain", r"sleep\s+\d+\s*&&\s*gh", "old correction", "seed");
+        cat.add_rule("bash", r1).unwrap();
+        let r2 = CorrectionRule::new("sleep-chain", r"sleep\s+\d+\s*&&\s*gh\s+pr", "new correction", "agent");
+        cat.add_rule("bash", r2).unwrap();
+        // Only one rule present (shadowed).
         assert_eq!(cat.len("bash"), 1);
-        assert!(cat.check("bash", "sleep 10 && echo ok").is_some());
+        // The newer correction is what fires.
+        let correction = cat.check("bash", "sleep 10 && gh pr checks 950").unwrap();
+        let correction_text = match correction {
+            ToolCorrection::Blocked { correction: c, .. } => c,
+            ToolCorrection::Warning { better: c, .. } => c,
+        };
+        assert!(correction_text.contains("new"));
     }
 
     #[test]
@@ -510,9 +496,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cat = CorrectionCatalog::load(dir.path()).unwrap();
         let rule = CorrectionRule::new("r", "p", "c", "a");
-        assert!(cat.propose("../escape", rule.clone()).is_err());
-        assert!(cat.propose("bad/name", rule.clone()).is_err());
-        assert!(cat.propose("", rule).is_err());
+        // add_rule validates tool name same as propose did.
+        assert!(cat.add_rule("../escape", rule.clone()).is_err());
+        assert!(cat.add_rule("bad/name", rule.clone()).is_err());
+        assert!(cat.add_rule("", rule).is_err());
     }
 
     #[test]

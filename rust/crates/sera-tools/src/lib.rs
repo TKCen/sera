@@ -1,3 +1,4 @@
+pub mod corrections;
 pub mod registry;
 pub mod sandbox;
 pub mod sera_errors;

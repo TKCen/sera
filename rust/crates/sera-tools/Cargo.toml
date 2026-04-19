@@ -17,6 +17,13 @@ hex = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 
+# Correction catalog (tool-layer reinforcement)
+regex = { workspace = true }
+serde_yaml = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-mini = { workspace = true }
+dirs = { workspace = true }
+
 # LSP phase 1 — get_symbols_overview
 async-lsp = { workspace = true }
 lsp-types = { workspace = true }

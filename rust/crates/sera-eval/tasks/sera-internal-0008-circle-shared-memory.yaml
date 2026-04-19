@@ -1,0 +1,33 @@
+---
+id: sera-internal-0008
+title: Retrieve a fact from circle-shared memory
+suite: sera-internal
+version: 1
+tags: [memory, circles, tier-1]
+setup:
+  memory_seed:
+    - role: system
+      content: "Circle fact: the project ships on Fridays."
+  skills: []
+  sandbox_tier: 1
+input:
+  prompt: "When does this project ship?"
+expected:
+  assertions:
+    - kind: contains_any
+      values: ["Friday", "Fridays"]
+    - kind: not_contains
+      values: ["I don't know", "cannot determine"]
+gold_memory_segment_ids:
+  - circle.release.cadence
+budget:
+  max_turns: 2
+  max_tokens: 2000
+  max_wall_seconds: 45
+---
+
+## Rationale
+
+Circle-shared memory (role: system) should be pulled into the prompt by the
+memory layer. This is the baseline cross-agent recall case — if this fails
+the memory wiring in the `+memory` profile is broken.

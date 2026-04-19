@@ -1,0 +1,34 @@
+---
+id: sera-internal-0001
+title: Recall user's preferred systems-programming language across sessions
+suite: sera-internal
+version: 1
+tags: [memory, cross-session, tier-1]
+setup:
+  memory_seed:
+    - role: user
+      content: "I prefer Rust for systems programming because I like the borrow checker."
+  skills: []
+  sandbox_tier: 1
+input:
+  prompt: "What language should I use for the new CLI you're helping me with?"
+expected:
+  assertions:
+    - kind: contains_any
+      values: ["Rust", "rust"]
+    - kind: not_contains
+      values: ["Python", "Go", "TypeScript"]
+gold_memory_segment_ids:
+  - preference.language.systems
+budget:
+  max_turns: 3
+  max_tokens: 2000
+  max_wall_seconds: 60
+---
+
+## Rationale
+
+Exercises Tier-1 (SQLite FTS5) memory recall with no pgvector. The model has
+to retrieve the seeded preference from a prior session and apply it to a new
+question. A model that ignores memory will guess a generic language and fail
+the `contains_any` assertion.

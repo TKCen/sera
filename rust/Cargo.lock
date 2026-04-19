@@ -5015,6 +5015,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sera-eval"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "sera-events"
 version = "0.1.0"
 dependencies = [

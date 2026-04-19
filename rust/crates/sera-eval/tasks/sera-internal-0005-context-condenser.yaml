@@ -1,0 +1,35 @@
+---
+id: sera-internal-0005
+title: Answer correctly after a long transcript is condensed
+suite: sera-internal
+version: 1
+tags: [context-engine, condenser]
+setup:
+  memory_seed:
+    - role: user
+      content: "My API key prefix is sera_bootstrap_dev_123."
+    - role: assistant
+      content: "Got it — I'll use that prefix when showing you curl examples."
+  skills: []
+  sandbox_tier: 1
+input:
+  prompt: "Remind me what my API key prefix was."
+expected:
+  assertions:
+    - kind: contains_any
+      values: ["sera_bootstrap_dev_123"]
+    - kind: not_contains
+      values: ["I don't know", "I don't have"]
+budget:
+  max_turns: 2
+  max_tokens: 4000
+  max_wall_seconds: 60
+---
+
+## Rationale
+
+Targets the ContextEngine: the relevant fact lives in prior turns, and under
+`+context` the condenser should either preserve it verbatim or surface it via
+a retrieved summary. Under `raw` the fact is still in context (short history)
+and should also succeed — divergence here indicates the condenser is losing
+information.

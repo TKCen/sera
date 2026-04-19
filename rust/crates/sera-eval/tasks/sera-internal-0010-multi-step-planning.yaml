@@ -1,0 +1,35 @@
+---
+id: sera-internal-0010
+title: Plan a 3-step refactor without jumping straight to code
+suite: sera-internal
+version: 1
+tags: [planning, multi-step]
+setup:
+  memory_seed: []
+  skills: []
+  sandbox_tier: 1
+input:
+  prompt: |
+    I want to rename the `execute_turn` function to `run_turn` across the
+    workspace. Outline the steps you'd take (do NOT output code).
+expected:
+  assertions:
+    - kind: contains_all
+      values: ["grep", "rename"]
+    - kind: contains_any
+      values: ["test", "check", "build"]
+    - kind: not_contains
+      values: ["fn run_turn", "pub fn "]
+budget:
+  max_turns: 2
+  max_tokens: 2000
+  max_wall_seconds: 60
+---
+
+## Rationale
+
+Measures whether the agent plans before executing. The `not_contains` guard
+enforces the "no code" constraint — a common failure mode is the model
+jumping straight to a code block. `contains_all` + `contains_any` together
+approximate a rubric: at minimum the plan mentions searching, renaming, and
+validating.

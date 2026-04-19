@@ -81,15 +81,15 @@ impl SignalEmitter {
             }
             // Also fan out to the dispatching agent when MainSession is set,
             // so the caller learns its dispatch is parked on a human.
-            if self.target.writes_inbox() {
-                if let Err(e) = self.store.enqueue(&self.to_agent_id, signal).await {
-                    tracing::warn!(
-                        signal_kind = signal.kind(),
-                        recipient = %self.to_agent_id,
-                        error = %e,
-                        "failed to enqueue attention signal to dispatcher",
-                    );
-                }
+            if self.target.writes_inbox()
+                && let Err(e) = self.store.enqueue(&self.to_agent_id, signal).await
+            {
+                tracing::warn!(
+                    signal_kind = signal.kind(),
+                    recipient = %self.to_agent_id,
+                    error = %e,
+                    "failed to enqueue attention signal to dispatcher",
+                );
             }
             return;
         }

@@ -623,10 +623,10 @@ impl AgentRuntime for DefaultRuntime {
                 // Any other outcome (Handoff, Interruption, WaitingForApproval, etc.)
                 // — emit the matching terminal signal and return.
                 other => {
-                    if let Some(emitter) = self.signal_emitter.as_ref() {
-                        if let Some(sig) = terminal_signal_for(&other, &turn_task_id) {
-                            emitter.emit(&sig).await;
-                        }
+                    if let Some(emitter) = self.signal_emitter.as_ref()
+                        && let Some(sig) = terminal_signal_for(&other, &turn_task_id)
+                    {
+                        emitter.emit(&sig).await;
                     }
                     return Ok(other);
                 }

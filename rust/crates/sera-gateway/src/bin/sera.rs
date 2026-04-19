@@ -437,16 +437,6 @@ struct TurnEvents {
     usage: UsageInfo,
 }
 
-impl Default for UsageInfo {
-    fn default() -> Self {
-        Self {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-        }
-    }
-}
-
 // ── Shared state ────────────────────────────────────────────────────────────
 
 struct AppState {
@@ -570,7 +560,7 @@ struct ChatRequest {
     stream: bool,
 }
 
-#[derive(Serialize, Debug, Clone, Copy)]
+#[derive(Serialize, Debug, Clone, Copy, Default)]
 struct UsageInfo {
     prompt_tokens: u64,
     completion_tokens: u64,

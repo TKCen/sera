@@ -309,12 +309,6 @@ fn validate_tool_name(tool: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn sanitize_id(id: &str) -> String {
-    id.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

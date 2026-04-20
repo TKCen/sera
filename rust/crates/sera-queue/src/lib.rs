@@ -20,3 +20,15 @@ pub mod sqlx_backend;
 
 #[cfg(feature = "apalis")]
 pub use sqlx_backend::SqlxQueueBackend;
+
+#[cfg(feature = "apalis")]
+pub mod apalis_backend;
+
+#[cfg(feature = "apalis")]
+pub use apalis_backend::{ApalisSeraStorage, SeraJobContext};
+
+/// Re-export of [`apalis_cron`] — users enable the `apalis-cron` feature and
+/// call `CronStream::new(...).pipe_to_storage(apalis_sera_storage)` to drive
+/// cron-triggered jobs through `QueueBackend`.
+#[cfg(feature = "apalis-cron")]
+pub use apalis_cron;

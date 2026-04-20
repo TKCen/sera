@@ -15,6 +15,14 @@ use crate::handoff::Handoff;
 /// Doom loop threshold — triggers Interruption after this many consecutive act cycles.
 pub const DOOM_LOOP_THRESHOLD: u32 = 3;
 
+/// Maximum compaction checkpoints retained per session (SPEC-runtime §6a / P0-6 M2 gate).
+///
+/// Re-exported here alongside [`DOOM_LOOP_THRESHOLD`] so the turn-loop budget
+/// constants live next to each other; the canonical definition lives in
+/// [`crate::context_engine::MAX_COMPACTION_CHECKPOINTS_PER_SESSION`].
+pub const MAX_COMPACTION_CHECKPOINTS_PER_SESSION: u32 =
+    crate::context_engine::MAX_COMPACTION_CHECKPOINTS_PER_SESSION;
+
 /// React mode for the think step.
 #[derive(Debug, Clone)]
 pub enum ReactMode {

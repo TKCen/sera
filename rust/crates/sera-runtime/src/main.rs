@@ -4,9 +4,10 @@
 //! tool dispatch, context engine, and turn loop. No gateway required.
 //!
 //! Two modes:
-//! - **Interactive** (default when stdin is a TTY): human-friendly chat REPL
+//! - **Interactive** (default when stdin is a TTY): human-friendly chat REPL.
 //! - **NDJSON** (default when stdin is piped, or `--ndjson`): machine-readable
-//!   Submission/Event protocol for gateway integration
+//!   Submission/Event protocol (P0-6 `AppServerTransport::Stdio` contract —
+//!   see [`sera_runtime::stdio`]).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,12 +19,12 @@ use sera_runtime::context_engine::pipeline::ContextPipeline;
 use sera_runtime::default_runtime::DefaultRuntime;
 use sera_runtime::health;
 use sera_runtime::llm_client::LlmClient;
+use sera_runtime::stdio;
 use sera_runtime::tools::TraitToolRegistry;
 use sera_runtime::tools::dispatcher::RegistryDispatcher;
 use sera_types::principal::PrincipalId;
-use sera_types::runtime::{AgentRuntime, TokenUsage, TurnContext, TurnOutcome};
+use sera_types::runtime::{AgentRuntime, TurnContext, TurnOutcome};
 use sera_types::tool::AuthzProviderHandle;
-use serde::{Deserialize, Serialize};
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
@@ -91,98 +92,6 @@ impl Cli {
     }
 }
 
-// ── NDJSON envelope types ────────────────────────────────────────────────────
-
-/// Local NDJSON submission type — serde-compatible with sera-gateway's Submission.
-/// Defined locally to avoid a cyclic dependency (sera-gateway depends on sera-runtime).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Submission {
-    id: uuid::Uuid,
-    op: Op,
-}
-
-/// Local operation enum — mirrors sera-gateway's Op.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum Op {
-    UserTurn {
-        items: Vec<serde_json::Value>,
-        #[serde(default)]
-        model_override: Option<String>,
-        /// Session key provided by the gateway for per-session context tracking.
-        #[serde(default)]
-        session_key: Option<String>,
-        /// Parent session key — set when this turn belongs to a child session.
-        #[serde(default)]
-        parent_session_key: Option<String>,
-    },
-    Steer {
-        items: Vec<serde_json::Value>,
-        #[serde(default)]
-        session_key: Option<String>,
-        /// Parent session key — propagated from the spawning session.
-        #[serde(default)]
-        parent_session_key: Option<String>,
-    },
-    Interrupt,
-    System(SystemOp),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "system_op", rename_all = "snake_case")]
-enum SystemOp {
-    Shutdown,
-    HealthCheck,
-}
-
-/// Local NDJSON event type — serde-compatible with sera-gateway's Event.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Event {
-    id: uuid::Uuid,
-    /// Nil UUID for handshake frames (no associated submission).
-    submission_id: uuid::Uuid,
-    msg: EventMsg,
-    timestamp: chrono::DateTime<chrono::Utc>,
-    /// Parent session key carried on every frame so consumers can route child events.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    parent_session_key: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum EventMsg {
-    /// First frame — protocol negotiation (OpenClaw handshake).
-    Handshake {
-        protocol_version: String,
-        features: Vec<String>,
-        agent_id: String,
-    },
-    TurnStarted { turn_id: uuid::Uuid },
-    /// Terminal turn frame carrying the provider-reported token usage for this
-    /// turn. Consumers (e.g. the gateway) parse `tokens` to report usage back
-    /// through `/api/chat` responses.
-    TurnCompleted {
-        turn_id: uuid::Uuid,
-        #[serde(default)]
-        tokens: TokenUsage,
-    },
-    StreamingDelta { delta: String },
-    /// Tool call started — emitted for each tool invocation during the turn.
-    ToolCallBegin {
-        turn_id: uuid::Uuid,
-        call_id: String,
-        tool: String,
-        arguments: serde_json::Value,
-    },
-    /// Tool call completed — emitted after tool execution with the result.
-    ToolCallEnd {
-        turn_id: uuid::Uuid,
-        call_id: String,
-        result: String,
-    },
-    Error { code: String, message: String },
-}
-
 // ── Authz provider construction ──────────────────────────────────────────────
 
 /// Build an [`AuthzProviderHandle`] from config.
@@ -230,9 +139,6 @@ fn build_authz_provider(config: &RuntimeConfig) -> Arc<dyn AuthzProviderHandle> 
         builder = builder.grant(role, kinds);
     }
 
-    // If no agent-id is available here we still produce a valid provider;
-    // principal assignments are wired at call time or via future config.
-    //
     // Assign the runtime's own agent-id as a full-access principal so the
     // default single-agent deployment works without additional config.
     if let Ok(agent_id) = std::env::var("AGENT_ID")
@@ -276,23 +182,21 @@ async fn main() -> anyhow::Result<()> {
     let system_prompt = cli.system.clone();
     let config = cli.into_config();
 
-    // In interactive mode, only show warnings (no info spam); NDJSON mode uses RUST_LOG
-    if interactive {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-            )
-            .with_writer(std::io::stderr)
-            .init();
+    // NDJSON mode reserves stdout for the protocol — all tracing output
+    // (including info logs) goes to stderr so it cannot corrupt the
+    // Submission/Event byte stream. Interactive mode likewise writes to
+    // stderr to keep stdout clean for the assistant's final response.
+    let filter = if interactive {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"))
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-            )
-            .init();
-    }
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
 
     // Start health server in background (unless disabled)
     if config.chat_port > 0 {
@@ -304,12 +208,8 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Build authz provider from config (allow-all stub when tool_authz_roles unset).
     let authz_provider = build_authz_provider(&config);
 
-    // Build tool registry with authz kill-switch flag, and dispatcher.
-    // All builtins are native `Tool` impls post bead sera-ttrm-5.
-    //
     // sera-a1u: every runtime owns a shared DelegationBus so the three
     // delegation tools (session_spawn / session_yield / session_send) can
     // coordinate over a single subscriber registry.
@@ -329,8 +229,6 @@ async fn main() -> anyhow::Result<()> {
         })
         .collect();
 
-    // Build the DefaultRuntime.
-    //
     // sera-jvi + sera-48v: opportunistically attach an [`AccountPool`] and a
     // unified [`ThinkingConfig`] when the corresponding env vars are set.
     // Absence of either preserves the legacy single-account / no-reasoning
@@ -351,7 +249,7 @@ async fn main() -> anyhow::Result<()> {
             tool_count = tool_defs.len(),
             "sera-runtime starting (NDJSON transport)"
         );
-        run_ndjson_loop(&config, &runtime, &tool_defs).await
+        stdio::run_ndjson_loop(&config, &runtime, &tool_defs).await
     }
 }
 
@@ -446,366 +344,7 @@ async fn run_interactive(
     Ok(())
 }
 
-// ── NDJSON transport ─────────────────────────────────────────────────────────
-
-/// Read Submissions from stdin (NDJSON), process each, write Events to stdout.
-async fn run_ndjson_loop(
-    config: &RuntimeConfig,
-    runtime: &DefaultRuntime,
-    tool_defs: &[sera_types::tool::ToolDefinition],
-) -> anyhow::Result<()> {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
-    let stdin = tokio::io::stdin();
-    let mut reader = BufReader::new(stdin);
-    let mut stdout = tokio::io::stdout();
-    let mut line = String::new();
-
-    // Emit handshake frame — first frame the gateway reads to negotiate protocol.
-    let handshake = Event {
-        id: uuid::Uuid::new_v4(),
-        submission_id: uuid::Uuid::nil(),
-        msg: EventMsg::Handshake {
-            protocol_version: "2.0".to_string(),
-            features: vec![
-                "steer".to_string(),
-                "hitl".to_string(),
-                "hooks@v2".to_string(),
-                "parent_session_key".to_string(),
-            ],
-            agent_id: config.agent_id.clone(),
-        },
-        timestamp: chrono::Utc::now(),
-        parent_session_key: None,
-    };
-    let mut handshake_json = serde_json::to_string(&handshake)?;
-    handshake_json.push('\n');
-    stdout.write_all(handshake_json.as_bytes()).await?;
-    stdout.flush().await?;
-
-    loop {
-        line.clear();
-        let n = reader.read_line(&mut line).await?;
-        if n == 0 {
-            tracing::info!("stdin closed, exiting NDJSON loop");
-            break;
-        }
-
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let submission: Submission = match serde_json::from_str(trimmed) {
-            Ok(s) => s,
-            Err(e) => {
-                let err_event = Event {
-                    id: uuid::Uuid::new_v4(),
-                    submission_id: uuid::Uuid::nil(),
-                    msg: EventMsg::Error {
-                        code: "parse_error".to_string(),
-                        message: format!("failed to parse submission: {e}"),
-                    },
-                    timestamp: chrono::Utc::now(),
-                    parent_session_key: None,
-                };
-                let mut json = serde_json::to_string(&err_event)?;
-                json.push('\n');
-                stdout.write_all(json.as_bytes()).await?;
-                stdout.flush().await?;
-                continue;
-            }
-        };
-
-        // Check for shutdown
-        if matches!(&submission.op, Op::System(SystemOp::Shutdown)) {
-            tracing::info!("received shutdown command, exiting");
-            break;
-        }
-
-        let turn_id = uuid::Uuid::new_v4();
-
-        // Extract parent_session_key from the submission op for propagation.
-        let submission_parent_key = match &submission.op {
-            Op::UserTurn { parent_session_key, .. } => parent_session_key.clone(),
-            Op::Steer { parent_session_key, .. } => parent_session_key.clone(),
-            _ => None,
-        };
-
-        // Emit TurnStarted
-        let started = Event {
-            id: uuid::Uuid::new_v4(),
-            submission_id: submission.id,
-            msg: EventMsg::TurnStarted { turn_id },
-            timestamp: chrono::Utc::now(),
-            parent_session_key: submission_parent_key.clone(),
-        };
-        let mut json = serde_json::to_string(&started)?;
-        json.push('\n');
-        stdout.write_all(json.as_bytes()).await?;
-
-        // Convert Submission to TurnContext and execute via DefaultRuntime
-        let turn_ctx = submission_to_turn_context(&submission, &config.agent_id, turn_id, tool_defs);
-        let outcome = runtime.execute_turn(turn_ctx).await;
-
-        // Extract tokens_used for the terminal TurnCompleted frame. `Interruption`
-        // is the only outcome variant without a `tokens_used` field; errors and
-        // the `Err` arm report zeroed usage (the LLM call never completed).
-        let tokens_for_completion = match &outcome {
-            Ok(TurnOutcome::FinalOutput { tokens_used, .. })
-            | Ok(TurnOutcome::RunAgain { tokens_used, .. })
-            | Ok(TurnOutcome::Handoff { tokens_used, .. })
-            | Ok(TurnOutcome::Compact { tokens_used, .. })
-            | Ok(TurnOutcome::Stop { tokens_used, .. })
-            | Ok(TurnOutcome::WaitingForApproval { tokens_used, .. })
-            | Ok(TurnOutcome::PlanEmitted { tokens_used, .. }) => tokens_used.clone(),
-            Ok(TurnOutcome::Interruption { .. }) | Err(_) => TokenUsage::default(),
-        };
-
-        // Convert TurnOutcome to Event messages
-        match outcome {
-            Ok(TurnOutcome::FinalOutput { response, transcript, .. }) => {
-                // Emit tool call events from the accumulated transcript.
-                // The transcript contains assistant messages (with tool_calls) and
-                // tool result messages accumulated during the tool-call loop.
-                for msg in &transcript {
-                    let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-                    if role == "assistant" {
-                        if let Some(tool_calls) = msg.get("tool_calls").and_then(|tc| tc.as_array()) {
-                            for tc in tool_calls {
-                                let call_id = tc.get("id").and_then(|id| id.as_str()).unwrap_or("").to_string();
-                                let tool_name = tc.get("function")
-                                    .and_then(|f| f.get("name"))
-                                    .and_then(|n| n.as_str())
-                                    .unwrap_or("")
-                                    .to_string();
-                                let arguments_str = tc.get("function")
-                                    .and_then(|f| f.get("arguments"))
-                                    .and_then(|a| a.as_str())
-                                    .unwrap_or("{}");
-                                let arguments = serde_json::from_str(arguments_str)
-                                    .unwrap_or(serde_json::Value::Object(Default::default()));
-                                let begin_event = Event {
-                                    id: uuid::Uuid::new_v4(),
-                                    submission_id: submission.id,
-                                    msg: EventMsg::ToolCallBegin {
-                                        turn_id,
-                                        call_id: call_id.clone(),
-                                        tool: tool_name,
-                                        arguments,
-                                    },
-                                    timestamp: chrono::Utc::now(),
-                                    parent_session_key: submission_parent_key.clone(),
-                                };
-                                json = serde_json::to_string(&begin_event)?;
-                                json.push('\n');
-                                stdout.write_all(json.as_bytes()).await?;
-                            }
-                        }
-                    } else if role == "tool" {
-                        let call_id = msg.get("tool_call_id").and_then(|id| id.as_str()).unwrap_or("").to_string();
-                        let result_content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
-                        let end_event = Event {
-                            id: uuid::Uuid::new_v4(),
-                            submission_id: submission.id,
-                            msg: EventMsg::ToolCallEnd {
-                                turn_id,
-                                call_id,
-                                result: result_content,
-                            },
-                            timestamp: chrono::Utc::now(),
-                            parent_session_key: submission_parent_key.clone(),
-                        };
-                        json = serde_json::to_string(&end_event)?;
-                        json.push('\n');
-                        stdout.write_all(json.as_bytes()).await?;
-                    }
-                }
-
-                // Emit the final response
-                let delta = Event {
-                    id: uuid::Uuid::new_v4(),
-                    submission_id: submission.id,
-                    msg: EventMsg::StreamingDelta { delta: response },
-                    timestamp: chrono::Utc::now(),
-                    parent_session_key: submission_parent_key.clone(),
-                };
-                json = serde_json::to_string(&delta)?;
-                json.push('\n');
-                stdout.write_all(json.as_bytes()).await?;
-            }
-            Ok(TurnOutcome::RunAgain { .. }) => {
-                let delta = Event {
-                    id: uuid::Uuid::new_v4(),
-                    submission_id: submission.id,
-                    msg: EventMsg::StreamingDelta {
-                        delta: "[run_again — tool calls dispatched]".to_string(),
-                    },
-                    timestamp: chrono::Utc::now(),
-                    parent_session_key: submission_parent_key.clone(),
-                };
-                json = serde_json::to_string(&delta)?;
-                json.push('\n');
-                stdout.write_all(json.as_bytes()).await?;
-            }
-            Ok(TurnOutcome::Handoff { target_agent_id, .. }) => {
-                let delta = Event {
-                    id: uuid::Uuid::new_v4(),
-                    submission_id: submission.id,
-                    msg: EventMsg::StreamingDelta {
-                        delta: format!("[handoff -> {target_agent_id}]"),
-                    },
-                    timestamp: chrono::Utc::now(),
-                    parent_session_key: submission_parent_key.clone(),
-                };
-                json = serde_json::to_string(&delta)?;
-                json.push('\n');
-                stdout.write_all(json.as_bytes()).await?;
-            }
-            Ok(TurnOutcome::Compact { .. }) => {
-                let delta = Event {
-                    id: uuid::Uuid::new_v4(),
-                    submission_id: submission.id,
-                    msg: EventMsg::StreamingDelta {
-                        delta: "[compact — context condensed]".to_string(),
-                    },
-                    timestamp: chrono::Utc::now(),
-                    parent_session_key: submission_parent_key.clone(),
-                };
-                json = serde_json::to_string(&delta)?;
-                json.push('\n');
-                stdout.write_all(json.as_bytes()).await?;
-            }
-            Ok(TurnOutcome::Interruption { reason, .. }) => {
-                let delta = Event {
-                    id: uuid::Uuid::new_v4(),
-                    submission_id: submission.id,
-                    msg: EventMsg::StreamingDelta {
-                        delta: format!("[interrupted: {reason}]"),
-                    },
-                    timestamp: chrono::Utc::now(),
-                    parent_session_key: submission_parent_key.clone(),
-                };
-                json = serde_json::to_string(&delta)?;
-                json.push('\n');
-                stdout.write_all(json.as_bytes()).await?;
-            }
-            Ok(TurnOutcome::Stop { summary, .. }) => {
-                let delta = Event {
-                    id: uuid::Uuid::new_v4(),
-                    submission_id: submission.id,
-                    msg: EventMsg::StreamingDelta {
-                        delta: format!("[stop: {summary}]"),
-                    },
-                    timestamp: chrono::Utc::now(),
-                    parent_session_key: submission_parent_key.clone(),
-                };
-                json = serde_json::to_string(&delta)?;
-                json.push('\n');
-                stdout.write_all(json.as_bytes()).await?;
-            }
-            Ok(TurnOutcome::WaitingForApproval { ticket_id, .. }) => {
-                let delta = Event {
-                    id: uuid::Uuid::new_v4(),
-                    submission_id: submission.id,
-                    msg: EventMsg::StreamingDelta {
-                        delta: format!("[waiting_for_approval: ticket={ticket_id}]"),
-                    },
-                    timestamp: chrono::Utc::now(),
-                    parent_session_key: submission_parent_key.clone(),
-                };
-                json = serde_json::to_string(&delta)?;
-                json.push('\n');
-                stdout.write_all(json.as_bytes()).await?;
-            }
-            Ok(TurnOutcome::PlanEmitted { plan_tool_calls, rationale, .. }) => {
-                let summary = format!(
-                    "[plan_emitted: {} tool call(s); rationale={:?}]",
-                    plan_tool_calls.len(),
-                    rationale
-                );
-                let delta = Event {
-                    id: uuid::Uuid::new_v4(),
-                    submission_id: submission.id,
-                    msg: EventMsg::StreamingDelta { delta: summary },
-                    timestamp: chrono::Utc::now(),
-                    parent_session_key: submission_parent_key.clone(),
-                };
-                json = serde_json::to_string(&delta)?;
-                json.push('\n');
-                stdout.write_all(json.as_bytes()).await?;
-            }
-            Err(e) => {
-                tracing::error!("execute_turn failed: {e:?}");
-                let err_event = Event {
-                    id: uuid::Uuid::new_v4(),
-                    submission_id: submission.id,
-                    msg: EventMsg::Error {
-                        code: "turn_error".to_string(),
-                        message: format!("{e:?}"),
-                    },
-                    timestamp: chrono::Utc::now(),
-                    parent_session_key: submission_parent_key.clone(),
-                };
-                json = serde_json::to_string(&err_event)?;
-                json.push('\n');
-                stdout.write_all(json.as_bytes()).await?;
-            }
-        }
-
-        // Emit TurnCompleted with the usage the LLM reported for this turn.
-        let completed = Event {
-            id: uuid::Uuid::new_v4(),
-            submission_id: submission.id,
-            msg: EventMsg::TurnCompleted {
-                turn_id,
-                tokens: tokens_for_completion,
-            },
-            timestamp: chrono::Utc::now(),
-            parent_session_key: submission_parent_key,
-        };
-        json = serde_json::to_string(&completed)?;
-        json.push('\n');
-        stdout.write_all(json.as_bytes()).await?;
-        stdout.flush().await?;
-    }
-
-    Ok(())
-}
-
-/// Convert a local `Submission` into a `TurnContext` for the runtime.
-fn submission_to_turn_context(
-    submission: &Submission,
-    agent_id: &str,
-    turn_id: uuid::Uuid,
-    tool_defs: &[sera_types::tool::ToolDefinition],
-) -> TurnContext {
-    let (messages, session_key_override, parent_session_key) = match &submission.op {
-        Op::UserTurn { items, session_key, parent_session_key, .. } => {
-            (items.clone(), session_key.clone(), parent_session_key.clone())
-        }
-        Op::Steer { items, session_key, parent_session_key } => {
-            (items.clone(), session_key.clone(), parent_session_key.clone())
-        }
-        Op::Interrupt | Op::System(_) => (vec![], None, None),
-    };
-
-    // Use gateway-provided session_key when available, otherwise generate one.
-    let session_key = session_key_override
-        .unwrap_or_else(|| format!("session:{agent_id}:{}", submission.id));
-
-    TurnContext {
-        event_id: turn_id.to_string(),
-        agent_id: agent_id.to_string(),
-        session_key,
-        messages,
-        available_tools: tool_defs.to_vec(),
-        metadata: HashMap::new(),
-        change_artifact: None,
-        parent_session_key,
-        tool_use_behavior: Default::default(),
-    }
-}
+// ── LLM client wiring ────────────────────────────────────────────────────────
 
 /// Build an [`LlmClient`] with optional sera-jvi account pool + sera-48v
 /// thinking config attached.

@@ -97,6 +97,33 @@ sera-types (leaf)
 - Incremental compilation is on by default in dev profile
 - First build downloads + compiles all deps (~30s); subsequent checks are ~1-3s
 
+### sccache Compiler Cache
+
+**Problem:** `rust/target/debug` grows to 52GB+ and `cargo clean` frees it but it rebuilds immediately on next compile.
+
+**Solution:** sccache + selective incremental clean:
+- `rust/.cargo/config.toml` sets `RUSTC_WRAPPER=sccache` for all workspace builds
+- `rust/build.sh` cleans `incremental/` only when >1GB, keeps `deps/` warm
+- `rust/docker-compose.sera.yml` mounts named volumes for cargo-registry, cargo-cache, sccache-cache
+
+**Setup:**
+```bash
+# Install sccache (pre-built binary)
+curl -sSL https://github.com/mozilla/sccache/releases/download/v0.8.1/sccache-v0.8.1-x86_64-unknown-linux-musl.tar.gz | tar xz -C ~/.cargo/bin
+mv ~/.cargo/bin/sccache-v0.8.1-x86_64-unknown-linux-musl/sccache ~/.cargo/bin/sccache
+chmod +x ~/.cargo/bin/sccache
+
+# Set cache dir and size
+export SCCACHE_DIR=~/.cache/sccache
+export SCCACHE_CACHE_SIZE=50G
+
+# Verify sccache is working
+cargo check -p sera-config  # first run: compiles
+~/.cargo/bin/sccache --show-stats  # should show cache hits on second run
+```
+
+**Docker builds:** Named volumes (`sera-cargo-registry`, `sera-cargo-cache`, `sera-sccache-cache`) persist across rebuilds. No additional setup needed — docker compose uses them automatically.
+
 ## Contract Tests
 
 For verifying Rust↔TypeScript compatibility:

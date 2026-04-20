@@ -1,5 +1,8 @@
-# Use lld for faster link times on Windows
-# Install: rustup component add llvm-tools (or install LLVM separately)
-# Uncomment if lld-link is available on your system:
-# [target.x86_64-pc-windows-msvc]
-# linker = "lld-link"
+# ─────────────────────────────────────────────────────────────────────────────
+# Cargo config for the Sera workspace
+# Cached at rust/.cargo/config.toml so it only applies to this workspace
+# ─────────────────────────────────────────────────────────────────────────────
+
+[build]
+# Use sccache as the rustc wrapper. Must be on PATH; see rust/CLAUDE.md for install.
+rustc-wrapper = "sccache"

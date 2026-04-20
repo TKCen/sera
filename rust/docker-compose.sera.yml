@@ -13,6 +13,16 @@ services:
     build:
       context: ..
       dockerfile: rust/Dockerfile.sera
+      cache:
+        - type: volume
+          source: sera-cargo-registry
+          target: /root/.cargo/registry
+        - type: volume
+          source: sera-cargo-cache
+          target: /root/.cargo/cache
+        - type: volume
+          source: sera-sccache-cache
+          target: /build/.sccache
     volumes:
       - ./sera.yaml:/app/sera.yaml:ro
       - sera-data:/app/data
@@ -38,3 +48,6 @@ services:
 
 volumes:
   sera-data:
+  sera-cargo-registry:
+  sera-cargo-cache:
+  sera-sccache-cache:

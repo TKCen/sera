@@ -17,6 +17,7 @@
 
 pub mod claim;
 pub mod coordination;
+pub mod engine;
 pub mod memory_manager;
 pub mod dreaming;
 pub mod source_ingest;
@@ -64,6 +65,12 @@ pub use task::{
 pub use termination::{
     check_termination, TerminationConfig, TerminationReason, TerminationState,
     WorkflowTermination,
+};
+
+// Re-exports — Phase 1 WorkflowEngine (SPEC-workflow-engine §4).
+pub use engine::{
+    EngineError, MemoryWorkflowBackend, SqliteWorkflowBackend, WorkflowEngine,
+    WorkflowEngineBackend,
 };
 
 // Re-exports — Circle coordination (SPEC-circles).

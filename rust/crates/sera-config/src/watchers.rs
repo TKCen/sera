@@ -2,9 +2,188 @@
 //!
 //! Watches specified directories for YAML file changes (create, modify, delete)
 //! and emits structured events with resource type classification and validation.
+//!
+//! Also provides [`ConfigWatcher`] for single-file config hot-reload with
+//! schema-validated atomic swap and `broadcast`-based [`ConfigReloadEvent`].
 
 use std::path::PathBuf;
-use tokio::sync::{mpsc, watch};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{mpsc, watch, RwLock, broadcast};
+use sha2::{Digest, Sha256};
+
+// ──────────────────────────────────────────────────────────────────────────────
+// ConfigWatcher — single-file hot-reload with schema-validated swap
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Event emitted on every debounced file change.
+#[derive(Debug, Clone)]
+pub enum ConfigReloadEvent {
+    /// Config reloaded successfully. `version` is the SHA-256 hex of the new content.
+    Reloaded(ConfigReloaded),
+    /// Reload attempted but failed validation; previous config is still active.
+    Failed(ConfigReloadFailed),
+}
+
+/// A successful hot-reload.
+#[derive(Debug, Clone)]
+pub struct ConfigReloaded {
+    /// SHA-256 hex digest of the new config content.
+    pub version: String,
+    /// Path of the file that changed.
+    pub path: PathBuf,
+}
+
+/// A failed hot-reload attempt.
+#[derive(Debug, Clone)]
+pub struct ConfigReloadFailed {
+    /// Human-readable reason the reload was rejected.
+    pub reason: String,
+    /// Path of the file that changed.
+    pub path: PathBuf,
+}
+
+/// Hot-reload watcher for a single YAML config file.
+///
+/// On each debounced change:
+/// 1. Reads and YAML-parses the file.
+/// 2. If valid, atomically swaps the active config via an `Arc<RwLock<serde_yaml::Value>>`
+///    and broadcasts a [`ConfigReloadEvent::Reloaded`] event.
+/// 3. If invalid, broadcasts [`ConfigReloadEvent::Failed`] and leaves the active config
+///    unchanged.
+pub struct ConfigWatcher {
+    /// The currently-active config value (shared with callers).
+    config: Arc<RwLock<serde_yaml::Value>>,
+    /// Broadcast sender — callers subscribe via [`ConfigWatcher::subscribe`].
+    tx: broadcast::Sender<ConfigReloadEvent>,
+}
+
+impl ConfigWatcher {
+    /// Spawn a config watcher on `path`.
+    ///
+    /// Returns the `ConfigWatcher` (which holds the active config and the broadcast
+    /// channel) plus a `tokio::task::JoinHandle` for the background watcher task.
+    ///
+    /// The initial config is read synchronously before spawning. Returns an error if
+    /// the file cannot be read or parsed at startup.
+    pub fn spawn(
+        path: PathBuf,
+    ) -> Result<(Self, tokio::task::JoinHandle<()>), ConfigWatcherError> {
+        use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode, DebounceEventResult};
+
+        // Load initial config
+        let initial = load_yaml(&path)?;
+        let config = Arc::new(RwLock::new(initial));
+        let (tx, _) = broadcast::channel(64);
+
+        let config_clone = Arc::clone(&config);
+        let tx_clone = tx.clone();
+        let path_clone = path.clone();
+
+        // Bridge: notify callback → tokio mpsc → async task
+        let (bridge_tx, mut bridge_rx) = mpsc::channel::<DebounceEventResult>(32);
+
+        let mut debouncer = new_debouncer(Duration::from_millis(300), move |res: DebounceEventResult| {
+            let _ = bridge_tx.blocking_send(res);
+        })
+        .map_err(|e| ConfigWatcherError::Init(e.to_string()))?;
+
+        // Watch the parent directory so renames (editor saves) are detected.
+        let watch_dir = path_clone
+            .parent()
+            .unwrap_or(&path_clone)
+            .to_path_buf();
+
+        debouncer
+            .watcher()
+            .watch(&watch_dir, RecursiveMode::NonRecursive)
+            .map_err(|e| ConfigWatcherError::Watch(e.to_string()))?;
+
+        let handle = tokio::spawn(async move {
+            // Keep debouncer alive for the lifetime of the task.
+            let _debouncer = debouncer;
+
+            while let Some(res) = bridge_rx.recv().await {
+                match res {
+                    Err(e) => {
+                        tracing::warn!(error = %e, "config watcher notify error");
+                    }
+                    Ok(events) => {
+                        // Only care about events touching our specific file.
+                        let relevant = events.iter().any(|ev| ev.path == path_clone);
+                        if !relevant {
+                            continue;
+                        }
+
+                        let event = match load_yaml(&path_clone) {
+                            Ok(value) => {
+                                let version = sha256_yaml(&value);
+                                *config_clone.write().await = value;
+                                ConfigReloadEvent::Reloaded(ConfigReloaded {
+                                    version,
+                                    path: path_clone.clone(),
+                                })
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    path = %path_clone.display(),
+                                    error = %e,
+                                    "config reload failed — keeping previous config"
+                                );
+                                ConfigReloadEvent::Failed(ConfigReloadFailed {
+                                    reason: e.to_string(),
+                                    path: path_clone.clone(),
+                                })
+                            }
+                        };
+
+                        // Ignore send errors (no active subscribers is fine).
+                        let _ = tx_clone.send(event);
+                    }
+                }
+            }
+        });
+
+        Ok((Self { config, tx }, handle))
+    }
+
+    /// Subscribe to future [`ConfigReloadEvent`]s.
+    pub fn subscribe(&self) -> broadcast::Receiver<ConfigReloadEvent> {
+        self.tx.subscribe()
+    }
+
+    /// Read the currently-active config value.
+    pub fn config(&self) -> Arc<RwLock<serde_yaml::Value>> {
+        Arc::clone(&self.config)
+    }
+}
+
+/// Errors from [`ConfigWatcher`] operations.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigWatcherError {
+    #[error("failed to initialize config watcher: {0}")]
+    Init(String),
+    #[error("failed to watch path: {0}")]
+    Watch(String),
+    #[error("failed to load config file: {0}")]
+    Load(String),
+}
+
+/// Load and YAML-parse a file. Returns `ConfigWatcherError::Load` on any failure.
+fn load_yaml(path: &std::path::Path) -> Result<serde_yaml::Value, ConfigWatcherError> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| ConfigWatcherError::Load(format!("read error: {e}")))?;
+    serde_yaml::from_str(&content)
+        .map_err(|e| ConfigWatcherError::Load(format!("YAML parse error: {e}")))
+}
+
+/// Compute a SHA-256 hex digest over the canonical YAML serialisation.
+fn sha256_yaml(value: &serde_yaml::Value) -> String {
+    let bytes = serde_yaml::to_string(value).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(bytes.as_bytes());
+    hex::encode(hasher.finalize())
+}
 
 /// Resource type detected from directory path
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]

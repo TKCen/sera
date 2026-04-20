@@ -237,13 +237,18 @@ use sera_tools::sandbox::wasm::WasmSandboxProvider;
 use sera_tools::sandbox::{SandboxConfig, SandboxError};
 
 #[tokio::test]
-async fn wasm_provider_signals_not_implemented() {
-    let provider = WasmSandboxProvider;
+async fn wasm_provider_rejects_empty_config() {
+    let provider = WasmSandboxProvider::default();
     let err = provider
         .create(&SandboxConfig::default())
         .await
         .unwrap_err();
-    assert!(matches!(err, SandboxError::NotImplemented));
+    // With the wasm feature enabled the real provider returns CreateFailed for
+    // an empty image; the stub returns NotImplemented.
+    assert!(
+        matches!(err, SandboxError::NotImplemented | SandboxError::CreateFailed { .. }),
+        "unexpected error: {err:?}"
+    );
     assert_eq!(provider.name(), "wasm");
 }
 

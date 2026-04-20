@@ -21,6 +21,9 @@ jobs:
         with:
           workspaces: rust
 
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.5
+
       - name: Check
         run: cd rust && cargo check --workspace
 

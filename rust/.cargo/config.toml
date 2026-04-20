@@ -4,6 +4,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 [build]
-# Use sccache for all compilations — keeps deps cached across clean builds
-# sccache binary at ~/.cargo/bin/sccache
-rustc-wrapper = "/home/entity/.cargo/bin/sccache"
+# Use sccache as the rustc wrapper. Must be on PATH; see rust/CLAUDE.md for install.
+rustc-wrapper = "sccache"

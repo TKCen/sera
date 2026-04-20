@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-default = ["sqlite", "sqlite-vec"]
+default = []
 pgvector = ["dep:sqlx", "dep:pgvector"]
 sqlite = ["dep:rusqlite"]
 sqlite-vec = ["sqlite", "dep:sqlite-vec"]

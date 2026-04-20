@@ -362,8 +362,8 @@ mod tests {
     use async_trait::async_trait;
     use chrono::Utc;
     use sera_types::{
-        EmbeddingError, EmbeddingHealth, EvictionPolicy, MemoryId, SemanticEntry, SemanticError,
-        SemanticStats,
+        EmbeddingError, EmbeddingHealth, EvictionPolicy, MemoryId, PutRequest, SemanticEntry,
+        SemanticError, SemanticStats,
     };
     use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
     use sera_types::tool::{
@@ -442,8 +442,8 @@ mod tests {
 
     #[async_trait]
     impl SemanticMemoryStore for CannedStore {
-        async fn put(&self, entry: SemanticEntry) -> Result<MemoryId, SemanticError> {
-            Ok(entry.id)
+        async fn put(&self, _req: PutRequest) -> Result<MemoryId, SemanticError> {
+            Ok(MemoryId::new("canned"))
         }
         async fn query(&self, q: SemanticQuery) -> Result<Vec<ScoredEntry>, SemanticError> {
             self.observed_top_k.store(q.top_k, Ordering::SeqCst);
@@ -478,7 +478,7 @@ mod tests {
                 id: MemoryId::new(id),
                 agent_id: "agent-a".to_string(),
                 content: content.to_string(),
-                embedding: vec![1.0, 0.0, 0.0, 0.0],
+                embedding: Some(vec![1.0, 0.0, 0.0, 0.0]),
                 tier: SegmentKind::MemoryRecall(id.to_string()),
                 tags: vec!["tag-a".into()],
                 created_at: Utc::now(),

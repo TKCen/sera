@@ -81,8 +81,8 @@ use tracing::warn;
 use uuid::Uuid;
 
 use sera_types::{
-    EmbeddingService, EvictionPolicy, MemoryId, ScoredEntry, SemanticEntry, SemanticError,
-    SemanticMemoryStore, SemanticQuery, SemanticStats, memory::SegmentKind,
+    EmbeddingService, EvictionPolicy, MemoryId, PutRequest, ScoredEntry, SemanticEntry,
+    SemanticError, SemanticMemoryStore, SemanticQuery, SemanticStats, memory::SegmentKind,
 };
 
 /// Default embedding dimensionality — matches the local
@@ -292,6 +292,105 @@ impl SqliteMemoryStore {
         .await
         .map_err(|e| SemanticError::Backend(format!("join: {e}")))?
     }
+
+    /// Test-only helper: insert a row with a caller-chosen id and
+    /// backdated `created_at`. Useful for eviction/TTL tests that depend
+    /// on stable ids and aged rows. Not part of the trait surface.
+    #[cfg(test)]
+    pub(crate) async fn put_raw(
+        &self,
+        id: &str,
+        agent_id: &str,
+        content: &str,
+        tier: SegmentKind,
+        tags: Vec<String>,
+        promoted: bool,
+        created_at: DateTime<Utc>,
+        embedding: Option<Vec<f32>>,
+    ) -> Result<MemoryId, SemanticError> {
+        let vec_available = self.vec_available;
+        let dims = self.dims;
+        let tier_json = serde_json::to_string(&tier)
+            .map_err(|e| SemanticError::Serialization(format!("tier: {e}")))?;
+        let tags_json = serde_json::to_string(&tags)
+            .map_err(|e| SemanticError::Serialization(format!("tags: {e}")))?;
+        let id_owned = if id.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            id.to_string()
+        };
+        let id_for_block = id_owned.clone();
+        let agent_id = agent_id.to_string();
+        let content = content.to_string();
+        let created_ts = created_at.timestamp();
+        let embedding_owned = embedding;
+
+        self.with_conn(move |conn| -> Result<MemoryId, SemanticError> {
+            let tx = conn
+                .transaction()
+                .map_err(|e| SemanticError::Backend(format!("begin tx: {e}")))?;
+            tx.execute(
+                "INSERT INTO memory_entries
+                    (id, agent_id, tier, content, metadata_json, tags, created_at, last_touched_at, access_count, promoted)
+                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, NULL, 0, ?7)
+                 ON CONFLICT(id) DO UPDATE SET
+                     agent_id   = excluded.agent_id,
+                     tier       = excluded.tier,
+                     content    = excluded.content,
+                     tags       = excluded.tags,
+                     created_at = excluded.created_at,
+                     promoted   = excluded.promoted",
+                params![
+                    id_for_block,
+                    agent_id,
+                    tier_json,
+                    content,
+                    tags_json,
+                    created_ts,
+                    promoted as i64,
+                ],
+            )
+            .map_err(|e| SemanticError::Backend(format!("insert entry: {e}")))?;
+            let rowid: i64 = tx
+                .query_row(
+                    "SELECT rowid FROM memory_entries WHERE id = ?1",
+                    params![id_for_block],
+                    |r| r.get(0),
+                )
+                .map_err(|e| SemanticError::Backend(format!("lookup rowid: {e}")))?;
+            tx.execute("DELETE FROM memory_fts WHERE rowid = ?1", params![rowid])
+                .map_err(|e| SemanticError::Backend(format!("delete fts: {e}")))?;
+            tx.execute(
+                "INSERT INTO memory_fts (rowid, content, agent_id, tier, tags)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![rowid, content, agent_id, tier_json, tags_json],
+            )
+            .map_err(|e| SemanticError::Backend(format!("insert fts: {e}")))?;
+            if vec_available
+                && let Some(ref emb) = embedding_owned
+                && !emb.is_empty()
+            {
+                if emb.len() != dims {
+                    return Err(SemanticError::DimensionMismatch {
+                        expected: dims,
+                        got: emb.len(),
+                    });
+                }
+                tx.execute("DELETE FROM memory_vec WHERE rowid = ?1", params![rowid])
+                    .ok();
+                let blob = vec_to_blob(emb);
+                tx.execute(
+                    "INSERT INTO memory_vec (rowid, embedding) VALUES (?1, ?2)",
+                    params![rowid, blob],
+                )
+                .map_err(|e| SemanticError::Backend(format!("insert vec: {e}")))?;
+            }
+            tx.commit()
+                .map_err(|e| SemanticError::Backend(format!("commit: {e}")))?;
+            Ok(MemoryId::new(id_for_block))
+        })
+        .await
+    }
 }
 
 // ─── Row plumbing ──────────────────────────────────────────────────────────
@@ -339,7 +438,7 @@ fn row_from_sqlite(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
     })
 }
 
-fn row_to_entry(row: Row, embedding: Vec<f32>) -> SemanticEntry {
+fn row_to_entry(row: Row, embedding: Option<Vec<f32>>) -> SemanticEntry {
     SemanticEntry {
         id: MemoryId::new(row.id),
         agent_id: row.agent_id,
@@ -377,24 +476,37 @@ fn now_unix() -> i64 {
 
 // ─── put / delete / touch / promote ────────────────────────────────────────
 
+/// Plain-field arguments for the blocking `put` path. Lives in this module
+/// so we can hand a fully-owned, `Send` struct to `tokio::task::spawn_blocking`
+/// without pulling the full `SemanticEntry` (which would tangle the input
+/// shape with the output shape).
+struct PutParams {
+    id: String,
+    agent_id: String,
+    content: String,
+    tier: SegmentKind,
+    tags: Vec<String>,
+    promoted: bool,
+    embedding: Option<Vec<f32>>,
+}
+
 fn put_blocking(
     conn: &mut Connection,
-    entry: &SemanticEntry,
+    params: PutParams,
     vec_available: bool,
     expected_dims: usize,
-    allow_vector: bool,
 ) -> Result<MemoryId, SemanticError> {
-    let id = if entry.id.as_str().is_empty() {
+    let id = if params.id.is_empty() {
         Uuid::new_v4().to_string()
     } else {
-        entry.id.as_str().to_string()
+        params.id
     };
-    let tier_json = serde_json::to_string(&entry.tier)
+    let tier_json = serde_json::to_string(&params.tier)
         .map_err(|e| SemanticError::Serialization(format!("tier serialize: {e}")))?;
-    let tags_json = serde_json::to_string(&entry.tags)
+    let tags_json = serde_json::to_string(&params.tags)
         .map_err(|e| SemanticError::Serialization(format!("tags serialize: {e}")))?;
-    let created = entry.created_at.timestamp();
-    let last_touched = entry.last_accessed_at.map(|t| t.timestamp());
+    let created = Utc::now().timestamp();
+    let last_touched: Option<i64> = None;
 
     let tx = conn
         .transaction()
@@ -413,13 +525,13 @@ fn put_blocking(
              promoted        = excluded.promoted",
         params![
             id,
-            entry.agent_id,
+            params.agent_id,
             tier_json,
-            entry.content,
+            params.content,
             tags_json,
             created,
             last_touched,
-            entry.promoted as i64,
+            params.promoted as i64,
         ],
     )
     .map_err(|e| SemanticError::Backend(format!("insert entry: {e}")))?;
@@ -443,20 +555,23 @@ fn put_blocking(
     tx.execute(
         "INSERT INTO memory_fts (rowid, content, agent_id, tier, tags)
          VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![rowid, entry.content, entry.agent_id, tier_json, tags_json],
+        params![rowid, params.content, params.agent_id, tier_json, tags_json],
     )
     .map_err(|e| SemanticError::Backend(format!("insert fts: {e}")))?;
 
-    if vec_available && allow_vector && !entry.embedding.is_empty() {
-        if entry.embedding.len() != expected_dims {
+    if vec_available
+        && let Some(ref emb) = params.embedding
+        && !emb.is_empty()
+    {
+        if emb.len() != expected_dims {
             return Err(SemanticError::DimensionMismatch {
                 expected: expected_dims,
-                got: entry.embedding.len(),
+                got: emb.len(),
             });
         }
         tx.execute("DELETE FROM memory_vec WHERE rowid = ?1", params![rowid])
             .ok();
-        let blob = vec_to_blob(&entry.embedding);
+        let blob = vec_to_blob(emb);
         tx.execute(
             "INSERT INTO memory_vec (rowid, embedding) VALUES (?1, ?2)",
             params![rowid, blob],
@@ -695,37 +810,43 @@ fn load_entries_by_ids(
 
 #[async_trait]
 impl SemanticMemoryStore for SqliteMemoryStore {
-    async fn put(&self, entry: SemanticEntry) -> Result<MemoryId, SemanticError> {
+    async fn put(&self, req: PutRequest) -> Result<MemoryId, SemanticError> {
         let vec_available = self.vec_available;
         let dims = self.dims;
         let embedding_service = self.embedding.clone();
-        let mut entry_owned = entry;
 
-        // If the caller did not pre-embed and we have both a provider and
-        // a live vector side, embed now. Errors MUST propagate — see
-        // sera-px3w; never fall back to a zero-vector.
-        if entry_owned.embedding.is_empty()
+        // Resolve the embedding. Unlike pgvector, SQLite's BM25 keyword
+        // path does not need a vector — `None` is acceptable. If the
+        // caller provides a vector we use it; otherwise we try the bound
+        // EmbeddingService; a failing embed propagates loudly (never a
+        // zero-vector, see sera-px3w); if no embedder is wired we stay
+        // keyword-only.
+        let mut embedding = req.supplied_embedding.clone();
+        if embedding.is_none()
             && vec_available
             && let Some(svc) = embedding_service.as_ref()
         {
-            let texts = vec![entry_owned.content.clone()];
+            let texts = vec![req.content.clone()];
             let vecs = svc.embed(&texts).await.map_err(|e| {
                 SemanticError::Backend(format!("embed on put: {e}"))
             })?;
-            entry_owned.embedding = vecs
-                .into_iter()
-                .next()
-                .ok_or_else(|| {
-                    SemanticError::Backend("embed returned no vectors".into())
-                })?;
+            embedding = Some(vecs.into_iter().next().ok_or_else(|| {
+                SemanticError::Backend("embed returned no vectors".into())
+            })?);
         }
 
-        let allow_vector = !entry_owned.embedding.is_empty();
+        let params = PutParams {
+            id: String::new(),
+            agent_id: req.agent_id,
+            content: req.content,
+            tier: req.tier,
+            tags: req.tags,
+            promoted: req.promoted,
+            embedding,
+        };
 
-        self.with_conn(move |conn| {
-            put_blocking(conn, &entry_owned, vec_available, dims, allow_vector)
-        })
-        .await
+        self.with_conn(move |conn| put_blocking(conn, params, vec_available, dims))
+            .await
     }
 
     async fn query(&self, query: SemanticQuery) -> Result<Vec<ScoredEntry>, SemanticError> {
@@ -800,7 +921,10 @@ impl SemanticMemoryStore for SqliteMemoryStore {
                         continue;
                     }
                     let recency = recency_norm(row.created_at, now);
-                    let entry = row_to_entry(row, Vec::new());
+                    // We don't read vectors back from sqlite-vec in the
+                    // query path — callers that need the vector re-query
+                    // via a concrete method. `None` is honest.
+                    let entry = row_to_entry(row, None);
                     let composite = rrf;
                     if let Some(th) = similarity_threshold
                         && composite < th
@@ -1129,18 +1253,16 @@ mod tests {
         out
     }
 
-    fn mk_entry(agent: &str, content: &str) -> SemanticEntry {
-        SemanticEntry {
-            id: MemoryId::new(""),
+    /// Build a test [`PutRequest`] with reasonable defaults.
+    fn mk_req(agent: &str, content: &str) -> PutRequest {
+        PutRequest {
             agent_id: agent.into(),
             content: content.into(),
-            embedding: vec![],
+            scope: None,
             tier: SegmentKind::MemoryRecall("recall-1".into()),
             tags: vec!["unit".into()],
-            created_at: Utc::now(),
-            last_accessed_at: None,
             promoted: false,
-            scope: None,
+            supplied_embedding: None,
         }
     }
 
@@ -1159,9 +1281,7 @@ mod tests {
         let p = tmp.path().join("sqlite-mem-test.db");
         let store = SqliteMemoryStore::open(&p, None).expect("open file");
         // Persisted to disk — schema created idempotently.
-        let mut e = mk_entry("a", "persist me");
-        e.id = MemoryId::new("p1");
-        store.put(e).await.unwrap();
+        store.put(mk_req("a", "persist me")).await.unwrap();
         let s = store.stats().await.unwrap();
         assert_eq!(s.total_rows, 1);
 
@@ -1177,17 +1297,12 @@ mod tests {
         // No embedding service -> BM25-only path exercised even when
         // the vec extension happens to load.
         let store = SqliteMemoryStore::open_in_memory(None).expect("open");
-        for (i, phrase) in [
+        for phrase in [
             "neural network architectures",
             "database index tuning",
             "coffee beans and espresso",
-        ]
-        .iter()
-        .enumerate()
-        {
-            let mut e = mk_entry("a", phrase);
-            e.id = MemoryId::new(format!("row-{i}"));
-            store.put(e).await.expect("put");
+        ] {
+            store.put(mk_req("a", phrase)).await.expect("put");
         }
 
         let hits = store
@@ -1213,12 +1328,14 @@ mod tests {
     #[tokio::test]
     async fn agent_id_isolation_enforced() {
         let store = SqliteMemoryStore::open_in_memory(None).expect("open");
-        let mut a = mk_entry("alice", "shared secret one");
-        a.id = MemoryId::new("a1");
-        let mut b = mk_entry("bob", "shared secret two");
-        b.id = MemoryId::new("b1");
-        store.put(a).await.unwrap();
-        store.put(b).await.unwrap();
+        store
+            .put(mk_req("alice", "shared secret one"))
+            .await
+            .unwrap();
+        store
+            .put(mk_req("bob", "shared secret two"))
+            .await
+            .unwrap();
 
         let alice_hits = store
             .query(SemanticQuery {
@@ -1258,9 +1375,7 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_row_and_reports_not_found_for_missing() {
         let store = SqliteMemoryStore::open_in_memory(None).expect("open");
-        let mut e = mk_entry("a", "ephemeral");
-        e.id = MemoryId::new("gone");
-        let id = store.put(e).await.unwrap();
+        let id = store.put(mk_req("a", "ephemeral")).await.unwrap();
         store.delete(&id).await.unwrap();
         let err = store.delete(&id).await.unwrap_err();
         assert!(matches!(err, SemanticError::NotFound(_)));
@@ -1270,13 +1385,32 @@ mod tests {
     async fn promote_and_ttl_evict_respects_promoted_exempt() {
         let store = SqliteMemoryStore::open_in_memory(None).expect("open");
         let old_ts = Utc::now() - chrono::Duration::days(30);
-        let mut old = mk_entry("a", "old pin");
-        old.id = MemoryId::new("old");
-        old.created_at = old_ts;
-        let mut fresh = mk_entry("a", "fresh row");
-        fresh.id = MemoryId::new("fresh");
-        store.put(old).await.unwrap();
-        store.put(fresh).await.unwrap();
+        store
+            .put_raw(
+                "old",
+                "a",
+                "old pin",
+                SegmentKind::MemoryRecall("r".into()),
+                vec![],
+                false,
+                old_ts,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .put_raw(
+                "fresh",
+                "a",
+                "fresh row",
+                SegmentKind::MemoryRecall("r".into()),
+                vec![],
+                false,
+                Utc::now(),
+                None,
+            )
+            .await
+            .unwrap();
 
         store.promote(&MemoryId::new("old")).await.unwrap();
 
@@ -1308,10 +1442,20 @@ mod tests {
     async fn row_cap_evicts_oldest_per_agent() {
         let store = SqliteMemoryStore::open_in_memory(None).expect("open");
         for i in 0..5 {
-            let mut e = mk_entry("a", &format!("row-{i}"));
-            e.id = MemoryId::new(format!("cap-{i}"));
-            e.created_at = Utc::now() - chrono::Duration::seconds((5 - i) as i64);
-            store.put(e).await.unwrap();
+            let created = Utc::now() - chrono::Duration::seconds((5 - i) as i64);
+            store
+                .put_raw(
+                    &format!("cap-{i}"),
+                    "a",
+                    &format!("row-{i}"),
+                    SegmentKind::MemoryRecall("r".into()),
+                    vec![],
+                    false,
+                    created,
+                    None,
+                )
+                .await
+                .unwrap();
         }
         let removed = store
             .evict(&EvictionPolicy {
@@ -1329,9 +1473,7 @@ mod tests {
     async fn maintenance_runs_without_error() {
         let store = SqliteMemoryStore::open_in_memory(None).expect("open");
         for i in 0..3 {
-            let mut e = mk_entry("a", &format!("content {i}"));
-            e.id = MemoryId::new(format!("m{i}"));
-            store.put(e).await.unwrap();
+            store.put(mk_req("a", &format!("content {i}"))).await.unwrap();
         }
         store.maintenance().await.expect("maintenance");
     }
@@ -1373,8 +1515,10 @@ mod tests {
             return;
         }
 
-        let e = mk_entry("a", "will fail to embed");
-        let err = store.put(e).await.expect_err("must fail loudly");
+        let err = store
+            .put(mk_req("a", "will fail to embed"))
+            .await
+            .expect_err("must fail loudly");
         assert!(matches!(err, SemanticError::Backend(_)));
     }
 
@@ -1385,10 +1529,13 @@ mod tests {
             TestEmbedding::new_with(dims),
         )))
         .expect("open");
-        let mut e = mk_entry("a", "alpha beta gamma");
-        e.id = MemoryId::new("r1");
-        e.embedding = hash_vec("alpha beta gamma", dims);
-        store.put(e).await.unwrap();
+        store
+            .put(
+                mk_req("a", "alpha beta gamma")
+                    .with_embedding(hash_vec("alpha beta gamma", dims)),
+            )
+            .await
+            .unwrap();
 
         let hits = store
             .query(SemanticQuery {
@@ -1420,13 +1567,8 @@ mod tests {
             eprintln!("sqlite-vec unavailable; exercising BM25-only fallback");
         }
 
-        for (i, t) in ["rust programming language", "python web framework", "espresso coffee"]
-            .iter()
-            .enumerate()
-        {
-            let mut e = mk_entry("a", t);
-            e.id = MemoryId::new(format!("h{i}"));
-            store.put(e).await.unwrap();
+        for t in ["rust programming language", "python web framework", "espresso coffee"] {
+            store.put(mk_req("a", t)).await.unwrap();
         }
 
         let hits = store
@@ -1448,9 +1590,7 @@ mod tests {
     #[tokio::test]
     async fn touch_updates_last_accessed_and_counts() {
         let store = SqliteMemoryStore::open_in_memory(None).expect("open");
-        let mut e = mk_entry("a", "touch me");
-        e.id = MemoryId::new("touch");
-        let id = store.put(e).await.unwrap();
+        let id = store.put(mk_req("a", "touch me")).await.unwrap();
         store.touch(&id).await.unwrap();
         let stats = store.stats().await.unwrap();
         assert_eq!(stats.total_rows, 1);
@@ -1460,13 +1600,12 @@ mod tests {
     async fn stats_reports_bounds_and_top_agents() {
         let store = SqliteMemoryStore::open_in_memory(None).expect("open");
         for i in 0..3 {
-            let mut e = mk_entry("alice", &format!("alice row {i}"));
-            e.id = MemoryId::new(format!("a{i}"));
-            store.put(e).await.unwrap();
+            store
+                .put(mk_req("alice", &format!("alice row {i}")))
+                .await
+                .unwrap();
         }
-        let mut e = mk_entry("bob", "bob row 0");
-        e.id = MemoryId::new("b0");
-        store.put(e).await.unwrap();
+        store.put(mk_req("bob", "bob row 0")).await.unwrap();
 
         let s = store.stats().await.unwrap();
         assert_eq!(s.total_rows, 4);
@@ -1485,11 +1624,11 @@ mod tests {
             eprintln!("vec-only test skipped; sqlite-vec not registered");
             return;
         }
-        for (i, t) in ["rust systems", "python web", "coffee"].iter().enumerate() {
-            let mut e = mk_entry("a", t);
-            e.id = MemoryId::new(format!("v{i}"));
-            e.embedding = hash_vec(t, dims);
-            store.put(e).await.unwrap();
+        for t in ["rust systems", "python web", "coffee"] {
+            store
+                .put(mk_req("a", t).with_embedding(hash_vec(t, dims)))
+                .await
+                .unwrap();
         }
         // Query with embedding only (no text) → pure vector path.
         let hits = store

@@ -58,11 +58,13 @@
 //! can wire in the in-memory backend instead. It does NOT auto-install
 //! the extension — that requires superuser privileges we shouldn't assume.
 
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use pgvector::Vector as PgVector;
 use sera_types::{
-    EvictionPolicy, MemoryId, ScoredEntry, Scope, SemanticEntry, SemanticError,
-    SemanticMemoryStore, SemanticQuery, SemanticStats, memory::SegmentKind,
+    EmbeddingService, EvictionPolicy, MemoryId, PutRequest, ScoredEntry, Scope, SemanticEntry,
+    SemanticError, SemanticMemoryStore, SemanticQuery, SemanticStats, memory::SegmentKind,
 };
 use sqlx::PgPool;
 use sqlx::Row;
@@ -90,10 +92,27 @@ fn time_to_chrono(dt: OffsetDateTime) -> DateTime<Utc> {
 pub const DEFAULT_SEMANTIC_DIMENSIONS: usize = 1536;
 
 /// Postgres + pgvector-backed [`SemanticMemoryStore`].
-#[derive(Clone, Debug)]
+///
+/// `embedding_service` is optional. When set, `put` with
+/// `supplied_embedding = None` embeds the content server-side before
+/// writing. When unset, `put` requires the caller to pass
+/// `supplied_embedding = Some(...)` and returns
+/// [`SemanticError::Backend`] otherwise — the pgvector backend does not
+/// own embeddings (see SPEC-memory-pluggability §3).
+#[derive(Clone)]
 pub struct PgVectorStore {
     pool: PgPool,
     dimensions: usize,
+    embedding_service: Option<Arc<dyn EmbeddingService>>,
+}
+
+impl std::fmt::Debug for PgVectorStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PgVectorStore")
+            .field("dimensions", &self.dimensions)
+            .field("has_embedder", &self.embedding_service.is_some())
+            .finish()
+    }
 }
 
 impl PgVectorStore {
@@ -102,6 +121,7 @@ impl PgVectorStore {
         Self {
             pool,
             dimensions: DEFAULT_SEMANTIC_DIMENSIONS,
+            embedding_service: None,
         }
     }
 
@@ -112,7 +132,21 @@ impl PgVectorStore {
     /// disagrees are rejected with
     /// [`SemanticError::DimensionMismatch`].
     pub fn with_dimensions(pool: PgPool, dimensions: usize) -> Self {
-        Self { pool, dimensions }
+        Self {
+            pool,
+            dimensions,
+            embedding_service: None,
+        }
+    }
+
+    /// Attach an [`EmbeddingService`] so `put` can accept
+    /// `PutRequest::supplied_embedding = None` and embed server-side.
+    pub fn with_embedding_service(
+        mut self,
+        embedding: Arc<dyn EmbeddingService>,
+    ) -> Self {
+        self.embedding_service = Some(embedding);
+        self
     }
 
     /// Borrow the underlying pool (integration tests / admin tooling).
@@ -298,7 +332,7 @@ fn row_to_entry(row: &sqlx::postgres::PgRow) -> Result<SemanticEntry, SemanticEr
         id: MemoryId::new(id.to_string()),
         agent_id,
         content,
-        embedding: embedding.to_vec(),
+        embedding: Some(embedding.to_vec()),
         tier: tier.0,
         tags,
         created_at: time_to_chrono(created_at),
@@ -310,31 +344,53 @@ fn row_to_entry(row: &sqlx::postgres::PgRow) -> Result<SemanticEntry, SemanticEr
 
 #[async_trait::async_trait]
 impl SemanticMemoryStore for PgVectorStore {
-    async fn put(&self, entry: SemanticEntry) -> Result<MemoryId, SemanticError> {
-        self.validate_dims(&entry.embedding)?;
-
-        // Accept either a valid UUID in entry.id or generate one when the
-        // caller passed an empty / non-UUID placeholder.
-        let id = if entry.id.as_str().is_empty() {
-            Uuid::new_v4()
-        } else {
-            Uuid::parse_str(entry.id.as_str()).unwrap_or_else(|_| Uuid::new_v4())
+    async fn put(&self, req: PutRequest) -> Result<MemoryId, SemanticError> {
+        // Resolve the embedding. Precedence: caller-supplied → bound
+        // EmbeddingService → error. pgvector does not silently store a
+        // zero vector (see sera-px3w).
+        let embedding_vec: Vec<f32> = match req.supplied_embedding {
+            Some(v) => v,
+            None => match self.embedding_service.as_ref() {
+                Some(svc) => {
+                    let vecs = svc
+                        .embed(std::slice::from_ref(&req.content))
+                        .await
+                        .map_err(|e| {
+                            SemanticError::Backend(format!("embed on put: {e}"))
+                        })?;
+                    vecs.into_iter().next().ok_or_else(|| {
+                        SemanticError::Backend(
+                            "embed on put returned no vectors".into(),
+                        )
+                    })?
+                }
+                None => {
+                    return Err(SemanticError::Backend(
+                        "no embedding service configured for pgvector put with supplied_embedding=None".into(),
+                    ));
+                }
+            },
         };
+        self.validate_dims(&embedding_vec)?;
 
-        let embedding = PgVector::from(entry.embedding.clone());
-        let tier = Json(entry.tier.clone());
+        let id = Uuid::new_v4();
+
+        let embedding = PgVector::from(embedding_vec);
+        let tier = Json(req.tier.clone());
 
         // GH#140 scope persistence. `None` back-compat maps to
         // `Scope::Agent(agent_id)` so pre-migration callers stay visible
         // under agent-only queries.
-        let effective_scope = entry
+        let effective_scope = req
             .scope
             .clone()
-            .unwrap_or_else(|| Scope::Agent(entry.agent_id.clone()));
+            .unwrap_or_else(|| Scope::Agent(req.agent_id.clone()));
         let (scope_kind, scope_key) = (
             effective_scope.kind_str().to_string(),
             effective_scope.key_str().to_string(),
         );
+
+        let now = Utc::now();
 
         sqlx::query(
             r#"
@@ -354,14 +410,14 @@ impl SemanticMemoryStore for PgVectorStore {
             "#,
         )
         .bind(id)
-        .bind(&entry.agent_id)
-        .bind(&entry.content)
+        .bind(&req.agent_id)
+        .bind(&req.content)
         .bind(embedding)
         .bind(tier)
-        .bind(&entry.tags)
-        .bind(chrono_to_time(entry.created_at))
-        .bind(entry.last_accessed_at.map(chrono_to_time))
-        .bind(entry.promoted)
+        .bind(&req.tags)
+        .bind(chrono_to_time(now))
+        .bind::<Option<OffsetDateTime>>(None)
+        .bind(req.promoted)
         .bind(scope_kind)
         .bind(scope_key)
         .execute(&self.pool)

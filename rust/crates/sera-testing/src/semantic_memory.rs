@@ -11,16 +11,27 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sera_types::{
-    EvictionPolicy, MemoryId, ScoredEntry, Scope, SemanticEntry, SemanticError,
-    SemanticMemoryStore, SemanticQuery, SemanticStats, memory::SegmentKind,
+    EmbeddingService, EvictionPolicy, MemoryId, PutRequest, ScoredEntry, Scope, SemanticEntry,
+    SemanticError, SemanticMemoryStore, SemanticQuery, SemanticStats, memory::SegmentKind,
 };
 use uuid::Uuid;
 
 /// In-process, [`SemanticMemoryStore`]-conforming fake.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct InMemorySemanticStore {
     inner: Arc<Mutex<State>>,
     dimensions: usize,
+    embedding_service: Option<Arc<dyn EmbeddingService>>,
+}
+
+impl std::fmt::Debug for InMemorySemanticStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InMemorySemanticStore")
+            .field("dimensions", &self.dimensions)
+            .field("has_embedder", &self.embedding_service.is_some())
+            .field("rows", &self.inner.lock().map(|s| s.rows.len()).unwrap_or(0))
+            .finish()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -41,7 +52,15 @@ impl InMemorySemanticStore {
         Self {
             inner: Arc::new(Mutex::new(State::default())),
             dimensions,
+            embedding_service: None,
         }
+    }
+
+    /// Attach an [`EmbeddingService`] so `put` can accept
+    /// `PutRequest::supplied_embedding = None`.
+    pub fn with_embedding_service(mut self, svc: Arc<dyn EmbeddingService>) -> Self {
+        self.embedding_service = Some(svc);
+        self
     }
 
     /// Configured embedding dimensionality. `0` means "not yet fixed".
@@ -94,21 +113,79 @@ fn recency_norm(created_at: DateTime<Utc>, now: DateTime<Utc>) -> f32 {
     (1.0 - age_days / HALF_LIFE_DAYS).clamp(0.0, 1.0)
 }
 
-#[async_trait]
-impl SemanticMemoryStore for InMemorySemanticStore {
-    async fn put(&self, mut entry: SemanticEntry) -> Result<MemoryId, SemanticError> {
-        if self.dims() != 0 && entry.embedding.len() != self.dims() {
+impl InMemorySemanticStore {
+    /// Test-only helper: insert a fully-formed [`SemanticEntry`] directly.
+    ///
+    /// Useful when tests need to control `id`, `created_at`, `scope`, or
+    /// the `embedding` value — all of which are not expressible through
+    /// the trait-level [`SemanticMemoryStore::put`] (which only takes a
+    /// [`PutRequest`] and owns id/timestamp generation itself).
+    pub async fn insert_entry(&self, mut entry: SemanticEntry) -> Result<MemoryId, SemanticError> {
+        if self.dims() != 0
+            && let Some(v) = entry.embedding.as_ref()
+            && v.len() != self.dims()
+        {
             return Err(SemanticError::DimensionMismatch {
                 expected: self.dims(),
-                got: entry.embedding.len(),
+                got: v.len(),
             });
         }
-
         if entry.id.as_str().is_empty() {
             entry.id = MemoryId::new(Uuid::new_v4().to_string());
         }
-
         let id = entry.id.clone();
+        let mut guard = self.inner.lock().expect("poisoned");
+        guard.rows.insert(id.clone(), entry);
+        Ok(id)
+    }
+}
+
+#[async_trait]
+impl SemanticMemoryStore for InMemorySemanticStore {
+    async fn put(&self, req: PutRequest) -> Result<MemoryId, SemanticError> {
+        // Resolve embedding — caller-supplied > bound embedder > error.
+        // Same policy as pgvector: this is a vector-first mock store
+        // (see SPEC-memory-pluggability §3).
+        let embedding: Vec<f32> = match req.supplied_embedding {
+            Some(v) => v,
+            None => match self.embedding_service.as_ref() {
+                Some(svc) => {
+                    let vecs = svc
+                        .embed(std::slice::from_ref(&req.content))
+                        .await
+                        .map_err(|e| SemanticError::Backend(format!("embed on put: {e}")))?;
+                    vecs.into_iter().next().ok_or_else(|| {
+                        SemanticError::Backend("embed returned no vectors".into())
+                    })?
+                }
+                None => {
+                    return Err(SemanticError::Backend(
+                        "no embedding service configured for in-memory put with supplied_embedding=None".into(),
+                    ));
+                }
+            },
+        };
+
+        if self.dims() != 0 && embedding.len() != self.dims() {
+            return Err(SemanticError::DimensionMismatch {
+                expected: self.dims(),
+                got: embedding.len(),
+            });
+        }
+
+        let id = MemoryId::new(Uuid::new_v4().to_string());
+        let entry = SemanticEntry {
+            id: id.clone(),
+            agent_id: req.agent_id,
+            content: req.content,
+            embedding: Some(embedding),
+            tier: req.tier,
+            tags: req.tags,
+            created_at: Utc::now(),
+            last_accessed_at: None,
+            promoted: req.promoted,
+            scope: req.scope,
+        };
         let mut guard = self.inner.lock().expect("poisoned");
         guard.rows.insert(id.clone(), entry);
         Ok(id)
@@ -152,7 +229,15 @@ impl SemanticMemoryStore for InMemorySemanticStore {
             .values()
             .filter(|e| matches_scope(e) && matches_tier(e))
             .map(|entry| {
-                let vs = cosine(&entry.embedding, &probe);
+                // Rows stored without an embedding score 0.0 on the
+                // vector side — cosine of any finite vector and a
+                // missing one is undefined, so we drop the signal
+                // rather than fabricate a match.
+                let vs = entry
+                    .embedding
+                    .as_ref()
+                    .map(|v| cosine(v, &probe))
+                    .unwrap_or(0.0);
                 let rs = recency_norm(entry.created_at, now);
                 ScoredEntry {
                     entry: entry.clone(),
@@ -316,12 +401,16 @@ fn tier_eq(a: &SegmentKind, b: &SegmentKind) -> bool {
 mod tests {
     use super::*;
 
+    /// Build a test [`SemanticEntry`] directly. Used via
+    /// [`InMemorySemanticStore::insert_entry`] for tests that need control
+    /// over id/embedding/created_at/scope that isn't expressible via the
+    /// trait-level [`PutRequest`].
     fn mk_entry(agent: &str, content: &str, emb: Vec<f32>) -> SemanticEntry {
         SemanticEntry {
             id: MemoryId::new(""),
             agent_id: agent.into(),
             content: content.into(),
-            embedding: emb,
+            embedding: Some(emb),
             tier: SegmentKind::MemoryRecall("r".into()),
             tags: vec![],
             created_at: Utc::now(),
@@ -335,7 +424,7 @@ mod tests {
     async fn put_query_delete_roundtrip() {
         let store = InMemorySemanticStore::new();
         let id = store
-            .put(mk_entry("a", "hello world", vec![1.0, 0.0, 0.0]))
+            .insert_entry(mk_entry("a", "hello world", vec![1.0, 0.0, 0.0]))
             .await
             .unwrap();
         assert_eq!(store.len(), 1);
@@ -372,11 +461,11 @@ mod tests {
     async fn agent_id_isolation() {
         let store = InMemorySemanticStore::new();
         store
-            .put(mk_entry("alice", "secret a", vec![1.0, 0.0]))
+            .insert_entry(mk_entry("alice", "secret a", vec![1.0, 0.0]))
             .await
             .unwrap();
         store
-            .put(mk_entry("bob", "secret b", vec![1.0, 0.0]))
+            .insert_entry(mk_entry("bob", "secret b", vec![1.0, 0.0]))
             .await
             .unwrap();
 
@@ -399,11 +488,11 @@ mod tests {
     async fn similarity_threshold_filters() {
         let store = InMemorySemanticStore::new();
         store
-            .put(mk_entry("a", "same", vec![1.0, 0.0]))
+            .insert_entry(mk_entry("a", "same", vec![1.0, 0.0]))
             .await
             .unwrap();
         store
-            .put(mk_entry("a", "orthogonal", vec![0.0, 1.0]))
+            .insert_entry(mk_entry("a", "orthogonal", vec![0.0, 1.0]))
             .await
             .unwrap();
 
@@ -425,7 +514,7 @@ mod tests {
     async fn dimension_mismatch_rejected_when_fixed() {
         let store = InMemorySemanticStore::with_dimensions(3);
         let err = store
-            .put(mk_entry("a", "bad", vec![1.0, 2.0]))
+            .insert_entry(mk_entry("a", "bad", vec![1.0, 2.0]))
             .await
             .unwrap_err();
         assert!(matches!(err, SemanticError::DimensionMismatch { expected: 3, got: 2 }));
@@ -437,8 +526,8 @@ mod tests {
         let mut old = mk_entry("a", "old", vec![1.0]);
         old.created_at = Utc::now() - chrono::Duration::days(10);
         let fresh = mk_entry("a", "fresh", vec![1.0]);
-        store.put(old).await.unwrap();
-        store.put(fresh).await.unwrap();
+        store.insert_entry(old).await.unwrap();
+        store.insert_entry(fresh).await.unwrap();
 
         let removed = store
             .evict(&EvictionPolicy {
@@ -457,7 +546,7 @@ mod tests {
         for i in 0..5 {
             let mut e = mk_entry("a", &format!("row-{i}"), vec![1.0]);
             e.created_at = Utc::now() - chrono::Duration::seconds((5 - i) as i64);
-            store.put(e).await.unwrap();
+            store.insert_entry(e).await.unwrap();
         }
 
         let removed = store
@@ -477,7 +566,7 @@ mod tests {
         let mut old = mk_entry("a", "pinned", vec![1.0]);
         old.created_at = Utc::now() - chrono::Duration::days(30);
         old.promoted = true;
-        store.put(old).await.unwrap();
+        store.insert_entry(old).await.unwrap();
 
         let removed = store
             .evict(&EvictionPolicy {
@@ -495,15 +584,15 @@ mod tests {
     async fn stats_reports_totals_and_per_agent() {
         let store = InMemorySemanticStore::new();
         store
-            .put(mk_entry("alice", "1", vec![1.0]))
+            .insert_entry(mk_entry("alice", "1", vec![1.0]))
             .await
             .unwrap();
         store
-            .put(mk_entry("alice", "2", vec![1.0]))
+            .insert_entry(mk_entry("alice", "2", vec![1.0]))
             .await
             .unwrap();
         store
-            .put(mk_entry("bob", "1", vec![1.0]))
+            .insert_entry(mk_entry("bob", "1", vec![1.0]))
             .await
             .unwrap();
 
@@ -520,8 +609,8 @@ mod tests {
         e1.tier = SegmentKind::MemoryRecall("x".into());
         let mut e2 = mk_entry("a", "skill-a", vec![1.0, 0.0]);
         e2.tier = SegmentKind::Skill("code".into());
-        store.put(e1).await.unwrap();
-        store.put(e2).await.unwrap();
+        store.insert_entry(e1).await.unwrap();
+        store.insert_entry(e2).await.unwrap();
 
         let q = SemanticQuery {
             agent_id: "a".into(),
@@ -564,7 +653,7 @@ mod tests {
             id: MemoryId::new(""),
             agent_id: agent.into(),
             content: content.into(),
-            embedding: emb,
+            embedding: Some(emb),
             tier: SegmentKind::MemoryRecall("r".into()),
             tags: vec![],
             created_at: Utc::now(),
@@ -578,7 +667,7 @@ mod tests {
     async fn scope_filter_matches_single_scope_exactly() {
         let store = InMemorySemanticStore::new();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "agent-row",
                 vec![1.0, 0.0],
@@ -587,7 +676,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "circle-row",
                 vec![1.0, 0.0],
@@ -616,7 +705,7 @@ mod tests {
         // Scope::Agent(agent_id).
         let store = InMemorySemanticStore::new();
         store
-            .put(mk_scoped("alice", "legacy", vec![1.0, 0.0], None))
+            .insert_entry(mk_scoped("alice", "legacy", vec![1.0, 0.0], None))
             .await
             .unwrap();
 
@@ -638,7 +727,7 @@ mod tests {
     async fn hierarchical_query_merges_across_levels() {
         let store = InMemorySemanticStore::new();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "agent-hit",
                 vec![1.0, 0.0],
@@ -647,7 +736,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "circle-hit",
                 vec![1.0, 0.0],
@@ -656,7 +745,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "org-hit",
                 vec![1.0, 0.0],
@@ -665,7 +754,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "global-hit",
                 vec![1.0, 0.0],
@@ -701,7 +790,7 @@ mod tests {
         // All hits have identical raw cosine similarity (1.0) — the only
         // tiebreaker is the per-level damping factor.
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "agent-row",
                 vec![1.0, 0.0],
@@ -710,7 +799,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "circle-row",
                 vec![1.0, 0.0],
@@ -719,7 +808,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "org-row",
                 vec![1.0, 0.0],
@@ -728,7 +817,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "global-row",
                 vec![1.0, 0.0],
@@ -778,8 +867,8 @@ mod tests {
             vec![1.0, 0.0],
             Some(Scope::Agent("a".into())),
         );
-        store.put(older).await.unwrap();
-        store.put(newer).await.unwrap();
+        store.insert_entry(older).await.unwrap();
+        store.insert_entry(newer).await.unwrap();
 
         let hierarchy = ScopeHierarchy::agent_only("a");
         let hits = store
@@ -796,7 +885,7 @@ mod tests {
         // Rows in Circle / Org scope should be invisible.
         let store = InMemorySemanticStore::new();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "agent-row",
                 vec![1.0, 0.0],
@@ -805,7 +894,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "circle-row",
                 vec![1.0, 0.0],
@@ -814,7 +903,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "global-row",
                 vec![1.0, 0.0],
@@ -844,7 +933,7 @@ mod tests {
         // row for the agent regardless of scope_kind.
         let store = InMemorySemanticStore::new();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "agent-row",
                 vec![1.0, 0.0],
@@ -853,7 +942,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "circle-row",
                 vec![1.0, 0.0],
@@ -862,7 +951,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .put(mk_scoped(
+            .insert_entry(mk_scoped(
                 "a",
                 "legacy-row",
                 vec![1.0, 0.0],

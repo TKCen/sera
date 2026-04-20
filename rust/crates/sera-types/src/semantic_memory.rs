@@ -7,14 +7,18 @@
 //!
 //! ## Contract
 //!
-//! - `put(SemanticEntry)` persists an embedding + content row and returns
-//!   the assigned [`MemoryId`]. Callers may pre-populate `entry.id` or let
-//!   the backend generate one.
+//! - `put(PutRequest)` persists content + metadata and returns the assigned
+//!   [`MemoryId`]. Callers pass content and (optionally) a pre-computed
+//!   embedding via [`PutRequest::supplied_embedding`]; backends that own
+//!   embeddings ignore that field and embed server-side (see
+//!   SPEC-memory-pluggability §3).
 //! - `query(SemanticQuery)` performs a scoped similarity search. All queries
 //!   MUST filter on `agent_id` first (multi-tenant isolation per
 //!   SPEC-memory §13.1).
 //! - `delete` removes a row by id; returns [`SemanticError::NotFound`] if
-//!   the id is unknown.
+//!   the id is unknown. Backends that only support bulk delete MAY return
+//!   [`SemanticError::Backend`] with a clear message (see
+//!   SPEC-memory-pluggability §4).
 //! - `evict` prunes rows according to the supplied [`EvictionPolicy`] and
 //!   returns the number of rows removed.
 //! - `stats` returns a cheap aggregate snapshot for operator dashboards.
@@ -259,6 +263,11 @@ impl From<&str> for MemoryId {
 ///
 /// Rows are scoped to a single `agent_id`. Queries MUST filter on this
 /// field before any vector-similarity work.
+///
+/// `embedding` is `None` when the backend either does not expose vectors
+/// (hindsight-style server-owned embeddings) or when the row was written
+/// via a keyword-only path (BM25 over FTS5). See
+/// SPEC-memory-pluggability §3.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SemanticEntry {
     /// Stable identifier. Callers MAY set this pre-put; otherwise the
@@ -269,10 +278,12 @@ pub struct SemanticEntry {
     /// Original text that was embedded — kept so callers can render the
     /// recall without re-inflating from a separate store.
     pub content: String,
-    /// Dense embedding. Length must match the backend's configured
-    /// dimensionality; mismatches surface as
-    /// [`SemanticError::DimensionMismatch`].
-    pub embedding: Vec<f32>,
+    /// Dense embedding, if the backend exposes one. Length must match the
+    /// backend's configured dimensionality; mismatches surface as
+    /// [`SemanticError::DimensionMismatch`]. `None` means the backend does
+    /// not return vectors (hindsight) or the row was stored keyword-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<Vec<f32>>,
     /// Which tier-segment produced this row.
     pub tier: SegmentKind,
     /// Opaque tags for operator filtering / recall-shaping heuristics.
@@ -294,6 +305,84 @@ pub struct SemanticEntry {
     /// walk agent → circle → org → global with per-level dampening.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<Scope>,
+}
+
+/// Write input for [`SemanticMemoryStore::put`] (SPEC-memory-pluggability §2).
+///
+/// Callers supply the content and metadata; `supplied_embedding` is a
+/// hint the backend MAY use or ignore entirely. Backends that own
+/// embeddings (e.g. hindsight) ignore `supplied_embedding` and embed
+/// server-side. Backends that require a caller-supplied vector (current
+/// pgvector impl without a bound embedding service) error when the field
+/// is `None` with a [`SemanticError::Backend`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PutRequest {
+    /// Owning agent instance. Used for multi-tenant isolation.
+    pub agent_id: String,
+    /// Original text to store (and optionally embed).
+    pub content: String,
+    /// Hierarchical memory scope. `None` is treated as
+    /// `Scope::Agent(agent_id)` for back-compat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Scope>,
+    /// Which tier-segment produced this row.
+    pub tier: SegmentKind,
+    /// Opaque tags for operator filtering / recall-shaping heuristics.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// If true the row is exempt from row-cap / TTL eviction and survives
+    /// policies with `promoted_exempt = true`.
+    #[serde(default)]
+    pub promoted: bool,
+    /// Pre-computed embedding. Backends that own embeddings ignore this;
+    /// backends that require it error on `None` with
+    /// [`SemanticError::Backend`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supplied_embedding: Option<Vec<f32>>,
+}
+
+impl PutRequest {
+    /// Convenience constructor for call sites that only need the mandatory
+    /// fields.
+    pub fn new(
+        agent_id: impl Into<String>,
+        content: impl Into<String>,
+        tier: SegmentKind,
+    ) -> Self {
+        Self {
+            agent_id: agent_id.into(),
+            content: content.into(),
+            scope: None,
+            tier,
+            tags: Vec::new(),
+            promoted: false,
+            supplied_embedding: None,
+        }
+    }
+
+    /// Attach a pre-computed embedding.
+    pub fn with_embedding(mut self, embedding: Vec<f32>) -> Self {
+        self.supplied_embedding = Some(embedding);
+        self
+    }
+
+    /// Attach tags.
+    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    /// Pin a scope.
+    pub fn with_scope(mut self, scope: Scope) -> Self {
+        self.scope = Some(scope);
+        self
+    }
+
+    /// Mark as promoted.
+    pub fn promoted(mut self) -> Self {
+        self.promoted = true;
+        self
+    }
 }
 
 /// Parameters for [`SemanticMemoryStore::query`].
@@ -415,10 +504,13 @@ pub enum SemanticError {
 /// `Arc<dyn SemanticMemoryStore>` and depend only on this trait.
 #[async_trait]
 pub trait SemanticMemoryStore: Send + Sync + 'static {
-    /// Persist `entry` and return its canonical [`MemoryId`]. If
-    /// `entry.id` is already populated, backends SHOULD use that value
-    /// (useful for idempotent writes from replays).
-    async fn put(&self, entry: SemanticEntry) -> Result<MemoryId, SemanticError>;
+    /// Persist the row described by `req` and return its canonical
+    /// [`MemoryId`]. Backends that own embeddings ignore
+    /// [`PutRequest::supplied_embedding`] entirely; backends that do not
+    /// own embeddings and receive `supplied_embedding = None` with no
+    /// fallback embedder MUST surface a [`SemanticError::Backend`] (see
+    /// SPEC-memory-pluggability §3.6).
+    async fn put(&self, req: PutRequest) -> Result<MemoryId, SemanticError>;
 
     /// Scoped similarity search. Results are ordered by descending
     /// [`ScoredEntry::score`] with ties broken by `created_at` desc.
@@ -596,7 +688,7 @@ mod tests {
             id: MemoryId::new("r-1"),
             agent_id: "agent-a".into(),
             content: "hello".into(),
-            embedding: vec![0.1, 0.2, 0.3],
+            embedding: Some(vec![0.1, 0.2, 0.3]),
             tier: SegmentKind::MemoryRecall("recall-7".into()),
             tags: vec!["pinned".into()],
             created_at: Utc::now(),
@@ -610,5 +702,50 @@ mod tests {
         assert_eq!(back.agent_id, e.agent_id);
         assert_eq!(back.embedding, e.embedding);
         assert!(back.promoted);
+    }
+
+    #[test]
+    fn semantic_entry_serializes_without_embedding_when_none() {
+        let e = SemanticEntry {
+            id: MemoryId::new("r-2"),
+            agent_id: "agent-a".into(),
+            content: "hindsight-style".into(),
+            embedding: None,
+            tier: SegmentKind::MemoryRecall("r-2".into()),
+            tags: vec![],
+            created_at: Utc::now(),
+            last_accessed_at: None,
+            promoted: false,
+            scope: None,
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(
+            !json.contains("\"embedding\""),
+            "embedding=None should be skipped in serialization: {json}"
+        );
+        let back: SemanticEntry = serde_json::from_str(&json).unwrap();
+        assert!(back.embedding.is_none());
+    }
+
+    #[test]
+    fn put_request_builder_defaults() {
+        let r = PutRequest::new("agent-a", "hello", SegmentKind::MemoryRecall("r".into()));
+        assert_eq!(r.agent_id, "agent-a");
+        assert_eq!(r.content, "hello");
+        assert!(r.tags.is_empty());
+        assert!(!r.promoted);
+        assert!(r.supplied_embedding.is_none());
+        assert!(r.scope.is_none());
+    }
+
+    #[test]
+    fn put_request_builder_attaches_embedding_and_tags() {
+        let r = PutRequest::new("agent-a", "hello", SegmentKind::MemoryRecall("r".into()))
+            .with_embedding(vec![0.1, 0.2])
+            .with_tags(vec!["pinned".into()])
+            .promoted();
+        assert_eq!(r.supplied_embedding.as_ref().unwrap().len(), 2);
+        assert_eq!(r.tags, vec!["pinned".to_string()]);
+        assert!(r.promoted);
     }
 }

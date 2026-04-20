@@ -317,7 +317,7 @@ impl ContextEnricher {
             .map(|h| Candidate {
                 id: h.entry.id.as_str().to_string(),
                 tokens: tokenise(&h.entry.content),
-                embedding: h.entry.embedding.clone(),
+                embedding: h.entry.embedding.clone().unwrap_or_default(),
                 created_at: h.entry.created_at,
             })
             .collect();
@@ -428,8 +428,9 @@ mod tests {
     use async_trait::async_trait;
     use chrono::Utc;
     use sera_types::{
-        EmbeddingError, EmbeddingHealth, EmbeddingService, EvictionPolicy, MemoryId, ScoredEntry,
-        SemanticEntry, SemanticError, SemanticMemoryStore, SemanticQuery, SemanticStats,
+        EmbeddingError, EmbeddingHealth, EmbeddingService, EvictionPolicy, MemoryId, PutRequest,
+        ScoredEntry, SemanticEntry, SemanticError, SemanticMemoryStore, SemanticQuery,
+        SemanticStats,
     };
 
     use super::*;
@@ -548,8 +549,8 @@ mod tests {
 
     #[async_trait]
     impl SemanticMemoryStore for CannedStore {
-        async fn put(&self, entry: SemanticEntry) -> Result<MemoryId, SemanticError> {
-            Ok(entry.id)
+        async fn put(&self, _req: PutRequest) -> Result<MemoryId, SemanticError> {
+            Ok(MemoryId::new("canned"))
         }
         async fn query(&self, _q: SemanticQuery) -> Result<Vec<ScoredEntry>, SemanticError> {
             Ok(self.hits.clone())
@@ -575,8 +576,8 @@ mod tests {
 
     #[async_trait]
     impl SemanticMemoryStore for FailingStore {
-        async fn put(&self, entry: SemanticEntry) -> Result<MemoryId, SemanticError> {
-            Ok(entry.id)
+        async fn put(&self, _req: PutRequest) -> Result<MemoryId, SemanticError> {
+            Ok(MemoryId::new("failing"))
         }
         async fn query(&self, _q: SemanticQuery) -> Result<Vec<ScoredEntry>, SemanticError> {
             Err(SemanticError::Backend("db exploded".into()))
@@ -597,8 +598,8 @@ mod tests {
 
     #[async_trait]
     impl SemanticMemoryStore for PanicStore {
-        async fn put(&self, entry: SemanticEntry) -> Result<MemoryId, SemanticError> {
-            Ok(entry.id)
+        async fn put(&self, _req: PutRequest) -> Result<MemoryId, SemanticError> {
+            Ok(MemoryId::new("panic-store"))
         }
         async fn query(&self, _q: SemanticQuery) -> Result<Vec<ScoredEntry>, SemanticError> {
             panic!("query() must not be called when enrichment is disabled");
@@ -620,7 +621,7 @@ mod tests {
                 id: MemoryId::new(id),
                 agent_id: "agent-a".to_string(),
                 content: content.to_string(),
-                embedding: vec![1.0, 0.0, 0.0, 0.0],
+                embedding: Some(vec![1.0, 0.0, 0.0, 0.0]),
                 tier: SegmentKind::MemoryRecall(id.to_string()),
                 tags: vec![],
                 created_at: Utc::now(),
@@ -858,7 +859,7 @@ mod tests {
             id: MemoryId::new(format!("{agent}-{content}")),
             agent_id: agent.to_string(),
             content: content.to_string(),
-            embedding: vec![1.0, 0.0, 0.0, 0.0],
+            embedding: Some(vec![1.0, 0.0, 0.0, 0.0]),
             tier: SegmentKind::MemoryRecall(content.to_string()),
             tags: vec![],
             created_at: Utc::now(),
@@ -873,19 +874,19 @@ mod tests {
         let embedding = Arc::new(FixedEmbedding::new(vec![1.0, 0.0, 0.0, 0.0]));
         let store = Arc::new(InMemorySemanticStore::new());
         store
-            .put(scoped_entry("agent-a", "agent-row", Scope::Agent("agent-a".into())))
+            .insert_entry(scoped_entry("agent-a", "agent-row", Scope::Agent("agent-a".into())))
             .await
             .unwrap();
         store
-            .put(scoped_entry("agent-a", "circle-row", Scope::Circle("ring".into())))
+            .insert_entry(scoped_entry("agent-a", "circle-row", Scope::Circle("ring".into())))
             .await
             .unwrap();
         store
-            .put(scoped_entry("agent-a", "org-row", Scope::Org("acme".into())))
+            .insert_entry(scoped_entry("agent-a", "org-row", Scope::Org("acme".into())))
             .await
             .unwrap();
         store
-            .put(scoped_entry("agent-a", "global-row", Scope::Global))
+            .insert_entry(scoped_entry("agent-a", "global-row", Scope::Global))
             .await
             .unwrap();
 
@@ -919,13 +920,13 @@ mod tests {
         let embedding = Arc::new(FixedEmbedding::new(vec![1.0, 0.0, 0.0, 0.0]));
         let store = Arc::new(InMemorySemanticStore::new());
         store
-            .put(scoped_entry("agent-a", "agent-row", Scope::Agent("agent-a".into())))
+            .insert_entry(scoped_entry("agent-a", "agent-row", Scope::Agent("agent-a".into())))
             .await
             .unwrap();
         // Rows under non-agent scopes but NOT agent_id=agent-a → invisible
         // to the agent-only path.
         store
-            .put(scoped_entry("agent-b", "other-agent", Scope::Agent("agent-b".into())))
+            .insert_entry(scoped_entry("agent-b", "other-agent", Scope::Agent("agent-b".into())))
             .await
             .unwrap();
 
@@ -949,11 +950,11 @@ mod tests {
         let embedding = Arc::new(FixedEmbedding::new(vec![1.0, 0.0, 0.0, 0.0]));
         let store = Arc::new(InMemorySemanticStore::new());
         store
-            .put(scoped_entry("agent-a", "agent-row", Scope::Agent("agent-a".into())))
+            .insert_entry(scoped_entry("agent-a", "agent-row", Scope::Agent("agent-a".into())))
             .await
             .unwrap();
         store
-            .put(scoped_entry("agent-a", "global-row", Scope::Global))
+            .insert_entry(scoped_entry("agent-a", "global-row", Scope::Global))
             .await
             .unwrap();
 

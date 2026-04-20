@@ -265,7 +265,7 @@ where
                             yield Ok(Some(req));
                         }
                         Err(e) => {
-                            yield Err(ApalisError::SourceError(std::sync::Arc::new(Box::new(
+                            yield Err(ApalisError::SourceError(Arc::new(Box::new(
                                 QueueError::Serde { reason: e.to_string() },
                             ))));
                         }
@@ -275,7 +275,7 @@ where
                     apalis_core::sleep(poll_interval).await;
                 }
                 Err(e) => {
-                    yield Err(ApalisError::SourceError(std::sync::Arc::new(Box::new(e))));
+                    yield Err(ApalisError::SourceError(Arc::new(Box::new(e))));
                     apalis_core::sleep(poll_interval).await;
                 }
             }

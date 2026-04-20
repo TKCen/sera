@@ -5027,6 +5027,7 @@ dependencies = [
  "rand 0.8.5",
  "rusqlite",
  "sera-errors",
+ "sera-memory",
  "sera-types",
  "serde",
  "serde_json",
@@ -5118,6 +5119,7 @@ dependencies = [
  "sera-hitl",
  "sera-hooks",
  "sera-mail",
+ "sera-memory",
  "sera-meta",
  "sera-plugins",
  "sera-queue",
@@ -5218,6 +5220,27 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "sera-memory"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "pgvector",
+ "rusqlite",
+ "sera-types",
+ "serde",
+ "serde_json",
+ "sqlite-vec",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -5337,6 +5360,7 @@ dependencies = [
  "sera-errors",
  "sera-hitl",
  "sera-hooks",
+ "sera-memory",
  "sera-models",
  "sera-skills",
  "sera-telemetry",
@@ -5376,6 +5400,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "sera-errors",
+ "sera-memory",
  "sera-types",
  "serde",
  "serde_json",
@@ -5442,6 +5467,7 @@ dependencies = [
  "chrono",
  "insta",
  "sera-db",
+ "sera-memory",
  "sera-queue",
  "sera-tools",
  "sera-types",
@@ -5543,6 +5569,7 @@ dependencies = [
  "rusqlite",
  "sera-errors",
  "sera-hitl",
+ "sera-memory",
  "sera-types",
  "serde",
  "serde_json",

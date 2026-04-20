@@ -254,7 +254,7 @@ mod tests {
     use crate::transcript::{ContentBlock, Role};
     use async_trait::async_trait;
     use chrono::Utc;
-    use sera_types::MemoryId;
+    use sera_memory::MemoryId;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
     use uuid::Uuid;

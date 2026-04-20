@@ -12,6 +12,7 @@ name = "sera-runtime"
 path = "src/main.rs"
 
 [dependencies]
+sera-memory.workspace = true
 sera-types.workspace = true
 sera-config.workspace = true
 sera-errors.workspace = true

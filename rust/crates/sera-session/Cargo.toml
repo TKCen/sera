@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+sera-memory.workspace = true
 sera-types.workspace = true
 sera-errors.workspace = true
 serde.workspace = true

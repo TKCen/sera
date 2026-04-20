@@ -26,10 +26,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sera_types::{
-    MemoryId, SemanticEntry, SemanticError, SemanticMemoryStore,
-    memory::SegmentKind,
-};
+use sera_types::memory::SegmentKind;
+use sera_memory::{MemoryId, PutRequest, SemanticError, SemanticMemoryStore};
+#[cfg(test)]
 use uuid::Uuid;
 
 use crate::transcript::{ContentBlock, Role, Transcript};
@@ -43,7 +42,7 @@ pub const MAX_ENTRY_CHARS: usize = 2_000;
 pub const MAX_BLOB_CHARS: usize = 32_000;
 
 /// Tier tag used for stored session transcripts. Consumers can filter on
-/// this in a [`sera_types::SemanticQuery::tier_filter`] to scope recall to
+/// this in a [`sera_memory::SemanticQuery::tier_filter`] to scope recall to
 /// archived sessions.
 pub const TRANSCRIPT_TIER_LABEL: &str = "session_transcript";
 
@@ -135,24 +134,21 @@ impl TranscriptIndexer for SemanticTranscriptIndexer {
         );
         let content = truncate(&format!("{header}{blob}"), MAX_BLOB_CHARS);
 
-        let entry = SemanticEntry {
-            id: MemoryId::new(format!("session-transcript:{}", Uuid::new_v4())),
+        let req = PutRequest {
             agent_id: agent_id.to_string(),
             content,
-            embedding: Vec::new(),
+            scope: None,
             tier: SegmentKind::Custom(TRANSCRIPT_TIER_LABEL.to_string()),
             tags: vec![
                 TRANSCRIPT_TAG.to_string(),
                 format!("session_id:{session_id}"),
                 format!("started_at:{started_at}"),
             ],
-            created_at: Utc::now(),
-            last_accessed_at: None,
             promoted: false,
-            scope: None,
+            supplied_embedding: None,
         };
 
-        let id = self.store.put(entry).await?;
+        let id = self.store.put(req).await?;
         tracing::debug!(
             agent_id,
             session_id,
@@ -263,9 +259,9 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use sera_types::{
-        EvictionPolicy, ScoredEntry, SemanticEntry, SemanticError, SemanticMemoryStore,
-        SemanticQuery, SemanticStats,
+    use sera_memory::{
+        EvictionPolicy, PutRequest, ScoredEntry, SemanticEntry, SemanticError,
+        SemanticMemoryStore, SemanticQuery, SemanticStats,
     };
 
     use super::*;
@@ -297,11 +293,23 @@ mod tests {
 
     #[async_trait]
     impl SemanticMemoryStore for MockStore {
-        async fn put(&self, entry: SemanticEntry) -> Result<MemoryId, SemanticError> {
+        async fn put(&self, req: PutRequest) -> Result<MemoryId, SemanticError> {
             if self.fail_on_put {
                 return Err(SemanticError::Backend("mock failure".into()));
             }
-            let id = entry.id.clone();
+            let id = MemoryId::new(format!("session-transcript:{}", Uuid::new_v4()));
+            let entry = SemanticEntry {
+                id: id.clone(),
+                agent_id: req.agent_id,
+                content: req.content,
+                embedding: req.supplied_embedding,
+                tier: req.tier,
+                tags: req.tags,
+                created_at: Utc::now(),
+                last_accessed_at: None,
+                promoted: req.promoted,
+                scope: req.scope,
+            };
             self.rows.lock().unwrap().push(entry);
             Ok(id)
         }

@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use sera_types::{
+use sera_memory::{
     EvictionPolicy, MemoryId, ScoredEntry, SemanticError, SemanticMemoryStore, SemanticQuery,
     SemanticStats,
 };
@@ -389,7 +389,7 @@ mod tests {
     use async_trait::async_trait;
     use chrono::{Duration as ChronoDuration, Utc};
     use sera_types::memory::SegmentKind;
-    use sera_types::{SemanticEntry, SemanticStats};
+    use sera_memory::{PutRequest, SemanticEntry, SemanticStats};
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -416,12 +416,31 @@ mod tests {
         fn get(&self, id: &MemoryId) -> Option<SemanticEntry> {
             self.rows.lock().unwrap().get(id).cloned()
         }
+        /// Test-only helper: insert a fully-formed [`SemanticEntry`] directly
+        /// so tests can pin id / created_at / promoted (not expressible via
+        /// the trait-level [`PutRequest`], which owns id + timestamp).
+        fn insert_entry(&self, entry: SemanticEntry) {
+            let id = entry.id.clone();
+            self.rows.lock().unwrap().insert(id, entry);
+        }
     }
 
     #[async_trait]
     impl SemanticMemoryStore for FakeStore {
-        async fn put(&self, entry: SemanticEntry) -> Result<MemoryId, SemanticError> {
-            let id = entry.id.clone();
+        async fn put(&self, req: PutRequest) -> Result<MemoryId, SemanticError> {
+            let id = MemoryId::new(format!("fake-{}", self.rows.lock().unwrap().len()));
+            let entry = SemanticEntry {
+                id: id.clone(),
+                agent_id: req.agent_id,
+                content: req.content,
+                embedding: req.supplied_embedding,
+                tier: req.tier,
+                tags: req.tags,
+                created_at: Utc::now(),
+                last_accessed_at: None,
+                promoted: req.promoted,
+                scope: req.scope,
+            };
             self.rows.lock().unwrap().insert(id.clone(), entry);
             Ok(id)
         }
@@ -539,7 +558,7 @@ mod tests {
             id: MemoryId::new(id),
             agent_id: agent.to_string(),
             content: format!("content-{id}"),
-            embedding: vec![0.1, 0.2, 0.3],
+            embedding: Some(vec![0.1, 0.2, 0.3]),
             tier: SegmentKind::MemoryRecall(id.to_string()),
             tags: vec![],
             created_at: Utc::now() - ChronoDuration::days(age_days),
@@ -582,14 +601,8 @@ mod tests {
     #[tokio::test]
     async fn ttl_eviction_removes_old_rows() {
         let store = Arc::new(FakeStore::new());
-        store
-            .put(mk_entry("old", "a", 400, false))
-            .await
-            .unwrap();
-        store
-            .put(mk_entry("fresh", "a", 1, false))
-            .await
-            .unwrap();
+        store.insert_entry(mk_entry("old", "a", 400, false));
+        store.insert_entry(mk_entry("fresh", "a", 1, false));
         assert_eq!(store.len(), 2);
 
         let cfg = SemanticEvictionConfig {
@@ -607,14 +620,8 @@ mod tests {
     #[tokio::test]
     async fn promoted_rows_survive_ttl_eviction() {
         let store = Arc::new(FakeStore::new());
-        store
-            .put(mk_entry("pinned", "a", 400, true))
-            .await
-            .unwrap();
-        store
-            .put(mk_entry("old-normal", "a", 400, false))
-            .await
-            .unwrap();
+        store.insert_entry(mk_entry("pinned", "a", 400, true));
+        store.insert_entry(mk_entry("old-normal", "a", 400, false));
 
         let cfg = SemanticEvictionConfig {
             eviction_max_per_agent: None,
@@ -638,10 +645,7 @@ mod tests {
         for i in 0..5 {
             let id = format!("row-{i}");
             let age = (5 - i) as i64;
-            store
-                .put(mk_entry(&id, "a", age, false))
-                .await
-                .unwrap();
+            store.insert_entry(mk_entry(&id, "a", age, false));
         }
         assert_eq!(store.len(), 5);
 
@@ -660,10 +664,7 @@ mod tests {
     #[tokio::test]
     async fn disabled_job_is_a_noop() {
         let store = Arc::new(FakeStore::new());
-        store
-            .put(mk_entry("old", "a", 400, false))
-            .await
-            .unwrap();
+        store.insert_entry(mk_entry("old", "a", 400, false));
         let cfg = SemanticEvictionConfig {
             enabled: false,
             eviction_ttl_days: Some(180),
@@ -695,10 +696,7 @@ mod tests {
     async fn dreaming_promotion_flips_top_n_to_promoted() {
         let store = Arc::new(FakeStore::new());
         for i in 0..5 {
-            store
-                .put(mk_entry(&format!("r-{i}"), "a", 1, false))
-                .await
-                .unwrap();
+            store.insert_entry(mk_entry(&format!("r-{i}"), "a", 1, false));
         }
 
         let picker = Arc::new(FixedPicker {
@@ -728,10 +726,7 @@ mod tests {
     #[tokio::test]
     async fn dreaming_promotion_skips_when_top_n_zero() {
         let store = Arc::new(FakeStore::new());
-        store
-            .put(mk_entry("r-0", "a", 1, false))
-            .await
-            .unwrap();
+        store.insert_entry(mk_entry("r-0", "a", 1, false));
         let cfg = SemanticEvictionConfig {
             eviction_max_per_agent: None,
             eviction_ttl_days: None,
@@ -760,10 +755,7 @@ mod tests {
     async fn report_records_before_and_after_counts() {
         let store = Arc::new(FakeStore::new());
         for i in 0..5 {
-            store
-                .put(mk_entry(&format!("r-{i}"), "a", 400, false))
-                .await
-                .unwrap();
+            store.insert_entry(mk_entry(&format!("r-{i}"), "a", 400, false));
         }
         let cfg = SemanticEvictionConfig {
             eviction_max_per_agent: None,

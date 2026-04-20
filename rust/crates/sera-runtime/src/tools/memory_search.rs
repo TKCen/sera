@@ -32,7 +32,8 @@ use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
     ToolInput, ToolMetadata, ToolOutput, ToolSchema,
 };
-use sera_types::{EmbeddingService, ScoredEntry, SemanticMemoryStore, SemanticQuery};
+use sera_types::EmbeddingService;
+use sera_memory::{ScoredEntry, SemanticMemoryStore, SemanticQuery};
 
 /// Default `top_k` when the caller omits the field.
 const DEFAULT_TOP_K: usize = 5;
@@ -64,7 +65,7 @@ pub struct MemorySearchToolResult {
 pub struct MemorySearchToolEntry {
     #[serde(flatten)]
     pub hit: MemorySearchResult,
-    /// Opaque tier-2 tags from [`sera_types::SemanticEntry::tags`].
+    /// Opaque tier-2 tags from [`sera_memory::SemanticEntry::tags`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     /// `true` iff the entry's `MemoryId` already appears in
@@ -361,10 +362,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use chrono::Utc;
-    use sera_types::{
-        EmbeddingError, EmbeddingHealth, EvictionPolicy, MemoryId, SemanticEntry, SemanticError,
-        SemanticStats,
-    };
+    use sera_types::{EmbeddingError, EmbeddingHealth};
+    use sera_memory::{EvictionPolicy, MemoryId, PutRequest, SemanticEntry, SemanticError, SemanticStats};
     use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
     use sera_types::tool::{
         AuditHandle, CredentialBag, DefaultAuthzProviderStub, SessionRef, ToolPolicy,
@@ -442,8 +441,8 @@ mod tests {
 
     #[async_trait]
     impl SemanticMemoryStore for CannedStore {
-        async fn put(&self, entry: SemanticEntry) -> Result<MemoryId, SemanticError> {
-            Ok(entry.id)
+        async fn put(&self, _req: PutRequest) -> Result<MemoryId, SemanticError> {
+            Ok(MemoryId::new("canned"))
         }
         async fn query(&self, q: SemanticQuery) -> Result<Vec<ScoredEntry>, SemanticError> {
             self.observed_top_k.store(q.top_k, Ordering::SeqCst);
@@ -478,7 +477,7 @@ mod tests {
                 id: MemoryId::new(id),
                 agent_id: "agent-a".to_string(),
                 content: content.to_string(),
-                embedding: vec![1.0, 0.0, 0.0, 0.0],
+                embedding: Some(vec![1.0, 0.0, 0.0, 0.0]),
                 tier: SegmentKind::MemoryRecall(id.to_string()),
                 tags: vec!["tag-a".into()],
                 created_at: Utc::now(),

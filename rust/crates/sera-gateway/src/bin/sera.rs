@@ -45,7 +45,7 @@ use sera_db::pgvector_store::PgVectorStore;
 #[allow(unused_imports)]
 use sera_db::{SqliteMemoryStore, DEFAULT_SQLITE_VEC_DIMENSIONS};
 use sera_runtime::skill_dispatch::SkillDispatchEngine;
-use sera_types::SemanticMemoryStore;
+use sera_memory::SemanticMemoryStore;
 // sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +
 // SERA-issued nonce fallback). Wired into AppState + `/api/mail/inbound`.
 use sera_mail::{
@@ -1276,7 +1276,7 @@ async fn execute_turn(
     // ── Memory recall: text-only SemanticMemoryStore query. Best-effort —
     // any backend error is logged and skipped; a failed recall must never
     // fail the turn.
-    let recall_query = sera_types::semantic_memory::SemanticQuery {
+    let recall_query = sera_memory::SemanticQuery {
         agent_id: agent_name.to_string(),
         scope: None,
         tier_filter: None,

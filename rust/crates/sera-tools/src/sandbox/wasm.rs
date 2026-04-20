@@ -310,6 +310,7 @@ mod stub {
 
     /// Stub WASM sandbox provider.  Enable the `wasm` feature for the real
     /// wasmtime-backed implementation.
+    #[derive(Default)]
     pub struct WasmSandboxProvider;
 
     #[async_trait]

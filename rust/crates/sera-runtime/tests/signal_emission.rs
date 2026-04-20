@@ -54,6 +54,7 @@ async fn started_and_done_land_in_inbox_with_main_session_target() {
         .with_target(SignalTarget::MainSession);
 
     let runtime = DefaultRuntime::new(Box::new(ContextPipeline::new()))
+        .with_allow_missing_constitutional_gate(true)
         .with_signal_emitter(emitter);
 
     let outcome = runtime
@@ -111,6 +112,7 @@ async fn silent_target_skips_inbox_entirely() {
         .with_target(SignalTarget::Silent);
 
     let runtime = DefaultRuntime::new(Box::new(ContextPipeline::new()))
+        .with_allow_missing_constitutional_gate(true)
         .with_signal_emitter(emitter);
 
     let _ = runtime

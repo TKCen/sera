@@ -107,6 +107,7 @@ async fn memory_block_prepended_as_system_message() {
 
     let asm = MemoryBlockAssembler::new(block);
     let runtime = DefaultRuntime::new(make_context_engine())
+        .with_allow_missing_constitutional_gate(true)
         .with_llm(Box::new(ArcLlm(llm.clone())))
         .with_memory_assembler(asm);
 
@@ -143,6 +144,7 @@ async fn no_memory_assembler_no_extra_system_message() {
     }
 
     let runtime = DefaultRuntime::new(make_context_engine())
+        .with_allow_missing_constitutional_gate(true)
         .with_llm(Box::new(ArcLlm(llm.clone())));
     // No memory assembler attached.
 
@@ -177,6 +179,7 @@ async fn empty_memory_block_is_noop() {
     // Empty block — no segments.
     let asm = MemoryBlockAssembler::new(MemoryBlock::new(4096));
     let runtime = DefaultRuntime::new(make_context_engine())
+        .with_allow_missing_constitutional_gate(true)
         .with_llm(Box::new(ArcLlm(llm.clone())))
         .with_memory_assembler(asm);
 
@@ -204,6 +207,7 @@ async fn overflow_below_threshold_does_not_trigger_pressure() {
     let asm = MemoryBlockAssembler::new(block);
 
     let runtime = DefaultRuntime::new(make_context_engine())
+        .with_allow_missing_constitutional_gate(true)
         .with_memory_assembler(asm);
 
     // 5 turns — each iteration overflow_turns increments but never reaches 6.
@@ -231,6 +235,7 @@ async fn overflow_at_flush_min_turns_logs_pressure() {
     let asm = MemoryBlockAssembler::new(block);
 
     let runtime = DefaultRuntime::new(make_context_engine())
+        .with_allow_missing_constitutional_gate(true)
         .with_memory_assembler(asm);
 
     for _ in 0..3 {
@@ -252,6 +257,7 @@ async fn pressure_counter_resets_when_under_budget() {
     let asm = MemoryBlockAssembler::new(block);
 
     let runtime = DefaultRuntime::new(make_context_engine())
+        .with_allow_missing_constitutional_gate(true)
         .with_memory_assembler(asm);
 
     // 2 over-budget turns.

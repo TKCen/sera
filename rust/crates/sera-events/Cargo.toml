@@ -2,6 +2,7 @@
 name = "sera-events"
 version.workspace = true
 edition.workspace = true
+publish = false
 
 [dependencies]
 sera-types.workspace = true

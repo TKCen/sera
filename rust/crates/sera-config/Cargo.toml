@@ -9,7 +9,7 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-notify.workspace = true
+notify = ">=8.2, <9"
 notify-debouncer-mini.workspace = true
 tracing.workspace = true
 sera-types.workspace = true

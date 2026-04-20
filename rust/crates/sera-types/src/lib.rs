@@ -33,7 +33,6 @@ pub mod queue;
 pub mod sandbox;
 pub mod secrets;
 pub mod session;
-pub mod semantic_memory;
 pub mod signal;
 pub mod skill;
 pub mod tool;
@@ -44,10 +43,6 @@ pub use llm::ThinkingLevel;
 pub use versioning::BuildIdentity;
 pub use content_block::{ContentBlock, ConversationMessage, ConversationRole};
 pub use embedding::{EmbeddingError, EmbeddingHealth, EmbeddingService};
-pub use semantic_memory::{
-    Damping, EvictionPolicy, MemoryHit, MemoryId, PutRequest, Scope, ScopeHierarchy, ScoredEntry,
-    SemanticEntry, SemanticError, SemanticMemoryStore, SemanticQuery, SemanticStats,
-};
 
 use serde::{Deserialize, Serialize};
 

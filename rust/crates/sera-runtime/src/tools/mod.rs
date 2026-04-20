@@ -119,7 +119,7 @@ impl TraitToolRegistry {
     pub fn with_memory_search(
         mut self,
         embedding: std::sync::Arc<dyn sera_types::EmbeddingService>,
-        store: std::sync::Arc<dyn sera_types::SemanticMemoryStore>,
+        store: std::sync::Arc<dyn sera_memory::SemanticMemoryStore>,
     ) -> Self {
         self.register(Box::new(memory_search::MemorySearchTool::new(
             embedding, store,

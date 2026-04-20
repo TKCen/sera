@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use sera_types::{
+use sera_memory::{
     EvictionPolicy, MemoryId, ScoredEntry, SemanticError, SemanticMemoryStore, SemanticQuery,
     SemanticStats,
 };
@@ -389,7 +389,7 @@ mod tests {
     use async_trait::async_trait;
     use chrono::{Duration as ChronoDuration, Utc};
     use sera_types::memory::SegmentKind;
-    use sera_types::{PutRequest, SemanticEntry, SemanticStats};
+    use sera_memory::{PutRequest, SemanticEntry, SemanticStats};
     use std::collections::HashMap;
     use std::sync::Mutex;
 

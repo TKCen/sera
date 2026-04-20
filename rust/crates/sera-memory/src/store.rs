@@ -43,7 +43,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::memory::SegmentKind;
+use sera_types::memory::SegmentKind;
 
 // ── Scope ─────────────────────────────────────────────────────────────────────
 

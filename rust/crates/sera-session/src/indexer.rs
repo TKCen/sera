@@ -26,10 +26,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sera_types::{
-    MemoryId, PutRequest, SemanticError, SemanticMemoryStore,
-    memory::SegmentKind,
-};
+use sera_types::memory::SegmentKind;
+use sera_memory::{MemoryId, PutRequest, SemanticError, SemanticMemoryStore};
 #[cfg(test)]
 use uuid::Uuid;
 
@@ -261,7 +259,7 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use sera_types::{
+    use sera_memory::{
         EvictionPolicy, PutRequest, ScoredEntry, SemanticEntry, SemanticError,
         SemanticMemoryStore, SemanticQuery, SemanticStats,
     };

@@ -1,0 +1,33 @@
+[package]
+name = "sera-memory"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["sqlite", "sqlite-vec"]
+pgvector = ["dep:sqlx", "dep:pgvector"]
+sqlite = ["dep:rusqlite"]
+sqlite-vec = ["sqlite", "dep:sqlite-vec"]
+testing = []
+
+[dependencies]
+sera-types.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+time.workspace = true
+# pgvector feature
+sqlx = { workspace = true, optional = true }
+pgvector = { version = "0.4", features = ["sqlx"], optional = true }
+# sqlite feature
+rusqlite = { workspace = true, optional = true }
+sqlite-vec = { version = "0.1", optional = true }
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile.workspace = true

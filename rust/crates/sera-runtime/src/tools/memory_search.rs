@@ -32,7 +32,8 @@ use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
     ToolInput, ToolMetadata, ToolOutput, ToolSchema,
 };
-use sera_types::{EmbeddingService, ScoredEntry, SemanticMemoryStore, SemanticQuery};
+use sera_types::EmbeddingService;
+use sera_memory::{ScoredEntry, SemanticMemoryStore, SemanticQuery};
 
 /// Default `top_k` when the caller omits the field.
 const DEFAULT_TOP_K: usize = 5;
@@ -361,10 +362,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use chrono::Utc;
-    use sera_types::{
-        EmbeddingError, EmbeddingHealth, EvictionPolicy, MemoryId, PutRequest, SemanticEntry,
-        SemanticError, SemanticStats,
-    };
+    use sera_types::{EmbeddingError, EmbeddingHealth};
+    use sera_memory::{EvictionPolicy, MemoryId, PutRequest, SemanticEntry, SemanticError, SemanticStats};
     use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
     use sera_types::tool::{
         AuditHandle, CredentialBag, DefaultAuthzProviderStub, SessionRef, ToolPolicy,

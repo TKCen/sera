@@ -6,6 +6,7 @@ license.workspace = true
 description = "Workflow engine for SERA — triggered tasks, dreaming, knowledge audits"
 
 [dependencies]
+sera-memory = { workspace = true }
 sera-types = { workspace = true }
 sera-errors = { workspace = true }
 sera-hitl = { workspace = true }

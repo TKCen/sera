@@ -33,9 +33,8 @@ use std::time::Duration;
 
 use chrono::Utc;
 use sera_types::memory::{MemorySegment, SegmentKind};
-use sera_types::{
-    EmbeddingService, ScopeHierarchy, ScoredEntry, SemanticMemoryStore, SemanticQuery,
-};
+use sera_types::EmbeddingService;
+use sera_memory::{ScopeHierarchy, ScoredEntry, SemanticMemoryStore, SemanticQuery};
 
 use super::hybrid::{tokenise, Candidate, HybridRetrievalConfig, HybridScorer};
 
@@ -427,10 +426,10 @@ mod tests {
 
     use async_trait::async_trait;
     use chrono::Utc;
-    use sera_types::{
-        EmbeddingError, EmbeddingHealth, EmbeddingService, EvictionPolicy, MemoryId, PutRequest,
-        ScoredEntry, SemanticEntry, SemanticError, SemanticMemoryStore, SemanticQuery,
-        SemanticStats,
+    use sera_types::{EmbeddingError, EmbeddingHealth, EmbeddingService};
+    use sera_memory::{
+        EvictionPolicy, MemoryId, PutRequest, ScoredEntry, SemanticEntry, SemanticError,
+        SemanticMemoryStore, SemanticQuery, SemanticStats,
     };
 
     use super::*;
@@ -852,7 +851,7 @@ mod tests {
     // ── GH#140: hierarchical scope enrichment ──────────────────────────────
 
     use sera_testing::semantic_memory::InMemorySemanticStore;
-    use sera_types::{Damping, Scope, ScopeHierarchy};
+    use sera_memory::{Damping, Scope, ScopeHierarchy};
 
     fn scoped_entry(agent: &str, content: &str, scope: Scope) -> SemanticEntry {
         SemanticEntry {

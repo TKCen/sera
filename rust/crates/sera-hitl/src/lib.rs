@@ -3,18 +3,28 @@
 //! Provides configurable escalation chains that can involve agents, humans, or
 //! both as approvers.  See SPEC-hitl-approval for the full design.
 
+pub mod ask_for_approval;
+pub mod assessment;
 pub mod error;
 pub mod mode;
-pub mod sera_errors;
 pub mod router;
+pub mod security_analyzer;
+pub mod sera_errors;
 pub mod ticket;
+pub mod tool_result;
 pub mod types;
 
 // Convenience re-exports at the crate root.
+pub use ask_for_approval::{AskForApproval, CategoryRouting, ExecAllowRule, GranularApprovalConfig};
+pub use assessment::{GuardianAssessment, GuardianRecommendation, GuardianRiskLevel};
 pub use error::HitlError;
 pub use mode::EnforcementMode;
 pub use router::ApprovalRouter;
+pub use security_analyzer::{
+    ActionSecurityRisk, AnalyzerError, ProposedAction, SecurityAnalyzer,
+};
 pub use ticket::{ApprovalDecision, ApprovalId, ApprovalTicket, TicketStatus};
+pub use tool_result::ToolResult;
 pub use types::{
     ApprovalEvidence, ApprovalPolicy, ApprovalRouting, ApprovalScope, ApprovalSpec,
     ApprovalTarget, ApprovalUrgency, RiskThreshold,
@@ -998,5 +1008,64 @@ mod tests {
             ticket.escalate().unwrap_err(),
             HitlError::EscalationExhausted { .. }
         ));
+    }
+
+    // ── RevisionRequested (SPEC-hitl-approval §5c) ────────────────────────────
+
+    #[test]
+    fn request_revision_then_submit_returns_to_pending() {
+        let spec = basic_spec(static_routing(), 1, Duration::from_secs(300));
+        let mut ticket = ApprovalTicket::new(spec, "session-rev-1");
+
+        let status = ticket
+            .request_revision(human_ref(), "tighten the scope")
+            .unwrap();
+        assert_eq!(status, TicketStatus::RevisionRequested);
+        assert_eq!(ticket.status, TicketStatus::RevisionRequested);
+        assert_eq!(ticket.revision_feedback.as_deref(), Some("tighten the scope"));
+        // A decision was recorded so audit history survives.
+        assert_eq!(ticket.decisions.len(), 1);
+
+        let status = ticket.submit_revision().unwrap();
+        assert_eq!(status, TicketStatus::Pending);
+        assert!(ticket.revision_feedback.is_none());
+    }
+
+    #[test]
+    fn submit_revision_from_pending_is_invalid() {
+        let spec = basic_spec(static_routing(), 1, Duration::from_secs(300));
+        let mut ticket = ApprovalTicket::new(spec, "session-rev-2");
+        let err = ticket.submit_revision().unwrap_err();
+        assert!(matches!(
+            err,
+            HitlError::InvalidTransition { from: TicketStatus::Pending, .. }
+        ));
+    }
+
+    #[test]
+    fn request_revision_on_terminal_is_invalid_transition() {
+        let spec = basic_spec(static_routing(), 1, Duration::from_secs(300));
+        let mut ticket = ApprovalTicket::new(spec, "session-rev-3");
+        ticket.approve(human_ref(), None).unwrap();
+        let err = ticket
+            .request_revision(agent_ref(), "reconsider")
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HitlError::InvalidTransition { from: TicketStatus::Approved, .. }
+        ));
+    }
+
+    #[test]
+    fn approve_after_revision_cycle_completes() {
+        // revision → submit → approve — full two-step revision loop.
+        let spec = basic_spec(static_routing(), 1, Duration::from_secs(300));
+        let mut ticket = ApprovalTicket::new(spec, "session-rev-4");
+        ticket
+            .request_revision(human_ref(), "narrow the args")
+            .unwrap();
+        ticket.submit_revision().unwrap();
+        let status = ticket.approve(human_ref(), Some("ok now".to_string())).unwrap();
+        assert_eq!(status, TicketStatus::Approved);
     }
 }

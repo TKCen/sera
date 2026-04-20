@@ -75,6 +75,9 @@ pub enum TicketStatus {
     Escalated,
     /// No decision was reached before the deadline.
     Expired,
+    /// Reviewer found issues but believes the proposer can revise and retry.
+    /// Not terminal: the ticket returns to Pending after revision is submitted.
+    RevisionRequested,
 }
 
 impl TicketStatus {
@@ -123,6 +126,10 @@ pub struct ApprovalTicket {
     pub created_at: DateTime<Utc>,
     /// When the ticket expires.
     pub expires_at: DateTime<Utc>,
+    /// Reviewer feedback attached during the most recent `RevisionRequested`
+    /// transition. Cleared when the proposer calls `submit_revision`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_feedback: Option<String>,
 }
 
 impl ApprovalTicket {
@@ -141,7 +148,54 @@ impl ApprovalTicket {
             decisions: Vec::new(),
             created_at: now,
             expires_at,
+            revision_feedback: None,
         }
+    }
+
+    /// Record a reviewer request-for-revision.
+    ///
+    /// Unlike `reject`, this is a non-terminal signal: the ticket's feedback
+    /// slot is populated and status moves to `RevisionRequested`. The
+    /// proposer calls `submit_revision` to return the ticket to `Pending`.
+    /// Returns [`HitlError::InvalidTransition`] from a terminal state and
+    /// [`HitlError::TicketExpired`] if the deadline has passed.
+    pub fn request_revision(
+        &mut self,
+        reviewer: PrincipalRef,
+        feedback: impl Into<String>,
+    ) -> Result<TicketStatus, HitlError> {
+        self.guard_transition("request_revision")?;
+        let feedback = feedback.into();
+        self.decisions.push(ApprovalDecision {
+            approver: reviewer,
+            status: TicketStatus::RevisionRequested,
+            reason: Some(feedback.clone()),
+            decided_at: Utc::now(),
+        });
+        self.revision_feedback = Some(feedback);
+        self.status = TicketStatus::RevisionRequested;
+        Ok(self.status)
+    }
+
+    /// Proposer submits a revision. Clears `revision_feedback` and returns
+    /// the ticket to `Pending`. Only valid when the ticket is currently in
+    /// `RevisionRequested`.
+    pub fn submit_revision(&mut self) -> Result<TicketStatus, HitlError> {
+        if self.status != TicketStatus::RevisionRequested {
+            return Err(HitlError::InvalidTransition {
+                from: self.status,
+                action: "submit_revision".to_string(),
+            });
+        }
+        // Expiry check still applies — a stale revision cycle can't bypass the
+        // deadline.
+        if self.is_expired() {
+            self.status = TicketStatus::Expired;
+            return Err(HitlError::TicketExpired { id: self.id.clone() });
+        }
+        self.revision_feedback = None;
+        self.status = TicketStatus::Pending;
+        Ok(self.status)
     }
 
     /// Record an approval decision from `approver`.

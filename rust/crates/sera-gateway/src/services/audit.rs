@@ -4,8 +4,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use sqlx::PgPool;
 use sera_db::audit::{AuditRepository, AuditRow};
-use sera_events::audit::AuditHashChain;
-use sera_events::centrifugo::CentrifugoClient;
+use sera_telemetry::centrifugo::CentrifugoClient;
+use sera_telemetry::hash_chain::AuditHashChain;
 use sera_types::audit::ActorType;
 
 #[derive(Debug, thiserror::Error)]
@@ -13,7 +13,7 @@ pub enum AuditError {
     #[error("database error: {0}")]
     Db(#[from] sera_db::error::DbError),
     #[error("verification failed: {0}")]
-    Verification(#[from] sera_events::error::AuditVerifyError),
+    Verification(#[from] sera_telemetry::hash_chain::AuditVerifyError),
     #[error("centrifugo publish failed: {0}")]
     Publish(String),
 }

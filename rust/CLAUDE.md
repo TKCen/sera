@@ -43,11 +43,10 @@ cargo check -p sera-core
 | `sera-config`     | lib  | Environment/file config loading                         |
 | `sera-db`         | lib  | PostgreSQL via sqlx, migrations, repositories           |
 | `sera-auth`       | lib  | API keys, JWT, OIDC, axum middleware                    |
-| `sera-events`     | lib  | Audit trail, Centrifugo pub/sub, lifecycle events       |
 | `sera-hooks`      | lib  | In-process hook registry + chain executor               |
 | `sera-hitl`       | lib  | HITL approval routing, escalation chains                |
 | `sera-workflow`   | lib  | Workflow engine, dreaming config, cron scheduling       |
-| `sera-telemetry`  | lib  | OTel tracing, AuditBackend, LaneFailureClass            |
+| `sera-telemetry`  | lib  | OTel tracing, AuditBackend, LaneFailureClass, Centrifugo pub/sub, legacy audit hash-chain |
 | `sera-queue`      | lib  | QueueBackend trait, LocalQueueBackend, GlobalThrottle    |
 | `sera-tools`      | lib  | SandboxProvider, SsrfValidator, BashAstChecker          |
 | `sera-errors`     | lib  | Unified error codes, SeraError, HTTP status mapping     |
@@ -73,7 +72,6 @@ cargo check -p sera-core
 sera-types (leaf)
   └─ sera-config
   └─ sera-db ← sera-auth
-  └─ sera-events
   └─ sera-tools (sandbox, ssrf, kill-switch)
   └─ sera-gateway (all above + queue + transport + envelope)
   └─ sera-runtime (types + config + context-engine + condensers)

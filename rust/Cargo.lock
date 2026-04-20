@@ -5034,24 +5034,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sera-events"
-version = "0.1.0"
-dependencies = [
- "jsonwebtoken",
- "reqwest 0.12.28",
- "sera-errors",
- "sera-types",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "sera-gateway"
 version = "0.1.0"
 dependencies = [
@@ -5077,7 +5059,6 @@ dependencies = [
  "sera-config",
  "sera-db",
  "sera-errors",
- "sera-events",
  "sera-hitl",
  "sera-hooks",
  "sera-mail",
@@ -5087,6 +5068,7 @@ dependencies = [
  "sera-runtime",
  "sera-secrets",
  "sera-session",
+ "sera-telemetry",
  "sera-testing",
  "sera-tools",
  "sera-types",
@@ -5191,7 +5173,6 @@ dependencies = [
  "rand 0.8.5",
  "sera-auth",
  "sera-errors",
- "sera-events",
  "sera-types",
  "serde",
  "serde_json",
@@ -5372,9 +5353,11 @@ name = "sera-telemetry"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "jsonwebtoken",
  "once_cell",
  "opentelemetry",
  "opentelemetry-otlp",
+ "reqwest 0.12.28",
  "sera-errors",
  "sera-types",
  "serde",

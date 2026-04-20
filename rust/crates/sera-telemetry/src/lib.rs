@@ -9,8 +9,11 @@
 //! - Lane commit provenance and run evidence (`provenance`)
 
 pub mod audit;
+pub mod centrifugo;
+pub mod channels;
 pub mod emitter;
 pub mod generation;
+pub mod hash_chain;
 pub mod lane_failure;
 pub mod otel;
 pub mod provenance;
@@ -18,6 +21,9 @@ pub mod provider_credentials;
 pub mod sera_errors;
 
 pub use audit::{AuditBackend, AuditEntry, AuditError, audit_append, set_audit_backend};
+pub use centrifugo::{CentrifugoClient, CentrifugoError};
+pub use channels::ChannelNamespace;
+pub use hash_chain::{AuditHashChain, AuditVerifyError};
 pub use emitter::{Emitter, EventMeta};
 pub use generation::{BuildIdentity, GenerationLabel, GenerationMarker};
 pub use lane_failure::LaneFailureClass;

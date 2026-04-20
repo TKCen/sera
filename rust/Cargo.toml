@@ -5,7 +5,6 @@ members = [
   "crates/sera-config",
   "crates/sera-db",
   "crates/sera-auth",
-  "crates/sera-events",
   "crates/sera-tools",
   "crates/sera-testing",
   "crates/sera-gateway",
@@ -193,7 +192,6 @@ sera-telemetry = { path = "crates/sera-telemetry" }
 sera-config = { path = "crates/sera-config" }
 sera-db = { path = "crates/sera-db" }
 sera-auth = { path = "crates/sera-auth" }
-sera-events = { path = "crates/sera-events" }
 sera-tools = { path = "crates/sera-tools" }
 sera-runtime = { path = "crates/sera-runtime" }
 sera-testing = { path = "crates/sera-testing" }

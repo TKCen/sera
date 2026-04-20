@@ -151,7 +151,7 @@ pub async fn get_history(
     }
 
     // Centrifugo history API not yet integrated — CentrifugoClient lacks a history method.
-    // Returns empty results until the history endpoint is added to sera-events.
+    // Returns empty results until the history endpoint is added to sera-telemetry.
     tracing::info!(channel = %params.channel, "intercom history: Centrifugo history API not yet integrated");
     Ok(Json(HistoryResponse {
         channel: params.channel,

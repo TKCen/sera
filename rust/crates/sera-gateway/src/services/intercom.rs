@@ -5,8 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use sera_events::centrifugo::CentrifugoClient;
-use sera_events::error::CentrifugoError;
+use sera_telemetry::centrifugo::{CentrifugoClient, CentrifugoError};
 use thiserror::Error;
 
 /// Intercom service error types.

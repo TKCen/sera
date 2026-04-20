@@ -467,6 +467,9 @@ pub enum MemoryTier {
 
 ## 3. Built-in Backends
 
+> [!IMPORTANT]
+> **Pluggability contract:** The normative rules that every backend — built-in or third-party — must honour are documented in [SPEC-memory-pluggability](SPEC-memory-pluggability.md). That spec establishes the `SemanticMemoryStore` trait, the backend freedoms (embeddings owned server-side, async latency, rejecting per-id delete) and obligations (agent/scope isolation, loud failure), and uses **hindsight** as the worked shape-proof for an external backend that owns its embeddings end-to-end. This section catalogs the backends SERA ships; the pluggability spec defines what "conforming backend" means.
+
 ### 3.1 File-Based (Default)
 
 Markdown files in the agent's workspace directory, organized by a heading hierarchy. The LLM-maintained wiki pattern uses:
@@ -479,12 +482,16 @@ The file-based backend supports **optional automatic git management** (see §5).
 > [!NOTE]  
 > **Beads task graph:** Originally considered for the memory backend, Beads has been reclassified as a **workflow/tool integration** (see [SPEC-workflow-engine](SPEC-workflow-engine.md) §6.1). Beads provides deterministic task DAGs for structured multi-step work tracking, which is a task decomposition concern rather than a memory storage concern.
 
-### 3.2 LCM / DAG Backend
+### 3.2 LCM / DAG — ContextEngine plugin (not a memory backend)
 
-DAG-based lossless context management (inspired by [lossless-claw](https://github.com/martian-engineering/lossless-claw)). Persists every message, builds hierarchical summaries, provides tools for drill-down (`search`, `describe`, `expand`).
+**Reclassification (sera-50y1 / sera-ze27 / sera-lg2i, 2026-04-20):** LCM ([`hermes-agent/plugins/context_engine/lcm`](https://github.com/TKCen/hermes-agent), inspired by [lossless-claw](https://github.com/martian-engineering/lossless-claw)) is **not** a `SemanticMemoryStore` backend. It is an append-only turn log + typed summary DAG + FTS5 search — a **context engine**, not a fact store. Forcing its `append_batch(turn_id, segments) / get_range(depth_from, depth_to) / dag.add_node / fts.search / externalize_refs` shape through `put / query / delete` loses the turn-id grouping, the depth-label filters, and the DAG addressing that make it useful.
 
-- **Tier:** 2, 3 (not default)
-- **Priority:** Phase 4
+The pluggability contract for turn-log + DAG + FTS engines lives in its sibling spec: [SPEC-context-engine-pluggability](SPEC-context-engine-pluggability.md). `ContextEngine` + optional `ContextQuery` + optional `ContextDiagnostics` cover LCM's full operation surface with 1:1 trait mappings. `hermes-agent`'s Python plugin is the authoritative operational reference for LCM's shape.
+
+- **Tier:** 2, 3 (not default — the default remains file-based per §3.1)
+- **Trait-shape conformance:** Phase 1 (bead `sera-ze27`, proven in [SPEC-context-engine-pluggability](SPEC-context-engine-pluggability.md) §4).
+- **Full Rust port of the LCM backend:** Phase 4. The port lands as an `Arc<dyn ContextEngine> + Arc<dyn ContextQuery> + Arc<dyn ContextDiagnostics>` in a follow-up bead.
+- **Memory interaction:** LCM runs alongside a `SemanticMemoryStore`, not in place of one. The two traits compose — an agent can use file-based memory for facts and LCM for lossless context simultaneously.
 
 ### 3.3 Database Backend
 

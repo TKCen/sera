@@ -70,9 +70,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 
-# WASM runtime
-wasmtime = "26"
-wasmtime-wasi = "26"
+# WASM runtime — pinned to >=43,<50 per P0-8 spec
+wasmtime = ">=43, <50"
+wasmtime-wasi = ">=43, <50"
+wasmtime-wasi-http = ">=43, <50"
 
 # Error handling
 thiserror = "2"

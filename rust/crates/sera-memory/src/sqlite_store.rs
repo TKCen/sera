@@ -21,10 +21,13 @@
 //!     created_at       INTEGER NOT NULL,      -- unix epoch seconds
 //!     last_touched_at  INTEGER,
 //!     access_count     INTEGER DEFAULT 0,
-//!     promoted         INTEGER NOT NULL DEFAULT 0
+//!     promoted         INTEGER NOT NULL DEFAULT 0,
+//!     scope_kind       TEXT NOT NULL DEFAULT 'agent',  -- GH#140
+//!     scope_key        TEXT NOT NULL DEFAULT ''        -- GH#140
 //! );
 //! CREATE INDEX IF NOT EXISTS idx_memory_entries_agent ON memory_entries(agent_id);
 //! CREATE INDEX IF NOT EXISTS idx_memory_entries_created ON memory_entries(created_at);
+//! CREATE INDEX IF NOT EXISTS idx_memory_entries_scope ON memory_entries(scope_kind, scope_key);
 //!
 //! -- Self-contained FTS5 (NOT contentless) — deliberately stores the
 //! -- content twice so DELETEs and UPDATEs don't hit the "cannot DELETE
@@ -252,10 +255,13 @@ impl SqliteMemoryStore {
                 created_at       INTEGER NOT NULL,
                 last_touched_at  INTEGER,
                 access_count     INTEGER NOT NULL DEFAULT 0,
-                promoted         INTEGER NOT NULL DEFAULT 0
+                promoted         INTEGER NOT NULL DEFAULT 0,
+                scope_kind       TEXT NOT NULL DEFAULT 'agent',
+                scope_key        TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_memory_entries_agent ON memory_entries(agent_id);
             CREATE INDEX IF NOT EXISTS idx_memory_entries_created ON memory_entries(created_at);
+            CREATE INDEX IF NOT EXISTS idx_memory_entries_scope ON memory_entries(scope_kind, scope_key);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
                 content,
@@ -331,10 +337,12 @@ impl SqliteMemoryStore {
             let tx = conn
                 .transaction()
                 .map_err(|e| SemanticError::Backend(format!("begin tx: {e}")))?;
+            // put_raw defaults to agent scope (back-compat).
+            let scope_key = agent_id.clone();
             tx.execute(
                 "INSERT INTO memory_entries
-                    (id, agent_id, tier, content, metadata_json, tags, created_at, last_touched_at, access_count, promoted)
-                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, NULL, 0, ?7)
+                    (id, agent_id, tier, content, metadata_json, tags, created_at, last_touched_at, access_count, promoted, scope_kind, scope_key)
+                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, NULL, 0, ?7, 'agent', ?8)
                  ON CONFLICT(id) DO UPDATE SET
                      agent_id   = excluded.agent_id,
                      tier       = excluded.tier,
@@ -350,6 +358,7 @@ impl SqliteMemoryStore {
                     tags_json,
                     created_ts,
                     promoted as i64,
+                    scope_key,
                 ],
             )
             .map_err(|e| SemanticError::Backend(format!("insert entry: {e}")))?;
@@ -408,6 +417,8 @@ struct Row {
     created_at: DateTime<Utc>,
     last_touched_at: Option<DateTime<Utc>>,
     promoted: bool,
+    scope_kind: String,
+    scope_key: String,
 }
 
 fn row_from_sqlite(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
@@ -419,6 +430,8 @@ fn row_from_sqlite(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
     let created_at: i64 = row.get("created_at")?;
     let last_touched_at: Option<i64> = row.get("last_touched_at")?;
     let promoted_int: i64 = row.get("promoted")?;
+    let scope_kind: String = row.get("scope_kind")?;
+    let scope_key: String = row.get("scope_key")?;
 
     let tier: SegmentKind = serde_json::from_str(&tier_json).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
@@ -437,10 +450,14 @@ fn row_from_sqlite(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         last_touched_at: last_touched_at
             .and_then(|ts| DateTime::<Utc>::from_timestamp(ts, 0)),
         promoted: promoted_int != 0,
+        scope_kind,
+        scope_key,
     })
 }
 
 fn row_to_entry(row: Row, embedding: Option<Vec<f32>>) -> SemanticEntry {
+    use crate::Scope;
+    let scope = Scope::from_parts(&row.scope_kind, &row.scope_key).ok();
     SemanticEntry {
         id: MemoryId::new(row.id),
         agent_id: row.agent_id,
@@ -451,7 +468,7 @@ fn row_to_entry(row: Row, embedding: Option<Vec<f32>>) -> SemanticEntry {
         created_at: row.created_at,
         last_accessed_at: row.last_touched_at,
         promoted: row.promoted,
-        scope: None,
+        scope,
     }
 }
 
@@ -490,6 +507,8 @@ struct PutParams {
     tags: Vec<String>,
     promoted: bool,
     embedding: Option<Vec<f32>>,
+    scope_kind: String,
+    scope_key: String,
 }
 
 fn put_blocking(
@@ -516,15 +535,17 @@ fn put_blocking(
 
     tx.execute(
         "INSERT INTO memory_entries
-            (id, agent_id, tier, content, metadata_json, tags, created_at, last_touched_at, access_count, promoted)
-         VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, 0, ?8)
+            (id, agent_id, tier, content, metadata_json, tags, created_at, last_touched_at, access_count, promoted, scope_kind, scope_key)
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, 0, ?8, ?9, ?10)
          ON CONFLICT(id) DO UPDATE SET
              agent_id        = excluded.agent_id,
              tier            = excluded.tier,
              content         = excluded.content,
              tags            = excluded.tags,
              last_touched_at = excluded.last_touched_at,
-             promoted        = excluded.promoted",
+             promoted        = excluded.promoted,
+             scope_kind      = excluded.scope_kind,
+             scope_key       = excluded.scope_key",
         params![
             id,
             params.agent_id,
@@ -534,6 +555,8 @@ fn put_blocking(
             created,
             last_touched,
             params.promoted as i64,
+            params.scope_kind,
+            params.scope_key,
         ],
     )
     .map_err(|e| SemanticError::Backend(format!("insert entry: {e}")))?;
@@ -781,7 +804,7 @@ fn load_entries_by_ids(
     }
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!(
-        "SELECT id, agent_id, tier, content, tags, created_at, last_touched_at, promoted
+        "SELECT id, agent_id, tier, content, tags, created_at, last_touched_at, promoted, scope_kind, scope_key
          FROM memory_entries
          WHERE id IN ({placeholders})"
     );
@@ -848,6 +871,11 @@ impl SemanticMemoryStore for SqliteMemoryStore {
             })?);
         }
 
+        let effective_scope = req
+            .scope
+            .unwrap_or_else(|| crate::Scope::Agent(req.agent_id.clone()));
+        let scope_kind = effective_scope.kind_str().to_string();
+        let scope_key = effective_scope.key_str().to_string();
         let params = PutParams {
             id: String::new(),
             agent_id: req.agent_id,
@@ -856,6 +884,8 @@ impl SemanticMemoryStore for SqliteMemoryStore {
             tags: req.tags,
             promoted: req.promoted,
             embedding,
+            scope_kind,
+            scope_key,
         };
 
         self.with_conn(move |conn| put_blocking(conn, params, vec_available, dims))

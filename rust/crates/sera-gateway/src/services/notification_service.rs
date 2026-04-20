@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use sera_events::centrifugo::CentrifugoClient;
+use sera_telemetry::centrifugo::CentrifugoClient;
 
 /// Notification event payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]

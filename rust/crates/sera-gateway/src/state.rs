@@ -8,7 +8,7 @@ use sera_config::core_config::CoreConfig;
 use sera_config::providers::ProvidersConfig;
 use sera_db::DbPool;
 use sera_db::lane_queue::LaneQueue;
-use sera_events::CentrifugoClient;
+use sera_telemetry::CentrifugoClient;
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_meta::artifact_pipeline::ArtifactPipeline;
 use sera_meta::constitutional::ConstitutionalRegistry;

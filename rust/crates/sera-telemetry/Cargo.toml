@@ -19,6 +19,8 @@ once_cell.workspace = true
 time.workspace = true
 uuid.workspace = true
 async-trait.workspace = true
+reqwest.workspace = true
+jsonwebtoken.workspace = true
 
 [features]
 default = []

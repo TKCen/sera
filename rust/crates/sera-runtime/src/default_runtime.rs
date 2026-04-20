@@ -87,6 +87,12 @@ pub struct DefaultRuntime {
     /// [`Signal::Review`] at the terminal outcome. See
     /// `docs/signal-system-design.md`.
     signal_emitter: Option<SignalEmitter>,
+    /// When `false` (production default) the runtime fails closed at the
+    /// `ConstitutionalGate` hook point if no policy chain is installed —
+    /// `_observe` and `_react` return an [`TurnOutcome::Interruption`] rather
+    /// than proceeding. Flip to `true` in tests / dev harnesses that have no
+    /// gate wired up yet. Missing ≠ permissive by design (P0-6).
+    allow_missing_constitutional_gate: bool,
 }
 
 impl std::fmt::Debug for DefaultRuntime {
@@ -119,7 +125,17 @@ impl DefaultRuntime {
             enricher: None,
             authz_provider: Arc::new(sera_types::tool::DefaultAuthzProviderStub),
             signal_emitter: None,
+            allow_missing_constitutional_gate: false,
         }
+    }
+
+    /// Opt the runtime in to permissive behaviour when no `ConstitutionalGate`
+    /// policy chain is installed. Defaults to `false` (fail-closed) — this
+    /// setter only exists so tests / bootstrap harnesses without a policy
+    /// wired in can proceed. Production deployments must leave it unset.
+    pub fn with_allow_missing_constitutional_gate(mut self, allow: bool) -> Self {
+        self.allow_missing_constitutional_gate = allow;
+        self
     }
 
     /// Install a lifecycle [`SignalEmitter`].
@@ -303,7 +319,14 @@ impl AgentRuntime for DefaultRuntime {
         let max_iterations = self.max_tool_iterations;
         for _iteration in 0..max_iterations {
             // 1. Observe — filter messages, run ConstitutionalGate hooks on input
-            let observed = match turn::observe(&turn_ctx, None, &[]).await {
+            let observed = match turn::observe(
+                &turn_ctx,
+                None,
+                &[],
+                self.allow_missing_constitutional_gate,
+            )
+            .await
+            {
                 Ok(msgs) => msgs,
                 Err(interruption) => return Ok(interruption),
             };
@@ -502,7 +525,15 @@ impl AgentRuntime for DefaultRuntime {
             }
 
             // 4. React — decide outcome, run ConstitutionalGate hooks on response
-            let outcome = turn::react(&act_result, &think_result, timer.elapsed_ms(), None, &[]).await;
+            let outcome = turn::react(
+                &act_result,
+                &think_result,
+                timer.elapsed_ms(),
+                None,
+                &[],
+                self.allow_missing_constitutional_gate,
+            )
+            .await;
 
             match outcome {
                 TurnOutcome::RunAgain { tokens_used, .. } => {
@@ -820,19 +851,19 @@ mod tests {
 
     #[test]
     fn default_runtime_creation() {
-        let runtime = DefaultRuntime::new(make_context_engine());
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true);
         assert_eq!(runtime.max_tool_iterations, 10);
     }
 
     #[test]
     fn default_runtime_with_max_tool_iterations() {
-        let runtime = DefaultRuntime::new(make_context_engine()).with_max_tool_iterations(25);
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true).with_max_tool_iterations(25);
         assert_eq!(runtime.max_tool_iterations, 25);
     }
 
     #[tokio::test]
     async fn execute_turn_returns_turn_outcome() {
-        let runtime = DefaultRuntime::new(make_context_engine());
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true);
 
         let outcome = runtime.execute_turn(make_turn_context()).await.unwrap();
 
@@ -850,7 +881,7 @@ mod tests {
 
     #[tokio::test]
     async fn capabilities_reports_correctly() {
-        let runtime = DefaultRuntime::new(make_context_engine());
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true);
         let caps = runtime.capabilities().await;
 
         assert!(caps.supports_tool_calls);
@@ -861,7 +892,7 @@ mod tests {
 
     #[tokio::test]
     async fn health_returns_healthy() {
-        let runtime = DefaultRuntime::new(make_context_engine());
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true);
         assert_eq!(runtime.health().await, HealthStatus::Healthy);
     }
 
@@ -1012,7 +1043,7 @@ mod tests {
         ]);
 
         // Set threshold=2 so injection doesn't fire yet (only 1 failure so far).
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(llm))
             .with_tool_dispatcher(Box::new(SelectiveDispatcher))
             .with_failure_threshold(2)
@@ -1040,7 +1071,7 @@ mod tests {
             vec![], // final
         ]);
 
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(llm))
             .with_tool_dispatcher(Box::new(AlwaysFailDispatcher))
             .with_failure_threshold(3)
@@ -1119,7 +1150,7 @@ mod tests {
             }
         }
 
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(ArcLlm(llm_clone)))
             .with_tool_dispatcher(Box::new(AlwaysFailDispatcher))
             .with_failure_threshold(3)
@@ -1198,7 +1229,7 @@ mod tests {
         }
 
         let cap_ref = capturing.clone();
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(ArcLlm2(cap_ref)))
             .with_tool_dispatcher(Box::new(AlwaysFailDispatcher))
             .with_failure_threshold(1) // threshold=1 so each tool triggers immediately
@@ -1278,7 +1309,7 @@ mod tests {
             call_count: std::sync::Mutex::new(0),
         });
 
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(ArcLlm3(llm)))
             .with_tool_dispatcher(Box::new(AlwaysFailDispatcher))
             .with_failure_threshold(3)
@@ -1295,13 +1326,13 @@ mod tests {
 
     #[test]
     fn failure_threshold_builder_sets_field() {
-        let runtime = DefaultRuntime::new(make_context_engine()).with_failure_threshold(5);
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true).with_failure_threshold(5);
         assert_eq!(runtime.failure_threshold, 5);
     }
 
     #[test]
     fn failure_threshold_default_is_three() {
-        let runtime = DefaultRuntime::new(make_context_engine());
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true);
         assert_eq!(runtime.failure_threshold, 3);
     }
 
@@ -1325,20 +1356,20 @@ mod tests {
                 })
             }
         }
-        let runtime = DefaultRuntime::new(make_context_engine()).with_llm(Box::new(DummyLlm));
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true).with_llm(Box::new(DummyLlm));
         assert!(runtime.llm.is_some());
     }
 
     #[test]
     fn builder_with_tool_dispatcher_sets_dispatcher() {
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_tool_dispatcher(Box::new(AlwaysOkDispatcher));
         assert!(runtime.tool_dispatcher.is_some());
     }
 
     #[test]
     fn builder_chaining_sets_all_fields() {
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_tool_dispatcher(Box::new(AlwaysOkDispatcher))
             .with_max_tool_iterations(7)
             .with_failure_threshold(2);
@@ -1349,7 +1380,7 @@ mod tests {
 
     #[test]
     fn debug_format_includes_key_fields() {
-        let runtime = DefaultRuntime::new(make_context_engine()).with_max_tool_iterations(5);
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true).with_max_tool_iterations(5);
         let debug_str = format!("{runtime:?}");
         assert!(debug_str.contains("max_tool_iterations"), "debug: {debug_str}");
         assert!(debug_str.contains("has_llm"), "debug: {debug_str}");
@@ -1381,7 +1412,7 @@ mod tests {
             }
         }
 
-        let runtime = DefaultRuntime::new(make_context_engine()).with_llm(Box::new(ImmediateLlm));
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true).with_llm(Box::new(ImmediateLlm));
         let outcome = runtime.execute_turn(make_turn_context()).await.unwrap();
 
         match outcome {
@@ -1404,7 +1435,7 @@ mod tests {
             vec![tool_call("c1", "my-tool")],
             vec![],
         ]);
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(llm))
             .with_tool_dispatcher(Box::new(AlwaysOkDispatcher));
 
@@ -1436,7 +1467,7 @@ mod tests {
             vec![tool_call("call-1", "echo")],
             vec![],
         ]);
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(llm))
             .with_tool_dispatcher(Box::new(AlwaysOkDispatcher));
 
@@ -1469,7 +1500,7 @@ mod tests {
             }
         }
 
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(AlwaysToolLlm))
             .with_tool_dispatcher(Box::new(AlwaysOkDispatcher))
             .with_max_tool_iterations(2);
@@ -1495,7 +1526,7 @@ mod tests {
         // because tool_use_behavior=None forbids tool calls.
         let llm = ToolCallingLlm::new(vec![vec![tool_call("c1", "forbidden")]]);
 
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(llm))
             .with_tool_dispatcher(Box::new(AlwaysOkDispatcher));
 
@@ -1521,7 +1552,7 @@ mod tests {
         // LLM calls "wrong-tool" but Specific { name: "allowed-tool" } is set.
         let llm = ToolCallingLlm::new(vec![vec![tool_call("c1", "wrong-tool")]]);
 
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(llm))
             .with_tool_dispatcher(Box::new(AlwaysOkDispatcher));
 
@@ -1550,7 +1581,7 @@ mod tests {
             vec![],
         ]);
 
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(llm))
             .with_tool_dispatcher(Box::new(AlwaysOkDispatcher));
 
@@ -1584,7 +1615,7 @@ mod tests {
             }
         }
 
-        let runtime = DefaultRuntime::new(make_context_engine()).with_llm(Box::new(FailingLlm));
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true).with_llm(Box::new(FailingLlm));
         let outcome = runtime.execute_turn(make_turn_context()).await.unwrap();
 
         match outcome {
@@ -1611,7 +1642,7 @@ mod tests {
             vec![],
         ]);
 
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(llm))
             .with_tool_dispatcher(Box::new(AlwaysFailDispatcher))
             .with_failure_threshold(99); // don't let injection interfere
@@ -1647,7 +1678,7 @@ mod tests {
             }
         }
 
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(AlwaysToolLlm2))
             .with_tool_dispatcher(Box::new(AlwaysOkDispatcher))
             .with_max_tool_iterations(10); // high enough that doom loop fires
@@ -1720,7 +1751,7 @@ mod tests {
         }
 
         let cap_ref = cap.clone();
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(ArcCap(cap_ref)))
             .with_tool_dispatcher(Box::new(AlwaysFailDispatcher))
             .with_failure_threshold(0); // disabled
@@ -1749,7 +1780,7 @@ mod tests {
             vec![],
         ]);
 
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(llm));
         // intentionally no with_tool_dispatcher
 
@@ -1856,7 +1887,7 @@ mod tests {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let dispatcher = RecordingDispatcher { seen: seen.clone() };
 
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(llm))
             .with_tool_dispatcher(Box::new(dispatcher));
 
@@ -1892,7 +1923,7 @@ mod tests {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let dispatcher = RecordingDispatcher { seen: seen.clone() };
 
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(llm))
             .with_tool_dispatcher(Box::new(dispatcher));
 
@@ -1925,7 +1956,7 @@ mod tests {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let dispatcher = RecordingDispatcher { seen: seen.clone() };
 
-        let runtime = DefaultRuntime::new(make_context_engine())
+        let runtime = DefaultRuntime::new(make_context_engine()).with_allow_missing_constitutional_gate(true)
             .with_llm(Box::new(llm))
             .with_tool_dispatcher(Box::new(dispatcher));
 

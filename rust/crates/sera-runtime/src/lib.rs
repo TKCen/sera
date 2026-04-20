@@ -49,6 +49,7 @@ pub mod semantic;
 pub mod shadow;
 pub mod signal_emit;
 pub mod skill_dispatch;
+pub mod stdio;
 pub mod tool_hooks;
 
 // Retained modules

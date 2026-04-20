@@ -389,9 +389,65 @@ mod tests {
         .expect("ack");
     }
 
-    // Integration test: run with a live Postgres via
-    //   DATABASE_URL=postgres://... cargo test -p sera-queue --features apalis
-    // wrapping SqlxQueueBackend in an ApalisSeraStorage and driving a real
-    // apalis Worker with retries + tracing layers. See sqlx_backend.rs for
-    // the table schema.
+    // Integration test: round-trip a job through ApalisSeraStorage backed by
+    // SqlxQueueBackend. Requires a live Postgres instance with the
+    // sera_queue_jobs table (schema in sqlx_backend.rs). Run with:
+    //   DATABASE_URL=postgres://... cargo test -p sera-queue --features apalis -- --ignored
+    #[cfg(feature = "apalis")]
+    #[ignore]
+    #[tokio::test]
+    async fn roundtrip_push_pull_ack_over_sqlx_backend() {
+        use crate::sqlx_backend::SqlxQueueBackend;
+        use futures::StreamExt;
+
+        #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+        struct Task {
+            name: String,
+        }
+
+        let db_url = std::env::var("DATABASE_URL")
+            .expect("DATABASE_URL must be set for sqlx integration test");
+        let pool = sqlx::PgPool::connect(&db_url)
+            .await
+            .expect("connect to Postgres");
+        let backend: Arc<dyn QueueBackend> =
+            Arc::new(SqlxQueueBackend::new(Arc::new(pool)));
+        let mut storage: ApalisSeraStorage<Task> =
+            ApalisSeraStorage::new(Arc::clone(&backend), "test-lane");
+
+        // Push a job via the Storage API.
+        let parts = storage
+            .push(Task { name: "hello".into() })
+            .await
+            .expect("push");
+        let pushed_id = parts.context.job_id.clone();
+        assert!(!pushed_id.is_empty());
+        assert_eq!(parts.context.lane, "test-lane");
+
+        // Pull it back by driving the stream one tick.
+        let mut stream = build_pull_stream(storage.clone());
+        let next = stream.next().await.expect("stream yields");
+        let req = next.expect("ok").expect("some");
+        assert_eq!(req.args.name, "hello");
+        assert_eq!(req.parts.context.job_id, pushed_id);
+        assert_eq!(req.parts.context.lane, "test-lane");
+
+        // Ack the job — deletes it from the table.
+        let resp: Response<()> = Response::success(
+            (),
+            apalis_core::task::task_id::TaskId::new(),
+            apalis_core::task::attempt::Attempt::default(),
+        );
+        let ack_ctx = SeraJobContext {
+            job_id: pushed_id,
+            lane: "test-lane".into(),
+        };
+        <ApalisSeraStorage<Task> as Ack<Task, (), JsonCodec<Value>>>::ack(
+            &mut storage,
+            &ack_ctx,
+            &resp,
+        )
+        .await
+        .expect("ack");
+    }
 }

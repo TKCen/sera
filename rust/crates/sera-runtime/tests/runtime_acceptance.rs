@@ -1,5 +1,8 @@
 //! Runtime acceptance tests — Lane D, P0-6.
 
+use sera_hooks::ChainExecutor;
+use sera_hooks::registry::HookRegistry;
+use sera_types::hook::{HookChain, HookInstance, HookMetadata, HookPoint, HookResult};
 use sera_types::runtime::{TokenUsage, TurnOutcome};
 
 use sera_runtime::compaction::condensers::*;
@@ -63,7 +66,7 @@ async fn four_method_lifecycle_callable() {
         tool_context: Default::default(),
     };
 
-    let observed = turn::observe(&ctx, None, &[]).await.unwrap();
+    let observed = turn::observe(&ctx, None, &[], true).await.unwrap();
     assert_eq!(observed.len(), 1);
 
     let think_result = turn::think(&observed, &ctx.tools, &ctx.react_mode, None, &Default::default()).await;
@@ -72,7 +75,7 @@ async fn four_method_lifecycle_callable() {
     let act_result = turn::act(&mut ctx.clone(), &think_result, None).await;
     matches!(act_result, ActResult::ToolResults(_));
 
-    let outcome = turn::react(&act_result, &think_result, 50, None, &[]).await;
+    let outcome = turn::react(&act_result, &think_result, 50, None, &[], true).await;
     matches!(outcome, TurnOutcome::FinalOutput { .. });
 }
 
@@ -214,6 +217,141 @@ fn turn_context_has_change_artifact_field() {
         tool_context: Default::default(),
     };
     assert_eq!(ctx.change_artifact.as_deref(), Some("ca-123"));
+}
+
+// ── ConstitutionalGate enforcement tests (P0-6) ─────────────────────────────
+
+/// Minimal passthrough hook — returns Continue for every invocation.
+struct AllowGate;
+
+#[async_trait::async_trait]
+impl sera_hooks::hook_trait::Hook for AllowGate {
+    fn metadata(&self) -> HookMetadata {
+        HookMetadata {
+            name: "allow-gate".to_string(),
+            description: "Always allows".to_string(),
+            version: "0.1.0".to_string(),
+            supported_points: HookPoint::ALL.to_vec(),
+            author: None,
+        }
+    }
+    async fn init(&mut self, _config: serde_json::Value) -> Result<(), sera_hooks::error::HookError> { Ok(()) }
+    async fn execute(&self, _ctx: &sera_types::hook::HookContext) -> Result<HookResult, sera_hooks::error::HookError> {
+        Ok(HookResult::pass())
+    }
+}
+
+/// Minimal deny hook — returns Reject for every invocation.
+struct DenyGate;
+
+#[async_trait::async_trait]
+impl sera_hooks::hook_trait::Hook for DenyGate {
+    fn metadata(&self) -> HookMetadata {
+        HookMetadata {
+            name: "deny-gate".to_string(),
+            description: "Always denies".to_string(),
+            version: "0.1.0".to_string(),
+            supported_points: HookPoint::ALL.to_vec(),
+            author: None,
+        }
+    }
+    async fn init(&mut self, _config: serde_json::Value) -> Result<(), sera_hooks::error::HookError> { Ok(()) }
+    async fn execute(&self, _ctx: &sera_types::hook::HookContext) -> Result<HookResult, sera_hooks::error::HookError> {
+        Ok(HookResult::reject("constitutional violation"))
+    }
+}
+
+fn make_ctx(session_key: &str) -> TurnContext {
+    TurnContext {
+        turn_id: Uuid::new_v4(),
+        session_key: session_key.into(),
+        agent_id: "agent-gate-test".into(),
+        messages: vec![serde_json::json!({"role": "user", "content": "test"})],
+        tools: vec![],
+        handoffs: vec![],
+        watch_signals: HashSet::new(),
+        change_artifact: None,
+        react_mode: ReactMode::Default,
+        doom_loop_count: 0,
+        enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
+        approval_routing: sera_hitl::ApprovalRouting::Autonomous,
+        pending_steer: None,
+        tool_use_behavior: Default::default(),
+        tool_context: Default::default(),
+    }
+}
+
+fn make_chain(hook_ref: &str) -> HookChain {
+    HookChain {
+        name: "gate-chain".to_string(),
+        point: HookPoint::ConstitutionalGate,
+        hooks: vec![HookInstance {
+            hook_ref: hook_ref.to_string(),
+            config: serde_json::Value::Null,
+            enabled: true,
+        }],
+        timeout_ms: 5000,
+        fail_open: false,
+    }
+}
+
+// ── 12. Gate registered + permissive → turn proceeds ────────────────────────
+
+#[tokio::test]
+async fn constitutional_gate_allow_hook_permits_turn() {
+    let mut registry = HookRegistry::new();
+    registry.register(Box::new(AllowGate));
+    let executor = ChainExecutor::new(std::sync::Arc::new(registry));
+    let chains = vec![make_chain("allow-gate")];
+    let ctx = make_ctx("sess-gate-allow");
+
+    let result = turn::observe(&ctx, Some(&executor), &chains, false).await;
+    assert!(result.is_ok(), "allow gate should permit observe: {result:?}");
+}
+
+// ── 13. Gate registered + Deny → Interruption emitted ───────────────────────
+
+#[tokio::test]
+async fn constitutional_gate_deny_hook_emits_interruption() {
+    let mut registry = HookRegistry::new();
+    registry.register(Box::new(DenyGate));
+    let executor = ChainExecutor::new(std::sync::Arc::new(registry));
+    let chains = vec![make_chain("deny-gate")];
+    let ctx = make_ctx("sess-gate-deny");
+
+    let result = turn::observe(&ctx, Some(&executor), &chains, false).await;
+    match result {
+        Err(TurnOutcome::Interruption { hook_point, reason, .. }) => {
+            assert_eq!(hook_point, "constitutional_gate");
+            assert!(reason.contains("constitutional violation"), "unexpected reason: {reason}");
+        }
+        other => panic!("expected Interruption, got {other:?}"),
+    }
+}
+
+// ── 14. No hook registered + default config → Interruption (fail-closed) ────
+
+#[tokio::test]
+async fn constitutional_gate_missing_hook_fail_closed() {
+    // No executor, no chains, allow_missing = false (production default).
+    let ctx = make_ctx("sess-gate-missing");
+    let result = turn::observe(&ctx, None, &[], false).await;
+    match result {
+        Err(TurnOutcome::Interruption { hook_point, .. }) => {
+            assert_eq!(hook_point, "constitutional_gate");
+        }
+        other => panic!("expected fail-closed Interruption, got {other:?}"),
+    }
+}
+
+// ── 15. No hook registered + allow_missing = true → turn proceeds ────────────
+
+#[tokio::test]
+async fn constitutional_gate_missing_hook_permissive_mode_proceeds() {
+    let ctx = make_ctx("sess-gate-permissive");
+    let result = turn::observe(&ctx, None, &[], true).await;
+    assert!(result.is_ok(), "permissive mode should allow missing gate: {result:?}");
+    assert_eq!(result.unwrap().len(), 1);
 }
 
 // ── Minimal ModelAdapter for compile-time condenser tests ───────────────────

@@ -179,71 +179,98 @@ pub struct TurnContext {
     pub tool_context: ToolContext,
 }
 
+/// Reserved interruption reason emitted when the `ConstitutionalGate` hook
+/// point is enforced but no policy chain is installed. The absence of a
+/// registered chain is treated as a deny by default — callers must opt in to
+/// permissive behaviour via `allow_missing` on [`observe`] / [`react`] (see
+/// `DefaultRuntime::with_allow_missing_constitutional_gate` for the runtime
+/// config knob).
+pub const MISSING_GATE_REASON: &str = "no ConstitutionalGate policy installed";
+
 /// Observe — filter messages by watch signals and run ConstitutionalGate hooks on input.
 ///
 /// Returns `Ok(messages)` when hooks allow the turn to proceed, or
 /// `Err(TurnOutcome::Interruption)` when a hook rejects the incoming messages.
+///
+/// `allow_missing` controls the fail-closed default: when `false` (production
+/// default), missing executor/chains and executor errors halt the turn with
+/// [`MISSING_GATE_REASON`]. Tests may set `true` to opt in to permissive mode.
 pub async fn observe(
     ctx: &TurnContext,
     executor: Option<&ChainExecutor>,
     chains: &[HookChain],
+    allow_missing: bool,
 ) -> Result<Vec<serde_json::Value>, TurnOutcome> {
     // P0: return all messages (filtering by cause_by is P1)
     let messages = ctx.messages.clone();
 
-    if let Some(exec) = executor {
-        let hook_ctx = HookContext {
-            point: HookPoint::ConstitutionalGate,
-            event: Some(serde_json::json!({ "messages": messages })),
-            session: Some(serde_json::json!({
-                "session_key": ctx.session_key,
-                "agent_id": ctx.agent_id,
-            })),
-            tool_call: None,
-            tool_result: None,
-            principal: None,
-            metadata: std::collections::HashMap::new(),
-            change_artifact: None,
-        };
-
-        let result = exec
-            .execute_at_point(HookPoint::ConstitutionalGate, chains, hook_ctx)
-            .await;
-
-        match result {
-            Ok(chain_result) => match chain_result.outcome {
-                HookResult::Reject { reason, .. } => {
-                    return Err(TurnOutcome::Interruption {
-                        hook_point: "constitutional_gate".to_string(),
-                        reason,
-                        duration_ms: 0,
-                    });
-                }
-                HookResult::Continue { updated_input, .. } => {
-                    // If a hook modified the input, use the updated messages.
-                    if let Some(updated) = updated_input
-                        && let Some(arr) = updated.as_array()
-                    {
-                        return Ok(arr.clone());
-                    }
-                }
-                HookResult::Redirect { target, reason } => {
-                    let reason_str = reason.unwrap_or_else(|| format!("redirected to {target}"));
-                    return Err(TurnOutcome::Interruption {
-                        hook_point: "constitutional_gate".to_string(),
-                        reason: reason_str,
-                        duration_ms: 0,
-                    });
-                }
-            },
-            Err(e) => {
-                tracing::warn!("ConstitutionalGate hook error in observe: {e}");
-                // Fail-safe: allow the turn to proceed on hook executor error.
-            }
+    // Fail-closed: absence of any registered ConstitutionalGate chain is a deny
+    // unless the runtime explicitly opted in to permissive mode.
+    let has_gate_chain = executor.is_some()
+        && chains.iter().any(|c| c.point == HookPoint::ConstitutionalGate);
+    if !has_gate_chain {
+        if allow_missing {
+            return Ok(messages);
         }
+        return Err(TurnOutcome::Interruption {
+            hook_point: "constitutional_gate".to_string(),
+            reason: MISSING_GATE_REASON.to_string(),
+            duration_ms: 0,
+        });
     }
 
-    Ok(messages)
+    let exec = executor.expect("has_gate_chain implies executor is Some");
+    let hook_ctx = HookContext {
+        point: HookPoint::ConstitutionalGate,
+        event: Some(serde_json::json!({ "messages": messages })),
+        session: Some(serde_json::json!({
+            "session_key": ctx.session_key,
+            "agent_id": ctx.agent_id,
+        })),
+        tool_call: None,
+        tool_result: None,
+        principal: None,
+        metadata: std::collections::HashMap::new(),
+        change_artifact: None,
+    };
+
+    let result = exec
+        .execute_at_point(HookPoint::ConstitutionalGate, chains, hook_ctx)
+        .await;
+
+    match result {
+        Ok(chain_result) => match chain_result.outcome {
+            HookResult::Reject { reason, .. } => Err(TurnOutcome::Interruption {
+                hook_point: "constitutional_gate".to_string(),
+                reason,
+                duration_ms: 0,
+            }),
+            HookResult::Continue { updated_input, .. } => {
+                if let Some(updated) = updated_input
+                    && let Some(arr) = updated.as_array()
+                {
+                    return Ok(arr.clone());
+                }
+                Ok(messages)
+            }
+            HookResult::Redirect { target, reason } => {
+                let reason_str = reason.unwrap_or_else(|| format!("redirected to {target}"));
+                Err(TurnOutcome::Interruption {
+                    hook_point: "constitutional_gate".to_string(),
+                    reason: reason_str,
+                    duration_ms: 0,
+                })
+            }
+        },
+        // Executor error on a configured gate is a deny — we never swallow a
+        // gate failure, regardless of `allow_missing` (that flag only governs
+        // the policy-absence case; a present-but-broken gate is always strict).
+        Err(e) => Err(TurnOutcome::Interruption {
+            hook_point: "constitutional_gate".to_string(),
+            reason: format!("gate executor error: {e}"),
+            duration_ms: 0,
+        }),
+    }
 }
 
 /// Think — call the LLM via the provided `LlmProvider`.
@@ -586,6 +613,7 @@ pub async fn react(
     elapsed_ms: u64,
     executor: Option<&ChainExecutor>,
     chains: &[HookChain],
+    allow_missing: bool,
 ) -> TurnOutcome {
     let tokens = &think_result.tokens;
 
@@ -671,10 +699,25 @@ pub async fn react(
         }
     };
 
-    // Run ConstitutionalGate hooks on FinalOutput responses only.
-    if let Some(exec) = executor
-        && let TurnOutcome::FinalOutput { ref response, .. } = outcome
-    {
+    // Run ConstitutionalGate enforcement on FinalOutput responses only.
+    // Non-FinalOutput outcomes (RunAgain, Handoff, etc.) are intermediate
+    // states that the observe() gate already vetted; gating them again would
+    // trigger missing-gate denials mid-loop on otherwise valid turns.
+    if let TurnOutcome::FinalOutput { ref response, .. } = outcome {
+        let has_gate_chain = executor.is_some()
+            && chains.iter().any(|c| c.point == HookPoint::ConstitutionalGate);
+        if !has_gate_chain {
+            if allow_missing {
+                return outcome;
+            }
+            return TurnOutcome::Interruption {
+                hook_point: "constitutional_gate".to_string(),
+                reason: MISSING_GATE_REASON.to_string(),
+                duration_ms: elapsed_ms,
+            };
+        }
+
+        let exec = executor.expect("has_gate_chain implies executor is Some");
         let hook_ctx = HookContext {
             point: HookPoint::ConstitutionalGate,
             event: Some(serde_json::json!({ "response": response })),
@@ -700,7 +743,6 @@ pub async fn react(
                     };
                 }
                 HookResult::Continue { updated_input, .. } => {
-                    // If a hook modified the response, return updated FinalOutput.
                     if let Some(updated) = updated_input
                         && let Some(new_response) = updated.as_str()
                     {
@@ -724,8 +766,11 @@ pub async fn react(
                 }
             },
             Err(e) => {
-                tracing::warn!("ConstitutionalGate hook error in react: {e}");
-                // Fail-safe: emit original outcome on hook executor error.
+                return TurnOutcome::Interruption {
+                    hook_point: "constitutional_gate".to_string(),
+                    reason: format!("gate executor error: {e}"),
+                    duration_ms: elapsed_ms,
+                };
             }
         }
     }
@@ -886,13 +931,32 @@ mod tests {
 
     // ── observe() tests ───────────────────────────────────────────────────────
 
+    // Under `allow_missing = true` (test-mode opt-in) the absence of any
+    // policy chain passes through cleanly.
     #[tokio::test]
-    async fn observe_no_hooks_passes_through() {
+    async fn observe_no_hooks_passes_through_when_allow_missing() {
         let ctx = make_turn_ctx(vec![
             serde_json::json!({"role": "user", "content": "hello"}),
         ]);
-        let msgs = observe(&ctx, None, &[]).await.unwrap();
+        let msgs = observe(&ctx, None, &[], true).await.unwrap();
         assert_eq!(msgs.len(), 1);
+    }
+
+    // Fail-closed default: `allow_missing = false` with no registered gate
+    // chain halts the turn with a `constitutional_gate` interruption.
+    #[tokio::test]
+    async fn observe_no_hooks_is_fail_closed_by_default() {
+        let ctx = make_turn_ctx(vec![
+            serde_json::json!({"role": "user", "content": "hello"}),
+        ]);
+        let result = observe(&ctx, None, &[], false).await;
+        match result {
+            Err(TurnOutcome::Interruption { hook_point, reason, .. }) => {
+                assert_eq!(hook_point, "constitutional_gate");
+                assert_eq!(reason, MISSING_GATE_REASON);
+            }
+            other => panic!("expected fail-closed Interruption, got {:?}", other),
+        }
     }
 
     #[tokio::test]
@@ -902,7 +966,7 @@ mod tests {
         ]);
         let exec = make_allow_executor();
         let chain = make_chain("always-allow");
-        let msgs = observe(&ctx, Some(&exec), &[chain]).await.unwrap();
+        let msgs = observe(&ctx, Some(&exec), &[chain], false).await.unwrap();
         assert_eq!(msgs.len(), 1);
     }
 
@@ -913,7 +977,7 @@ mod tests {
         ]);
         let exec = make_reject_executor();
         let chain = make_chain("always-reject");
-        let result = observe(&ctx, Some(&exec), &[chain]).await;
+        let result = observe(&ctx, Some(&exec), &[chain], false).await;
         match result {
             Err(TurnOutcome::Interruption { hook_point, reason, .. }) => {
                 assert_eq!(hook_point, "constitutional_gate");
@@ -924,13 +988,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn observe_no_matching_chains_passes_through() {
-        // Chain targets a different hook point — should not fire.
+    async fn observe_no_matching_chains_is_fail_closed() {
+        // A chain for a different hook point does not count as a
+        // ConstitutionalGate policy — fail-closed must still apply.
         let ctx = make_turn_ctx(vec![
             serde_json::json!({"role": "user", "content": "hello"}),
         ]);
         let exec = make_reject_executor();
-        // Supply a chain for PreRoute, not ConstitutionalGate.
         let non_matching_chain = HookChain {
             name: "pre-route-chain".into(),
             point: HookPoint::PreRoute,
@@ -942,8 +1006,14 @@ mod tests {
             timeout_ms: 5000,
             fail_open: false,
         };
-        let msgs = observe(&ctx, Some(&exec), &[non_matching_chain]).await.unwrap();
-        assert_eq!(msgs.len(), 1);
+        let result = observe(&ctx, Some(&exec), &[non_matching_chain], false).await;
+        match result {
+            Err(TurnOutcome::Interruption { hook_point, reason, .. }) => {
+                assert_eq!(hook_point, "constitutional_gate");
+                assert_eq!(reason, MISSING_GATE_REASON);
+            }
+            other => panic!("expected fail-closed Interruption, got {:?}", other),
+        }
     }
 
     // ── react() tests ─────────────────────────────────────────────────────────
@@ -958,10 +1028,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn react_no_hooks_returns_final_output() {
+    async fn react_no_hooks_passes_through_when_allow_missing() {
         let act = ActResult::ToolResults(vec![]);
         let think = make_think_result("Hello from LLM");
-        let outcome = react(&act, &think, 10, None, &[]).await;
+        let outcome = react(&act, &think, 10, None, &[], true).await;
         match outcome {
             TurnOutcome::FinalOutput { response, .. } => {
                 assert_eq!(response, "Hello from LLM");
@@ -971,12 +1041,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn react_no_hooks_is_fail_closed_by_default() {
+        let act = ActResult::ToolResults(vec![]);
+        let think = make_think_result("Hello from LLM");
+        let outcome = react(&act, &think, 10, None, &[], false).await;
+        match outcome {
+            TurnOutcome::Interruption { hook_point, reason, .. } => {
+                assert_eq!(hook_point, "constitutional_gate");
+                assert_eq!(reason, MISSING_GATE_REASON);
+            }
+            other => panic!("expected fail-closed Interruption, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
     async fn react_allow_hook_passes_final_output_through() {
         let act = ActResult::ToolResults(vec![]);
         let think = make_think_result("Hello from LLM");
         let exec = make_allow_executor();
         let chain = make_chain("always-allow");
-        let outcome = react(&act, &think, 10, Some(&exec), &[chain]).await;
+        let outcome = react(&act, &think, 10, Some(&exec), &[chain], false).await;
         match outcome {
             TurnOutcome::FinalOutput { response, .. } => {
                 assert_eq!(response, "Hello from LLM");
@@ -991,7 +1075,7 @@ mod tests {
         let think = make_think_result("Hello from LLM");
         let exec = make_reject_executor();
         let chain = make_chain("always-reject");
-        let outcome = react(&act, &think, 10, Some(&exec), &[chain]).await;
+        let outcome = react(&act, &think, 10, Some(&exec), &[chain], false).await;
         match outcome {
             TurnOutcome::Interruption { hook_point, reason, .. } => {
                 assert_eq!(hook_point, "constitutional_gate");
@@ -1008,7 +1092,7 @@ mod tests {
         let think = make_think_result("");
         let exec = make_reject_executor();
         let chain = make_chain("always-reject");
-        let outcome = react(&act, &think, 10, Some(&exec), &[chain]).await;
+        let outcome = react(&act, &think, 10, Some(&exec), &[chain], false).await;
         match outcome {
             TurnOutcome::RunAgain { .. } => {}
             other => panic!("expected RunAgain, got {:?}", other),
@@ -1024,7 +1108,7 @@ mod tests {
         let think = make_think_result("");
         let exec = make_reject_executor();
         let chain = make_chain("always-reject");
-        let outcome = react(&act, &think, 10, Some(&exec), &[chain]).await;
+        let outcome = react(&act, &think, 10, Some(&exec), &[chain], false).await;
         match outcome {
             TurnOutcome::Interruption { hook_point, reason, .. } => {
                 assert_eq!(hook_point, "doom_loop");

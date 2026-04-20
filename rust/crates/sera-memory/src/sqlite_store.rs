@@ -823,6 +823,17 @@ impl SemanticMemoryStore for SqliteMemoryStore {
         // EmbeddingService; a failing embed propagates loudly (never a
         // zero-vector, see sera-px3w); if no embedder is wired we stay
         // keyword-only.
+        //
+        // When `supplied_embedding` is `Some` but the sqlite-vec extension
+        // is not loaded, the vector cannot be persisted — log a warning so
+        // the caller knows their vector was discarded, keyword-only path
+        // still completes.
+        if req.supplied_embedding.is_some() && !vec_available {
+            tracing::warn!(
+                target: "sera_memory::sqlite",
+                "supplied_embedding discarded: sqlite-vec extension not loaded; row stored keyword-only",
+            );
+        }
         let mut embedding = req.supplied_embedding.clone();
         if embedding.is_none()
             && vec_available

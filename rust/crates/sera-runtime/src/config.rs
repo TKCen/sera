@@ -32,7 +32,7 @@ pub struct RuntimeConfig {
     /// [`crate::context_engine::MAX_RECALL_SEGMENTS`] (3).
     pub semantic_top_k: usize,
     /// Minimum composite score for a store hit to survive initial filtering.
-    /// Forwarded to [`sera_types::SemanticQuery::similarity_threshold`].
+    /// Forwarded to [`sera_memory::SemanticQuery::similarity_threshold`].
     pub semantic_similarity_threshold: Option<f32>,
     /// Wall-clock timeout on the combined embedding + store query, in
     /// milliseconds. Past this budget the enricher degrades silently to an
@@ -42,7 +42,7 @@ pub struct RuntimeConfig {
     /// [`crate::context_engine::ContextEnricher`].
     ///
     /// When `true`, the enricher calls
-    /// [`sera_types::SemanticMemoryStore::query_hierarchical`] with the
+    /// [`sera_memory::SemanticMemoryStore::query_hierarchical`] with the
     /// agent's scope chain (Agent → Circle → Org → Global). When `false`
     /// (the default), the enricher keeps its pre-GH#140 agent-only
     /// `query()` behaviour. Safe rollout kill-switch — no code path other

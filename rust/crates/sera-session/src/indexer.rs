@@ -42,7 +42,7 @@ pub const MAX_ENTRY_CHARS: usize = 2_000;
 pub const MAX_BLOB_CHARS: usize = 32_000;
 
 /// Tier tag used for stored session transcripts. Consumers can filter on
-/// this in a [`sera_types::SemanticQuery::tier_filter`] to scope recall to
+/// this in a [`sera_memory::SemanticQuery::tier_filter`] to scope recall to
 /// archived sessions.
 pub const TRANSCRIPT_TIER_LABEL: &str = "session_transcript";
 

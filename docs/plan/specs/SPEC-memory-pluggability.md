@@ -163,23 +163,37 @@ the claim is "our trait is honest about what it models, and the things it
 doesn't model get their own trait, and neither hides the other." That is
 what a durable pluggability seam looks like.
 
-## 6. Back-compat
+## 6. Migration
 
-The type move lands in two steps:
+The type move landed in a single PR with the trait-revision commit (a
+breaking change) and the crate-extract commit kept separate for reviewer
+ergonomics. No re-export shims were kept in `sera-types` — that would
+have created a circular dependency (`sera-memory` depends on
+`sera-types` for `SegmentKind`). Instead:
 
-1. **This bead (sera-50y1).** `sera-types` keeps `pub use sera_memory::…`
-   re-exports for `SemanticMemoryStore`, `SemanticEntry`, `SemanticQuery`,
-   `ScoredEntry`, `PutRequest`, `EvictionPolicy`, `SemanticStats`,
-   `SemanticError`, `Scope`, `Damping`, `ScopeHierarchy`, `MemoryHit`, and
-   `MemoryId`. Downstream crates (`sera-runtime`, `sera-workflow`,
-   `sera-session`, `sera-gateway`) continue to import from `sera_types::…`
-   verbatim. `sera-db::SqliteMemoryStore` and
-   `sera-db::pgvector_store::PgVectorStore` remain reachable via the same
-   paths through `pub use sera_memory::…`.
-2. **Follow-up bead.** Remove the re-exports. Bump downstream imports to
-   `use sera_memory::…` and `use sera_memory::pgvector_store::…`.
+1. **`sera-types`** — the old `semantic_memory` module is deleted
+   outright. `sera-types` now owns only the primitives that all other
+   crates consume (`memory::SegmentKind`, `EmbeddingService` in
+   `embedding.rs`, etc.).
+2. **`sera-memory`** — new crate. Owns `SemanticMemoryStore` + the
+   accompanying types (`PutRequest`, `SemanticEntry`, `SemanticQuery`,
+   `ScoredEntry`, `EvictionPolicy`, `SemanticStats`, `SemanticError`,
+   `Scope`, `Damping`, `ScopeHierarchy`, `MemoryHit`, `MemoryId`) plus
+   the three in-process backends (`PgVectorStore`, `SqliteMemoryStore`,
+   `InMemorySemanticStore`) behind the `pgvector`, `sqlite`, and
+   `testing` features.
+3. **`sera-db` and `sera-testing`** — kept thin re-export stubs at the
+   original file locations (`sera_db::pgvector_store::PgVectorStore`,
+   `sera_db::sqlite_memory_store::SqliteMemoryStore`,
+   `sera_testing::semantic_memory::InMemorySemanticStore`). Downstream
+   call sites that already imported from these paths keep working
+   verbatim. A follow-up bead removes the stubs once downstream has
+   migrated to direct `sera_memory::…` imports.
+4. **Downstream call sites** — every `use sera_types::{PutRequest, …}`
+   was rewritten to `use sera_memory::{PutRequest, …}` in the same PR.
+   `SegmentKind` remains at `sera_types::memory::SegmentKind`.
 
-The `embedding: Option<Vec<f32>>` and `put(PutRequest)` changes ARE breaking
-— they cannot be smoothed over re-exports. Every call site in this
-workspace is updated in the same commit that introduces them. The
-re-export plan above preserves **import paths**, not type signatures.
+The `embedding: Option<Vec<f32>>` and `put(PutRequest)` changes are
+breaking — no shim can smooth over a type-signature break. Every caller
+in this workspace adapted at once. The stub re-exports above preserve
+**import paths in sera-db and sera-testing**, not type signatures.

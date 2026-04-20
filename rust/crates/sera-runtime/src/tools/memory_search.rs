@@ -65,7 +65,7 @@ pub struct MemorySearchToolResult {
 pub struct MemorySearchToolEntry {
     #[serde(flatten)]
     pub hit: MemorySearchResult,
-    /// Opaque tier-2 tags from [`sera_types::SemanticEntry::tags`].
+    /// Opaque tier-2 tags from [`sera_memory::SemanticEntry::tags`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     /// `true` iff the entry's `MemoryId` already appears in

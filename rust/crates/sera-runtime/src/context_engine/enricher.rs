@@ -311,6 +311,11 @@ impl ContextEnricher {
         }
 
         let now = Utc::now();
+        // `None` collapses to an empty `Vec<f32>` — the `HybridScorer`
+        // convention (see hybrid.rs:92, :212): an empty candidate vector
+        // means "embedding unavailable" and contributes 0.0 to the vector
+        // component, exactly like a missing embedding should. No fabricated
+        // scores, just an explicit no-op path.
         let candidates: Vec<Candidate> = hits
             .iter()
             .map(|h| Candidate {

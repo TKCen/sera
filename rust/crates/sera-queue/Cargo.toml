@@ -15,11 +15,18 @@ uuid = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 sqlx = { workspace = true, optional = true }
+apalis = { version = "0.7", optional = true }
+apalis-core = { version = "0.7", optional = true, features = ["json", "sleep"] }
+apalis-cron = { version = "0.7", optional = true }
+async-stream = { workspace = true, optional = true }
+futures = { version = "0.3", optional = true }
+tower = { workspace = true, optional = true }
 
 [features]
 default = ["local"]
 local = []
-apalis = ["dep:sqlx"]
+apalis = ["dep:sqlx", "dep:apalis", "dep:apalis-core", "dep:futures", "dep:tower", "dep:async-stream"]
+apalis-cron = ["apalis", "dep:apalis-cron"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

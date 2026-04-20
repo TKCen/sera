@@ -122,6 +122,7 @@ impl InMemorySemanticStore {
     /// the `embedding` value — all of which are not expressible through
     /// the trait-level [`SemanticMemoryStore::put`] (which only takes a
     /// [`PutRequest`] and owns id/timestamp generation itself).
+    #[doc(hidden)]
     pub async fn insert_entry(&self, mut entry: SemanticEntry) -> Result<MemoryId, SemanticError> {
         if self.dims() != 0
             && let Some(v) = entry.embedding.as_ref()

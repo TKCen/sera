@@ -166,9 +166,9 @@ where
     }
 
     async fn len(&mut self) -> Result<i64, Self::Error> {
-        // QueueBackend exposes no length API; report zero rather than block
-        // callers that only want a health-check style value.
-        Ok(0)
+        Err(QueueError::Storage {
+            reason: "len is not supported by sera-queue QueueBackend".into(),
+        })
     }
 
     async fn fetch_by_id(
@@ -200,8 +200,9 @@ where
     }
 
     async fn is_empty(&mut self) -> Result<bool, Self::Error> {
-        // No size API — be conservative and report non-empty so callers poll.
-        Ok(false)
+        Err(QueueError::Storage {
+            reason: "is_empty is not supported by sera-queue QueueBackend".into(),
+        })
     }
 
     async fn vacuum(&mut self) -> Result<usize, Self::Error> {

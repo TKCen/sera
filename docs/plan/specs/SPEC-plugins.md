@@ -89,14 +89,12 @@ pub enum PluginTransport {
         endpoint: String,           // host:port
         tls: Option<TlsConfig>,     // required outside localhost dev
     },
-    /// Child process spawned by the gateway. stdin/stdout carry
-    /// framed JSON-RPC matching the proto-defined method set.
+    /// Child process spawned by the gateway. stdin/stdout carry framed
+    /// JSON-RPC matching the proto-defined method set. Heartbeats
+    /// multiplex over the same channel — no separate control channel.
     Stdio {
-        command: Vec<String>,       // argv for the plugin process
+        command: Vec<String>,       // argv for the plugin process (command[0] MUST be absolute — see §6.2)
         env: HashMap<String, String>,
-        // Optional Unix-domain socket for heartbeat / out-of-band control.
-        // If unset, heartbeat multiplexes over the main stdio channel.
-        control_socket: Option<PathBuf>,
     },
 }
 ```
@@ -106,6 +104,8 @@ pub enum PluginTransport {
 **Why both are first-class.** A plugin that needs to run in a separate failure domain, on a different host, or behind a network boundary uses gRPC. A plugin that wants minimal ops — no TCP port, no cert rotation, process co-located with the gateway, restart controlled by the gateway — uses stdio. **Neither is a "dev" mode and neither is a "prod" mode.** The choice is an operations posture, not a code-path gate.
 
 **Capability parity.** Every `PluginCapability` variant in §2.1 can be served by either transport. There is no "MemoryBackend is gRPC-only" or "ContextEngine is stdio-only" carve-out. The LCM `ContextEngine` example in §4b uses stdio because its Python implementation is simplest over stdin/stdout; the SharePoint `MemoryBackend` example in §4a uses gRPC because it fronts a remote enterprise service — but either could legally run on the other transport, and the gateway's dispatch code path is the same.
+
+**No per-capability transport preference.** The spec deliberately avoids recommending stdio for certain capabilities and gRPC for others. An operator who runs a `ContextEngine` over gRPC (for isolation or multi-host reasons) and a `ToolExecutor` over stdio (as a lightweight local subprocess) is entirely within the spec. Per-capability policy, if any is ever needed, belongs in operator configuration — not in this document.
 
 ---
 
@@ -201,7 +201,8 @@ spec:
     - ContextEngine
   transport: stdio
   stdio:
-    command: ["python", "-m", "sera_context_lcm"]
+    # command[0] MUST be absolute per §6.2 — no $PATH lookup at spawn.
+    command: ["/usr/bin/python", "-m", "sera_context_lcm"]
     env:
       LCM_DB_PATH: "/var/lib/sera/lcm.db"
       PYTHONUNBUFFERED: "1"
@@ -231,8 +232,8 @@ SERA ships **three first-class plugin SDKs**, one per language, all supporting *
 | SDK | Crate / package | Languages | Transports |
 |---|---|---|---|
 | `sera-plugin-sdk-rust` | `rust/crates/sera-plugin-sdk` | Rust | stdio + gRPC |
-| `sera-plugin-sdk-py` | `sdks/py/sera-plugin-sdk` (PyPI: `sera-plugin-sdk`) | Python 3.11+ | stdio + gRPC |
-| `sera-plugin-sdk-ts` | `sdks/ts/sera-plugin-sdk` (npm: `@sera/plugin-sdk`) | TypeScript / Node 20+ | stdio + gRPC |
+| `sera-plugin-sdk-py` | `sdk/python/sera-plugin-sdk` (PyPI: `sera-plugin-sdk`) | Python 3.11+ | stdio + gRPC |
+| `sera-plugin-sdk-ts` | `sdk/typescript/sera-plugin-sdk` (npm: `@sera/plugin-sdk`) | TypeScript / Node 20+ | stdio + gRPC |
 
 The Python and TypeScript SDKs are **not** "generate protoc and figure it out yourself." They are thin ergonomic wrappers — classes / ABCs with `@capability` or `@tool` decorators, a runtime that handles framing, heartbeats, graceful shutdown, and error-envelope conversion — so a plugin author writes plugin logic, not transport plumbing. A Python `ContextEngine` plugin looks roughly like:
 
@@ -252,7 +253,7 @@ if __name__ == "__main__":
 
 ### 5.1 Schema canonicalisation
 
-Proto files remain the **canonical** wire contract. Each `.proto` in `rust/proto/plugin/` gets a **hand-maintained `.schema.json` sibling** that describes the same wire format for stdio JSON-RPC consumers. The JSON Schemas are **not** codegen output — they are authored and reviewed alongside the protos, committed next to them, and checked at PR time. If proto and JSON Schema drift, **proto wins**; reviewers are responsible for catching the drift before merge. This keeps the two-transport story honest without introducing a build-step dependency on a proto-to-JSON-Schema generator.
+Proto files remain the **canonical** wire contract. Each `.proto` in `rust/proto/plugin/` gets a **hand-maintained `.schema.json` sibling** that describes the same wire format for stdio JSON-RPC consumers. The JSON Schemas are **not** codegen output — they are authored and reviewed alongside the protos, committed next to them. If proto and JSON Schema drift, **proto wins** — enforced by a **CI check** that compares each `.proto`'s generated descriptor against its `.schema.json` mirror and fails the build on meaningful drift beyond allowed normalisations. The schema files stay human-authored and human-reviewable; the CI check is the safety net that keeps the two-transport story honest without forcing a codegen pipeline into the build graph.
 
 ```
 rust/proto/plugin/
@@ -271,6 +272,10 @@ Proto and schema files are Apache-2.0. A plugin author who needs raw wire access
 
 The three SDK crates, the `sera-context-lcm` Python plugin, and the manifest `transport:` field wiring are tracked as sibling beads under parent `sera-xx48`. This spec is the design record they implement against; none of those implementations ship as part of this amendment.
 
+### 5.3 SDK release cadence
+
+The three SDKs publish **independently**. Each SDK pins to a protocol version (the proto + JSON Schema contract version) and bumps on its own code changes; the protocol version bump is the coordination point. When the proto set changes, every SDK bumps to match it; otherwise each ecosystem (crates.io, PyPI, npm) follows its own cadence and its own SemVer story. Coordinated lockstep releases across three package managers for three independently-evolving codebases forces empty-diff bumps on SDKs that did not actually change, and adds release friction without a corresponding operator benefit — the thing operators actually care about is "which protocol version does this SDK speak," which is the pinned version, not the SDK's package-manager version.
+
 ---
 
 ## 6. Security
@@ -281,15 +286,17 @@ Security requirements are **transport-uniform in the spec, operator-satisfied di
 
 All **gRPC** plugin connections MUST use mTLS in Tier 2/3 deployments. The gateway validates the plugin's client certificate against a pinned CA. Plain TCP is permitted for localhost-only development.
 
-### 6.2 Socket permissions (stdio transport)
+### 6.2 Binary pinning (stdio transport)
 
-All **stdio** plugin connections MUST run with sufficiently restricted filesystem and socket permissions that only the gateway's UID can reach the plugin's IO channels. Operators satisfy this by:
+The stdio transport has **no socket** — stdin and stdout are inherited file descriptors, private to the parent-child pair at the kernel level. Its authentication analog of mTLS is therefore **binary identity**: the gateway can only reach peers it spawned itself, so "the peer is who the operator declared" reduces to "the binary the gateway spawned is the binary the operator configured."
 
-- Running the gateway and spawned plugin processes under the same UID.
-- If the stdio transport uses an auxiliary Unix-domain socket (`control_socket` in the `PluginTransport::Stdio` variant — e.g. for out-of-band heartbeat or capability-token exchange), the socket file MUST be created with mode `0600` (owner-only) in a directory that is itself owner-only (`0700`).
-- On Windows, named-pipe parity: the equivalent is a named pipe with a DACL that grants access only to the gateway's user SID. See §10 Open Questions on Windows parity.
+Operators satisfy this by:
 
-In all cases the gateway refuses to register a stdio plugin whose control socket or pipe has looser permissions. This is the socket-perms analog of mTLS cert pinning — the gateway rejects any transport where it cannot prove the peer is who the operator declared.
+- Declaring an **absolute path** for `PluginTransport::Stdio::command[0]`. Relative paths are rejected at registration; `$PATH` resolution is **not** performed at spawn time — if the operator meant `/usr/bin/python`, they write `/usr/bin/python`.
+- Ensuring the plugin binary and its parent directory are writable only by a privileged user (typically root or the operator account). The gateway refuses to spawn binaries living in world-writable directories; this is a filesystem-perms check analogous to mTLS's CA pinning.
+- Optionally configuring a SHA-256 digest for the binary in the manifest. If present, the gateway hashes the file at spawn and refuses to register on mismatch. (Tracked as a follow-up bead; not required for the initial stdio transport.)
+
+After spawn, OS-level process isolation takes over: stdin/stdout file descriptors are private to the gateway/plugin pair, no third process can write to the plugin's stdin or read its stdout, and the gateway owns process-group membership for clean `SIGTERM` / `SIGKILL` shutdown. This is the stdio analog of the TLS channel binding gRPC gets from mTLS — different mechanism, same guarantee: **the wire cannot be tampered with once the peer is authenticated**.
 
 ### 6.3 Plugin isolation
 
@@ -305,7 +312,7 @@ Supervision is uniform across transports. The `CircuitBreaker` (`rust/crates/ser
 
 | Supervision concern | gRPC | stdio |
 |---|---|---|
-| Health check | `Heartbeat` RPC every `health_check_interval` | Same `Heartbeat` JSON-RPC method over stdin/stdout (or the optional `control_socket`) |
+| Health check | `Heartbeat` RPC every `health_check_interval` | Same `Heartbeat` JSON-RPC method over stdin/stdout |
 | Failure isolation | Per-plugin `CircuitBreaker` (3-state: closed → open → half-open) | Same `CircuitBreaker` — same failure counts, same cooldown |
 | Crash detection | Connection drop / RPC timeout | Child-process exit (non-zero status or SIGPIPE on write) |
 | Restart | Operator or supervisor reconnects; gateway records failures via breaker | Gateway respawns the child with exponential backoff; breaker tracks consecutive restart failures |
@@ -359,12 +366,10 @@ spec:
   capabilities: [ContextEngine]
   transport: stdio
   stdio:
-    command: ["python", "-m", "my_plugin"]
+    # command[0] MUST be an absolute path — no $PATH resolution at spawn. See §6.2.
+    command: ["/usr/bin/python", "-m", "my_plugin"]
     env:
       MY_PLUGIN_CONFIG: "/etc/sera/plugins/my-plugin.toml"
-    # Optional — for out-of-band heartbeat / capability-token exchange.
-    # Must be 0600 in a 0700 directory; see §6.2.
-    control_socket: "/run/sera/plugins/my-stdio-plugin.sock"
   health_check_interval: 30s
 ```
 
@@ -411,21 +416,12 @@ plugins:
 
 ## 10. Open Questions
 
-### 10.1 Pre-existing (unchanged by this amendment)
-
 1. **Plugin versioning** — How are plugin proto / JSON Schema contract versions negotiated at registration? Semver? Capability set negotiation?
 2. **Plugin discovery** — Should the gateway support auto-discovery of plugins on a local network (mDNS)? Or is explicit config-file registration always required?
 3. **Plugin hot-registration** — Can plugins register dynamically without restarting the gateway? Target: yes, but persistence semantics need design.
 4. **Capability token signing** — Who signs capability tokens? The operator? The gateway admin key? How are tokens rotated?
 5. **Plugin marketplace** — Is there a planned registry/marketplace for community plugins? Out of scope for SERA 1.0.
-
-### 10.2 Opened by the 2026-04-21 amendment
-
-6. **Stdio socket path convention across OSes.** Where should the gateway create stdio `control_socket` files by default? `/run/sera/plugins/*.sock` is the Linux convention; macOS differs; Windows has no socket. Per-OS defaults + an explicit `control_socket:` override seems right, but the defaults need to be pinned before SDK work lands.
-7. **Windows named-pipe parity.** On Windows, the stdio transport's `control_socket` equivalent is a named pipe with a DACL granting access only to the gateway's user SID. Does the Rust manifest model a single `control_socket: PathBuf` field (interpreting it as a pipe name on Windows) or a discriminated `control_channel: { Unix { path } | Pipe { name } }`? Leaning toward the former for simplicity, but the DACL construction is non-trivial.
-8. **SDK versioning across three languages.** Rust, Python, and TypeScript SDKs all consume the same proto + JSON Schema, but they ship on independent cadences (crates.io, PyPI, npm). Does sera publish a **coordinated release** (all three at the same contract version) or **independent releases** gated by the proto version they target? Coordinated is simpler to reason about; independent is the reality of multi-ecosystem publishing.
-9. **JSON Schema drift detection.** The amendment specifies that protos are canonical and JSON Schemas are hand-maintained mirrors, with reviewers catching drift at PR time. Is that sufficient, or does the repo need a CI check that diff-compares the generated proto descriptor against the JSON Schema? The codegen-free stance says "reviewer catch"; the safety-net stance says "CI check." Leaving the decision open for the SDK beads.
-10. **Per-capability transport preference.** Even though capability parity (§2.3) is required, should the spec (or the capability proto) advertise a **recommended** transport per capability? For example, `ContextEngine` is typically local-to-the-gateway, so stdio is recommended; `ToolExecutor` for an external service is typically gRPC. Recommendation vs requirement is the question.
+6. **Stdio binary hash pinning.** The amendment leaves SHA-256 digest pinning of the stdio `command[0]` binary as an optional future hardening (§6.2) — not required for the initial stdio transport landing. The manifest shape and the gateway's spawn-time hash check are a follow-up bead.
 
 ---
 
@@ -446,10 +442,19 @@ plugins:
 11. **Preserved verbatim:** §3 S7 PLC example, the core structure of §7 Invariants (one new row added for transport uniformity), existing `PluginCapability` variants.
 12. **Spec title and top matter updated** — "gRPC Plugin Interface" → "Plugin Interface"; SDK line expanded to reference all three language SDKs.
 
+**2026-04-21 (fold-in commit, same PR, same beads).** Design-pass resolutions for the former §10.2 open questions, folded into the spec in a second commit on the same PR:
+
+- **Q7 — Windows named-pipe parity / stdio control channel.** Resolved: stdin/stdout only; no separate control channel. Removed `control_socket` from `PluginTransport::Stdio` (§2.3), the §8 YAML example, the §6.5 supervision-table parenthetical, and the §4b LCM example. Q6 (stdio socket path convention across OSes) became obsolete under this resolution and was dropped.
+- **Q7 consequence — §6.2 rewritten.** The socket-permissions story was replaced with **binary pinning**: absolute `command[0]`, no `$PATH` resolution at spawn, non-world-writable binary directory, optional SHA-256 digest pinning as a follow-up. The stdio authentication analog of mTLS is now binary identity plus OS process isolation — not socket perms.
+- **Q8 — SDK release cadence.** Resolved: **independent** per language; protocol version is the coordination point. New §5.3.
+- **Q9 — JSON Schema drift detection.** Resolved: **CI check** that compares the generated proto descriptor against each hand-maintained `.schema.json` mirror and fails the build on drift beyond allowed normalisations. §5.1 updated.
+- **Q10 — Per-capability transport preference.** Resolved: **no per-capability preference** — capabilities are transport-agnostic by design. Note added to §2.3.
+- **SDK package location.** Resolved: `sdk/python/sera-plugin-sdk/` + `sdk/typescript/sera-plugin-sdk/`. §5 SDK table updated.
+- **§10 restructure.** The former §10.1 / §10.2 split was flattened to a single numbered list; the only new open question introduced by this amendment (stdio binary-hash pinning) is a future-hardening follow-up, not a blocker.
+
 **Follow-up implementation beads** tracked under parent `sera-xx48`:
 
-- `sera-plugin-sdk-py` — Python SDK (stdio + gRPC, `MemoryBackend` + `ContextEngine` + `ToolExecutor`)
-- `sera-plugin-sdk-ts` — TypeScript SDK (parity with Python SDK)
-- `sera-plugin-sdk-rust` — extension of existing `sera-plugins` surface to add stdio transport + `ContextEngine` capability variant + `transport:` manifest field parsing
-- `sera-context-lcm` — first Python plugin consumer, wraps `hermes-agent/plugins/context_engine/lcm`
-- A bead for the `rust/crates/sera-plugins` code changes itself (add `ContextEngine` to `PluginCapability`, extend `ManifestSpec` with `transport:` discriminated block, wire subprocess lifecycle supervision into the registry)
+- `sera-psql` — `sera-plugin-sdk-py`: Python SDK at `sdk/python/sera-plugin-sdk/`, stdio + gRPC, starts with `MemoryBackend` + `ContextEngine`.
+- `sera-kfic` — `sera-plugin-sdk-ts`: TypeScript SDK at `sdk/typescript/sera-plugin-sdk/`, parity with the Python SDK.
+- `sera-yf9r` — `sera-context-lcm`: first Python plugin consumer; wraps `hermes-agent/plugins/context_engine/lcm` at `sdk/python/sera-context-lcm/`.
+- `sera-1bg4` — `rust/crates/sera-plugins` catch-up: add `ContextEngine` to `PluginCapability`, replace `ManifestSpec`'s top-level `endpoint:` + `tls:` with the discriminated `transport: grpc | stdio` block (§8), wire subprocess lifecycle supervision into the registry (§6.5), update the module-level doc comment. A dedicated `sera-plugin-sdk-rust` ergonomic-wrapper crate can be split off later if needed — the existing `sera-plugins` surface is the landing zone for now.

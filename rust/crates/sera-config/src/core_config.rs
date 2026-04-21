@@ -239,6 +239,7 @@ mod tests {
 
     #[test]
     fn core_config_requires_database_url() {
+        let _guard = SERA_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Save, remove, test, restore
         let saved = env::var("DATABASE_URL").ok();
         unsafe { env::remove_var("DATABASE_URL") };
@@ -252,6 +253,7 @@ mod tests {
 
     #[test]
     fn core_config_defaults() {
+        let _guard = SERA_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = env::var("DATABASE_URL").ok();
         unsafe { env::set_var("DATABASE_URL", "postgres://test:test@localhost/sera") };
         let result = CoreConfig::from_env();

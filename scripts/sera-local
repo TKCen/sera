@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# sera-local — Boot a local SERA gateway + runtime against an external LLM
+#
+# Usage:
+#   sera-local                      Boot with defaults (LM Studio, gemma-4-e2b, :42540)
+#   sera-local --model <name>       Override the LLM model name
+#   sera-local --port <n>           Override the gateway HTTP port
+#   sera-local --llm <url>          Override the OpenAI-compatible base URL
+#   sera-local --data-dir <path>    Override the working dir (default: .sera-local/)
+#   sera-local --help               Show this help
+#
+# Defaults target a host-local LM Studio on :1234 with google/gemma-4-e2b loaded.
+# The manifest sets tier=local so the runtime's constitutional gate is permissive
+# (no HookChain required). Ctrl-C stops the gateway.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+MODEL="google/gemma-4-e2b"
+PORT="42540"
+LLM_BASE_URL="http://localhost:1234/v1"
+DATA_DIR="${REPO_ROOT}/.sera-local"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model)    MODEL="$2"; shift 2 ;;
+    --port)     PORT="$2"; shift 2 ;;
+    --llm)      LLM_BASE_URL="$2"; shift 2 ;;
+    --data-dir) DATA_DIR="$2"; shift 2 ;;
+    --help|-h)  sed -n '2,14p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    *)          echo "unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+GATEWAY_BIN="${REPO_ROOT}/rust/target/debug/sera-gateway"
+RUNTIME_BIN="${REPO_ROOT}/rust/target/debug/sera-runtime"
+
+if [[ ! -x "$GATEWAY_BIN" || ! -x "$RUNTIME_BIN" ]]; then
+  echo "Building sera-gateway + sera-runtime (first run)..." >&2
+  (cd "${REPO_ROOT}/rust" && cargo build -p sera-gateway -p sera-runtime)
+fi
+
+mkdir -p "$DATA_DIR"
+CONFIG="${DATA_DIR}/sera.yaml"
+
+cat > "$CONFIG" <<EOF
+apiVersion: sera.dev/v1
+kind: Instance
+metadata:
+  name: sera-local
+spec:
+  tier: local
+---
+apiVersion: sera.dev/v1
+kind: Provider
+metadata:
+  name: lmstudio
+spec:
+  kind: openai-compatible
+  base_url: "${LLM_BASE_URL}"
+  default_model: ${MODEL}
+---
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: sera
+spec:
+  provider: lmstudio
+  model: ${MODEL}
+  persona:
+    immutable_anchor: |
+      You are SERA. Reply briefly.
+EOF
+
+echo "sera-local: starting gateway on http://localhost:${PORT}"
+echo "sera-local: model=${MODEL} llm=${LLM_BASE_URL}"
+echo "sera-local: data=${DATA_DIR}"
+echo "sera-local: chat via: curl -s http://localhost:${PORT}/api/chat -H 'Content-Type: application/json' -d '{\"agent\":\"sera\",\"message\":\"hi\",\"stream\":false}'"
+echo
+
+cd "$DATA_DIR"
+exec env \
+  SERA_RUNTIME_BIN="$RUNTIME_BIN" \
+  LLM_BASE_URL="$LLM_BASE_URL" \
+  RUST_LOG="${RUST_LOG:-sera_gateway=info,sera_runtime=info}" \
+  "$GATEWAY_BIN" start --config "$CONFIG" --port "$PORT"

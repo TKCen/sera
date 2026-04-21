@@ -855,7 +855,7 @@ mod tests {
 
     // ── GH#140: hierarchical scope enrichment ──────────────────────────────
 
-    use sera_testing::semantic_memory::InMemorySemanticStore;
+    use sera_memory::InMemorySemanticStore;
     use sera_memory::{Damping, Scope, ScopeHierarchy};
 
     fn scoped_entry(agent: &str, content: &str, scope: Scope) -> SemanticEntry {

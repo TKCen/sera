@@ -41,9 +41,9 @@ use sera_db::sqlite::SqliteDb;
 // (FTS5 + sqlite-vec + RRF). Pairs with PgVectorStore for the enterprise
 // path. Wired in the boot path below via backend selection on
 // SERA_MEMORY_BACKEND + DATABASE_URL.
-use sera_db::pgvector_store::PgVectorStore;
+use sera_memory::PgVectorStore;
 #[allow(unused_imports)]
-use sera_db::{SqliteMemoryStore, DEFAULT_SQLITE_VEC_DIMENSIONS};
+use sera_memory::{SqliteMemoryStore, DEFAULT_SQLITE_VEC_DIMENSIONS};
 use sera_runtime::skill_dispatch::SkillDispatchEngine;
 use sera_memory::SemanticMemoryStore;
 // sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +

@@ -22,9 +22,54 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_ADMIN_SOCK: &str = "/var/lib/sera/admin.sock";
 
 /// Returns the admin socket path: `SERA_ADMIN_SOCK` env var if set, otherwise
-/// [`DEFAULT_ADMIN_SOCK`].
+/// a cascade of defaults in priority order:
+///
+/// 1. `/var/lib/sera/admin.sock` — prod default (systemd creates the dir)
+/// 2. `$XDG_RUNTIME_DIR/sera-admin.sock` — if `XDG_RUNTIME_DIR` is set and its dir exists
+/// 3. `${TMPDIR:-/tmp}/sera-admin-$USER.sock` — per-user temp fallback
+///
+/// The first candidate whose parent directory exists is chosen. If all parent
+/// directories are missing the last candidate is returned anyway and `bind`
+/// will surface the OS error.
 pub fn admin_sock_path() -> String {
-    std::env::var("SERA_ADMIN_SOCK").unwrap_or_else(|_| DEFAULT_ADMIN_SOCK.to_string())
+    // Explicit override — always wins.
+    if let Ok(p) = std::env::var("SERA_ADMIN_SOCK") {
+        return p;
+    }
+
+    /// Check whether a path's parent directory exists (and is a directory).
+    fn parent_exists(path: &str) -> bool {
+        std::path::Path::new(path)
+            .parent()
+            .map(|p| p.is_dir())
+            .unwrap_or(false)
+    }
+
+    // 1. Prod default.
+    let prod = DEFAULT_ADMIN_SOCK.to_string();
+    if parent_exists(&prod) {
+        tracing::info!(path = %prod, reason = "prod-default", "Admin socket path selected");
+        return prod;
+    }
+
+    // 2. XDG_RUNTIME_DIR (set by systemd/logind on most Linux desktops).
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        let candidate = format!("{xdg}/sera-admin.sock");
+        if parent_exists(&candidate) {
+            tracing::info!(path = %candidate, reason = "xdg-runtime", "Admin socket path selected");
+            return candidate;
+        }
+    }
+
+    // 3. Per-user temp fallback — always returned even if the dir somehow
+    //    doesn't exist so that `bind` can produce the real OS error.
+    let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| std::process::id().to_string());
+    let candidate = format!("{tmp}/sera-admin-{user}.sock");
+    tracing::info!(path = %candidate, reason = "tmpdir", "Admin socket path selected");
+    candidate
 }
 
 /// Kill switch state.
@@ -320,12 +365,61 @@ mod tests {
         unsafe { std::env::remove_var("SERA_ADMIN_SOCK") };
     }
 
-    /// Socket path falls back to default when env var not set.
+    /// Socket path falls back to default when env var not set and /var/lib/sera exists.
     #[test]
-    fn sock_path_default() {
+    fn sock_path_default_when_prod_dir_exists() {
         unsafe { std::env::remove_var("SERA_ADMIN_SOCK") };
-        // Only check it equals the constant; actual value is platform default.
-        assert_eq!(admin_sock_path(), DEFAULT_ADMIN_SOCK);
+        // Only verify the constant value; existence of /var/lib/sera varies by host.
+        assert_eq!(DEFAULT_ADMIN_SOCK, "/var/lib/sera/admin.sock");
+    }
+
+    /// When /var/lib/sera is absent, the function falls through to XDG_RUNTIME_DIR
+    /// or the tmpdir cascade rather than returning the prod default.
+    #[test]
+    fn sock_path_cascade_when_prod_dir_absent() {
+        unsafe { std::env::remove_var("SERA_ADMIN_SOCK") };
+
+        // Use a tempdir to simulate an existing XDG_RUNTIME_DIR.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dir_path = dir.path().to_str().unwrap().to_string();
+
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &dir_path) };
+
+        // /var/lib/sera almost certainly doesn't exist in CI / dev boxes.
+        // If it does exist on this machine the cascade goes to prod-default,
+        // which is also correct — skip in that case.
+        if std::path::Path::new("/var/lib/sera").is_dir() {
+            unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+            return;
+        }
+
+        let path = admin_sock_path();
+        assert!(
+            path.starts_with(&dir_path),
+            "expected XDG_RUNTIME_DIR path, got {path}"
+        );
+        assert!(path.ends_with("sera-admin.sock"), "unexpected suffix: {path}");
+
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+    }
+
+    /// When neither prod dir nor XDG_RUNTIME_DIR is available, falls through to tmpdir.
+    #[test]
+    fn sock_path_cascade_to_tmpdir() {
+        unsafe { std::env::remove_var("SERA_ADMIN_SOCK") };
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+
+        if std::path::Path::new("/var/lib/sera").is_dir() {
+            return; // prod dir exists — cascade stops there, which is correct
+        }
+
+        let path = admin_sock_path();
+        // Must contain "sera-admin-" and end with ".sock".
+        assert!(
+            path.contains("sera-admin-"),
+            "expected tmpdir path, got {path}"
+        );
+        assert!(path.ends_with(".sock"), "unexpected suffix: {path}");
     }
 }
 

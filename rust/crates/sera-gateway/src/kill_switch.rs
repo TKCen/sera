@@ -339,7 +339,7 @@ mod socket_tests {
         format!("/tmp/sera-test-admin-{}.sock", std::process::id())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn socket_rollback_arms_kill_switch() {
         let ks = Arc::new(KillSwitch::new());
         let path = tmp_sock();
@@ -367,7 +367,7 @@ mod socket_tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn socket_status_returns_state() {
         let ks = Arc::new(KillSwitch::new());
         let path = format!("/tmp/sera-test-status-{}.sock", std::process::id());
@@ -384,7 +384,7 @@ mod socket_tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn socket_disarm_after_rollback() {
         let ks = Arc::new(KillSwitch::new());
         let path = format!("/tmp/sera-test-disarm-{}.sock", std::process::id());

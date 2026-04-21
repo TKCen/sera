@@ -1,7 +1,8 @@
-//! Core plugin types: registration, capabilities, health, and TLS config.
+//! Core plugin types: registration, capabilities, health, and transport config.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 
 /// A plugin capability advertised at registration time.
@@ -10,6 +11,7 @@ use std::fmt;
 pub enum PluginCapability {
     MemoryBackend,
     ToolExecutor,
+    ContextEngine,
     SandboxProvider,
     AuthProvider,
     SecretProvider,
@@ -23,6 +25,7 @@ impl fmt::Display for PluginCapability {
         match self {
             Self::MemoryBackend => write!(f, "MemoryBackend"),
             Self::ToolExecutor => write!(f, "ToolExecutor"),
+            Self::ContextEngine => write!(f, "ContextEngine"),
             Self::SandboxProvider => write!(f, "SandboxProvider"),
             Self::AuthProvider => write!(f, "AuthProvider"),
             Self::SecretProvider => write!(f, "SecretProvider"),
@@ -30,6 +33,68 @@ impl fmt::Display for PluginCapability {
             Self::Custom(s) => write!(f, "Custom({s})"),
         }
     }
+}
+
+/// mTLS configuration for gRPC plugin connections (required for Tier 2/3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsConfig {
+    /// PEM-encoded CA certificate.
+    pub ca_cert: String,
+    /// PEM-encoded client certificate.
+    pub client_cert: String,
+    /// PEM-encoded client private key.
+    pub client_key: String,
+}
+
+/// gRPC transport configuration sub-block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrpcTransportConfig {
+    /// gRPC endpoint the plugin listens on (e.g. `"localhost:9090"`).
+    pub endpoint: String,
+    /// mTLS config — required for Tier 2/3, optional for localhost dev.
+    pub tls: Option<TlsConfig>,
+}
+
+/// stdio transport configuration sub-block.
+///
+/// The plugin is spawned as a child process. `command[0]` MUST be an absolute
+/// path — no `$PATH` resolution is performed at spawn time (§6.2).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StdioTransportConfig {
+    /// argv for the plugin process. `command[0]` must be an absolute path.
+    pub command: Vec<String>,
+    /// Environment variables to inject into the plugin process.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+}
+
+/// Transport selection for a plugin registration.
+///
+/// Discriminated by the `transport:` field in YAML. The nested `grpc:` /
+/// `stdio:` sub-objects match SPEC-plugins §8:
+///
+/// ```yaml
+/// transport: grpc
+/// grpc:
+///   endpoint: "localhost:9090"
+/// ```
+///
+/// or
+///
+/// ```yaml
+/// transport: stdio
+/// stdio:
+///   command: ["/usr/bin/python", "-m", "my_plugin"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "transport", rename_all = "lowercase")]
+pub enum PluginTransport {
+    /// gRPC over TCP. Remote or localhost; mTLS required in Tier 2/3.
+    Grpc { grpc: GrpcTransportConfig },
+    /// Child process spawned by the gateway. stdin/stdout carry framed
+    /// JSON-RPC matching the proto-defined method set. Heartbeats multiplex
+    /// over the same channel — no separate control channel (Q7 resolution).
+    Stdio { stdio: StdioTransportConfig },
 }
 
 /// Semantic version of a plugin.
@@ -42,7 +107,11 @@ pub struct PluginVersion {
 
 impl PluginVersion {
     pub fn new(major: u32, minor: u32, patch: u32) -> Self {
-        Self { major, minor, patch }
+        Self {
+            major,
+            minor,
+            patch,
+        }
     }
 }
 
@@ -52,17 +121,6 @@ impl fmt::Display for PluginVersion {
     }
 }
 
-/// mTLS configuration for plugin connections (required for Tier 2/3).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TlsConfig {
-    /// PEM-encoded CA certificate.
-    pub ca_cert: String,
-    /// PEM-encoded client certificate.
-    pub client_cert: String,
-    /// PEM-encoded client private key.
-    pub client_key: String,
-}
-
 /// Plugin registration descriptor submitted when a plugin connects.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginRegistration {
@@ -70,10 +128,8 @@ pub struct PluginRegistration {
     pub name: String,
     pub version: PluginVersion,
     pub capabilities: Vec<PluginCapability>,
-    /// gRPC endpoint the plugin listens on (e.g. `"localhost:9090"`).
-    pub endpoint: String,
-    /// mTLS config — required for Tier 2/3, optional for localhost dev.
-    pub tls: Option<TlsConfig>,
+    /// Transport used to reach this plugin (gRPC or stdio subprocess).
+    pub transport: PluginTransport,
     /// How often the gateway should perform a health check.
     pub health_check_interval: std::time::Duration,
 }
@@ -140,6 +196,7 @@ mod tests {
     #[test]
     fn capability_display() {
         assert_eq!(PluginCapability::MemoryBackend.to_string(), "MemoryBackend");
+        assert_eq!(PluginCapability::ContextEngine.to_string(), "ContextEngine");
         assert_eq!(
             PluginCapability::Custom("MyThing".into()).to_string(),
             "Custom(MyThing)"
@@ -150,6 +207,15 @@ mod tests {
     fn capability_serde_roundtrip() {
         let cap = PluginCapability::ToolExecutor;
         let json = serde_json::to_string(&cap).unwrap();
+        let back: PluginCapability = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cap);
+    }
+
+    #[test]
+    fn context_engine_serde_roundtrip() {
+        let cap = PluginCapability::ContextEngine;
+        let json = serde_json::to_string(&cap).unwrap();
+        assert_eq!(json, r#""ContextEngine""#);
         let back: PluginCapability = serde_json::from_str(&json).unwrap();
         assert_eq!(back, cap);
     }
@@ -175,8 +241,12 @@ mod tests {
             name: "test".into(),
             version: PluginVersion::new(1, 0, 0),
             capabilities: vec![PluginCapability::ToolExecutor],
-            endpoint: "localhost:9090".into(),
-            tls: None,
+            transport: PluginTransport::Grpc {
+                grpc: GrpcTransportConfig {
+                    endpoint: "localhost:9090".into(),
+                    tls: None,
+                },
+            },
             health_check_interval: std::time::Duration::from_secs(30),
         };
         let info = PluginInfo::new(reg);

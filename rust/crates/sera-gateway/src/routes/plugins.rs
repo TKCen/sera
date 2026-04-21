@@ -153,7 +153,9 @@ mod tests {
         routing::{get, post},
         Router,
     };
-    use sera_plugins::{PluginCapability, PluginRegistration, PluginVersion};
+    use sera_plugins::{
+        GrpcTransportConfig, PluginCapability, PluginRegistration, PluginTransport, PluginVersion,
+    };
     use std::time::Duration;
     use tower::ServiceExt;
 
@@ -176,8 +178,12 @@ mod tests {
                 name: name.to_owned(),
                 version: PluginVersion::new(1, 0, 0),
                 capabilities: vec![PluginCapability::ToolExecutor],
-                endpoint: "localhost:9090".to_owned(),
-                tls: None,
+                transport: PluginTransport::Grpc {
+                    grpc: GrpcTransportConfig {
+                        endpoint: "localhost:9090".to_owned(),
+                        tls: None,
+                    },
+                },
                 health_check_interval: Duration::from_secs(30),
             };
             s.registry.register(reg).await.unwrap();

@@ -83,7 +83,10 @@ impl SkillSource for PluginSource {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use sera_plugins::{PluginError, PluginHealth, PluginInfo, PluginRegistration, PluginVersion};
+    use sera_plugins::{
+        GrpcTransportConfig, PluginError, PluginHealth, PluginInfo, PluginRegistration,
+        PluginTransport, PluginVersion,
+    };
     use std::sync::Mutex;
     use std::time::Duration;
 
@@ -138,8 +141,12 @@ mod tests {
             capabilities: vec![PluginCapability::Custom(
                 SKILL_PROVIDER_CAPABILITY.to_string(),
             )],
-            endpoint: "localhost:9000".into(),
-            tls: None,
+            transport: PluginTransport::Grpc {
+                grpc: GrpcTransportConfig {
+                    endpoint: "localhost:9000".into(),
+                    tls: None,
+                },
+            },
             health_check_interval: Duration::from_secs(30),
         })
     }

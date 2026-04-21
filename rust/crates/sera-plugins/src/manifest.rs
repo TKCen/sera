@@ -6,18 +6,36 @@
 //! apiVersion: sera.dev/v1
 //! kind: Plugin
 //! metadata:
-//!   name: my-plugin
+//!   name: my-grpc-plugin
 //! spec:
 //!   capabilities: [ToolExecutor]
-//!   endpoint: "localhost:9090"
+//!   transport: grpc
+//!   grpc:
+//!     endpoint: "localhost:9090"
+//!   health_check_interval: 30s
+//! ```
+//!
+//! or stdio:
+//!
+//! ```yaml
+//! apiVersion: sera.dev/v1
+//! kind: Plugin
+//! metadata:
+//!   name: my-stdio-plugin
+//! spec:
+//!   capabilities: [ContextEngine]
+//!   transport: stdio
+//!   stdio:
+//!     command: ["/usr/bin/python", "-m", "my_plugin"]
 //!   health_check_interval: 30s
 //! ```
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::time::Duration;
 
 use crate::error::PluginError;
-use crate::types::{PluginCapability, PluginRegistration, PluginVersion, TlsConfig};
+use crate::types::{PluginCapability, PluginRegistration, PluginTransport, PluginVersion};
 
 /// Top-level structure of a plugin YAML manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,25 +57,21 @@ pub struct ManifestMetadata {
     pub annotations: std::collections::HashMap<String, String>,
 }
 
-/// Manifest spec block.
+/// Manifest spec block — transport-discriminated per SPEC-plugins §8.
+///
+/// The `transport:` key selects the variant; the matching sub-block (`grpc:`
+/// or `stdio:`) carries the transport-specific config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestSpec {
     pub capabilities: Vec<PluginCapability>,
-    pub endpoint: String,
+    /// Transport selection + config, flattened into the spec block.
+    #[serde(flatten)]
+    pub transport: PluginTransport,
     /// Health-check interval expressed as a human-readable string, e.g. `"30s"`, `"1m"`.
     #[serde(default = "default_health_check_interval")]
     pub health_check_interval: String,
-    pub tls: Option<ManifestTlsConfig>,
     #[serde(default = "default_version")]
     pub version: String,
-}
-
-/// TLS config as expressed in the manifest.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ManifestTlsConfig {
-    pub ca_cert: String,
-    pub client_cert: String,
-    pub client_key: String,
 }
 
 fn default_health_check_interval() -> String {
@@ -72,21 +86,30 @@ fn default_version() -> String {
 pub fn parse_duration(s: &str) -> Result<Duration, PluginError> {
     let s = s.trim();
     if let Some(secs) = s.strip_suffix('s') {
-        let n: u64 = secs.trim().parse().map_err(|_| PluginError::ManifestInvalid {
-            reason: format!("invalid duration '{s}'"),
-        })?;
+        let n: u64 = secs
+            .trim()
+            .parse()
+            .map_err(|_| PluginError::ManifestInvalid {
+                reason: format!("invalid duration '{s}'"),
+            })?;
         return Ok(Duration::from_secs(n));
     }
     if let Some(mins) = s.strip_suffix('m') {
-        let n: u64 = mins.trim().parse().map_err(|_| PluginError::ManifestInvalid {
-            reason: format!("invalid duration '{s}'"),
-        })?;
+        let n: u64 = mins
+            .trim()
+            .parse()
+            .map_err(|_| PluginError::ManifestInvalid {
+                reason: format!("invalid duration '{s}'"),
+            })?;
         return Ok(Duration::from_secs(n * 60));
     }
     if let Some(hours) = s.strip_suffix('h') {
-        let n: u64 = hours.trim().parse().map_err(|_| PluginError::ManifestInvalid {
-            reason: format!("invalid duration '{s}'"),
-        })?;
+        let n: u64 = hours
+            .trim()
+            .parse()
+            .map_err(|_| PluginError::ManifestInvalid {
+                reason: format!("invalid duration '{s}'"),
+            })?;
         return Ok(Duration::from_secs(n * 3600));
     }
     Err(PluginError::ManifestInvalid {
@@ -114,6 +137,27 @@ fn parse_version(s: &str) -> Result<PluginVersion, PluginError> {
     })
 }
 
+/// Validate that `command[0]` is an absolute path (§6.2 binary pinning).
+pub fn validate_stdio_command(command: &[String]) -> Result<(), PluginError> {
+    match command.first() {
+        None => Err(PluginError::ManifestInvalid {
+            reason: "stdio command must not be empty".into(),
+        }),
+        Some(cmd) => {
+            if !Path::new(cmd).is_absolute() {
+                Err(PluginError::ManifestInvalid {
+                    reason: format!(
+                        "stdio command[0] must be an absolute path (got '{cmd}') — \
+                         no $PATH resolution is performed at spawn time (§6.2)"
+                    ),
+                })
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
 impl PluginManifest {
     /// Parse a YAML string into a [`PluginManifest`].
     pub fn from_yaml(yaml: &str) -> Result<Self, PluginError> {
@@ -135,21 +179,19 @@ impl PluginManifest {
             });
         }
 
+        // Validate stdio binary pinning (§6.2)
+        if let PluginTransport::Stdio { ref stdio } = self.spec.transport {
+            validate_stdio_command(&stdio.command)?;
+        }
+
         let version = parse_version(&self.spec.version)?;
         let health_check_interval = parse_duration(&self.spec.health_check_interval)?;
-
-        let tls = self.spec.tls.map(|t| TlsConfig {
-            ca_cert: t.ca_cert,
-            client_cert: t.client_cert,
-            client_key: t.client_key,
-        });
 
         Ok(PluginRegistration {
             name: self.metadata.name,
             version,
             capabilities: self.spec.capabilities,
-            endpoint: self.spec.endpoint,
-            tls,
+            transport: self.spec.transport,
             health_check_interval,
         })
     }
@@ -254,10 +296,7 @@ impl PluginManifestV1 {
     fn validate(&self) -> Result<(), PluginError> {
         if self.api_version != "sera/v1" {
             return Err(PluginError::ManifestInvalid {
-                reason: format!(
-                    "api_version must be 'sera/v1', got '{}'",
-                    self.api_version
-                ),
+                reason: format!("api_version must be 'sera/v1', got '{}'", self.api_version),
             });
         }
         if !is_valid_plugin_name(&self.name) {
@@ -313,7 +352,9 @@ pub trait PluginService: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::PluginTransport;
 
+    // Updated to use the new transport-discriminated shape (SPEC-plugins §8).
     const MINIMAL_YAML: &str = r#"
 apiVersion: sera.dev/v1
 kind: Plugin
@@ -322,7 +363,9 @@ metadata:
 spec:
   capabilities:
     - ToolExecutor
-  endpoint: "localhost:9090"
+  transport: grpc
+  grpc:
+    endpoint: "localhost:9090"
   health_check_interval: 30s
 "#;
 
@@ -331,7 +374,11 @@ spec:
         let m = PluginManifest::from_yaml(MINIMAL_YAML).unwrap();
         assert_eq!(m.kind, "Plugin");
         assert_eq!(m.metadata.name, "test-plugin");
-        assert_eq!(m.spec.endpoint, "localhost:9090");
+        // transport is grpc with the expected endpoint
+        match &m.spec.transport {
+            PluginTransport::Grpc { grpc } => assert_eq!(grpc.endpoint, "localhost:9090"),
+            other => panic!("expected Grpc transport, got {other:?}"),
+        }
     }
 
     #[test]
@@ -341,7 +388,13 @@ spec:
         assert_eq!(reg.name, "test-plugin");
         assert_eq!(reg.health_check_interval, Duration::from_secs(30));
         assert_eq!(reg.capabilities, vec![PluginCapability::ToolExecutor]);
-        assert!(reg.tls.is_none());
+        match &reg.transport {
+            PluginTransport::Grpc { grpc } => {
+                assert_eq!(grpc.endpoint, "localhost:9090");
+                assert!(grpc.tls.is_none());
+            }
+            other => panic!("expected Grpc transport, got {other:?}"),
+        }
     }
 
     #[test]
@@ -391,17 +444,24 @@ metadata:
 spec:
   capabilities:
     - MemoryBackend
-  endpoint: "10.0.0.1:9090"
+  transport: grpc
+  grpc:
+    endpoint: "10.0.0.1:9090"
+    tls:
+      ca_cert: "ca-pem"
+      client_cert: "cert-pem"
+      client_key: "key-pem"
   health_check_interval: 1m
-  tls:
-    ca_cert: "ca-pem"
-    client_cert: "cert-pem"
-    client_key: "key-pem"
 "#;
         let m = PluginManifest::from_yaml(yaml).unwrap();
         let reg = m.into_registration().unwrap();
-        let tls = reg.tls.unwrap();
-        assert_eq!(tls.ca_cert, "ca-pem");
+        match &reg.transport {
+            PluginTransport::Grpc { grpc } => {
+                let tls = grpc.tls.as_ref().unwrap();
+                assert_eq!(tls.ca_cert, "ca-pem");
+            }
+            other => panic!("expected Grpc transport, got {other:?}"),
+        }
         assert_eq!(reg.health_check_interval, Duration::from_secs(60));
     }
 
@@ -416,12 +476,88 @@ spec:
   capabilities:
     - ToolExecutor
     - SandboxProvider
-  endpoint: "localhost:9091"
+  transport: grpc
+  grpc:
+    endpoint: "localhost:9091"
   health_check_interval: 30s
 "#;
         let m = PluginManifest::from_yaml(yaml).unwrap();
         let reg = m.into_registration().unwrap();
         assert_eq!(reg.capabilities.len(), 2);
+    }
+
+    #[test]
+    fn stdio_manifest_parses() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Plugin
+metadata:
+  name: my-stdio-plugin
+spec:
+  capabilities:
+    - ContextEngine
+  transport: stdio
+  stdio:
+    command: ["/usr/bin/python", "-m", "my_plugin"]
+    env:
+      MY_PLUGIN_CONFIG: "/etc/sera/plugins/my-plugin.toml"
+  health_check_interval: 30s
+"#;
+        let m = PluginManifest::from_yaml(yaml).unwrap();
+        let reg = m.into_registration().unwrap();
+        assert_eq!(reg.name, "my-stdio-plugin");
+        assert_eq!(reg.capabilities, vec![PluginCapability::ContextEngine]);
+        match &reg.transport {
+            PluginTransport::Stdio { stdio } => {
+                assert_eq!(stdio.command, vec!["/usr/bin/python", "-m", "my_plugin"]);
+                assert_eq!(
+                    stdio.env.get("MY_PLUGIN_CONFIG").map(String::as_str),
+                    Some("/etc/sera/plugins/my-plugin.toml")
+                );
+            }
+            other => panic!("expected Stdio transport, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stdio_relative_command_rejected() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Plugin
+metadata:
+  name: bad-plugin
+spec:
+  capabilities:
+    - ToolExecutor
+  transport: stdio
+  stdio:
+    command: ["python", "-m", "my_plugin"]
+  health_check_interval: 30s
+"#;
+        let m = PluginManifest::from_yaml(yaml).unwrap();
+        let err = m.into_registration().unwrap_err();
+        assert!(matches!(err, PluginError::ManifestInvalid { .. }));
+        assert!(err.to_string().contains("absolute path"));
+    }
+
+    #[test]
+    fn stdio_empty_command_rejected() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Plugin
+metadata:
+  name: bad-plugin
+spec:
+  capabilities:
+    - ToolExecutor
+  transport: stdio
+  stdio:
+    command: []
+  health_check_interval: 30s
+"#;
+        let m = PluginManifest::from_yaml(yaml).unwrap();
+        let err = m.into_registration().unwrap_err();
+        assert!(matches!(err, PluginError::ManifestInvalid { .. }));
     }
 
     // ── PluginManifestV1 tests ────────────────────────────────────────────────

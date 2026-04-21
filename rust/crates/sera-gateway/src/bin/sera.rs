@@ -14,28 +14,25 @@ use std::sync::Arc;
 
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::{Parser, Subcommand};
-use futures_util::stream;
 use futures_util::StreamExt;
+use futures_util::stream;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, mpsc};
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 
 use sera_config::manifest_loader::{
-    load_manifest_file, parse_manifests, resolve_provider_api_key,
-    ManifestSet,
+    ManifestSet, load_manifest_file, parse_manifests, resolve_provider_api_key,
 };
 use sera_config::secrets::SecretResolver;
 use sera_db::lane_queue::{LaneQueue, QueueMode};
-use sera_db::lane_queue_counter::{
-    InMemoryLaneCounter, LaneCounterStoreDyn, PostgresLaneCounter,
-};
+use sera_db::lane_queue_counter::{InMemoryLaneCounter, LaneCounterStoreDyn, PostgresLaneCounter};
 use sera_db::sqlite::SqliteDb;
 // sera-vzce: SqliteMemoryStore is the zero-infra SemanticMemoryStore tier
 // (FTS5 + sqlite-vec + RRF). Pairs with PgVectorStore for the enterprise
@@ -44,19 +41,20 @@ use sera_db::sqlite::SqliteDb;
 use sera_memory::PgVectorStore;
 #[allow(unused_imports)]
 use sera_memory::{SqliteMemoryStore, DEFAULT_SQLITE_VEC_DIMENSIONS};
-use sera_runtime::skill_dispatch::SkillDispatchEngine;
 use sera_memory::SemanticMemoryStore;
+use sera_runtime::skill_dispatch::SkillDispatchEngine;
 // sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +
 // SERA-issued nonce fallback). Wired into AppState + `/api/mail/inbound`.
+use sera_gateway::kill_switch::{KillSwitch, admin_sock_path, spawn_admin_socket};
+use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_mail::{
-    parse_raw_message, CorrelationOutcome, HeaderMailCorrelator, InMemoryEnvelopeIndex,
-    InMemoryMailLookup, MailCorrelator,
+    CorrelationOutcome, HeaderMailCorrelator, InMemoryEnvelopeIndex, InMemoryMailLookup,
+    MailCorrelator, parse_raw_message,
 };
+use sera_types::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
 use sera_types::event::Event as DomainEvent;
 use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
 use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
-use sera_hooks::{ChainExecutor, HookRegistry};
-use sera_types::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
 
 // ── Phase-3 SPEC-interop crates ──────────────────────────────────────────────
 use sera_a2a::{A2aClient, A2aRequest, A2aRouter, InProcRouter, LoopbackTransport};
@@ -99,8 +97,7 @@ mod doctor;
 /// attempted — the caller still falls back to SqliteMemoryStore on any
 /// connect or init failure.
 fn wants_pgvector_backend(backend_pref: Option<&str>, database_url: Option<&str>) -> bool {
-    matches!(backend_pref, Some("pgvector"))
-        || (backend_pref.is_none() && database_url.is_some())
+    matches!(backend_pref, Some("pgvector")) || (backend_pref.is_none() && database_url.is_some())
 }
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
@@ -210,7 +207,11 @@ impl StdioHarness {
     /// Send a turn with the given conversation messages to the runtime.
     /// Blocks until the runtime emits `TurnCompleted`, returns a `TurnEvents`
     /// containing the response text and any tool call events.
-    async fn send_turn(&self, messages: Vec<serde_json::Value>, session_key: &str) -> anyhow::Result<TurnEvents> {
+    async fn send_turn(
+        &self,
+        messages: Vec<serde_json::Value>,
+        session_key: &str,
+    ) -> anyhow::Result<TurnEvents> {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
         let submission = serde_json::json!({
@@ -274,17 +275,36 @@ impl StdioHarness {
                 "tool_call_begin" => {
                     if let Some(msg) = event.get("msg") {
                         result.tool_events.push(ToolEvent::Begin {
-                            call_id: msg.get("call_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                            tool: msg.get("tool").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                            arguments: msg.get("arguments").cloned().unwrap_or(serde_json::Value::Null),
+                            call_id: msg
+                                .get("call_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            tool: msg
+                                .get("tool")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            arguments: msg
+                                .get("arguments")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null),
                         });
                     }
                 }
                 "tool_call_end" => {
                     if let Some(msg) = event.get("msg") {
                         result.tool_events.push(ToolEvent::End {
-                            call_id: msg.get("call_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                            content: msg.get("result").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            call_id: msg
+                                .get("call_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            content: msg
+                                .get("result")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
                         });
                     }
                 }
@@ -424,8 +444,15 @@ impl StdioHarness {
 /// A tool call event captured from the runtime's NDJSON output.
 #[derive(Debug, Clone)]
 enum ToolEvent {
-    Begin { call_id: String, tool: String, arguments: serde_json::Value },
-    End { call_id: String, content: String },
+    Begin {
+        call_id: String,
+        tool: String,
+        arguments: serde_json::Value,
+    },
+    End {
+        call_id: String,
+        content: String,
+    },
 }
 
 /// Result from a harness turn — response text, tool call events, and the
@@ -527,6 +554,10 @@ struct AppState {
     /// threaded into `execute_turn` for best-effort memory recall. A failure
     /// to recall must never fail the turn — we log and continue.
     semantic_store: Arc<dyn SemanticMemoryStore>,
+    /// Admin kill switch (SPEC-gateway §7a.4). Armed via `ROLLBACK` on the
+    /// Unix admin socket; causes all HTTP submissions to be rejected with 503
+    /// until disarmed with `DISARM`.
+    kill_switch: Arc<KillSwitch>,
 }
 
 // ── Phase-3 trait impls ──────────────────────────────────────────────────────
@@ -902,11 +933,16 @@ async fn chat_handler(
         "message_received",
         "human",
         "human",
-        Some(&serde_json::json!({ "agent": agent_name, "message_len": req.message.len() }).to_string()),
+        Some(
+            &serde_json::json!({ "agent": agent_name, "message_len": req.message.len() })
+                .to_string(),
+        ),
     );
 
     // Get recent transcript for context.
-    let transcript = db.get_transcript_recent(&session.id, 20).unwrap_or_default();
+    let transcript = db
+        .get_transcript_recent(&session.id, 20)
+        .unwrap_or_default();
     drop(db); // Release lock before dispatching to harness.
 
     if req.stream {
@@ -921,10 +957,30 @@ async fn chat_handler(
 
         let aname = agent_name.clone();
         let sse_stream = stream::unfold(
-            StreamState::Pending { agent_spec, transcript, message, state: state_clone, harness: harness_clone, session_id: sid, session_key: skey, message_id: mid_clone, agent_name: aname },
+            StreamState::Pending {
+                agent_spec,
+                transcript,
+                message,
+                state: state_clone,
+                harness: harness_clone,
+                session_id: sid,
+                session_key: skey,
+                message_id: mid_clone,
+                agent_name: aname,
+            },
             |fold_state| async move {
                 match fold_state {
-                    StreamState::Pending { agent_spec, transcript, message, state, harness, session_id, session_key, message_id, agent_name } => {
+                    StreamState::Pending {
+                        agent_spec,
+                        transcript,
+                        message,
+                        state,
+                        harness,
+                        session_id,
+                        session_key,
+                        message_id,
+                        agent_name,
+                    } => {
                         let result = execute_turn(
                             &agent_spec,
                             &transcript,
@@ -950,35 +1006,70 @@ async fn chat_handler(
                         {
                             let db = state.db.lock().await;
                             persist_tool_events(&db, &session_id, &result.tool_events);
-                            let _ = db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None);
+                            let _ = db.append_transcript(
+                                &session_id,
+                                "assistant",
+                                Some(&result.reply),
+                                None,
+                                None,
+                            );
                             let _ = db.append_audit(
-                                "response_sent", "agent:sera", "agent",
-                                Some(&serde_json::json!({
-                                    "session_id": session_id,
-                                    "response_len": result.reply.len(),
-                                }).to_string()),
+                                "response_sent",
+                                "agent:sera",
+                                "agent",
+                                Some(
+                                    &serde_json::json!({
+                                        "session_id": session_id,
+                                        "response_len": result.reply.len(),
+                                    })
+                                    .to_string(),
+                                ),
                             );
                         }
 
                         // Split reply into word-sized chunks for streaming.
-                        let chunks: Vec<String> = result.reply.split_inclusive(' ')
+                        let chunks: Vec<String> = result
+                            .reply
+                            .split_inclusive(' ')
                             .map(|s| s.to_owned())
                             .collect();
                         let usage = result.usage;
 
-                        Some((None, StreamState::Streaming { chunks, index: 0, session_id, message_id, usage }))
+                        Some((
+                            None,
+                            StreamState::Streaming {
+                                chunks,
+                                index: 0,
+                                session_id,
+                                message_id,
+                                usage,
+                            },
+                        ))
                     }
-                    StreamState::Streaming { chunks, index, session_id, message_id, usage } => {
+                    StreamState::Streaming {
+                        chunks,
+                        index,
+                        session_id,
+                        message_id,
+                        usage,
+                    } => {
                         if index < chunks.len() {
                             let payload = serde_json::json!({
                                 "delta": chunks[index],
                                 "session_id": session_id,
                                 "message_id": message_id,
                             });
-                            let event = Event::default()
-                                .event("message")
-                                .data(payload.to_string());
-                            Some((Some(Ok::<_, std::convert::Infallible>(event)), StreamState::Streaming { chunks, index: index + 1, session_id, message_id, usage }))
+                            let event = Event::default().event("message").data(payload.to_string());
+                            Some((
+                                Some(Ok::<_, std::convert::Infallible>(event)),
+                                StreamState::Streaming {
+                                    chunks,
+                                    index: index + 1,
+                                    session_id,
+                                    message_id,
+                                    usage,
+                                },
+                            ))
                         } else {
                             // Send done event with usage.
                             let payload = serde_json::json!({
@@ -989,9 +1080,7 @@ async fn chat_handler(
                                     "total_tokens": usage.total_tokens,
                                 }
                             });
-                            let event = Event::default()
-                                .event("done")
-                                .data(payload.to_string());
+                            let event = Event::default().event("done").data(payload.to_string());
                             Some((Some(Ok(event)), StreamState::Done))
                         }
                     }
@@ -1001,7 +1090,9 @@ async fn chat_handler(
         )
         .filter_map(|item| async move { item });
 
-        Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()).into_response())
+        Ok(Sse::new(sse_stream)
+            .keep_alive(KeepAlive::default())
+            .into_response())
     } else {
         // Synchronous JSON mode (existing behavior).
         let result = execute_turn(
@@ -1023,7 +1114,9 @@ async fn chat_handler(
         // Save tool events and assistant response.
         let db = state.db.lock().await;
         persist_tool_events(&db, &session_id, &result.tool_events);
-        if let Err(e) = db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None) {
+        if let Err(e) =
+            db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None)
+        {
             tracing::error!(error = %e, "Failed to append assistant transcript");
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
@@ -1032,22 +1125,26 @@ async fn chat_handler(
             "response_sent",
             "agent:sera",
             "agent",
-            Some(&serde_json::json!({
-                "session_id": session_id,
-                "response_len": result.reply.len(),
-                "usage": {
-                    "prompt_tokens": result.usage.prompt_tokens,
-                    "completion_tokens": result.usage.completion_tokens,
-                    "total_tokens": result.usage.total_tokens,
-                }
-            }).to_string()),
+            Some(
+                &serde_json::json!({
+                    "session_id": session_id,
+                    "response_len": result.reply.len(),
+                    "usage": {
+                        "prompt_tokens": result.usage.prompt_tokens,
+                        "completion_tokens": result.usage.completion_tokens,
+                        "total_tokens": result.usage.total_tokens,
+                    }
+                })
+                .to_string(),
+            ),
         );
 
         Ok(Json(ChatResponse {
             response: result.reply,
             session_id,
             usage: result.usage,
-        }).into_response())
+        })
+        .into_response())
     }
 }
 
@@ -1070,10 +1167,7 @@ async fn agents_handler(
                     .map(|s| s.provider.clone())
                     .unwrap_or_default(),
                 model: spec.as_ref().and_then(|s| s.model.clone()),
-                has_tools: spec
-                    .as_ref()
-                    .and_then(|s| s.tools.as_ref())
-                    .is_some(),
+                has_tools: spec.as_ref().and_then(|s| s.tools.as_ref()).is_some(),
             }
         })
         .collect();
@@ -1369,10 +1463,7 @@ async fn execute_turn(
                 "Runtime harness turn timed out; releasing lane"
             );
             MvsTurnResult {
-                reply: format!(
-                    "[sera] Runtime timed out after {}s",
-                    timeout.as_secs()
-                ),
+                reply: format!("[sera] Runtime timed out after {}s", timeout.as_secs()),
                 tool_events: vec![],
                 usage: UsageInfo {
                     prompt_tokens: 0,
@@ -1450,7 +1541,11 @@ async fn execute_steer(
 fn persist_tool_events(db: &sera_db::sqlite::SqliteDb, session_id: &str, events: &[ToolEvent]) {
     for event in events {
         match event {
-            ToolEvent::Begin { call_id, tool, arguments } => {
+            ToolEvent::Begin {
+                call_id,
+                tool,
+                arguments,
+            } => {
                 let tool_calls_json = serde_json::json!([{
                     "id": call_id,
                     "type": "function",
@@ -1468,13 +1563,8 @@ fn persist_tool_events(db: &sera_db::sqlite::SqliteDb, session_id: &str, events:
                 );
             }
             ToolEvent::End { call_id, content } => {
-                let _ = db.append_transcript(
-                    session_id,
-                    "tool",
-                    Some(content),
-                    None,
-                    Some(call_id),
-                );
+                let _ =
+                    db.append_transcript(session_id, "tool", Some(content), None, Some(call_id));
             }
         }
     }
@@ -1498,7 +1588,11 @@ async fn run_hook_point(
     chains: &[HookChain],
     ctx: HookContext,
 ) -> sera_types::hook::ChainResult {
-    match state.chain_executor.execute_at_point(point, chains, ctx).await {
+    match state
+        .chain_executor
+        .execute_at_point(point, chains, ctx)
+        .await
+    {
         Ok(result) => {
             if result.hooks_executed > 0 {
                 tracing::debug!(
@@ -1530,7 +1624,10 @@ async fn event_loop(state: Arc<AppState>, mut rx: mpsc::Receiver<DiscordMessage>
         // Poll for a message or yield so the executor can make progress.
         // We check `shutting_down` first so we never block on `recv` after
         // the flag is set — even if the sender hasn't been dropped yet.
-        if state.shutting_down.load(std::sync::atomic::Ordering::Relaxed) {
+        if state
+            .shutting_down
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             break;
         }
         tokio::select! {
@@ -1579,11 +1676,14 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             "discord_message",
             &msg.user_id,
             "human",
-            Some(&serde_json::json!({
-                "username": msg.username,
-                "channel_id": msg.channel_id,
-                "message_len": msg.content.len(),
-            }).to_string()),
+            Some(
+                &serde_json::json!({
+                    "username": msg.username,
+                    "channel_id": msg.channel_id,
+                    "message_len": msg.content.len(),
+                })
+                .to_string(),
+            ),
         );
     }
 
@@ -1644,12 +1744,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
                 .to_owned()
         });
 
-    let agent_spec: AgentSpec = match state
-        .manifests
-        .agent_spec(&agent_name)
-        .ok()
-        .flatten()
-    {
+    let agent_spec: AgentSpec = match state.manifests.agent_spec(&agent_name).ok().flatten() {
         Some(s) => s,
         None => {
             let err_msg = format!("Agent '{agent_name}' not found in manifests");
@@ -1679,12 +1774,9 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             Ok(Some(s)) => s,
             Ok(None) => {
                 let id = format!("ses_{}_{}", agent_name, msg.channel_id);
-                if let Err(e) = db.create_session(
-                    &id,
-                    &agent_name,
-                    &session_key,
-                    Some(&msg.user_id),
-                ) {
+                if let Err(e) =
+                    db.create_session(&id, &agent_name, &session_key, Some(&msg.user_id))
+                {
                     anyhow::bail!("Failed to create session: {e}");
                 }
                 match db.get_session_by_key(&session_key) {
@@ -1696,7 +1788,9 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         };
 
         let _ = db.append_transcript(&session.id, "user", Some(&msg.content), None, None);
-        let transcript = db.get_transcript_recent(&session.id, 20).unwrap_or_default();
+        let transcript = db
+            .get_transcript_recent(&session.id, 20)
+            .unwrap_or_default();
         (session, transcript)
     };
 
@@ -1716,7 +1810,8 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         metadata: std::collections::HashMap::new(),
         change_artifact: None, // Populated by sera-meta when processing evolution ChangeArtifacts
     };
-    let post_route_result = run_hook_point(state, HookPoint::PostRoute, &chains, post_route_ctx).await;
+    let post_route_result =
+        run_hook_point(state, HookPoint::PostRoute, &chains, post_route_ctx).await;
     match &post_route_result.outcome {
         HookResult::Reject { reason, .. } => {
             tracing::info!(reason = %reason, "post_route hook rejected message");
@@ -1870,7 +1965,12 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         let steer_content: Vec<serde_json::Value> = batch
             .iter()
             .filter(|qe| qe.is_steer)
-            .filter_map(|qe| qe.event.text.as_ref().map(|t| serde_json::json!({"role": "user", "content": t})))
+            .filter_map(|qe| {
+                qe.event
+                    .text
+                    .as_ref()
+                    .map(|t| serde_json::json!({"role": "user", "content": t}))
+            })
             .collect();
 
         let user_content: String = batch
@@ -1887,7 +1987,8 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             // Persist the steer as a user message in transcript.
             {
                 let db = state.db.lock().await;
-                let steer_text = steer_content.iter()
+                let steer_text = steer_content
+                    .iter()
                     .filter_map(|m| m.get("content").and_then(|c| c.as_str()).map(String::from))
                     .collect::<Vec<_>>()
                     .join("\n");
@@ -1918,7 +2019,8 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         let transcript = {
             let db = state.db.lock().await;
             let _ = db.append_transcript(&session.id, "user", Some(&user_content), None, None);
-            db.get_transcript_recent(&session.id, 20).unwrap_or_default()
+            db.get_transcript_recent(&session.id, 20)
+                .unwrap_or_default()
         };
 
         let follow_up = execute_turn(
@@ -1936,7 +2038,8 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         {
             let db = state.db.lock().await;
             persist_tool_events(&db, &session.id, &follow_up.tool_events);
-            let _ = db.append_transcript(&session.id, "assistant", Some(&follow_up.reply), None, None);
+            let _ =
+                db.append_transcript(&session.id, "assistant", Some(&follow_up.reply), None, None);
         }
 
         // Complete run for this follow-up turn.
@@ -2017,17 +2120,15 @@ fn run_secrets(config: &std::path::Path, command: SecretCommands) -> anyhow::Res
             resolver.store(&path, &value)?;
             println!("Secret stored: {path}");
         }
-        SecretCommands::Get { path } => {
-            match resolver.resolve(&path) {
-                Some(v) => {
-                    let masked = mask_secret(&v);
-                    println!("{path}: {masked}");
-                }
-                None => {
-                    anyhow::bail!("Secret not found: {path}");
-                }
+        SecretCommands::Get { path } => match resolver.resolve(&path) {
+            Some(v) => {
+                let masked = mask_secret(&v);
+                println!("{path}: {masked}");
             }
-        }
+            None => {
+                anyhow::bail!("Secret not found: {path}");
+            }
+        },
         SecretCommands::List => {
             let mut paths = resolver.list();
             paths.sort();
@@ -2097,10 +2198,7 @@ fn run_agent_list(config: &std::path::Path) -> anyhow::Result<()> {
 
 fn run_agent_create(config: &PathBuf, name: &str) -> anyhow::Result<()> {
     if !config.exists() {
-        anyhow::bail!(
-            "{} not found. Run `sera init` first.",
-            config.display()
-        );
+        anyhow::bail!("{} not found. Run `sera init` first.", config.display());
     }
 
     let content = std::fs::read_to_string(config)?;
@@ -2178,8 +2276,7 @@ pub fn init_file_logging() -> LogGuard {
     let file_appender = tracing_appender::rolling::daily(&log_dir, "sera.log");
     let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&log_level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&log_level));
 
     let stdout_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stdout);
     let file_layer = tracing_subscriber::fmt::layer()
@@ -2192,7 +2289,9 @@ pub fn init_file_logging() -> LogGuard {
         .with(file_layer)
         .init();
 
-    LogGuard { _file_guard: file_guard }
+    LogGuard {
+        _file_guard: file_guard,
+    }
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -2361,8 +2460,7 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     // engine just starts empty.
     let skill_engine = Arc::new(SkillDispatchEngine::new());
     {
-        let skills_dir = std::env::var("SERA_SKILLS_DIR")
-            .unwrap_or_else(|_| "skills".to_string());
+        let skills_dir = std::env::var("SERA_SKILLS_DIR").unwrap_or_else(|_| "skills".to_string());
         let path = PathBuf::from(&skills_dir);
         match skill_engine.load_dir(&path).await {
             Ok(count) => tracing::info!(
@@ -2399,7 +2497,10 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
             continue;
         }
 
-        let token = match sera_config::manifest_loader::resolve_connector_token_with(&spec, &secret_resolver) {
+        let token = match sera_config::manifest_loader::resolve_connector_token_with(
+            &spec,
+            &secret_resolver,
+        ) {
             Some(t) => t,
             None => {
                 tracing::warn!(
@@ -2570,6 +2671,7 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         skill_engine,
         semantic_store,
+        kill_switch: Arc::new(KillSwitch::new()),
     });
 
     // 4. Start event processing loop.
@@ -2577,6 +2679,18 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     tokio::spawn(async move {
         event_loop(event_state, discord_rx).await;
     });
+
+    // 4a. Spawn admin kill-switch Unix socket (SPEC-gateway §7a.4).
+    {
+        let ks = Arc::clone(&state.kill_switch);
+        let sock_path = admin_sock_path();
+        spawn_admin_socket(ks, sock_path, || {
+            tracing::warn!(
+                event = "KILL_SWITCH_ACTIVATED",
+                "ROLLBACK received on admin socket — gateway halted"
+            );
+        });
+    }
 
     // 5. Build and start HTTP server.
     let app = build_router(Arc::clone(&state));
@@ -2651,10 +2765,7 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
             drained = outcome.drained,
             "lane queue drain exceeded deadline"
         ),
-        Ok(outcome) => tracing::info!(
-            drained = outcome.drained,
-            "lane queue drain complete"
-        ),
+        Ok(outcome) => tracing::info!(drained = outcome.drained, "lane queue drain complete"),
         Err(e) => tracing::error!(error = %e, "lane queue drain failed"),
     }
 
@@ -2762,17 +2873,17 @@ async fn mail_inbound_handler(
         StatusCode::BAD_REQUEST
     })?;
 
-    let outcome = state
-        .mail_correlator
-        .correlate(&msg)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "mail correlator failed");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let outcome = state.mail_correlator.correlate(&msg).await.map_err(|e| {
+        tracing::error!(error = %e, "mail correlator failed");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     let resp = match outcome {
-        CorrelationOutcome::Resolved { gate_id, thread_id, tier } => MailInboundResponse {
+        CorrelationOutcome::Resolved {
+            gate_id,
+            thread_id,
+            tier,
+        } => MailInboundResponse {
             outcome: "resolved",
             gate_id: Some(gate_id.as_str().to_string()),
             thread_id: Some(thread_id.as_str().to_string()),
@@ -2840,6 +2951,29 @@ async fn hooks_list_handler(
     })))
 }
 
+/// Middleware that rejects all requests with 503 while the kill switch is armed.
+/// Health endpoints bypass this gate so load balancers can still observe state.
+async fn kill_switch_gate(
+    State(state): State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    // Health endpoints always pass through.
+    let path = request.uri().path();
+    let is_health = path == "/health" || path == "/api/health" || path == "/api/health/ready";
+    if !is_health && state.kill_switch.is_armed() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "gateway_halted",
+                "reason": "admin kill-switch engaged"
+            })),
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
 fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
@@ -2865,11 +2999,20 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/a2a/send", post(route_a2a::send_message::<AppState>))
         .route("/api/a2a/peers", get(route_a2a::list_peers::<AppState>))
         .route("/api/a2a/accept", post(route_a2a::accept::<AppState>))
-        .route("/api/agui/stream", get(route_agui::stream_events::<AppState>))
+        .route(
+            "/api/agui/stream",
+            get(route_agui::stream_events::<AppState>),
+        )
         .route("/api/agui/emit", post(route_agui::emit_event::<AppState>))
         .route("/api/plugins", get(route_plugins::list_plugins::<AppState>))
-        .route("/api/plugins/{id}/call", post(route_plugins::call_plugin::<AppState>))
-        .route("/api/plugins/hot-reload", post(route_plugins::hot_reload::<AppState>))
+        .route(
+            "/api/plugins/{id}/call",
+            post(route_plugins::call_plugin::<AppState>),
+        )
+        .route(
+            "/api/plugins/hot-reload",
+            post(route_plugins::hot_reload::<AppState>),
+        )
         // ── sera-8d1.2-follow: party mode (circles/{id}/party) ───────────────
         .route(
             "/api/circles/{id}/party",
@@ -2880,6 +3023,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         // trait (they currently depend on the Postgres-backed `crate::state::AppState`
         // and `crate::error::AppError` from the library, incompatible with this
         // binary's SqliteDb-backed AppState).
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state),
+            kill_switch_gate,
+        ))
         .with_state(state)
 }
 
@@ -2895,12 +3042,18 @@ mod tests {
     #[test]
     fn pgvector_selected_when_env_pin() {
         assert!(wants_pgvector_backend(Some("pgvector"), None));
-        assert!(wants_pgvector_backend(Some("pgvector"), Some("postgres://x")));
+        assert!(wants_pgvector_backend(
+            Some("pgvector"),
+            Some("postgres://x")
+        ));
     }
 
     #[test]
     fn sqlite_pin_ignores_database_url() {
-        assert!(!wants_pgvector_backend(Some("sqlite"), Some("postgres://x")));
+        assert!(!wants_pgvector_backend(
+            Some("sqlite"),
+            Some("postgres://x")
+        ));
         assert!(!wants_pgvector_backend(Some("sqlite"), None));
     }
 
@@ -2957,6 +3110,7 @@ mod tests {
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            kill_switch: Arc::new(KillSwitch::new()),
         })
     }
 
@@ -2989,6 +3143,7 @@ mod tests {
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            kill_switch: Arc::new(KillSwitch::new()),
         })
     }
 
@@ -3021,6 +3176,7 @@ mod tests {
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            kill_switch: Arc::new(KillSwitch::new()),
         })
     }
 
@@ -3053,6 +3209,7 @@ mod tests {
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            kill_switch: Arc::new(KillSwitch::new()),
         })
     }
 
@@ -3066,8 +3223,7 @@ mod tests {
     async fn shutdown_signal_future_builds_without_panic() {
         let fut = super::shutdown_signal();
         // Poll once so the registration code runs, then drop.
-        let poll =
-            tokio::time::timeout(std::time::Duration::from_millis(50), fut).await;
+        let poll = tokio::time::timeout(std::time::Duration::from_millis(50), fut).await;
         // A timeout is the expected outcome — no signal arrived during the
         // test. A completion would mean a real signal fired, which is still
         // fine for a panic-check.
@@ -3129,7 +3285,8 @@ mod tests {
 
     #[test]
     fn parse_start_custom() {
-        let cli = Cli::try_parse_from(["sera", "start", "-c", "custom.yaml", "-p", "8080"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["sera", "start", "-c", "custom.yaml", "-p", "8080"]).unwrap();
         match cli.command {
             Commands::Start { config, port } => {
                 assert_eq!(config, PathBuf::from("custom.yaml"));
@@ -3149,7 +3306,9 @@ mod tests {
     fn parse_agent_list() {
         let cli = Cli::try_parse_from(["sera", "agent", "list"]).unwrap();
         match cli.command {
-            Commands::Agent { command: AgentCommands::List } => {}
+            Commands::Agent {
+                command: AgentCommands::List,
+            } => {}
             _ => panic!("expected Agent List"),
         }
     }
@@ -3158,7 +3317,9 @@ mod tests {
     fn parse_agent_create() {
         let cli = Cli::try_parse_from(["sera", "agent", "create", "reviewer"]).unwrap();
         match cli.command {
-            Commands::Agent { command: AgentCommands::Create { name } } => {
+            Commands::Agent {
+                command: AgentCommands::Create { name },
+            } => {
                 assert_eq!(name, "reviewer");
             }
             _ => panic!("expected Agent Create"),
@@ -3181,7 +3342,13 @@ mod tests {
         let set = test_manifests();
         let spec = set.agent_spec("sera").unwrap().unwrap();
         assert_eq!(spec.provider, "lm-studio");
-        assert!(spec.persona.unwrap().immutable_anchor.unwrap().contains("Sera"));
+        assert!(
+            spec.persona
+                .unwrap()
+                .immutable_anchor
+                .unwrap()
+                .contains("Sera")
+        );
     }
 
     #[test]
@@ -3373,9 +3540,11 @@ mod tests {
     async fn readiness_flips_to_200_after_successful_probe() {
         let state = test_state_async().await;
         // Precondition: latch is cold and the mock harness is wired in.
-        assert!(!state
-            .runtime_ready
-            .load(std::sync::atomic::Ordering::Acquire));
+        assert!(
+            !state
+                .runtime_ready
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
         assert!(!state.harnesses.is_empty());
         let app = build_router(Arc::clone(&state));
 
@@ -3396,9 +3565,11 @@ mod tests {
         assert_eq!(json["status"], "ready");
         assert_eq!(json["runtime_connected"], true);
         // Latch must persist across calls so subsequent probes are O(1).
-        assert!(state
-            .runtime_ready
-            .load(std::sync::atomic::Ordering::Acquire));
+        assert!(
+            state
+                .runtime_ready
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
     }
 
     /// Once the latch is set, readiness must answer 200 even with no harness
@@ -3835,6 +4006,7 @@ mod tests {
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            kill_switch: Arc::new(KillSwitch::new()),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -3870,6 +4042,7 @@ mod tests {
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            kill_switch: Arc::new(KillSwitch::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -3906,10 +4079,14 @@ mod tests {
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            kill_switch: Arc::new(KillSwitch::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
-        assert_eq!(validate_api_key(&state, &headers), Err(StatusCode::UNAUTHORIZED));
+        assert_eq!(
+            validate_api_key(&state, &headers),
+            Err(StatusCode::UNAUTHORIZED)
+        );
     }
 
     #[test]
@@ -3942,9 +4119,13 @@ mod tests {
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            kill_switch: Arc::new(KillSwitch::new()),
         };
         let headers = HeaderMap::new();
-        assert_eq!(validate_api_key(&state, &headers), Err(StatusCode::UNAUTHORIZED));
+        assert_eq!(
+            validate_api_key(&state, &headers),
+            Err(StatusCode::UNAUTHORIZED)
+        );
     }
 
     // ── SSE streaming tests ──────────────────────────────────────────────────
@@ -3979,18 +4160,31 @@ mod tests {
 
         let stream = futures_util::stream::unfold(state, |fold_state| async move {
             match fold_state {
-                StreamState::Streaming { chunks, index, session_id, message_id, usage } => {
+                StreamState::Streaming {
+                    chunks,
+                    index,
+                    session_id,
+                    message_id,
+                    usage,
+                } => {
                     if index < chunks.len() {
-                        let event = axum::response::sse::Event::default()
-                            .event("message")
-                            .data(serde_json::json!({
+                        let event = axum::response::sse::Event::default().event("message").data(
+                            serde_json::json!({
                                 "delta": chunks[index],
                                 "session_id": session_id,
                                 "message_id": message_id,
-                            }).to_string());
+                            })
+                            .to_string(),
+                        );
                         Some((
                             Some(Ok::<_, std::convert::Infallible>(event)),
-                            StreamState::Streaming { chunks, index: index + 1, session_id, message_id, usage },
+                            StreamState::Streaming {
+                                chunks,
+                                index: index + 1,
+                                session_id,
+                                message_id,
+                                usage,
+                            },
                         ))
                     } else {
                         let event = axum::response::sse::Event::default()
@@ -4046,7 +4240,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let agents = json.as_array().expect("expected array");
         assert_eq!(agents.len(), 1);
@@ -4091,7 +4287,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json.as_array().unwrap().len(), 0);
     }
@@ -4102,7 +4300,8 @@ mod tests {
         // Create a session directly in the DB.
         {
             let db = state.db.lock().await;
-            db.create_session("ses_test_1", "sera", "discord:sera:ch_42", Some("user_1")).unwrap();
+            db.create_session("ses_test_1", "sera", "discord:sera:ch_42", Some("user_1"))
+                .unwrap();
         }
 
         let app = build_router(Arc::clone(&state));
@@ -4117,7 +4316,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let sessions = json.as_array().unwrap();
         assert_eq!(sessions.len(), 1);
@@ -4134,7 +4335,8 @@ mod tests {
         let state = test_state();
         {
             let db = state.db.lock().await;
-            db.create_session("ses_tr_1", "sera", "sk_tr_1", None).unwrap();
+            db.create_session("ses_tr_1", "sera", "sk_tr_1", None)
+                .unwrap();
         }
 
         let app = build_router(Arc::clone(&state));
@@ -4149,7 +4351,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json.as_array().unwrap().len(), 0);
     }
@@ -4159,9 +4363,12 @@ mod tests {
         let state = test_state();
         {
             let db = state.db.lock().await;
-            db.create_session("ses_tr_2", "sera", "sk_tr_2", None).unwrap();
-            db.append_transcript("ses_tr_2", "user", Some("hello"), None, None).unwrap();
-            db.append_transcript("ses_tr_2", "assistant", Some("hi there"), None, None).unwrap();
+            db.create_session("ses_tr_2", "sera", "sk_tr_2", None)
+                .unwrap();
+            db.append_transcript("ses_tr_2", "user", Some("hello"), None, None)
+                .unwrap();
+            db.append_transcript("ses_tr_2", "assistant", Some("hi there"), None, None)
+                .unwrap();
         }
 
         let app = build_router(Arc::clone(&state));
@@ -4176,7 +4383,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let entries = json.as_array().unwrap();
         assert_eq!(entries.len(), 2);
@@ -4331,7 +4540,10 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_err(), "expected Elapsed when harness never responds");
+        assert!(
+            result.is_err(),
+            "expected Elapsed when harness never responds"
+        );
         assert!(
             start.elapsed() < std::time::Duration::from_secs(1),
             "timeout must fire near its bound, not after the test harness limit"
@@ -4347,11 +4559,10 @@ mod tests {
     /// LM Studio `/v1/chat/completions` response body.
     #[tokio::test]
     async fn send_turn_parses_usage_from_turn_completed() {
-        let harness = StdioHarness::spawn_mock_with_usage(42, 17, 59).await.unwrap();
-        let events = harness
-            .send_turn(Vec::new(), "test-session")
+        let harness = StdioHarness::spawn_mock_with_usage(42, 17, 59)
             .await
             .unwrap();
+        let events = harness.send_turn(Vec::new(), "test-session").await.unwrap();
         assert_eq!(events.response, "mock response");
         assert_eq!(events.usage.prompt_tokens, 42);
         assert_eq!(events.usage.completion_tokens, 17);
@@ -4363,10 +4574,7 @@ mod tests {
     #[tokio::test]
     async fn send_turn_defaults_usage_to_zero_when_tokens_missing() {
         let harness = StdioHarness::spawn_mock().await.unwrap();
-        let events = harness
-            .send_turn(Vec::new(), "test-session")
-            .await
-            .unwrap();
+        let events = harness.send_turn(Vec::new(), "test-session").await.unwrap();
         assert_eq!(events.usage.prompt_tokens, 0);
         assert_eq!(events.usage.completion_tokens, 0);
         assert_eq!(events.usage.total_tokens, 0);
@@ -4395,9 +4603,7 @@ mod tests {
     /// execution.
     #[tokio::test]
     async fn hooks_list_route_returns_registered_points() {
-        use sera_types::hook::{
-            HookContext, HookMetadata, HookPoint, HookResult,
-        };
+        use sera_types::hook::{HookContext, HookMetadata, HookPoint, HookResult};
 
         // Minimal test hook that advertises two supported points so the
         // `by_point` grouping in the handler exercises more than one key.
@@ -4413,7 +4619,10 @@ mod tests {
                     author: None,
                 }
             }
-            async fn init(&mut self, _config: serde_json::Value) -> Result<(), sera_hooks::HookError> {
+            async fn init(
+                &mut self,
+                _config: serde_json::Value,
+            ) -> Result<(), sera_hooks::HookError> {
                 Ok(())
             }
             async fn execute(
@@ -4457,6 +4666,7 @@ mod tests {
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            kill_switch: Arc::new(KillSwitch::new()),
         });
 
         let app = build_router(Arc::clone(&state));
@@ -4472,7 +4682,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(json["count"], 1);
@@ -4481,8 +4693,16 @@ mod tests {
         assert_eq!(hooks[0]["name"], "test-hook");
 
         let by_point = json["by_point"].as_object().expect("by_point is an object");
-        assert!(by_point.contains_key("pre_turn"), "pre_turn point missing: {:?}", by_point);
-        assert!(by_point.contains_key("post_turn"), "post_turn point missing: {:?}", by_point);
+        assert!(
+            by_point.contains_key("pre_turn"),
+            "pre_turn point missing: {:?}",
+            by_point
+        );
+        assert!(
+            by_point.contains_key("post_turn"),
+            "post_turn point missing: {:?}",
+            by_point
+        );
         assert_eq!(by_point["pre_turn"].as_array().unwrap().len(), 1);
         assert_eq!(by_point["post_turn"].as_array().unwrap().len(), 1);
     }
@@ -4505,7 +4725,7 @@ mod tests {
                 chain_executor,
                 harnesses: std::collections::HashMap::new(),
                 runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 mail_correlator: Arc::new(HeaderMailCorrelator::new(
                     Arc::new(InMemoryEnvelopeIndex::default()),
                     None,
@@ -4521,6 +4741,7 @@ mod tests {
                 semantic_store: Arc::new(
                     SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
                 ),
+                kill_switch: Arc::new(KillSwitch::new()),
             })
         };
         let app = build_router(state);
@@ -4558,5 +4779,94 @@ mod tests {
             .unwrap();
         // 404 = route matched, circle not found via stub — NOT "no route matched"
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── Kill switch admission gate tests (SPEC-gateway §7a.4) ────────────────
+
+    /// When the kill switch is disarmed, requests pass through normally.
+    #[tokio::test]
+    async fn kill_switch_disarmed_allows_requests() {
+        let state = test_state();
+        let app = build_router(Arc::clone(&state));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// When the kill switch is armed, non-health requests are rejected with 503.
+    #[tokio::test]
+    async fn kill_switch_armed_rejects_with_503() {
+        let state = test_state();
+        state.kill_switch.arm();
+        let app = build_router(Arc::clone(&state));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/agents")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "gateway_halted");
+    }
+
+    /// Health endpoints bypass the kill switch gate so load balancers can
+    /// still probe liveness/readiness.
+    #[tokio::test]
+    async fn kill_switch_armed_health_still_passes() {
+        let state = test_state();
+        state.kill_switch.arm();
+        let app = build_router(Arc::clone(&state));
+        for path in ["/health", "/api/health"] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_ne!(
+                resp.status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "health endpoint {path} must not be blocked by kill switch"
+            );
+        }
+    }
+
+    /// After disarming, requests pass through again.
+    #[tokio::test]
+    async fn kill_switch_disarm_resumes_serving() {
+        let state = test_state();
+        state.kill_switch.arm();
+        state.kill_switch.disarm();
+        let app = build_router(Arc::clone(&state));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

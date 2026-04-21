@@ -3,8 +3,8 @@
 use sera_gateway::envelope::*;
 use sera_gateway::harness_dispatch::*;
 use sera_gateway::kill_switch::*;
-use sera_gateway::transport::*;
 use sera_gateway::transport::in_process::InProcessTransport;
+use sera_gateway::transport::*;
 
 use std::pin::Pin;
 
@@ -116,9 +116,7 @@ async fn in_process_transport_dispatch() {
     let evt = Event {
         id: Uuid::new_v4(),
         submission_id: sub_id,
-        msg: EventMsg::StreamingDelta {
-            delta: "ok".into(),
-        },
+        msg: EventMsg::StreamingDelta { delta: "ok".into() },
         trace: W3cTraceContext::default(),
         timestamp: chrono::Utc::now(),
     };
@@ -208,12 +206,14 @@ fn kill_switch_admin_socket_accepts_shutdown() {
     let ks = KillSwitch::new();
     assert_eq!(ks.state(), KillSwitchState::Disarmed);
 
-    let result = ks.handle_command("ROLLBACK\n");
+    let (result, did_rollback) = ks.handle_command("ROLLBACK\n");
     assert_eq!(result, "OK\n");
+    assert!(did_rollback);
     assert_eq!(ks.state(), KillSwitchState::Armed);
 
-    let result = ks.handle_command("DISARM\n");
+    let (result, did_rollback) = ks.handle_command("DISARM\n");
     assert_eq!(result, "OK\n");
+    assert!(!did_rollback);
     assert_eq!(ks.state(), KillSwitchState::Disarmed);
 }
 

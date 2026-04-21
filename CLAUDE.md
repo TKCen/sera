@@ -91,25 +91,27 @@ Load selectively based on your task — do not load everything upfront:
 
 ```
 sera/
-  core/                  # sera-core API server (TS)    → see core/CLAUDE.md
-  core/agent-runtime/    # Agent worker process (TS)    → see core/agent-runtime/CLAUDE.md
-  rust/                  # Rust workspace (SERA 2.0)    → see rust/CLAUDE.md
-  web/                   # sera-web dashboard           → see web/CLAUDE.md
-  tui/                   # Rust terminal UI (ratatui)   → see tui/CLAUDE.md
-  cli/                   # Go CLI (auth flows)          → see cli/CLAUDE.md
-  tools/discord-bridge/  # Discord sidecar              → see tools/discord-bridge/CLAUDE.md
-  e2e/                   # Playwright E2E tests         → see e2e/CLAUDE.md
-  docs/                  # Architecture and epic specs  (load on demand — see table above)
-  agents/                # Agent YAML manifests (instances)
-  templates/             # AgentTemplate definitions
-  schemas/               # JSON Schema for manifests and policies
-  sandbox-boundaries/    # Tier policy definitions (tier-1/2/3.yaml)
+  rust/                  # Rust workspace (SERA 2.0, active)     → see rust/CLAUDE.md
+  scripts/               # Dev/ops scripts (sera-local, sera-omc, sera-omx, …)
+  docs/                  # Architecture and spec docs             (load on demand — see table above)
+  e2e/                   # Playwright E2E tests                   → see e2e/CLAUDE.md
+  examples/              # Example manifests and agents
+  ops/                   # Ops tooling (docker, systemd, etc.)
   capability-policies/   # CapabilityPolicy definitions
-  lists/                 # Network and command allow/denylists
-  circles/               # Circle definitions and shared memory
-  litellm/               # LiteLLM provider gateway config
-  centrifugo/            # Centrifugo real-time messaging config
+  secrets/               # Local secrets (gitignored)
+  workspaces/            # Agent workspaces
+  legacy/                # Archived pre-Rust codebase (reference only; no active development)
+    core/                # Former sera-core API server (TS)
+    core/agent-runtime/  # Former agent worker (TS)
+    web/                 # Former sera-web dashboard
+    tui/                 # Former Rust TUI (pre-reboot)
+    cli/                 # Former Go CLI (auth flows)
+    tools/discord-bridge/ # Former Discord sidecar
+    centrifugo/          # Former Centrifugo config
+    templates/ schemas/ sandbox-boundaries/ lists/ circles/ …    # Other pre-migration assets
 ```
+
+> **Note (2026-04-21):** The TS/Go codebase was moved under `legacy/` during the Rust migration. Active work lives in `rust/`; `legacy/` is kept for reference while Rust parity is finished. Sections below that reference `core/`, `web/`, `tui/`, `cli/`, or `tools/` at top-level paths (notably the Docker Compose section and the `bun install` learning) reflect the pre-migration layout — apply with `legacy/` prefix if touching them.
 
 ## Code Quality
 

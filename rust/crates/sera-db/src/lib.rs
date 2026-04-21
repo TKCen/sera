@@ -20,8 +20,6 @@ pub mod delegations;
 pub mod memory;
 pub mod notifications;
 pub mod operator_requests;
-pub mod pgvector_store;
-pub mod sqlite_memory_store;
 pub mod secrets;
 pub mod signals;
 pub mod tasks;
@@ -35,4 +33,3 @@ pub mod error;
 
 pub use pool::DbPool;
 pub use error::DbError;
-pub use sqlite_memory_store::{DEFAULT_SQLITE_VEC_DIMENSIONS, SqliteMemoryStore};

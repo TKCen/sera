@@ -139,6 +139,8 @@ Splitting the optional methods across two traits — not one "extended"
 trait — lets a future engine opt into drill tools **without** also
 committing to diagnostics, and vice versa.
 
+The split at `ContextQuery` vs `ContextDiagnostics` is not arbitrary: any engine that implements `ContextQuery` at all has semantic reason to make `search`, `describe_node`, and `expand_node` work (they are the read side of whatever the engine persists), whereas `ContextDiagnostics` methods (`status`, `doctor`) have no semantic home for an engine that persists nothing — defaulting them would be the same dishonest stub problem under a different name.
+
 Capability matrix:
 
 | Engine | `ContextEngine` | `ContextQuery` | `ContextDiagnostics` |
@@ -186,6 +188,11 @@ do NOT leak across the seam. They are encoded as `ContextNodeId(String)`
 + `depth_label: String`. A sera tool that presents LCM output
 stringifies `SummaryNode.node_id` as `"42"` and renders `depth = 1` as
 `"D1"`.
+
+`lcm_expand_query` (LCM's sixth agent-facing tool) has no row in this
+table because it is a composition — search + `expand_node` + LLM
+synthesis — not a 1:1 mapping to a trait method; it lives at the sera
+tool authorship layer described in §7.
 
 ## 5. Default pipeline worked example
 

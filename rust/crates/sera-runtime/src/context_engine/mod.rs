@@ -397,4 +397,31 @@ mod pluggability_tests {
         assert_eq!(back.engine.name, "test");
         assert_eq!(back.session_id.as_deref(), Some("sess-1"));
     }
+
+    /// Object-safety smoke: `ContextQuery` must be usable as a trait object.
+    /// If a future change breaks `async_trait` object-safety (e.g. a method
+    /// gains a `Self: Sized` bound) this test fails at compile time.
+    #[test]
+    fn context_query_is_object_safe() {
+        use std::sync::Arc;
+        let _: Arc<dyn ContextQuery> = Arc::new(NodeOnlyQuery);
+    }
+
+    /// Metadata round-trip: `ContextSearchHit::metadata` carries the
+    /// `#[serde(default)]` forward-compat slot. Verify non-null metadata
+    /// survives a JSON round-trip so the slot is locked in.
+    #[test]
+    fn search_hit_metadata_round_trips() {
+        let hit = ContextSearchHit {
+            node_id: Some(ContextNodeId::new("1")),
+            externalized_ref: None,
+            snippet: "test".into(),
+            depth_label: "D0".into(),
+            rank: None,
+            metadata: serde_json::json!({"bucket": "recent", "score": 0.9}),
+        };
+        let s = serde_json::to_string(&hit).unwrap();
+        let back: ContextSearchHit = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.metadata, hit.metadata);
+    }
 }

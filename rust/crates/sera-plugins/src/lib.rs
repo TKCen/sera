@@ -1,10 +1,14 @@
-//! `sera-plugins` — gRPC plugin registry and SDK for SERA.
+//! `sera-plugins` — dual-transport (gRPC + stdio) plugin registry and SDK for SERA.
 //!
 //! Plugins are out-of-process services that implement SERA trait contracts over
-//! the wire. This crate provides:
+//! the wire. Two transports are supported: **gRPC** (TCP, mTLS) and **stdio**
+//! (spawned child process, stdin/stdout framed JSON-RPC). Both expose the same
+//! capability set, manifest shape, supervision model, and audit envelope.
 //!
-//! - [`types`] — core data types (registration, capability, health, TLS)
-//! - [`registry`] — [`PluginRegistry`] trait + [`InMemoryPluginRegistry`]
+//! This crate provides:
+//!
+//! - [`types`] — core data types (registration, capability, health, transport config)
+//! - [`registry`] — [`PluginRegistry`] trait + [`InMemoryPluginRegistry`] (with stdio lifecycle)
 //! - [`manifest`] — YAML manifest parsing (`kind: Plugin` and `sera/v1` flat format)
 //! - [`circuit_breaker`] — three-state circuit breaker for failure isolation
 //! - [`error`] — [`PluginError`] with [`From`] impl into [`SeraError`]
@@ -31,8 +35,8 @@
 //! // 3. Guard calls with a circuit breaker
 //! let cb = CircuitBreaker::new(&plugin_name, 3, Duration::from_secs(30));
 //! cb.allow()?;                 // returns Err(PluginError::CircuitOpen) when tripped
-//! cb.record_success();         // call after a successful RPC
-//! cb.record_failure();         // call after a failed RPC
+//! cb.record_success();         // call after a successful RPC / stdio exchange
+//! cb.record_failure();         // call after a failed RPC / stdio exchange
 //! ```
 
 pub mod circuit_breaker;
@@ -49,7 +53,8 @@ pub use registry::{InMemoryPluginRegistry, PluginRegistry};
 
 // ── Types ────────────────────────────────────────────────────────────────────
 pub use types::{
-    PluginCapability, PluginHealth, PluginInfo, PluginRegistration, PluginVersion, TlsConfig,
+    GrpcTransportConfig, PluginCapability, PluginHealth, PluginInfo, PluginRegistration,
+    PluginTransport, PluginVersion, StdioTransportConfig, TlsConfig,
 };
 
 // ── Manifest ─────────────────────────────────────────────────────────────────

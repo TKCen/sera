@@ -45,7 +45,11 @@ pub struct CircuitBreaker {
 
 impl CircuitBreaker {
     /// Create a new circuit breaker with the given thresholds.
-    pub fn new(plugin_name: impl Into<String>, failure_threshold: u32, reset_timeout: Duration) -> Self {
+    pub fn new(
+        plugin_name: impl Into<String>,
+        failure_threshold: u32,
+        reset_timeout: Duration,
+    ) -> Self {
         Self {
             plugin_name: plugin_name.into(),
             failure_threshold,

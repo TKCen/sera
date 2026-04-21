@@ -8,8 +8,7 @@
 
 use sera_plugins::{
     CircuitBreaker, CircuitState, InMemoryPluginRegistry, PluginCapability, PluginHealth,
-    PluginRegistry,
-    manifest::PluginManifest,
+    PluginRegistry, PluginTransport, manifest::PluginManifest,
 };
 use std::time::Duration;
 
@@ -21,7 +20,9 @@ metadata:
 spec:
   capabilities:
     - ToolExecutor
-  endpoint: "localhost:19090"
+  transport: grpc
+  grpc:
+    endpoint: "localhost:19090"
   health_check_interval: 30s
   version: "2.0.1"
 "#;
@@ -31,11 +32,21 @@ spec:
 async fn full_lifecycle_manifest_to_registry() {
     // (a) Parse the manifest
     let manifest = PluginManifest::from_yaml(YAML).expect("manifest must parse");
-    let registration = manifest.into_registration().expect("registration must succeed");
+    let registration = manifest
+        .into_registration()
+        .expect("registration must succeed");
 
     assert_eq!(registration.name, "integ-plugin");
-    assert_eq!(registration.capabilities, vec![PluginCapability::ToolExecutor]);
+    assert_eq!(
+        registration.capabilities,
+        vec![PluginCapability::ToolExecutor]
+    );
     assert_eq!(registration.health_check_interval, Duration::from_secs(30));
+    // Verify transport shape
+    match &registration.transport {
+        PluginTransport::Grpc { grpc } => assert_eq!(grpc.endpoint, "localhost:19090"),
+        other => panic!("expected Grpc transport, got {other:?}"),
+    }
 
     // (b) Register in the in-memory registry
     let registry = InMemoryPluginRegistry::new();
@@ -45,7 +56,10 @@ async fn full_lifecycle_manifest_to_registry() {
         .expect("register must succeed");
 
     // Confirm it is retrievable
-    let info = registry.get("integ-plugin").await.expect("plugin must be found");
+    let info = registry
+        .get("integ-plugin")
+        .await
+        .expect("plugin must be found");
     assert_eq!(info.registration.name, "integ-plugin");
     assert!(!info.health.healthy, "initial health must be false");
 
@@ -110,9 +124,15 @@ fn circuit_breaker_state_machine() {
 async fn deregister_removes_plugin() {
     let registry = InMemoryPluginRegistry::new();
     let manifest = PluginManifest::from_yaml(YAML).unwrap();
-    registry.register(manifest.into_registration().unwrap()).await.unwrap();
+    registry
+        .register(manifest.into_registration().unwrap())
+        .await
+        .unwrap();
 
-    registry.deregister("integ-plugin").await.expect("deregister must succeed");
+    registry
+        .deregister("integ-plugin")
+        .await
+        .expect("deregister must succeed");
 
     let err = registry.get("integ-plugin").await.unwrap_err();
     assert!(

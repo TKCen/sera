@@ -34,6 +34,7 @@ members = [
   "crates/sera-mail",
   "crates/sera-eval",
   "crates/sera-memory",
+  "crates/sera-memory-hindsight",
 ]
 
 [workspace.package]
@@ -190,6 +191,7 @@ which       = "8"
 
 # Workspace crates
 sera-memory = { path = "crates/sera-memory" }
+sera-memory-hindsight = { path = "crates/sera-memory-hindsight" }
 sera-types = { path = "crates/sera-types" }
 sera-telemetry = { path = "crates/sera-telemetry" }
 sera-config = { path = "crates/sera-config" }

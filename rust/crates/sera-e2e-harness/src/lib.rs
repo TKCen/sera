@@ -34,6 +34,20 @@
 //!   Skips cleanly (does not fail) if `CENTRIFUGO_URL` is unset.  Implies
 //!   `integration`.
 //!
+//! ## Environment variables
+//!
+//! - `SERA_E2E_LLM_BASE_URL` — base URL of the LLM provider to use during
+//!   the test run (e.g. `http://localhost:1234/v1` for LM Studio).  When
+//!   unset, the harness falls back to the built-in wiremock mock.
+//! - `SERA_E2E_MODEL` — model identifier written into the generated
+//!   `sera.yaml` for both `default_model` and the agent's `model` field.
+//!   When unset or empty, defaults to `"e2e-mock"`, which is accepted by the
+//!   wiremock fallback.  Set this to your real model name (e.g.
+//!   `"lmstudio-community/meta-llama-3-8b"`) when pointing
+//!   `SERA_E2E_LLM_BASE_URL` at a real provider.
+//! - `SERA_E2E_LOG` — `RUST_LOG` value forwarded to the spawned gateway
+//!   child.  Defaults to `"warn"`.
+//!
 //! ## Skip contract
 //!
 //! The real integration test exercises a live LLM by default.  When
@@ -46,7 +60,7 @@ use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
@@ -131,7 +145,8 @@ impl InProcessGateway {
         // URL here (vs. letting the runtime read the ambient env) is what
         // lets the harness point each test at its own wiremock port.
         let config_path = root.join("sera.yaml");
-        std::fs::write(&config_path, minimal_sera_yaml(llm_base_url))
+        let model = resolve_model_env();
+        std::fs::write(&config_path, minimal_sera_yaml(llm_base_url, &model))
             .context("writing sera.yaml into tempdir")?;
 
         // Pick an ephemeral port by binding to :0 and immediately releasing.
@@ -276,14 +291,30 @@ impl InProcessGateway {
     }
 }
 
+/// Resolve the model identifier to use in the generated `sera.yaml`.
+///
+/// Reads `SERA_E2E_MODEL` from the environment.  If the variable is set and
+/// non-empty, that value is used for both `default_model` and the agent's
+/// `model` field.  If unset or empty, falls back to `"e2e-mock"`, which is
+/// the model name accepted by the built-in wiremock fallback.
+pub fn resolve_model_env() -> String {
+    match std::env::var("SERA_E2E_MODEL") {
+        Ok(v) if !v.is_empty() => v,
+        _ => "e2e-mock".to_owned(),
+    }
+}
+
 /// Minimal valid manifest set — one Instance, one Provider, one Agent.
 ///
 /// The provider's `base_url` is templated to the caller-supplied LLM URL
 /// because the autonomous gateway pulls this out of the manifest and
 /// injects it into every spawned `sera-runtime` child's env as
-/// `LLM_BASE_URL`.  We deliberately keep the manifest otherwise boring:
-/// one agent, no connectors, no tools, no persona beyond a short anchor.
-fn minimal_sera_yaml(llm_base_url: &str) -> String {
+/// `LLM_BASE_URL`.  The `model` parameter controls the `default_model` on
+/// the provider and the agent's `model` field — use [`resolve_model_env`] to
+/// obtain the right value for the current test environment.  We deliberately
+/// keep the manifest otherwise boring: one agent, no connectors, no tools,
+/// no persona beyond a short anchor.
+fn minimal_sera_yaml(llm_base_url: &str, model: &str) -> String {
     format!(
         r#"apiVersion: sera.dev/v1
 kind: Instance
@@ -299,7 +330,7 @@ metadata:
 spec:
   kind: openai-compatible
   base_url: "{llm_base_url}"
-  default_model: e2e-mock
+  default_model: {model}
 ---
 apiVersion: sera.dev/v1
 kind: Agent
@@ -307,12 +338,49 @@ metadata:
   name: sera
 spec:
   provider: mock-openai
-  model: e2e-mock
+  model: {model}
   persona:
     immutable_anchor: |
       You are a SERA e2e test persona. Reply briefly.
 "#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_model_env;
+
+    // NOTE: This test mutates the process environment, which is not safe when
+    // multiple threads read env vars concurrently.  Cargo runs unit tests in a
+    // single binary with multiple threads by default.  Mark #[ignore] so the
+    // test must be opted into explicitly with `cargo test -- --ignored`, which
+    // the caller can run single-threaded via `cargo test -- --ignored
+    // --test-threads=1`.
+    #[test]
+    #[ignore = "mutates process env; run with --test-threads=1 -- --ignored"]
+    fn resolve_model_env_returns_env_var_when_set() {
+        // SAFETY: test is #[ignore]-d; caller must use --test-threads=1.
+        unsafe { std::env::set_var("SERA_E2E_MODEL", "my-real-model") };
+        let result = resolve_model_env();
+        unsafe { std::env::remove_var("SERA_E2E_MODEL") };
+        assert_eq!(result, "my-real-model");
+    }
+
+    #[test]
+    #[ignore = "mutates process env; run with --test-threads=1 -- --ignored"]
+    fn resolve_model_env_falls_back_when_unset() {
+        unsafe { std::env::remove_var("SERA_E2E_MODEL") };
+        assert_eq!(resolve_model_env(), "e2e-mock");
+    }
+
+    #[test]
+    #[ignore = "mutates process env; run with --test-threads=1 -- --ignored"]
+    fn resolve_model_env_falls_back_when_empty() {
+        unsafe { std::env::set_var("SERA_E2E_MODEL", "") };
+        let result = resolve_model_env();
+        unsafe { std::env::remove_var("SERA_E2E_MODEL") };
+        assert_eq!(result, "e2e-mock");
+    }
 }
 
 /// Bind `127.0.0.1:0` and read back the OS-assigned port, then release the
@@ -382,11 +450,9 @@ pub fn count_audit_rows(db_path: &Path, event: &str) -> Result<i64> {
     if !db_path.exists() {
         return Ok(0);
     }
-    let conn = rusqlite::Connection::open_with_flags(
-        db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .with_context(|| format!("opening {db_path:?} for audit count"))?;
+    let conn =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("opening {db_path:?} for audit count"))?;
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM audit_log WHERE event_type = ?1",
@@ -405,11 +471,9 @@ pub fn count_transcript_rows(db_path: &Path, session_id: &str, role: &str) -> Re
     if !db_path.exists() {
         return Ok(0);
     }
-    let conn = rusqlite::Connection::open_with_flags(
-        db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .with_context(|| format!("opening {db_path:?} for transcript count"))?;
+    let conn =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("opening {db_path:?} for transcript count"))?;
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM transcript WHERE session_id = ?1 AND role = ?2",

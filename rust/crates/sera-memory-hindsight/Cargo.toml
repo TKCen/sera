@@ -1,0 +1,23 @@
+[package]
+name = "sera-memory-hindsight"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Hindsight HTTP adapter for SemanticMemoryStore (server-owned embeddings)"
+
+[dependencies]
+sera-memory = { workspace = true }
+sera-types = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+wiremock = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

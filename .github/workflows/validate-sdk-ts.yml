@@ -1,0 +1,51 @@
+name: CI — Validate SDK TS
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "sdk/**"
+      - "rust/proto/plugin/**"
+      - ".github/workflows/validate-sdk-ts.yml"
+  push:
+    branches: [main]
+    paths:
+      - "sdk/**"
+      - "rust/proto/plugin/**"
+      - ".github/workflows/validate-sdk-ts.yml"
+
+jobs:
+  validate-sdk-ts:
+    name: validate-sdk-ts
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/typescript/sera-plugin-sdk
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Generate proto stubs
+        run: npm run proto
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test

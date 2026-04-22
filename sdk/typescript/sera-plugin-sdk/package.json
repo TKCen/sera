@@ -1,0 +1,52 @@
+{
+  "name": "@sera/plugin-sdk",
+  "version": "0.0.1",
+  "description": "SERA plugin SDK for TypeScript — dual transport (stdio + gRPC) per SPEC-plugins",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./stdio": {
+      "types": "./dist/transport/stdio.d.ts",
+      "import": "./dist/transport/stdio.js"
+    },
+    "./grpc": {
+      "types": "./dist/transport/grpc.d.ts",
+      "import": "./dist/transport/grpc.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "proto": "node scripts/generate-proto.mjs",
+    "prebuild": "npm run proto",
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist src/generated/*.ts"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.12.0",
+    "@grpc/proto-loader": "^0.7.13",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
+  }
+}

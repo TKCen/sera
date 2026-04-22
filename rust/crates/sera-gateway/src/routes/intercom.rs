@@ -7,8 +7,11 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use sera_auth::ActingContext;
+use sera_gateway::envelope::{Op, Submission, W3cTraceContext};
+use sera_gateway::session_store::SessionStore as _;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -56,6 +59,37 @@ pub async fn publish(
     // Agent-scoped callers may only publish as themselves. Operator callers
     // (dashboard, bootstrap API key) may publish for any agent.
     verify_agent_ownership(&ctx, &body.agent)?;
+
+    // Emit envelope — channel publish is an observable agent action (sends a
+    // message to a channel that other agents or humans may receive).
+    //
+    // Spec shape decision (bead sera-r1g8): Op::UserTurn with the channel and
+    // message type encoded in the text item. The payload is in final_output_schema
+    // so replay tooling can reconstruct the full message.
+    let envelope = Submission {
+        id: Uuid::new_v4(),
+        op: Op::UserTurn {
+            items: vec![sera_types::content_block::ContentBlock::Text {
+                text: format!("intercom_publish:{}:{}", body.channel, body.message_type),
+            }],
+            cwd: None,
+            approval_policy: Some(body.agent.clone()),
+            sandbox_policy: None,
+            model_override: None,
+            effort: None,
+            final_output_schema: Some(body.payload.clone()),
+        },
+        trace: W3cTraceContext::default(),
+        change_artifact: None,
+    };
+    if let Err(e) = state
+        .session_store
+        .append_envelope(&body.agent, &envelope)
+        .await
+    {
+        tracing::warn!(error = %e, agent = %body.agent, channel = %body.channel, "session_store.append_envelope failed for intercom publish; continuing");
+    }
+
     tracing::debug!(agent = %body.agent, channel = %body.channel, "intercom publish authorized");
     let centrifugo = state
         .centrifugo
@@ -100,6 +134,40 @@ pub async fn dm(
     // Enforce that the sender claimed in `from` matches the authenticated
     // agent. Operator callers may impersonate any sender.
     verify_agent_ownership(&ctx, &body.from)?;
+
+    // Emit envelope — DM is an observable agent action (one agent sending a
+    // direct message to another, which may trigger a session turn on the
+    // recipient side).
+    //
+    // Spec shape decision (bead sera-r1g8): Op::Steer is the closest — it
+    // "injects a mid-turn user message". DM is semantically similar: one agent
+    // steering another. We use Op::UserTurn with the recipient encoded in
+    // approval_policy for correlation; a dedicated Op::AgentDm variant is
+    // deferred until the intercom spec is finalised.
+    let envelope = Submission {
+        id: Uuid::new_v4(),
+        op: Op::UserTurn {
+            items: vec![sera_types::content_block::ContentBlock::Text {
+                text: format!("intercom_dm:{}:{}", body.from, body.to),
+            }],
+            cwd: None,
+            approval_policy: Some(body.to.clone()),
+            sandbox_policy: None,
+            model_override: None,
+            effort: None,
+            final_output_schema: Some(body.payload.clone()),
+        },
+        trace: W3cTraceContext::default(),
+        change_artifact: None,
+    };
+    if let Err(e) = state
+        .session_store
+        .append_envelope(&body.from, &envelope)
+        .await
+    {
+        tracing::warn!(error = %e, from = %body.from, to = %body.to, "session_store.append_envelope failed for intercom dm; continuing");
+    }
+
     tracing::debug!(from = %body.from, to = %body.to, "intercom dm authorized");
     let centrifugo = state
         .centrifugo

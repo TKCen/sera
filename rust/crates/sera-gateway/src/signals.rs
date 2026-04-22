@@ -18,11 +18,11 @@
 use std::sync::Arc;
 
 use axum::{
+    Json,
     body::Body,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Json,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -184,7 +184,7 @@ pub async fn push_signals_handler<S: SignalAppState>(
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use axum::{routing::post, Router};
+    use axum::{Router, routing::post};
     use rusqlite::Connection;
     use sera_db::signals::{SqliteSignalStore, StoredSignal};
     use sera_types::capability::AgentCapability;
@@ -275,7 +275,9 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let out: SignalPushResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(out.accepted, 1);
         assert_eq!(out.skipped, 0);
@@ -327,7 +329,9 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let out: SignalPushResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(out.accepted, 3);
         assert_eq!(out.failed, 0);
@@ -366,7 +370,9 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let out: SignalPushResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(out.accepted, 0);
         assert_eq!(out.skipped, 1);
@@ -396,7 +402,9 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let out: SignalPushResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(out.accepted, 1);
         assert_eq!(out.skipped, 0);
@@ -433,7 +441,9 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let out: SignalPushResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(out.accepted, 2);
         assert_eq!(out.failed, 1);
@@ -497,7 +507,9 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let out: SignalPushResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(out.accepted, 0);
         assert_eq!(out.failed, 0);
@@ -527,7 +539,9 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let out: SignalPushResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(out.accepted, 2);
     }

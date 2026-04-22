@@ -107,6 +107,21 @@ pub trait SessionStore: Send + Sync {
 
     /// Replay every submission for `session_id` in the order it was appended.
     async fn replay(&self, session_id: &str) -> Result<Vec<Submission>, SessionStoreError>;
+
+    /// Append an envelope with no emissions yet. Used by agent-facing routes
+    /// (sera-r1g8) that emit the inbound envelope before dispatching to the
+    /// underlying service.
+    async fn append_envelope(
+        &self,
+        session_id: &str,
+        envelope: &Submission,
+    ) -> Result<SubmissionRef, SessionStoreError> {
+        let bundle = StoredSubmission {
+            submission: envelope.clone(),
+            emissions: Vec::new(),
+        };
+        self.append_submission(session_id, &bundle).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +435,104 @@ impl SessionStore for SqliteGitSessionStore {
         })
         .await
         .map_err(|e| SessionStoreError::Io(std::io::Error::other(e.to_string())))?
+    }
+}
+
+// ---------------------------------------------------------------------------
+// InMemorySessionStore
+// ---------------------------------------------------------------------------
+
+/// In-memory [`SessionStore`] used by the default binary boot path and by
+/// every gateway test that does not exercise shadow-git persistence. Stores
+/// appended bundles per session in a tokio `Mutex<Vec>`; synthesises a stable
+/// 40-hex commit string per append so [`SubmissionRef`] consumers never see
+/// an ambiguous short SHA.
+#[derive(Default, Clone)]
+pub struct InMemorySessionStore {
+    inner: Arc<Mutex<std::collections::HashMap<String, Vec<StoredSubmission>>>>,
+}
+
+impl InMemorySessionStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return every stored bundle for `session_id` in append order.
+    pub async fn all_for(&self, session_id: &str) -> Vec<StoredSubmission> {
+        self.inner
+            .lock()
+            .await
+            .get(session_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Number of bundles stored for `session_id`.
+    pub async fn len_for(&self, session_id: &str) -> usize {
+        self.inner
+            .lock()
+            .await
+            .get(session_id)
+            .map(|v| v.len())
+            .unwrap_or(0)
+    }
+}
+
+fn synth_commit(session_id: &str, index: u64) -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let hasher_state = std::collections::hash_map::RandomState::new();
+    let mut h = hasher_state.build_hasher();
+    Hasher::write(&mut h, session_id.as_bytes());
+    Hasher::write_u64(&mut h, index);
+    let lo = h.finish();
+    let mut h2 = hasher_state.build_hasher();
+    Hasher::write_u64(&mut h2, lo);
+    Hasher::write(&mut h2, session_id.as_bytes());
+    let hi = h2.finish();
+    // 40-hex-char synthetic SHA — not a real git object id, only for identity.
+    format!("{hi:016x}{lo:016x}{index:08x}")
+}
+
+#[async_trait]
+impl SessionStore for InMemorySessionStore {
+    async fn append_submission(
+        &self,
+        session_id: &str,
+        bundle: &StoredSubmission,
+    ) -> Result<SubmissionRef, SessionStoreError> {
+        let mut inner = self.inner.lock().await;
+        let entry = inner.entry(session_id.to_string()).or_default();
+        let index = entry.len() as u64;
+        entry.push(bundle.clone());
+        Ok(SubmissionRef {
+            session_id: session_id.to_string(),
+            commit: synth_commit(session_id, index),
+            index,
+        })
+    }
+
+    async fn head(&self, session_id: &str) -> Result<Option<SubmissionRef>, SessionStoreError> {
+        let inner = self.inner.lock().await;
+        Ok(inner.get(session_id).and_then(|v| {
+            if v.is_empty() {
+                None
+            } else {
+                let index = (v.len() - 1) as u64;
+                Some(SubmissionRef {
+                    session_id: session_id.to_string(),
+                    commit: synth_commit(session_id, index),
+                    index,
+                })
+            }
+        }))
+    }
+
+    async fn replay(&self, session_id: &str) -> Result<Vec<Submission>, SessionStoreError> {
+        let inner = self.inner.lock().await;
+        Ok(inner
+            .get(session_id)
+            .map(|v| v.iter().map(|b| b.submission.clone()).collect())
+            .unwrap_or_default())
     }
 }
 

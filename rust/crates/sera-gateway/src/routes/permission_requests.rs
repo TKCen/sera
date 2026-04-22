@@ -7,6 +7,10 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use sera_gateway::envelope::{Op, Submission, W3cTraceContext};
+use sera_gateway::session_store::SessionStore as _;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -78,6 +82,45 @@ pub async fn create_request(
     let now = time::OffsetDateTime::now_utc();
     let agent_id = uuid::Uuid::parse_str(&body.agent_instance_id)
         .map_err(|_| AppError::Internal(anyhow::anyhow!("Invalid agent instance ID format")))?;
+
+    // Emit envelope before the DB write — permission requests are observable
+    // mutations (an agent requesting access to a resource).
+    //
+    // Spec shape decision (bead sera-r1g8): Op::ApprovalResponse is outbound
+    // (operator → gateway). For an inbound permission *request* we use
+    // Op::UserTurn with the resource path as the text item, matching the
+    // "agent submitting a request" semantic. The HITL round-trip will produce
+    // a follow-up Op::ApprovalResponse when the operator responds.
+    let envelope = Submission {
+        id: Uuid::new_v4(),
+        op: Op::UserTurn {
+            items: vec![sera_types::content_block::ContentBlock::Text {
+                text: format!(
+                    "permission_request:{}:{}:{}",
+                    body.permission_type, body.resource, body.access_level
+                ),
+            }],
+            cwd: None,
+            approval_policy: Some(body.agent_instance_id.clone()),
+            sandbox_policy: None,
+            model_override: None,
+            effort: None,
+            final_output_schema: None,
+        },
+        trace: W3cTraceContext::default(),
+        change_artifact: None,
+    };
+    if let Err(e) = state
+        .session_store
+        .append_envelope(&body.agent_instance_id, &envelope)
+        .await
+    {
+        tracing::warn!(
+            error = %e,
+            agent_instance_id = %body.agent_instance_id,
+            "session_store.append_envelope failed for create_request; continuing"
+        );
+    }
 
     sqlx::query(
         "INSERT INTO permission_requests (id, agent_instance_id, permission_type, resource, access_level, justification, status, created_at)

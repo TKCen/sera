@@ -4,8 +4,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::{mpsc, Mutex};
-use tokio_stream::{wrappers::ReceiverStream, Stream};
+use tokio::sync::{Mutex, mpsc};
+use tokio_stream::{Stream, wrappers::ReceiverStream};
 
 use crate::envelope::{Event, Submission};
 

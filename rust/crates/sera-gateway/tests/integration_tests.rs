@@ -6,10 +6,7 @@
 //! - Protected routes accept valid API key auth
 //! - Error responses are properly formatted JSON
 
-use axum::{
-    body::Body,
-    http::Request,
-};
+use axum::{body::Body, http::Request};
 use serde_json::Value;
 
 // Test utilities for common patterns

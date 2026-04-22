@@ -398,7 +398,10 @@ mod tests {
             path.starts_with(&dir_path),
             "expected XDG_RUNTIME_DIR path, got {path}"
         );
-        assert!(path.ends_with("sera-admin.sock"), "unexpected suffix: {path}");
+        assert!(
+            path.ends_with("sera-admin.sock"),
+            "unexpected suffix: {path}"
+        );
 
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     }

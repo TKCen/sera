@@ -18,15 +18,15 @@
 use std::sync::Arc;
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    Json,
 };
 use serde::Deserialize;
 
 use sera_types::circle::{PartyConfig, PartyOutcome};
 use sera_workflow::coordination::{
-    CoordinationError, CoordinationPolicy, ConcurrencyPolicy, Coordinator, FirstSuccess,
+    ConcurrencyPolicy, CoordinationError, CoordinationPolicy, Coordinator, FirstSuccess,
     PartyMember,
 };
 
@@ -63,16 +63,10 @@ pub trait PartyAppState: Send + Sync + 'static {
     /// member collection so gateway-side registration, auth, and LLM wiring
     /// stay out of the handler. Returning `None` signals that the circle
     /// does not exist (handler replies 404).
-    fn resolve_party_members(
-        &self,
-        circle_id: &str,
-    ) -> Option<Vec<Arc<dyn PartyMember>>>;
+    fn resolve_party_members(&self, circle_id: &str) -> Option<Vec<Arc<dyn PartyMember>>>;
 }
 
-fn check_party_auth(
-    api_key: &Option<String>,
-    headers: &HeaderMap,
-) -> Result<(), StatusCode> {
+fn check_party_auth(api_key: &Option<String>, headers: &HeaderMap) -> Result<(), StatusCode> {
     let expected = match api_key {
         None => return Ok(()),
         Some(k) => k,
@@ -143,10 +137,10 @@ where
 mod tests {
     use super::*;
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode},
         routing::post,
-        Router,
     };
     use sera_types::circle::BlackboardEntry;
     use std::collections::HashMap;
@@ -188,10 +182,7 @@ mod tests {
         fn api_key(&self) -> &Option<String> {
             &self.api_key
         }
-        fn resolve_party_members(
-            &self,
-            circle_id: &str,
-        ) -> Option<Vec<Arc<dyn PartyMember>>> {
+        fn resolve_party_members(&self, circle_id: &str) -> Option<Vec<Arc<dyn PartyMember>>> {
             self.circles.get(circle_id).cloned()
         }
     }

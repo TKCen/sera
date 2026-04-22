@@ -18,6 +18,7 @@ use sera_gateway::envelope::GenerationMarker;
 use sera_gateway::evolve_token::{EvolveTokenSigner, ProposalUsageStore};
 use sera_gateway::harness_dispatch::HarnessRegistry;
 use sera_gateway::kill_switch::KillSwitch;
+use sera_gateway::session_store::SessionStore;
 use sera_gateway::transcript_persist::TranscriptPersistence;
 use crate::services::schedule_service::ScheduleService;
 
@@ -73,4 +74,10 @@ pub struct AppState {
     /// layer. Backed by Postgres in production (restart-safe) and by the
     /// in-memory store in tests.
     pub proposal_usage: Arc<dyn ProposalUsageStore>,
+    /// Submission envelope store — every agent-facing route appends a
+    /// [`sera_gateway::envelope::Submission`] here before calling the
+    /// underlying service. Backed by [`sera_gateway::session_store::InMemorySessionStore`]
+    /// in the default boot path; swapped for the PartTable+git implementation
+    /// when `sera-r9ed` lands.
+    pub session_store: Arc<dyn SessionStore>,
 }

@@ -89,7 +89,10 @@ pub enum RestartPolicy {
     /// Restart on crash up to `max_attempts` times, with `backoff_secs`
     /// between attempts (flat delay for Phase M; SPEC §18.11 open question
     /// covers possible exponential backoff in Phase 2).
-    OnCrash { max_attempts: u32, backoff_secs: u64 },
+    OnCrash {
+        max_attempts: u32,
+        backoff_secs: u64,
+    },
     /// Always restart, even on clean exit, with `backoff_secs` between
     /// attempts.
     Always { backoff_secs: u64 },
@@ -561,7 +564,10 @@ mod tests {
             workspace_root: std::env::temp_dir(),
             env: HashMap::new(),
         };
-        let err = mgr.spawn(req).await.expect_err("spawn of missing binary must fail");
+        let err = mgr
+            .spawn(req)
+            .await
+            .expect_err("spawn of missing binary must fail");
         match err {
             ProcessError::SpawnFailed(_) => {}
             other => panic!("expected SpawnFailed, got {:?}", other),
@@ -580,10 +586,22 @@ mod tests {
         let p = sample_process(Some(4242));
         let rendered = log_spawn_redacted(&p);
 
-        assert!(rendered.contains("command=rust-analyzer"), "missing command: {rendered}");
-        assert!(rendered.contains("args_len=2"), "missing args_len: {rendered}");
-        assert!(!rendered.contains("SECRET_TOKEN_abc123"), "leaked secret arg: {rendered}");
-        assert!(!rendered.contains("--foo"), "leaked non-secret arg: {rendered}");
+        assert!(
+            rendered.contains("command=rust-analyzer"),
+            "missing command: {rendered}"
+        );
+        assert!(
+            rendered.contains("args_len=2"),
+            "missing args_len: {rendered}"
+        );
+        assert!(
+            !rendered.contains("SECRET_TOKEN_abc123"),
+            "leaked secret arg: {rendered}"
+        );
+        assert!(
+            !rendered.contains("--foo"),
+            "leaked non-secret arg: {rendered}"
+        );
     }
 }
 
@@ -605,9 +623,10 @@ impl From<ProcessError> for sera_errors::SeraError {
             ProcessError::AlreadyExists => {
                 sera_errors::SeraError::new(SeraErrorCode::AlreadyExists, "process already exists")
             }
-            ProcessError::StoreFailure(msg) => {
-                sera_errors::SeraError::new(SeraErrorCode::Internal, format!("store failure: {msg}"))
-            }
+            ProcessError::StoreFailure(msg) => sera_errors::SeraError::new(
+                SeraErrorCode::Internal,
+                format!("store failure: {msg}"),
+            ),
             ProcessError::ReconciliationFailed { pid, reason } => sera_errors::SeraError::new(
                 SeraErrorCode::Internal,
                 format!("reconciliation failed for pid {pid}: {reason}"),

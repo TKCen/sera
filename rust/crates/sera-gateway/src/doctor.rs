@@ -33,7 +33,10 @@ impl CheckResult {
 
     pub fn detail(&self) -> &str {
         match self {
-            CheckResult::Pass(d) | CheckResult::Warn(d) | CheckResult::Fail(d) | CheckResult::Skip(d) => d,
+            CheckResult::Pass(d)
+            | CheckResult::Warn(d)
+            | CheckResult::Fail(d)
+            | CheckResult::Skip(d) => d,
         }
     }
 
@@ -69,10 +72,7 @@ impl Check for ConfigLoadCheck {
 
     fn run(&self) -> CheckResult {
         if !self.config_path.exists() {
-            return CheckResult::Fail(format!(
-                "file not found: {}",
-                self.config_path.display()
-            ));
+            return CheckResult::Fail(format!("file not found: {}", self.config_path.display()));
         }
 
         let content = match std::fs::read_to_string(&self.config_path) {
@@ -84,8 +84,11 @@ impl Check for ConfigLoadCheck {
             Ok(set) => CheckResult::Pass(format!(
                 "loaded from {} ({} manifests)",
                 self.config_path.display(),
-                set.instances.len() + set.providers.len() + set.agents.len()
-                    + set.connectors.len() + set.hook_chains.len()
+                set.instances.len()
+                    + set.providers.len()
+                    + set.agents.len()
+                    + set.connectors.len()
+                    + set.hook_chains.len()
             )),
             Err(e) => CheckResult::Fail(format!("parse error: {e}")),
         }
@@ -147,7 +150,9 @@ impl Check for DbReachableCheck {
 
             let start = Instant::now();
             match std::net::TcpStream::connect_timeout(
-                &addr.parse().unwrap_or_else(|_| "127.0.0.1:5432".parse().unwrap()),
+                &addr
+                    .parse()
+                    .unwrap_or_else(|_| "127.0.0.1:5432".parse().unwrap()),
                 std::time::Duration::from_secs(3),
             ) {
                 Ok(_) => CheckResult::Pass(format!(
@@ -164,11 +169,7 @@ impl Check for DbReachableCheck {
 
 /// The env vars the doctor checks. These are the production secrets defined in
 /// `sera_config::core_config::DEV_SECRET_VALUES`.
-const REQUIRED_ENV_VARS: &[&str] = &[
-    "SERA_API_KEY",
-    "SERA_TOKEN_SECRET",
-    "SERA_MASTER_KEY",
-];
+const REQUIRED_ENV_VARS: &[&str] = &["SERA_API_KEY", "SERA_TOKEN_SECRET", "SERA_MASTER_KEY"];
 
 /// Dev-default values that are known-unsafe for production.
 const DEV_DEFAULTS: &[&str] = &[
@@ -212,7 +213,10 @@ impl Check for EnvSecretsCheck {
                 dev_defaults.join(", ")
             ));
         }
-        CheckResult::Pass(format!("{} required vars present and non-default", REQUIRED_ENV_VARS.len()))
+        CheckResult::Pass(format!(
+            "{} required vars present and non-default",
+            REQUIRED_ENV_VARS.len()
+        ))
     }
 }
 
@@ -227,7 +231,9 @@ impl Check for DockerCheck {
 
     fn run(&self) -> CheckResult {
         // First check whether `docker` is on PATH
-        let which = Command::new("which").arg("docker").output()
+        let which = Command::new("which")
+            .arg("docker")
+            .output()
             .or_else(|_| Command::new("where").arg("docker").output());
 
         if let Err(e) = &which {
@@ -440,7 +446,11 @@ impl Check for LlmProviderCheck {
                 ok.join(", ")
             ))
         } else {
-            CheckResult::Pass(format!("{} providers reachable: {}", ok.len(), ok.join(", ")))
+            CheckResult::Pass(format!(
+                "{} providers reachable: {}",
+                ok.len(),
+                ok.join(", ")
+            ))
         }
     }
 }
@@ -453,10 +463,8 @@ pub struct RunnerResult {
 }
 
 pub fn run_checks(checks: &[Box<dyn Check>]) -> RunnerResult {
-    let rows: Vec<(&'static str, CheckResult)> = checks
-        .iter()
-        .map(|c| (c.name(), c.run()))
-        .collect();
+    let rows: Vec<(&'static str, CheckResult)> =
+        checks.iter().map(|c| (c.name(), c.run())).collect();
     let any_fail = rows.iter().any(|(_, r)| r.is_fail());
     RunnerResult { rows, any_fail }
 }
@@ -468,7 +476,8 @@ pub fn print_table(result: &RunnerResult) {
 
     println!(
         "{:<name_w$} {:<status_w$} DETAIL",
-        "CHECK", "STATUS",
+        "CHECK",
+        "STATUS",
         name_w = name_w,
         status_w = status_w
     );
@@ -497,7 +506,10 @@ pub fn print_json(result: &RunnerResult) {
         })
         .collect();
 
-    println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&rows).unwrap_or_default()
+    );
 }
 
 // ── Build the default check list from a config path ─────────────────────────
@@ -529,7 +541,9 @@ pub fn build_checks(config_path: &Path) -> Vec<Box<dyn Check>> {
         .join("capability-policies");
 
     let checks: Vec<Box<dyn Check>> = vec![
-        Box::new(ConfigLoadCheck { config_path: config_path.to_path_buf() }),
+        Box::new(ConfigLoadCheck {
+            config_path: config_path.to_path_buf(),
+        }),
         Box::new(DbReachableCheck { database_url }),
         Box::new(EnvSecretsCheck),
         Box::new(DockerCheck),
@@ -574,16 +588,24 @@ spec:
 "#
         )
         .unwrap();
-        let check = ConfigLoadCheck { config_path: f.path().to_path_buf() };
+        let check = ConfigLoadCheck {
+            config_path: f.path().to_path_buf(),
+        };
         let result = check.run();
-        assert!(!result.is_fail(), "expected Pass or Warn, got: {:?}", result.label());
+        assert!(
+            !result.is_fail(),
+            "expected Pass or Warn, got: {:?}",
+            result.label()
+        );
     }
 
     #[test]
     fn config_load_invalid_yaml() {
         let mut f = NamedTempFile::new().unwrap();
         writeln!(f, "{{{{ not yaml }}}}").unwrap();
-        let check = ConfigLoadCheck { config_path: f.path().to_path_buf() };
+        let check = ConfigLoadCheck {
+            config_path: f.path().to_path_buf(),
+        };
         // Invalid YAML that can't be parsed as manifests → Fail
         // (may pass serde_yaml but fail manifest parsing — either is acceptable)
         let result = check.run();
@@ -604,9 +626,15 @@ spec:
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let url = format!("sqlite:{}", db_path.display());
-        let check = DbReachableCheck { database_url: Some(url) };
+        let check = DbReachableCheck {
+            database_url: Some(url),
+        };
         let result = check.run();
-        assert!(matches!(result, CheckResult::Pass(_)), "got: {:?}", result.label());
+        assert!(
+            matches!(result, CheckResult::Pass(_)),
+            "got: {:?}",
+            result.label()
+        );
     }
 
     #[test]
@@ -658,9 +686,15 @@ spec:
         let mut g = std::fs::File::create(dir.path().join("sandboxed.yaml")).unwrap();
         writeln!(g, "kind: CapabilityPolicy\nname: sandboxed").unwrap();
 
-        let check = CapabilityPoliciesCheck { policies_dir: dir.path().to_path_buf() };
+        let check = CapabilityPoliciesCheck {
+            policies_dir: dir.path().to_path_buf(),
+        };
         let result = check.run();
-        assert!(matches!(result, CheckResult::Pass(_)), "got: {:?}", result.detail());
+        assert!(
+            matches!(result, CheckResult::Pass(_)),
+            "got: {:?}",
+            result.detail()
+        );
     }
 
     #[test]
@@ -669,7 +703,9 @@ spec:
         let mut f = std::fs::File::create(dir.path().join("bad.yaml")).unwrap();
         writeln!(f, "key: [unclosed bracket").unwrap();
 
-        let check = CapabilityPoliciesCheck { policies_dir: dir.path().to_path_buf() };
+        let check = CapabilityPoliciesCheck {
+            policies_dir: dir.path().to_path_buf(),
+        };
         let result = check.run();
         assert!(matches!(result, CheckResult::Fail(_)));
     }
@@ -690,7 +726,9 @@ spec:
 
     #[test]
     fn llm_provider_no_providers() {
-        let check = LlmProviderCheck { provider_urls: vec![] };
+        let check = LlmProviderCheck {
+            provider_urls: vec![],
+        };
         assert!(matches!(check.run(), CheckResult::Skip(_)));
     }
 
@@ -709,20 +747,25 @@ spec:
     fn runner_collects_all_results() {
         struct AlwaysPass;
         impl Check for AlwaysPass {
-            fn name(&self) -> &'static str { "test.pass" }
-            fn run(&self) -> CheckResult { CheckResult::Pass("ok".to_string()) }
+            fn name(&self) -> &'static str {
+                "test.pass"
+            }
+            fn run(&self) -> CheckResult {
+                CheckResult::Pass("ok".to_string())
+            }
         }
 
         struct AlwaysFail;
         impl Check for AlwaysFail {
-            fn name(&self) -> &'static str { "test.fail" }
-            fn run(&self) -> CheckResult { CheckResult::Fail("broken".to_string()) }
+            fn name(&self) -> &'static str {
+                "test.fail"
+            }
+            fn run(&self) -> CheckResult {
+                CheckResult::Fail("broken".to_string())
+            }
         }
 
-        let checks: Vec<Box<dyn Check>> = vec![
-            Box::new(AlwaysPass),
-            Box::new(AlwaysFail),
-        ];
+        let checks: Vec<Box<dyn Check>> = vec![Box::new(AlwaysPass), Box::new(AlwaysFail)];
 
         let result = run_checks(&checks);
         assert_eq!(result.rows.len(), 2);
@@ -733,8 +776,12 @@ spec:
     fn runner_no_fail() {
         struct AlwaysPass;
         impl Check for AlwaysPass {
-            fn name(&self) -> &'static str { "test.pass" }
-            fn run(&self) -> CheckResult { CheckResult::Pass("ok".to_string()) }
+            fn name(&self) -> &'static str {
+                "test.pass"
+            }
+            fn run(&self) -> CheckResult {
+                CheckResult::Pass("ok".to_string())
+            }
         }
 
         let checks: Vec<Box<dyn Check>> = vec![Box::new(AlwaysPass)];

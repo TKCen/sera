@@ -250,3 +250,252 @@ fn rest_chat_handler_wraps_as_submission() {
     assert!(json.contains("Hello"));
     assert!(json.contains("user_turn"));
 }
+
+// ── 9. SessionStore unit tests ──────────────────────────────────────────────
+//
+// These tests verify that InMemorySessionStore correctly records Submission
+// envelopes in the order they are appended, and that SubmissionRef correlates
+// back to the envelope id. They form the contract that route wrappers rely on.
+
+use sera_gateway::session_store::{InMemorySessionStore, SessionStore};
+
+#[tokio::test]
+async fn session_store_chat_envelope_recorded() {
+    // Simulate what chat route wrapper does: build a UserTurn Submission and
+    // append it before dispatching to the harness.
+    let store = InMemorySessionStore::new();
+
+    let sub = Submission {
+        id: Uuid::new_v4(),
+        op: Op::UserTurn {
+            items: vec![sera_types::ContentBlock::Text {
+                text: "hello agent".to_string(),
+            }],
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            model_override: None,
+            effort: None,
+            final_output_schema: None,
+        },
+        trace: W3cTraceContext::default(),
+        change_artifact: None,
+    };
+    let sub_id = sub.id;
+
+    let session = "session-chat-1";
+    let r = store.append_envelope(session, &sub).await.unwrap();
+    assert_eq!(r.session_id, session);
+    assert_eq!(r.index, 0);
+
+    assert_eq!(store.len_for(session).await, 1);
+
+    let all = store.all_for(session).await;
+    assert_eq!(all[0].submission.id, sub_id);
+    match &all[0].submission.op {
+        Op::UserTurn { items, .. } => {
+            assert_eq!(items.len(), 1);
+            if let sera_types::ContentBlock::Text { text } = &items[0] {
+                assert_eq!(text, "hello agent");
+            } else {
+                panic!("expected Text content block");
+            }
+        }
+        other => panic!("expected UserTurn, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn session_store_task_enqueue_envelope_recorded() {
+    // Simulate what the enqueue_task route wrapper does.
+    let store = InMemorySessionStore::new();
+
+    let sub = Submission {
+        id: Uuid::new_v4(),
+        op: Op::UserTurn {
+            items: vec![sera_types::ContentBlock::Text {
+                text: "summarise document".to_string(),
+            }],
+            cwd: None,
+            approval_policy: Some("agent-xyz".to_string()),
+            sandbox_policy: None,
+            model_override: None,
+            effort: None,
+            final_output_schema: None,
+        },
+        trace: W3cTraceContext::default(),
+        change_artifact: None,
+    };
+    let sub_id = sub.id;
+    let session = "agent-xyz";
+    let r = store.append_envelope(session, &sub).await.unwrap();
+    assert_eq!(r.session_id, session);
+
+    let all = store.all_for(session).await;
+    assert_eq!(all[0].submission.id, sub_id);
+    // approval_policy encodes the agent_id for correlation
+    match &all[0].submission.op {
+        Op::UserTurn {
+            approval_policy, ..
+        } => {
+            assert_eq!(approval_policy.as_deref(), Some("agent-xyz"));
+        }
+        other => panic!("expected UserTurn, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn session_store_permission_request_envelope_recorded() {
+    // Simulate what create_request route wrapper does.
+    let store = InMemorySessionStore::new();
+
+    let sub = Submission {
+        id: Uuid::new_v4(),
+        op: Op::UserTurn {
+            items: vec![sera_types::ContentBlock::Text {
+                text: "permission_request:filesystem:/workspace/data:read".to_string(),
+            }],
+            cwd: None,
+            approval_policy: Some("instance-abc".to_string()),
+            sandbox_policy: None,
+            model_override: None,
+            effort: None,
+            final_output_schema: None,
+        },
+        trace: W3cTraceContext::default(),
+        change_artifact: None,
+    };
+    let sub_id = sub.id;
+    let session = "instance-abc";
+    let r = store.append_envelope(session, &sub).await.unwrap();
+    assert_eq!(r.session_id, session);
+    assert_eq!(store.len_for(session).await, 1);
+    let all = store.all_for(session).await;
+    assert_eq!(all[0].submission.id, sub_id);
+}
+
+#[tokio::test]
+async fn session_store_intercom_dm_envelope_recorded() {
+    // Simulate what intercom::dm route wrapper does.
+    let store = InMemorySessionStore::new();
+
+    let payload = serde_json::json!({"text": "hey, can you help?"});
+    let sub = Submission {
+        id: Uuid::new_v4(),
+        op: Op::UserTurn {
+            items: vec![sera_types::ContentBlock::Text {
+                text: "intercom_dm:agent-a:agent-b".to_string(),
+            }],
+            cwd: None,
+            approval_policy: Some("agent-b".to_string()),
+            sandbox_policy: None,
+            model_override: None,
+            effort: None,
+            final_output_schema: Some(payload.clone()),
+        },
+        trace: W3cTraceContext::default(),
+        change_artifact: None,
+    };
+    let sub_id = sub.id;
+    let session = "agent-a";
+    let r = store.append_envelope(session, &sub).await.unwrap();
+    assert_eq!(r.session_id, session);
+
+    let all = store.all_for(session).await;
+    assert_eq!(all[0].submission.id, sub_id);
+    match &all[0].submission.op {
+        Op::UserTurn {
+            final_output_schema,
+            ..
+        } => {
+            assert_eq!(final_output_schema.as_ref().unwrap(), &payload);
+        }
+        other => panic!("expected UserTurn, got {:?}", other),
+    }
+}
+
+// ── 10. Integration: sequence of route envelopes with parent refs ───────────
+//
+// Fires a sequence of Submission envelopes (mimicking chat → task → result)
+// and verifies the store sees them in order with correct ids.
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_store_sequence_preserves_order_and_ids() {
+    let store = InMemorySessionStore::new();
+
+    let chat_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let result_id = Uuid::new_v4();
+
+    // 1. Chat turn submission
+    let chat_sub = Submission {
+        id: chat_id,
+        op: Op::UserTurn {
+            items: vec![sera_types::ContentBlock::Text {
+                text: "start a research task".to_string(),
+            }],
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            model_override: None,
+            effort: None,
+            final_output_schema: None,
+        },
+        trace: W3cTraceContext::default(),
+        change_artifact: None,
+    };
+
+    // 2. Task enqueue submission
+    let task_sub = Submission {
+        id: task_id,
+        op: Op::UserTurn {
+            items: vec![sera_types::ContentBlock::Text {
+                text: "research task".to_string(),
+            }],
+            cwd: None,
+            approval_policy: Some("agent-research".to_string()),
+            sandbox_policy: None,
+            model_override: None,
+            effort: None,
+            final_output_schema: None,
+        },
+        trace: W3cTraceContext::default(),
+        change_artifact: None,
+    };
+
+    // 3. Task result submission
+    let result_sub = Submission {
+        id: result_id,
+        op: Op::UserTurn {
+            items: vec![sera_types::ContentBlock::Text {
+                text: format!("task_result:{task_id}"),
+            }],
+            cwd: None,
+            approval_policy: Some("agent-research".to_string()),
+            sandbox_policy: None,
+            model_override: None,
+            effort: None,
+            final_output_schema: Some(serde_json::json!({"summary": "done"})),
+        },
+        trace: W3cTraceContext::default(),
+        change_artifact: None,
+    };
+
+    // Append in sequence — simulates a complete agent workflow
+    let session = "agent-research";
+    let r1 = store.append_envelope(session, &chat_sub).await.unwrap();
+    let r2 = store.append_envelope(session, &task_sub).await.unwrap();
+    let r3 = store.append_envelope(session, &result_sub).await.unwrap();
+
+    // Refs carry the session id + monotonically increasing index.
+    assert_eq!((r1.session_id.as_str(), r1.index), (session, 0));
+    assert_eq!((r2.session_id.as_str(), r2.index), (session, 1));
+    assert_eq!((r3.session_id.as_str(), r3.index), (session, 2));
+
+    // Store must have exactly 3 entries in insertion order
+    let all = store.all_for(session).await;
+    assert_eq!(all.len(), 3);
+    assert_eq!(all[0].submission.id, chat_id, "chat must be first");
+    assert_eq!(all[1].submission.id, task_id, "task enqueue must be second");
+    assert_eq!(all[2].submission.id, result_id, "task result must be third");
+}

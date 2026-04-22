@@ -191,15 +191,14 @@ impl SessionPersist for SqlxSessionPersist {
     }
 
     async fn load(&self, session_key: &str) -> Result<Option<PersistedSession>, sqlx::Error> {
-        let row: Option<(String, serde_json::Value, time::OffsetDateTime)> =
-            sqlx::query_as(
-                "SELECT session_key, snapshot_data, saved_at
+        let row: Option<(String, serde_json::Value, time::OffsetDateTime)> = sqlx::query_as(
+            "SELECT session_key, snapshot_data, saved_at
                  FROM session_snapshots
                  WHERE session_key = $1",
-            )
-            .bind(session_key)
-            .fetch_optional(&self.pool)
-            .await?;
+        )
+        .bind(session_key)
+        .fetch_optional(&self.pool)
+        .await?;
 
         Ok(row.map(|(session_key, data, saved_at)| PersistedSession {
             session_key,

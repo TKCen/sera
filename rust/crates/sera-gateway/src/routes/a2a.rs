@@ -7,19 +7,17 @@
 #![allow(dead_code)]
 
 use axum::{
+    Json,
     extract::State,
     http::{HeaderMap, StatusCode},
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use sera_a2a::{
-    A2aClient, A2aRequest, A2aResponse, Capabilities, Task,
-};
 #[cfg(test)]
 use sera_a2a::InProcRouter;
+use sera_a2a::{A2aClient, A2aRequest, A2aResponse, Capabilities, Task};
 
 // ---------------------------------------------------------------------------
 // Peer registry (in-process store, injected into AppState)
@@ -181,10 +179,10 @@ pub trait A2aAppState: Send + Sync + 'static {
 mod tests {
     use super::*;
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode},
         routing::{get, post},
-        Router,
     };
     use sera_a2a::{A2aRequest, A2aResponse, A2aRouter, LoopbackTransport};
     use tower::ServiceExt;

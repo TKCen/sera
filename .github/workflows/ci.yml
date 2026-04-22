@@ -48,3 +48,54 @@ jobs:
 
       - name: Run E2E smoke
         run: ops/e2e/smoke.sh
+
+  validate-sdk-py:
+    name: ci-validate-sdk-py
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            sdk:
+              - 'sdk/**'
+              - 'rust/proto/plugin/**'
+              - '.github/workflows/ci.yml'
+
+      - if: steps.changes.outputs.sdk == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - if: steps.changes.outputs.sdk == 'true'
+        name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install hatch
+
+      - if: steps.changes.outputs.sdk == 'true'
+        name: Install SDK (editable + dev)
+        working-directory: sdk/python/sera-plugin-sdk
+        run: python -m pip install -e '.[dev]'
+
+      - if: steps.changes.outputs.sdk == 'true'
+        name: Ruff
+        working-directory: sdk/python/sera-plugin-sdk
+        run: ruff check src tests
+
+      - if: steps.changes.outputs.sdk == 'true'
+        name: Mypy
+        working-directory: sdk/python/sera-plugin-sdk
+        run: mypy src
+
+      - if: steps.changes.outputs.sdk == 'true'
+        name: Pytest
+        working-directory: sdk/python/sera-plugin-sdk
+        run: pytest -q
+
+      - if: steps.changes.outputs.sdk == 'true'
+        name: Build wheel
+        working-directory: sdk/python/sera-plugin-sdk
+        run: hatch build

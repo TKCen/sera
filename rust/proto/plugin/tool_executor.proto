@@ -1,0 +1,48 @@
+// SERA ToolExecutor plugin capability.
+//
+// See SPEC-plugins §3 (S7 PLC example) and SPEC-tools. ToolExecutor plugins
+// register their tool manifest and receive dispatched ToolCalls from the
+// gateway. arguments_json / content_json carry structured payloads; each
+// tool's input_schema_json is the contract the gateway validates against
+// before dispatch.
+
+syntax = "proto3";
+
+package sera.plugin.v1;
+
+import "google/protobuf/empty.proto";
+
+service ToolExecutor {
+  rpc ListTools(google.protobuf.Empty) returns (ListToolsResponse);
+  rpc ExecuteTool(ToolCall) returns (ToolResult);
+}
+
+enum ToolRiskLevel {
+  TOOL_RISK_LEVEL_UNSPECIFIED = 0;
+  TOOL_RISK_LEVEL_READ = 1;
+  TOOL_RISK_LEVEL_WRITE = 2;
+  TOOL_RISK_LEVEL_EXEC = 3;
+}
+
+message ToolDefinition {
+  string name = 1;
+  string description = 2;
+  string input_schema_json = 3; // JSON Schema for tool arguments
+  ToolRiskLevel risk_level = 4;
+}
+
+message ListToolsResponse {
+  repeated ToolDefinition tools = 1;
+}
+
+message ToolCall {
+  string tool_name = 1;
+  string arguments_json = 2; // JSON object matching tool.input_schema_json
+  string call_id = 3;
+}
+
+message ToolResult {
+  string call_id = 1;
+  string content_json = 2; // tool-defined result payload as JSON
+  bool is_error = 3;
+}

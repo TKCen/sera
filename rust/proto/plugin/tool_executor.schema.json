@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sera.dev/schemas/plugin/tool_executor.schema.json",
+  "title": "sera.plugin.v1.ToolExecutor JSON-RPC envelopes",
+  "description": "Hand-maintained mirror of tool_executor.proto for stdio JSON-RPC transport. Proto is canonical (SPEC-plugins §5.1).",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/ListToolsRequestEnvelope" },
+    { "$ref": "#/$defs/ListToolsResponseEnvelope" },
+    { "$ref": "#/$defs/ExecuteToolRequestEnvelope" },
+    { "$ref": "#/$defs/ExecuteToolResponseEnvelope" }
+  ],
+  "$defs": {
+    "JsonRpcId": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "integer" },
+        { "type": "null" }
+      ]
+    },
+    "ToolRiskLevel": {
+      "type": "string",
+      "enum": [
+        "TOOL_RISK_LEVEL_UNSPECIFIED",
+        "TOOL_RISK_LEVEL_READ",
+        "TOOL_RISK_LEVEL_WRITE",
+        "TOOL_RISK_LEVEL_EXEC"
+      ]
+    },
+    "ToolDefinition": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "input_schema_json": { "type": "string" },
+        "risk_level": { "$ref": "#/$defs/ToolRiskLevel" }
+      },
+      "required": ["name", "input_schema_json", "risk_level"],
+      "additionalProperties": false
+    },
+    "ListToolsResponse": {
+      "type": "object",
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ToolDefinition" }
+        }
+      },
+      "required": ["tools"],
+      "additionalProperties": false
+    },
+    "ToolCall": {
+      "type": "object",
+      "properties": {
+        "tool_name": { "type": "string" },
+        "arguments_json": { "type": "string" },
+        "call_id": { "type": "string" }
+      },
+      "required": ["tool_name", "arguments_json", "call_id"],
+      "additionalProperties": false
+    },
+    "ToolResult": {
+      "type": "object",
+      "properties": {
+        "call_id": { "type": "string" },
+        "content_json": { "type": "string" },
+        "is_error": { "type": "boolean" }
+      },
+      "required": ["call_id", "content_json", "is_error"],
+      "additionalProperties": false
+    },
+    "ListToolsRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.ToolExecutor/ListTools" },
+        "params": { "type": "object", "maxProperties": 0 }
+      },
+      "required": ["jsonrpc", "id", "method"],
+      "additionalProperties": false
+    },
+    "ListToolsResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/ListToolsResponse" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "ExecuteToolRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.ToolExecutor/ExecuteTool" },
+        "params": { "$ref": "#/$defs/ToolCall" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "ExecuteToolResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/ToolResult" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    }
+  }
+}

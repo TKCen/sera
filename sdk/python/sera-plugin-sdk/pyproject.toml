@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling>=1.22", "grpcio-tools>=1.60"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sera-plugin-sdk"
+version = "0.1.0"
+description = "SERA plugin SDK (Python) — stdio + gRPC, ABC-based capabilities"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+authors = [{ name = "SERA Contributors" }]
+keywords = ["sera", "plugin", "sdk", "grpc", "stdio"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+  "grpcio>=1.60",
+  "protobuf>=4.25",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "mypy>=1.10",
+  "ruff>=0.5",
+  "grpcio-tools>=1.60",
+]
+
+[project.urls]
+Homepage = "https://github.com/sera-project/sera"
+Issues = "https://github.com/sera-project/sera/issues"
+
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sera_plugin_sdk"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src",
+  "README.md",
+  "LICENSE",
+  "hatch_build.py",
+  "pyproject.toml",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["src/sera_plugin_sdk/_generated"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]  # line length handled by formatter where needed
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B018"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["sera_plugin_sdk"]
+mypy_path = "src"
+exclude = ["_generated/"]
+
+[[tool.mypy.overrides]]
+module = "sera_plugin_sdk._generated.*"
+ignore_errors = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "grpc.*"
+ignore_missing_imports = true

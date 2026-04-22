@@ -1,0 +1,37 @@
+// SERA SandboxProvider plugin capability.
+//
+// See SPEC-plugins §2.1. Minimal execution surface: run a command in the
+// plugin's sandbox, retrieve the combined stdout/stderr/exit, then clean up.
+
+syntax = "proto3";
+
+package sera.plugin.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+
+service SandboxProvider {
+  rpc Execute(SandboxExecRequest) returns (SandboxExecResult);
+  rpc Cleanup(SandboxId) returns (google.protobuf.Empty);
+}
+
+message SandboxId {
+  string value = 1;
+}
+
+message SandboxExecRequest {
+  string sandbox_id = 1;              // optional; empty = ephemeral
+  repeated string command = 2;
+  map<string, string> env = 3;
+  string workdir = 4;
+  uint64 time_limit_seconds = 5;
+  uint64 memory_limit_bytes = 6;
+}
+
+message SandboxExecResult {
+  string sandbox_id = 1;
+  string stdout = 2;
+  string stderr = 3;
+  int32 exit_code = 4;
+  google.protobuf.Duration duration = 5;
+}

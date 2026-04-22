@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sera.dev/schemas/plugin/memory_backend.schema.json",
+  "title": "sera.plugin.v1.MemoryBackend JSON-RPC envelopes",
+  "description": "Hand-maintained mirror of memory_backend.proto for stdio JSON-RPC transport. Proto is canonical (SPEC-plugins §5.1).",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/StoreRequestEnvelope" },
+    { "$ref": "#/$defs/StoreResponseEnvelope" },
+    { "$ref": "#/$defs/RetrieveRequestEnvelope" },
+    { "$ref": "#/$defs/RetrieveResponseEnvelope" },
+    { "$ref": "#/$defs/SearchRequestEnvelope" },
+    { "$ref": "#/$defs/SearchResponseEnvelope" },
+    { "$ref": "#/$defs/DeleteRequestEnvelope" },
+    { "$ref": "#/$defs/DeleteResponseEnvelope" }
+  ],
+  "$defs": {
+    "JsonRpcId": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "integer" },
+        { "type": "null" }
+      ]
+    },
+    "Timestamp": { "type": "string", "format": "date-time" },
+    "MemoryRecord": {
+      "type": "object",
+      "properties": {
+        "key": { "type": "string" },
+        "content": { "type": "string" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "created_at": { "$ref": "#/$defs/Timestamp" }
+      },
+      "required": ["key", "content"],
+      "additionalProperties": false
+    },
+    "StoreRequest": {
+      "type": "object",
+      "properties": { "record": { "$ref": "#/$defs/MemoryRecord" } },
+      "required": ["record"],
+      "additionalProperties": false
+    },
+    "StoreResponse": {
+      "type": "object",
+      "properties": { "key": { "type": "string" } },
+      "required": ["key"],
+      "additionalProperties": false
+    },
+    "RetrieveRequest": {
+      "type": "object",
+      "properties": { "key": { "type": "string" } },
+      "required": ["key"],
+      "additionalProperties": false
+    },
+    "RetrieveResponse": {
+      "type": "object",
+      "properties": {
+        "record": { "$ref": "#/$defs/MemoryRecord" },
+        "found": { "type": "boolean" }
+      },
+      "required": ["found"],
+      "additionalProperties": false
+    },
+    "SearchRequest": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "limit": { "type": "integer", "minimum": 0 },
+        "filter": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "required": ["query"],
+      "additionalProperties": false
+    },
+    "SearchHit": {
+      "type": "object",
+      "properties": {
+        "record": { "$ref": "#/$defs/MemoryRecord" },
+        "score": { "type": "number" }
+      },
+      "required": ["record"],
+      "additionalProperties": false
+    },
+    "SearchResponse": {
+      "type": "object",
+      "properties": {
+        "hits": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SearchHit" }
+        }
+      },
+      "required": ["hits"],
+      "additionalProperties": false
+    },
+    "DeleteRequest": {
+      "type": "object",
+      "properties": { "key": { "type": "string" } },
+      "required": ["key"],
+      "additionalProperties": false
+    },
+    "DeleteResponse": {
+      "type": "object",
+      "properties": { "deleted": { "type": "boolean" } },
+      "required": ["deleted"],
+      "additionalProperties": false
+    },
+    "StoreRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.MemoryBackend/Store" },
+        "params": { "$ref": "#/$defs/StoreRequest" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "StoreResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/StoreResponse" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "RetrieveRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.MemoryBackend/Retrieve" },
+        "params": { "$ref": "#/$defs/RetrieveRequest" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "RetrieveResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/RetrieveResponse" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "SearchRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.MemoryBackend/Search" },
+        "params": { "$ref": "#/$defs/SearchRequest" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "SearchResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/SearchResponse" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "DeleteRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.MemoryBackend/Delete" },
+        "params": { "$ref": "#/$defs/DeleteRequest" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "DeleteResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/DeleteResponse" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    }
+  }
+}

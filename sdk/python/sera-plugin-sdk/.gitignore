@@ -1,0 +1,13 @@
+src/sera_plugin_sdk/_generated/*.py
+!src/sera_plugin_sdk/_generated/__init__.py
+__pycache__/
+*.pyc
+*.pyo
+dist/
+build/
+.tox/
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

@@ -1,0 +1,154 @@
+// SERA ContextEngine plugin capability.
+//
+// See SPEC-plugins §2.1 and SPEC-context-engine-pluggability §2. Three
+// services, one per trait tier (core / query / diagnostics), so a plugin
+// that only implements ContextEngine does not have to stub out Query and
+// Diagnostics methods.
+
+syntax = "proto3";
+
+package sera.plugin.v1;
+
+import "google/protobuf/empty.proto";
+
+// Core context-engine seam — every plugin with PLUGIN_CAPABILITY_CONTEXT_ENGINE
+// MUST implement this service.
+service ContextEngine {
+  rpc Ingest(IngestRequest) returns (IngestAck);
+  rpc Assemble(AssembleRequest) returns (AssembledContext);
+}
+
+// Optional drill-tool surface — implemented by engines with an addressable
+// store (e.g. LCM). Maps to the ContextQuery trait in
+// sera_runtime::context_engine.
+service ContextQuery {
+  rpc Search(CtxSearchRequest) returns (CtxSearchResponse);
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+  rpc Expand(ExpandRequest) returns (ExpandResponse);
+}
+
+// Optional health/introspection surface — status() and doctor().
+service ContextDiagnostics {
+  rpc Status(StatusRequest) returns (StatusResponse);
+  rpc Doctor(google.protobuf.Empty) returns (DoctorReport);
+}
+
+enum ContextRole {
+  CONTEXT_ROLE_UNSPECIFIED = 0;
+  CONTEXT_ROLE_SYSTEM = 1;
+  CONTEXT_ROLE_USER = 2;
+  CONTEXT_ROLE_ASSISTANT = 3;
+  CONTEXT_ROLE_TOOL = 4;
+}
+
+enum ContextSegmentKind {
+  CONTEXT_SEGMENT_KIND_UNSPECIFIED = 0;
+  CONTEXT_SEGMENT_KIND_SOUL = 1;
+  CONTEXT_SEGMENT_KIND_WORKING = 2;
+  CONTEXT_SEGMENT_KIND_LONGTERM = 3;
+  CONTEXT_SEGMENT_KIND_OVERFLOW = 4;
+}
+
+// ContextEngine.Ingest
+message IngestRequest {
+  string session_id = 1;
+  ContextRole role = 2;
+  string content = 3;
+  map<string, string> metadata = 4;
+}
+
+message IngestAck {
+  bool accepted = 1;
+}
+
+// ContextEngine.Assemble
+message AssembleRequest {
+  string session_id = 1;
+  uint32 budget_tokens = 2;
+  string constraints_json = 3; // engine-specific constraints; opaque JSON
+}
+
+message ContextSegment {
+  ContextSegmentKind kind = 1;
+  string content = 2;
+  uint32 tokens = 3;
+}
+
+message AssembledContext {
+  repeated ContextSegment segments = 1;
+  uint32 total_tokens = 2;
+}
+
+// ContextQuery.Search
+message CtxSearchRequest {
+  string session_id = 1;
+  string query = 2;
+  uint32 limit = 3;
+}
+
+message CtxSearchHit {
+  string node_id = 1;        // opaque, see SPEC-context-engine-pluggability §2.2
+  string depth_label = 2;    // e.g. "D0", "D1"; "" for flat engines
+  string preview = 3;
+  double rank = 4;           // lower is stronger (FTS5 convention)
+  bool rank_present = 5;     // false mirrors Option<f64>::None
+}
+
+message CtxSearchResponse {
+  repeated CtxSearchHit hits = 1;
+}
+
+// ContextQuery.Describe
+message DescribeRequest {
+  string session_id = 1;
+  string node_id = 2; // opaque; plugin interprets
+}
+
+message DescribeResponse {
+  string node_id = 1;
+  string depth_label = 2;
+  uint32 tokens = 3;
+  repeated string child_node_ids = 4;
+  string metadata_json = 5;
+}
+
+// ContextQuery.Expand
+message ExpandRequest {
+  string session_id = 1;
+  string node_id = 2;
+  uint32 max_tokens = 3;
+}
+
+message ExpandResponse {
+  string node_id = 1;
+  string content = 2;
+  uint32 tokens = 3;
+  bool truncated = 4;
+}
+
+// ContextDiagnostics.Status
+message StatusRequest {
+  string session_id = 1; // empty for aggregate status
+}
+
+message StatusResponse {
+  string fields_json = 1; // backend-defined metrics; opaque JSON object
+}
+
+// ContextDiagnostics.Doctor
+enum DoctorSeverity {
+  DOCTOR_SEVERITY_UNSPECIFIED = 0;
+  DOCTOR_SEVERITY_OK = 1;
+  DOCTOR_SEVERITY_WARN = 2;
+  DOCTOR_SEVERITY_FAIL = 3;
+}
+
+message DoctorCheck {
+  string name = 1;
+  DoctorSeverity severity = 2;
+  string message = 3;
+}
+
+message DoctorReport {
+  repeated DoctorCheck checks = 1;
+}

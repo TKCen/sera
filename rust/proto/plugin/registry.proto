@@ -1,0 +1,103 @@
+// SERA Plugin Registry — canonical wire contract.
+//
+// See docs/plan/specs/SPEC-plugins.md §2.1 (PluginRegistration), §2.3 (Transport).
+// Capability parity across transports (gRPC / stdio) is a spec invariant.
+
+syntax = "proto3";
+
+package sera.plugin.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+// Plugin registry service. Identical surface for gRPC and stdio transports
+// (stdio consumers speak the JSON-RPC mirror defined in registry.schema.json).
+service PluginRegistry {
+  rpc Register(PluginRegistration) returns (RegistrationAck);
+  rpc Heartbeat(PluginHeartbeat) returns (HeartbeatAck);
+  rpc Deregister(PluginId) returns (google.protobuf.Empty);
+}
+
+// Capability set a plugin declares at registration. A plugin may declare
+// multiple capabilities if it implements several trait contracts.
+enum PluginCapability {
+  PLUGIN_CAPABILITY_UNSPECIFIED = 0;
+  PLUGIN_CAPABILITY_MEMORY_BACKEND = 1;
+  PLUGIN_CAPABILITY_TOOL_EXECUTOR = 2;
+  PLUGIN_CAPABILITY_CONTEXT_ENGINE = 3;
+  PLUGIN_CAPABILITY_SANDBOX_PROVIDER = 4;
+  PLUGIN_CAPABILITY_AUTH_PROVIDER = 5;
+  PLUGIN_CAPABILITY_SECRET_PROVIDER = 6;
+  PLUGIN_CAPABILITY_REALTIME_BACKEND = 7;
+  PLUGIN_CAPABILITY_CUSTOM = 8;
+}
+
+// SemVer split. Mirror of PluginVersion in sera-plugins types.rs.
+message PluginVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+  uint32 patch = 3;
+  string prerelease = 4; // empty when not a prerelease
+}
+
+// TLS material for gRPC transport. Paths are absolute filesystem paths;
+// inline PEM is permitted for tooling that prefers not to materialise files.
+message TlsConfig {
+  string ca_cert_pem = 1;      // absolute path OR inline PEM
+  string client_cert_pem = 2;  // absolute path OR inline PEM
+  string client_key_pem = 3;   // absolute path OR inline PEM
+}
+
+// gRPC transport: reach the plugin over TCP (mTLS required outside localhost dev).
+message GrpcTransport {
+  string endpoint = 1;  // host:port
+  TlsConfig tls = 2;    // optional in dev, required in Tier 2/3
+}
+
+// Stdio transport: gateway spawns the child process. command[0] MUST be an
+// absolute path per SPEC-plugins §6.2 — no $PATH resolution at spawn.
+message StdioTransport {
+  repeated string command = 1;        // argv; command[0] absolute
+  map<string, string> env = 2;        // environment for the child
+}
+
+// Exactly one transport per registration. Capability set, manifest shape,
+// supervision, and audit semantics are identical across transports.
+message PluginTransport {
+  oneof transport {
+    GrpcTransport grpc = 1;
+    StdioTransport stdio = 2;
+  }
+}
+
+message PluginRegistration {
+  string name = 1;
+  PluginVersion version = 2;
+  repeated PluginCapability capabilities = 3;
+  PluginTransport transport = 4;
+  google.protobuf.Duration health_check_interval = 5;
+  // Free-form capability discriminator for PLUGIN_CAPABILITY_CUSTOM entries.
+  // Indexed positionally against `capabilities`.
+  repeated string custom_capability_tags = 6;
+}
+
+message RegistrationAck {
+  string plugin_id = 1;
+  repeated PluginCapability server_capabilities = 2;
+  string protocol_version = 3;  // proto + schema contract version (SPEC §5.3)
+}
+
+message PluginHeartbeat {
+  string plugin_id = 1;
+  uint64 uptime_seconds = 2;
+}
+
+message HeartbeatAck {
+  bool ok = 1;
+  google.protobuf.Timestamp server_time = 2;
+}
+
+message PluginId {
+  string value = 1;
+}

@@ -1,0 +1,370 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sera.dev/schemas/plugin/context_engine.schema.json",
+  "title": "sera.plugin.v1.ContextEngine / ContextQuery / ContextDiagnostics JSON-RPC envelopes",
+  "description": "Hand-maintained mirror of context_engine.proto for stdio JSON-RPC transport. Proto is canonical (SPEC-plugins §5.1). Three services kept side-by-side so a plugin advertising only ContextEngine need not implement Query/Diagnostics.",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/IngestRequestEnvelope" },
+    { "$ref": "#/$defs/IngestResponseEnvelope" },
+    { "$ref": "#/$defs/AssembleRequestEnvelope" },
+    { "$ref": "#/$defs/AssembleResponseEnvelope" },
+    { "$ref": "#/$defs/SearchRequestEnvelope" },
+    { "$ref": "#/$defs/SearchResponseEnvelope" },
+    { "$ref": "#/$defs/DescribeRequestEnvelope" },
+    { "$ref": "#/$defs/DescribeResponseEnvelope" },
+    { "$ref": "#/$defs/ExpandRequestEnvelope" },
+    { "$ref": "#/$defs/ExpandResponseEnvelope" },
+    { "$ref": "#/$defs/StatusRequestEnvelope" },
+    { "$ref": "#/$defs/StatusResponseEnvelope" },
+    { "$ref": "#/$defs/DoctorRequestEnvelope" },
+    { "$ref": "#/$defs/DoctorResponseEnvelope" }
+  ],
+  "$defs": {
+    "JsonRpcId": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "integer" },
+        { "type": "null" }
+      ]
+    },
+    "ContextRole": {
+      "type": "string",
+      "enum": [
+        "CONTEXT_ROLE_UNSPECIFIED",
+        "CONTEXT_ROLE_SYSTEM",
+        "CONTEXT_ROLE_USER",
+        "CONTEXT_ROLE_ASSISTANT",
+        "CONTEXT_ROLE_TOOL"
+      ]
+    },
+    "ContextSegmentKind": {
+      "type": "string",
+      "enum": [
+        "CONTEXT_SEGMENT_KIND_UNSPECIFIED",
+        "CONTEXT_SEGMENT_KIND_SOUL",
+        "CONTEXT_SEGMENT_KIND_WORKING",
+        "CONTEXT_SEGMENT_KIND_LONGTERM",
+        "CONTEXT_SEGMENT_KIND_OVERFLOW"
+      ]
+    },
+    "DoctorSeverity": {
+      "type": "string",
+      "enum": [
+        "DOCTOR_SEVERITY_UNSPECIFIED",
+        "DOCTOR_SEVERITY_OK",
+        "DOCTOR_SEVERITY_WARN",
+        "DOCTOR_SEVERITY_FAIL"
+      ]
+    },
+    "IngestRequest": {
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "string" },
+        "role": { "$ref": "#/$defs/ContextRole" },
+        "content": { "type": "string" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "required": ["session_id", "role", "content"],
+      "additionalProperties": false
+    },
+    "IngestAck": {
+      "type": "object",
+      "properties": { "accepted": { "type": "boolean" } },
+      "required": ["accepted"],
+      "additionalProperties": false
+    },
+    "AssembleRequest": {
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "string" },
+        "budget_tokens": { "type": "integer", "minimum": 0 },
+        "constraints_json": { "type": "string" }
+      },
+      "required": ["session_id", "budget_tokens"],
+      "additionalProperties": false
+    },
+    "ContextSegment": {
+      "type": "object",
+      "properties": {
+        "kind": { "$ref": "#/$defs/ContextSegmentKind" },
+        "content": { "type": "string" },
+        "tokens": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["kind", "content", "tokens"],
+      "additionalProperties": false
+    },
+    "AssembledContext": {
+      "type": "object",
+      "properties": {
+        "segments": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ContextSegment" }
+        },
+        "total_tokens": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["segments", "total_tokens"],
+      "additionalProperties": false
+    },
+    "CtxSearchRequest": {
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "string" },
+        "query": { "type": "string" },
+        "limit": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["query"],
+      "additionalProperties": false
+    },
+    "CtxSearchHit": {
+      "type": "object",
+      "properties": {
+        "node_id": { "type": "string" },
+        "depth_label": { "type": "string" },
+        "preview": { "type": "string" },
+        "rank": { "type": "number" },
+        "rank_present": { "type": "boolean" }
+      },
+      "required": ["node_id", "rank_present"],
+      "additionalProperties": false
+    },
+    "CtxSearchResponse": {
+      "type": "object",
+      "properties": {
+        "hits": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CtxSearchHit" }
+        }
+      },
+      "required": ["hits"],
+      "additionalProperties": false
+    },
+    "DescribeRequest": {
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "string" },
+        "node_id": { "type": "string" }
+      },
+      "required": ["node_id"],
+      "additionalProperties": false
+    },
+    "DescribeResponse": {
+      "type": "object",
+      "properties": {
+        "node_id": { "type": "string" },
+        "depth_label": { "type": "string" },
+        "tokens": { "type": "integer", "minimum": 0 },
+        "child_node_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "metadata_json": { "type": "string" }
+      },
+      "required": ["node_id"],
+      "additionalProperties": false
+    },
+    "ExpandRequest": {
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "string" },
+        "node_id": { "type": "string" },
+        "max_tokens": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["node_id", "max_tokens"],
+      "additionalProperties": false
+    },
+    "ExpandResponse": {
+      "type": "object",
+      "properties": {
+        "node_id": { "type": "string" },
+        "content": { "type": "string" },
+        "tokens": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" }
+      },
+      "required": ["node_id", "content"],
+      "additionalProperties": false
+    },
+    "StatusRequest": {
+      "type": "object",
+      "properties": { "session_id": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "StatusResponse": {
+      "type": "object",
+      "properties": { "fields_json": { "type": "string" } },
+      "required": ["fields_json"],
+      "additionalProperties": false
+    },
+    "DoctorCheck": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "severity": { "$ref": "#/$defs/DoctorSeverity" },
+        "message": { "type": "string" }
+      },
+      "required": ["name", "severity"],
+      "additionalProperties": false
+    },
+    "DoctorReport": {
+      "type": "object",
+      "properties": {
+        "checks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/DoctorCheck" }
+        }
+      },
+      "required": ["checks"],
+      "additionalProperties": false
+    },
+    "IngestRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.ContextEngine/Ingest" },
+        "params": { "$ref": "#/$defs/IngestRequest" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "IngestResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/IngestAck" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "AssembleRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.ContextEngine/Assemble" },
+        "params": { "$ref": "#/$defs/AssembleRequest" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "AssembleResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/AssembledContext" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "SearchRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.ContextQuery/Search" },
+        "params": { "$ref": "#/$defs/CtxSearchRequest" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "SearchResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/CtxSearchResponse" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "DescribeRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.ContextQuery/Describe" },
+        "params": { "$ref": "#/$defs/DescribeRequest" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "DescribeResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/DescribeResponse" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "ExpandRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.ContextQuery/Expand" },
+        "params": { "$ref": "#/$defs/ExpandRequest" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "ExpandResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/ExpandResponse" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "StatusRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.ContextDiagnostics/Status" },
+        "params": { "$ref": "#/$defs/StatusRequest" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "StatusResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/StatusResponse" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "DoctorRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.ContextDiagnostics/Doctor" },
+        "params": { "type": "object", "maxProperties": 0 }
+      },
+      "required": ["jsonrpc", "id", "method"],
+      "additionalProperties": false
+    },
+    "DoctorResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/DoctorReport" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    }
+  }
+}

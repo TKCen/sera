@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sera.dev/schemas/plugin/auth_provider.schema.json",
+  "title": "sera.plugin.v1.AuthProvider JSON-RPC envelopes",
+  "description": "Hand-maintained mirror of auth_provider.proto for stdio JSON-RPC transport. Proto is canonical (SPEC-plugins §5.1).",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/AuthenticateRequestEnvelope" },
+    { "$ref": "#/$defs/AuthenticateResponseEnvelope" },
+    { "$ref": "#/$defs/AuthorizeRequestEnvelope" },
+    { "$ref": "#/$defs/AuthorizeResponseEnvelope" }
+  ],
+  "$defs": {
+    "JsonRpcId": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "integer" },
+        { "type": "null" }
+      ]
+    },
+    "AuthRequest": {
+      "type": "object",
+      "properties": {
+        "subject": { "type": "string" },
+        "credential": { "type": "string" }
+      },
+      "required": ["subject"],
+      "additionalProperties": false
+    },
+    "AuthResponse": {
+      "type": "object",
+      "properties": {
+        "authenticated": { "type": "boolean" },
+        "subject_id": { "type": "string" },
+        "claims": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "reason": { "type": "string" }
+      },
+      "required": ["authenticated"],
+      "additionalProperties": false
+    },
+    "AuthzRequest": {
+      "type": "object",
+      "properties": {
+        "subject_id": { "type": "string" },
+        "action": { "type": "string" },
+        "resource": { "type": "string" },
+        "context": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "required": ["subject_id", "action", "resource"],
+      "additionalProperties": false
+    },
+    "AuthzResponse": {
+      "type": "object",
+      "properties": {
+        "allow": { "type": "boolean" },
+        "reason": { "type": "string" }
+      },
+      "required": ["allow"],
+      "additionalProperties": false
+    },
+    "AuthenticateRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.AuthProvider/Authenticate" },
+        "params": { "$ref": "#/$defs/AuthRequest" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "AuthenticateResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/AuthResponse" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "AuthorizeRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.AuthProvider/Authorize" },
+        "params": { "$ref": "#/$defs/AuthzRequest" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "AuthorizeResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/AuthzResponse" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    }
+  }
+}

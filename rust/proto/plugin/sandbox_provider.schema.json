@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sera.dev/schemas/plugin/sandbox_provider.schema.json",
+  "title": "sera.plugin.v1.SandboxProvider JSON-RPC envelopes",
+  "description": "Hand-maintained mirror of sandbox_provider.proto for stdio JSON-RPC transport. Proto is canonical (SPEC-plugins §5.1).",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/ExecuteRequestEnvelope" },
+    { "$ref": "#/$defs/ExecuteResponseEnvelope" },
+    { "$ref": "#/$defs/CleanupRequestEnvelope" },
+    { "$ref": "#/$defs/CleanupResponseEnvelope" }
+  ],
+  "$defs": {
+    "JsonRpcId": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "integer" },
+        { "type": "null" }
+      ]
+    },
+    "Duration": {
+      "type": "string",
+      "description": "Duration string (e.g. '30s', '1500ms')"
+    },
+    "SandboxId": {
+      "type": "object",
+      "properties": { "value": { "type": "string" } },
+      "required": ["value"],
+      "additionalProperties": false
+    },
+    "SandboxExecRequest": {
+      "type": "object",
+      "properties": {
+        "sandbox_id": { "type": "string" },
+        "command": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "workdir": { "type": "string" },
+        "time_limit_seconds": { "type": "integer", "minimum": 0 },
+        "memory_limit_bytes": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["command"],
+      "additionalProperties": false
+    },
+    "SandboxExecResult": {
+      "type": "object",
+      "properties": {
+        "sandbox_id": { "type": "string" },
+        "stdout": { "type": "string" },
+        "stderr": { "type": "string" },
+        "exit_code": { "type": "integer" },
+        "duration": { "$ref": "#/$defs/Duration" }
+      },
+      "required": ["exit_code"],
+      "additionalProperties": false
+    },
+    "ExecuteRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.SandboxProvider/Execute" },
+        "params": { "$ref": "#/$defs/SandboxExecRequest" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "ExecuteResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/SandboxExecResult" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "CleanupRequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.SandboxProvider/Cleanup" },
+        "params": { "$ref": "#/$defs/SandboxId" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "CleanupResponseEnvelope": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "type": "object", "maxProperties": 0 }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sera.dev/schemas/plugin/registry.schema.json",
+  "title": "sera.plugin.v1.PluginRegistry JSON-RPC envelopes",
+  "description": "Hand-maintained mirror of registry.proto for stdio JSON-RPC transport. Proto is canonical (SPEC-plugins §5.1).",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/RegisterRequest" },
+    { "$ref": "#/$defs/RegisterResponse" },
+    { "$ref": "#/$defs/HeartbeatRequest" },
+    { "$ref": "#/$defs/HeartbeatResponse" },
+    { "$ref": "#/$defs/DeregisterRequest" },
+    { "$ref": "#/$defs/DeregisterResponse" }
+  ],
+  "$defs": {
+    "JsonRpcId": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "integer" },
+        { "type": "null" }
+      ]
+    },
+    "PluginCapability": {
+      "type": "string",
+      "enum": [
+        "PLUGIN_CAPABILITY_UNSPECIFIED",
+        "PLUGIN_CAPABILITY_MEMORY_BACKEND",
+        "PLUGIN_CAPABILITY_TOOL_EXECUTOR",
+        "PLUGIN_CAPABILITY_CONTEXT_ENGINE",
+        "PLUGIN_CAPABILITY_SANDBOX_PROVIDER",
+        "PLUGIN_CAPABILITY_AUTH_PROVIDER",
+        "PLUGIN_CAPABILITY_SECRET_PROVIDER",
+        "PLUGIN_CAPABILITY_REALTIME_BACKEND",
+        "PLUGIN_CAPABILITY_CUSTOM"
+      ]
+    },
+    "PluginVersion": {
+      "type": "object",
+      "properties": {
+        "major": { "type": "integer", "minimum": 0 },
+        "minor": { "type": "integer", "minimum": 0 },
+        "patch": { "type": "integer", "minimum": 0 },
+        "prerelease": { "type": "string" }
+      },
+      "required": ["major", "minor", "patch"],
+      "additionalProperties": false
+    },
+    "TlsConfig": {
+      "type": "object",
+      "properties": {
+        "ca_cert_pem": { "type": "string" },
+        "client_cert_pem": { "type": "string" },
+        "client_key_pem": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "GrpcTransport": {
+      "type": "object",
+      "properties": {
+        "endpoint": { "type": "string" },
+        "tls": { "$ref": "#/$defs/TlsConfig" }
+      },
+      "required": ["endpoint"],
+      "additionalProperties": false
+    },
+    "StdioTransport": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "required": ["command"],
+      "additionalProperties": false
+    },
+    "PluginTransport": {
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": { "grpc": { "$ref": "#/$defs/GrpcTransport" } },
+          "required": ["grpc"],
+          "additionalProperties": false
+        },
+        {
+          "properties": { "stdio": { "$ref": "#/$defs/StdioTransport" } },
+          "required": ["stdio"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Duration": {
+      "type": "string",
+      "description": "Duration string (e.g. '30s', '1500ms')"
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "PluginRegistration": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "$ref": "#/$defs/PluginVersion" },
+        "capabilities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PluginCapability" }
+        },
+        "transport": { "$ref": "#/$defs/PluginTransport" },
+        "health_check_interval": { "$ref": "#/$defs/Duration" },
+        "custom_capability_tags": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["name", "version", "capabilities", "transport"],
+      "additionalProperties": false
+    },
+    "RegistrationAck": {
+      "type": "object",
+      "properties": {
+        "plugin_id": { "type": "string" },
+        "server_capabilities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PluginCapability" }
+        },
+        "protocol_version": { "type": "string" }
+      },
+      "required": ["plugin_id", "protocol_version"],
+      "additionalProperties": false
+    },
+    "PluginHeartbeat": {
+      "type": "object",
+      "properties": {
+        "plugin_id": { "type": "string" },
+        "uptime_seconds": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["plugin_id"],
+      "additionalProperties": false
+    },
+    "HeartbeatAck": {
+      "type": "object",
+      "properties": {
+        "ok": { "type": "boolean" },
+        "server_time": { "$ref": "#/$defs/Timestamp" }
+      },
+      "required": ["ok"],
+      "additionalProperties": false
+    },
+    "PluginId": {
+      "type": "object",
+      "properties": { "value": { "type": "string" } },
+      "required": ["value"],
+      "additionalProperties": false
+    },
+    "RegisterRequest": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.PluginRegistry/Register" },
+        "params": { "$ref": "#/$defs/PluginRegistration" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "RegisterResponse": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/RegistrationAck" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "HeartbeatRequest": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.PluginRegistry/Heartbeat" },
+        "params": { "$ref": "#/$defs/PluginHeartbeat" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "HeartbeatResponse": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "$ref": "#/$defs/HeartbeatAck" }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "DeregisterRequest": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "const": "sera.plugin.v1.PluginRegistry/Deregister" },
+        "params": { "$ref": "#/$defs/PluginId" }
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    "DeregisterResponse": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "result": { "type": "object", "maxProperties": 0 }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    }
+  }
+}

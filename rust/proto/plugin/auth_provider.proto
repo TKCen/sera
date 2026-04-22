@@ -1,0 +1,37 @@
+// SERA AuthProvider plugin capability.
+//
+// See SPEC-plugins §2.1 and SPEC-identity-authz. Minimal two-method surface:
+// Authenticate(subject) → identity, Authorize(subject, action, resource) → allow.
+
+syntax = "proto3";
+
+package sera.plugin.v1;
+
+service AuthProvider {
+  rpc Authenticate(AuthRequest) returns (AuthResponse);
+  rpc Authorize(AuthzRequest) returns (AuthzResponse);
+}
+
+message AuthRequest {
+  string subject = 1;     // opaque identifier (token, username, …)
+  string credential = 2;  // opaque credential material
+}
+
+message AuthResponse {
+  bool authenticated = 1;
+  string subject_id = 2;           // canonical identity after auth
+  map<string, string> claims = 3;  // additional attributes
+  string reason = 4;               // populated on failure
+}
+
+message AuthzRequest {
+  string subject_id = 1;
+  string action = 2;
+  string resource = 3;
+  map<string, string> context = 4;
+}
+
+message AuthzResponse {
+  bool allow = 1;
+  string reason = 2;
+}

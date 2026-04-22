@@ -1,0 +1,64 @@
+// SERA MemoryBackend plugin capability.
+//
+// See SPEC-plugins §2.1 and SPEC-memory-pluggability — a MemoryBackend plugin
+// implements the SemanticMemoryStore trait over the wire.
+
+syntax = "proto3";
+
+package sera.plugin.v1;
+
+import "google/protobuf/timestamp.proto";
+
+service MemoryBackend {
+  rpc Store(StoreRequest) returns (StoreResponse);
+  rpc Retrieve(RetrieveRequest) returns (RetrieveResponse);
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+}
+
+message MemoryRecord {
+  string key = 1;
+  string content = 2;
+  map<string, string> metadata = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message StoreRequest {
+  MemoryRecord record = 1;
+}
+
+message StoreResponse {
+  string key = 1;
+}
+
+message RetrieveRequest {
+  string key = 1;
+}
+
+message RetrieveResponse {
+  MemoryRecord record = 1;
+  bool found = 2;
+}
+
+message SearchRequest {
+  string query = 1;
+  uint32 limit = 2;
+  map<string, string> filter = 3;
+}
+
+message SearchHit {
+  MemoryRecord record = 1;
+  double score = 2; // backend-defined; higher = more relevant unless documented otherwise
+}
+
+message SearchResponse {
+  repeated SearchHit hits = 1;
+}
+
+message DeleteRequest {
+  string key = 1;
+}
+
+message DeleteResponse {
+  bool deleted = 1;
+}

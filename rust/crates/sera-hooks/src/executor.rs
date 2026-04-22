@@ -73,7 +73,12 @@ impl ChainExecutor {
 
         // Pre-flight: already-cancelled signals exit with zero hooks run.
         if cancel.is_cancelled() {
-            return Ok(aborted_result(ctx, 0, chain_start.elapsed().as_millis() as u64, None));
+            return Ok(aborted_result(
+                ctx,
+                0,
+                chain_start.elapsed().as_millis() as u64,
+                None,
+            ));
         }
 
         // Split hook instances into Internal-first, Plugin-second order while
@@ -86,8 +91,10 @@ impl ChainExecutor {
                     == HookTier::Internal
             });
 
-        let ordered: Vec<&HookInstance> =
-            internal_instances.into_iter().chain(plugin_instances).collect();
+        let ordered: Vec<&HookInstance> = internal_instances
+            .into_iter()
+            .chain(plugin_instances)
+            .collect();
 
         for instance in ordered {
             // Respect the enabled flag.

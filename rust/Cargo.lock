@@ -5173,16 +5173,20 @@ name = "sera-hooks"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "schemars 1.2.1",
  "sera-errors",
  "sera-types",
  "serde",
  "serde_json",
+ "serde_yaml",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tracing",
  "wasmtime",
  "wasmtime-wasi",
+ "wit-parser 0.244.0",
 ]
 
 [[package]]

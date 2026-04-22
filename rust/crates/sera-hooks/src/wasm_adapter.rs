@@ -165,8 +165,8 @@ impl WasmHookAdapter {
         config: WasmConfig,
     ) -> WasmResult<Self> {
         let engine = build_engine()?;
-        let module = Module::new(&engine, bytes.as_ref())
-            .map_err(|e| WasmError::Module(e.to_string()))?;
+        let module =
+            Module::new(&engine, bytes.as_ref()).map_err(|e| WasmError::Module(e.to_string()))?;
         Ok(Self {
             engine: Arc::new(engine),
             module: Arc::new(module),
@@ -219,19 +219,13 @@ impl WasmHookAdapter {
                     .instantiate(&mut store, &module)
                     .map_err(|e| WasmError::Linking(e.to_string()))?;
 
-                let memory = instance
-                    .get_memory(&mut store, "memory")
-                    .ok_or_else(|| {
-                        WasmError::Execution(
-                            "WASM module does not export 'memory'".to_string(),
-                        )
-                    })?;
+                let memory = instance.get_memory(&mut store, "memory").ok_or_else(|| {
+                    WasmError::Execution("WASM module does not export 'memory'".to_string())
+                })?;
 
                 let hook_execute = instance
                     .get_typed_func::<(i32, i32), i32>(&mut store, "hook_execute")
-                    .map_err(|e| {
-                        WasmError::Execution(format!("hook_execute not found: {e}"))
-                    })?;
+                    .map_err(|e| WasmError::Execution(format!("hook_execute not found: {e}")))?;
 
                 // Write context JSON at offset 0 in WASM linear memory.
                 let ctx_ptr: i32 = 0;
@@ -246,14 +240,9 @@ impl WasmHookAdapter {
                 // Read null-terminated JSON result from WASM memory.
                 let data = memory.data(&store);
                 let start = result_ptr as usize;
-                let nul = data[start..]
-                    .iter()
-                    .position(|&b| b == 0)
-                    .ok_or_else(|| {
-                        WasmError::Execution(
-                            "hook_execute result is not null-terminated".to_string(),
-                        )
-                    })?;
+                let nul = data[start..].iter().position(|&b| b == 0).ok_or_else(|| {
+                    WasmError::Execution("hook_execute result is not null-terminated".to_string())
+                })?;
                 let result_str = std::str::from_utf8(&data[start..start + nul])
                     .map_err(|e| WasmError::Execution(format!("invalid UTF-8: {e}")))?;
                 let result: HookResult =
@@ -313,8 +302,7 @@ impl HookTrait for WasmHookAdapter {
 #[cfg(feature = "wasm")]
 pub fn validate_wasm_module(bytes: &[u8]) -> WasmResult<()> {
     let engine = build_engine()?;
-    let module =
-        Module::new(&engine, bytes).map_err(|e| WasmError::Module(e.to_string()))?;
+    let module = Module::new(&engine, bytes).map_err(|e| WasmError::Module(e.to_string()))?;
     for export in module.exports() {
         if export.name() == "hook_execute" {
             return Ok(());
@@ -460,12 +448,9 @@ mod tests {
                 timeout_ms: 5_000,
                 ..Default::default()
             };
-            let adapter = WasmHookAdapter::from_bytes(
-                INFINITE_LOOP_WAT.as_bytes(),
-                meta("looper"),
-                config,
-            )
-            .expect("compilation should succeed");
+            let adapter =
+                WasmHookAdapter::from_bytes(INFINITE_LOOP_WAT.as_bytes(), meta("looper"), config)
+                    .expect("compilation should succeed");
 
             let err = adapter.execute_wasm(&ctx()).await.unwrap_err();
             assert!(
@@ -499,10 +484,7 @@ mod tests {
             // Under tight scheduling either FuelExhausted or WallClockTimeout
             // is acceptable — both indicate a resource limit was enforced.
             assert!(
-                matches!(
-                    err,
-                    WasmError::WallClockTimeout | WasmError::FuelExhausted
-                ),
+                matches!(err, WasmError::WallClockTimeout | WasmError::FuelExhausted),
                 "expected WallClockTimeout or FuelExhausted; got: {:?}",
                 err
             );
@@ -510,9 +492,12 @@ mod tests {
 
         #[tokio::test]
         async fn validate_accepts_valid_module() {
-            let result =
-                crate::wasm_adapter::validate_wasm_module(GOOD_HOOK_WAT.as_bytes());
-            assert!(result.is_ok(), "should accept valid module; got: {:?}", result);
+            let result = crate::wasm_adapter::validate_wasm_module(GOOD_HOOK_WAT.as_bytes());
+            assert!(
+                result.is_ok(),
+                "should accept valid module; got: {:?}",
+                result
+            );
         }
 
         #[tokio::test]

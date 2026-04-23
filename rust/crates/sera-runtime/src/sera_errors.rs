@@ -7,7 +7,6 @@
 //! - [`DelegationError`] — handoff/delegation errors
 //! - [`SubagentError`] — subagent lifecycle errors
 //! - [`LlmError`] — LLM client errors
-//! - [`HarnessError`] — test harness errors
 //! - [`ContextError`] — context engine errors
 
 use sera_errors::{SeraError, SeraErrorCode};
@@ -15,7 +14,6 @@ use sera_errors::{SeraError, SeraErrorCode};
 use crate::context_engine::ContextError;
 use crate::error::RuntimeError;
 use crate::handoff::DelegationError;
-use crate::harness::HarnessError;
 use crate::llm_client::LlmError;
 use crate::subagent::SubagentError;
 use crate::turn::{ThinkError, ToolError};
@@ -86,16 +84,6 @@ impl From<LlmError> for SeraError {
             LlmError::ProviderUnavailable(_) => SeraErrorCode::Unavailable,
             LlmError::Timeout(_) => SeraErrorCode::Timeout,
             LlmError::RequestError(_) => SeraErrorCode::Internal,
-        };
-        SeraError::with_source(code, err.to_string(), err)
-    }
-}
-
-impl From<HarnessError> for SeraError {
-    fn from(err: HarnessError) -> Self {
-        let code = match &err {
-            HarnessError::Internal(_) => SeraErrorCode::Internal,
-            HarnessError::NotSupported(_) => SeraErrorCode::NotImplemented,
         };
         SeraError::with_source(code, err.to_string(), err)
     }

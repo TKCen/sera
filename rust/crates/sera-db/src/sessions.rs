@@ -1,4 +1,7 @@
 //! Sessions repository — read access to the chat_sessions table.
+//! Postgres-only: compiled only when the `postgres` feature is enabled.
+
+#![cfg(feature = "postgres")]
 
 use sqlx::PgPool;
 use crate::error::DbError;

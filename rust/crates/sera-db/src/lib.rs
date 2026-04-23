@@ -13,6 +13,7 @@ pub mod audit;
 pub mod circles;
 pub mod metering;
 pub mod schedules;
+#[cfg(feature = "postgres")]
 pub mod sessions;
 pub mod skills;
 pub mod api_keys;

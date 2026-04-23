@@ -2,15 +2,17 @@
 //!
 //! Dual-backend (sera-mwb4):
 //! * [`AuditRepository`] — original Postgres-backed repo (sqlx, `audit_trail` table).
+//!   Compiled only when the `postgres` feature is enabled.
 //! * [`SqliteAuditStore`] — rusqlite-backed equivalent that mirrors the same
-//!   append/query surface for local-first deployments.
+//!   append/query surface for local-first deployments. Always compiled.
 //! * [`AuditStore`] — async trait satisfied by both so callers can depend on
-//!   the trait object rather than a concrete type.
+//!   the trait object rather than a concrete type. Always compiled.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use rusqlite::{params, Connection};
+#[cfg(feature = "postgres")]
 use sqlx::PgPool;
 use tokio::sync::Mutex;
 
@@ -31,8 +33,11 @@ pub struct AuditRow {
 }
 
 /// Audit repository for database operations.
+/// Only available with the `postgres` feature.
+#[cfg(feature = "postgres")]
 pub struct AuditRepository;
 
+#[cfg(feature = "postgres")]
 impl AuditRepository {
     /// Append an audit event with hash chain.
     /// Uses an EXCLUSIVE lock to ensure sequential hashing.
@@ -187,17 +192,21 @@ pub trait AuditStore: Send + Sync + std::fmt::Debug {
 
 /// Postgres implementation of [`AuditStore`] — delegates to
 /// [`AuditRepository`] so the existing static functions remain usable.
+/// Only available with the `postgres` feature.
+#[cfg(feature = "postgres")]
 #[derive(Debug, Clone)]
 pub struct PgAuditStore {
     pool: PgPool,
 }
 
+#[cfg(feature = "postgres")]
 impl PgAuditStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
 
+#[cfg(feature = "postgres")]
 #[async_trait]
 impl AuditStore for PgAuditStore {
     async fn append(

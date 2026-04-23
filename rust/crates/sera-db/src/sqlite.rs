@@ -11,6 +11,7 @@ use std::path::Path;
 // Row types
 // ---------------------------------------------------------------------------
 
+#[cfg(not(feature = "postgres"))]
 #[derive(Debug, Clone)]
 pub struct SessionRow {
     pub id: String,
@@ -33,6 +34,7 @@ pub struct TranscriptRow {
     pub created_at: String,
 }
 
+#[cfg(not(feature = "postgres"))]
 #[derive(Debug, Clone)]
 pub struct AuditRow {
     pub id: i64,
@@ -151,6 +153,7 @@ impl SqliteDb {
         Ok(())
     }
 
+    #[cfg(not(feature = "postgres"))]
     pub fn get_session_by_key(&self, session_key: &str) -> rusqlite::Result<Option<SessionRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, agent_id, session_key, state, principal_id, created_at, updated_at
@@ -173,6 +176,7 @@ impl SqliteDb {
         }
     }
 
+    #[cfg(not(feature = "postgres"))]
     pub fn list_sessions(&self) -> rusqlite::Result<Vec<SessionRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, agent_id, session_key, state, principal_id, created_at, updated_at
@@ -201,6 +205,7 @@ impl SqliteDb {
     }
 
     /// Return an existing active session for the given agent, or create a new one.
+    #[cfg(not(feature = "postgres"))]
     pub fn get_or_create_session(&self, agent_id: &str) -> rusqlite::Result<SessionRow> {
         // Try to find an existing active session for this agent.
         let mut stmt = self.conn.prepare(
@@ -389,6 +394,7 @@ impl SqliteDb {
         Ok(self.conn.last_insert_rowid())
     }
 
+    #[cfg(not(feature = "postgres"))]
     pub fn query_audit(&self, limit: usize) -> rusqlite::Result<Vec<AuditRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, event_type, actor_id, actor_kind, details, created_at
@@ -414,6 +420,7 @@ impl SqliteDb {
 
 /// Generate a short hex string suitable for IDs (not cryptographically random,
 /// but good enough for local/dev session identifiers).
+#[cfg(not(feature = "postgres"))]
 fn uuid_v4_hex() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let d = SystemTime::now()
@@ -428,6 +435,7 @@ fn uuid_v4_hex() -> String {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[cfg(not(feature = "postgres"))]
 mod tests {
     use super::*;
 

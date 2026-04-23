@@ -6,6 +6,7 @@ edition.workspace = true
 [features]
 default = ["sqlite-vec"]
 integration = []
+postgres = []
 sqlite-vec = ["dep:sqlite-vec"]
 
 [dependencies]

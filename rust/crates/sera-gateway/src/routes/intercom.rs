@@ -2,16 +2,16 @@
 #![allow(dead_code, unused_imports)]
 
 use axum::{
+    Json,
     extract::{Extension, Query, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::envelope::{Op, Submission, W3cTraceContext};
+use crate::session_store::SessionStore as _;
 use sera_auth::ActingContext;
-use sera_gateway::envelope::{Op, Submission, W3cTraceContext};
-use sera_gateway::session_store::SessionStore as _;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -22,10 +22,7 @@ use crate::state::AppState;
 /// callers (ActingContext with `agent_id = Some(x)`) may only publish or DM
 /// as themselves. Operator-scoped callers (bootstrap API key, operator JWTs)
 /// may proxy for any agent — they're used by the dashboard and admin tools.
-fn verify_agent_ownership(
-    ctx: &ActingContext,
-    claimed_agent_id: &str,
-) -> Result<(), AppError> {
+fn verify_agent_ownership(ctx: &ActingContext, claimed_agent_id: &str) -> Result<(), AppError> {
     match &ctx.agent_id {
         Some(caller) if caller == claimed_agent_id => Ok(()),
         Some(caller) => Err(AppError::Forbidden(format!(
@@ -307,15 +304,20 @@ pub async fn get_connection_token(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let token = state.jwt.issue(sera_auth::JwtClaims {
-        sub: params.agent_id.clone(),
-        iss: "sera".to_string(),
-        aud: Vec::new(),
-        exp: now_secs + 3600, // 1 hour
-        nbf: None,
-        agent_id: Some(params.agent_id.clone()),
-        instance_id: None,
-    }).map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue Centrifugo token: {e}")))?;
+    let token = state
+        .jwt
+        .issue(sera_auth::JwtClaims {
+            sub: params.agent_id.clone(),
+            iss: "sera".to_string(),
+            aud: Vec::new(),
+            exp: now_secs + 3600, // 1 hour
+            nbf: None,
+            agent_id: Some(params.agent_id.clone()),
+            instance_id: None,
+        })
+        .map_err(|e| {
+            AppError::Internal(anyhow::anyhow!("Failed to issue Centrifugo token: {e}"))
+        })?;
 
     Ok(Json(TokenResponse { token }))
 }
@@ -342,15 +344,20 @@ pub async fn get_subscription_token(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let token = state.jwt.issue(sera_auth::JwtClaims {
-        sub: params.channel.clone(),
-        iss: "sera".to_string(),
-        aud: Vec::new(),
-        exp: now_secs + 3600,
-        nbf: None,
-        agent_id: None,
-        instance_id: None,
-    }).map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue subscription token: {e}")))?;
+    let token = state
+        .jwt
+        .issue(sera_auth::JwtClaims {
+            sub: params.channel.clone(),
+            iss: "sera".to_string(),
+            aud: Vec::new(),
+            exp: now_secs + 3600,
+            nbf: None,
+            agent_id: None,
+            instance_id: None,
+        })
+        .map_err(|e| {
+            AppError::Internal(anyhow::anyhow!("Failed to issue subscription token: {e}"))
+        })?;
 
     Ok(Json(TokenResponse { token }))
 }

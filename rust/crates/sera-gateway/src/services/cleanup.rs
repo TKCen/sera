@@ -1,9 +1,9 @@
 //! Cleanup service — container lifecycle and TTL enforcement for terminated agents.
 
-use std::sync::Arc;
-use sqlx::PgPool;
-use sera_tools::sandbox::{SandboxHandle, SandboxProvider};
 use sera_db::error::DbError;
+use sera_tools::sandbox::{SandboxHandle, SandboxProvider};
+use sqlx::PgPool;
+use std::sync::Arc;
 
 /// Represents an agent eligible for cleanup.
 #[derive(Debug, Clone)]
@@ -63,7 +63,7 @@ impl CleanupService {
              FROM agent_instances
              WHERE status = 'terminated'
              AND updated_at < NOW() - CAST($1 AS interval)
-             ORDER BY updated_at ASC"
+             ORDER BY updated_at ASC",
         )
         .bind(&cutoff)
         .fetch_all(self.pool.as_ref())
@@ -86,7 +86,7 @@ impl CleanupService {
     pub async fn cleanup_expired_keys(&self) -> Result<i64, CleanupError> {
         let result = sqlx::query(
             "DELETE FROM api_keys
-             WHERE expires_at IS NOT NULL AND expires_at < NOW()"
+             WHERE expires_at IS NOT NULL AND expires_at < NOW()",
         )
         .execute(self.pool.as_ref())
         .await
@@ -99,7 +99,7 @@ impl CleanupService {
     pub async fn cleanup_expired_sessions(&self) -> Result<i64, CleanupError> {
         let result = sqlx::query(
             "DELETE FROM chat_sessions
-             WHERE expires_at IS NOT NULL AND expires_at < NOW()"
+             WHERE expires_at IS NOT NULL AND expires_at < NOW()",
         )
         .execute(self.pool.as_ref())
         .await
@@ -140,12 +140,10 @@ impl CleanupService {
                 }
 
                 // Mark agent as cleaned in DB
-                if let Err(e) = sqlx::query(
-                    "DELETE FROM agent_instances WHERE id::text = $1"
-                )
-                .bind(&agent.id)
-                .execute(self.pool.as_ref())
-                .await
+                if let Err(e) = sqlx::query("DELETE FROM agent_instances WHERE id::text = $1")
+                    .bind(&agent.id)
+                    .execute(self.pool.as_ref())
+                    .await
                 {
                     tracing::warn!(
                         agent_id = %agent.id,

@@ -1,9 +1,9 @@
 //! Skills endpoint.
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +30,7 @@ pub struct SkillResponse {
 pub async fn list_skills(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<SkillResponse>>, AppError> {
-    let rows = SkillRepository::list_skills(state.db.inner()).await?;
+    let rows = SkillRepository::list_skills(state.db.require_pg_pool()).await?;
     let skills: Vec<SkillResponse> = rows
         .into_iter()
         .map(|r| SkillResponse {
@@ -70,7 +70,7 @@ pub async fn create_skill(
     let triggers = body.triggers.unwrap_or(serde_json::json!([]));
 
     let row = SkillRepository::create_skill(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &body.name,
         &body.version,
         &body.description,
@@ -103,7 +103,7 @@ pub async fn get_skill(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<SkillResponse>, AppError> {
-    let row = SkillRepository::get_by_name(state.db.inner(), &name).await?;
+    let row = SkillRepository::get_by_name(state.db.require_pg_pool(), &name).await?;
     Ok(Json(SkillResponse {
         id: row.id.to_string(),
         skill_id: row.skill_id,
@@ -122,7 +122,7 @@ pub async fn delete_skill(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let deleted = SkillRepository::delete_skill(state.db.inner(), &name).await?;
+    let deleted = SkillRepository::delete_skill(state.db.require_pg_pool(), &name).await?;
     if !deleted {
         return Err(AppError::Db(sera_db::DbError::NotFound {
             entity: "skill",

@@ -1,9 +1,9 @@
 //! Provider list endpoint.
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -28,9 +28,7 @@ pub struct ProviderResponse {
 }
 
 /// GET /api/providers/list
-pub async fn list_providers(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, AppError> {
+pub async fn list_providers(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let providers = match &state.config.providers {
         Some(config) => config
             .providers
@@ -84,20 +82,23 @@ pub async fn add_provider(
 
     {
         let mut providers = state.providers.write().await;
-        providers.add_provider(entry).map_err(|e| AppError::Db(
-            sera_db::DbError::Conflict(e),
-        ))?;
+        providers
+            .add_provider(entry)
+            .map_err(|e| AppError::Db(sera_db::DbError::Conflict(e)))?;
         if let Some(path) = &state.providers_path {
-            providers.save_to_file(path).map_err(|e| {
-                AppError::Internal(anyhow::anyhow!("{e}"))
-            })?;
+            providers
+                .save_to_file(path)
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("{e}")))?;
         }
     }
 
-    Ok((StatusCode::CREATED, Json(serde_json::json!({
-        "modelName": body.model_name,
-        "result": "added"
-    }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "modelName": body.model_name,
+            "result": "added"
+        })),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,13 +136,15 @@ pub async fn update_provider(
                 })
             })?;
         if let Some(path) = &state.providers_path {
-            providers.save_to_file(path).map_err(|e| {
-                AppError::Internal(anyhow::anyhow!("{e}"))
-            })?;
+            providers
+                .save_to_file(path)
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("{e}")))?;
         }
     }
 
-    Ok(Json(serde_json::json!({"success": true, "modelName": model_name})))
+    Ok(Json(
+        serde_json::json!({"success": true, "modelName": model_name}),
+    ))
 }
 
 /// DELETE /api/providers/:modelName
@@ -159,9 +162,9 @@ pub async fn delete_provider(
             })
         })?;
         if let Some(path) = &state.providers_path {
-            providers.save_to_file(path).map_err(|e| {
-                AppError::Internal(anyhow::anyhow!("{e}"))
-            })?;
+            providers
+                .save_to_file(path)
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("{e}")))?;
         }
     }
 

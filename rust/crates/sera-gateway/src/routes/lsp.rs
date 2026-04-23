@@ -2,10 +2,10 @@
 //! Routes LSP requests to managed language server processes.
 #![allow(dead_code, unused_imports)]
 
-use axum::{extract::State, http::StatusCode, Json};
-use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 use crate::state::AppState;
+use axum::{Json, extract::State, http::StatusCode};
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 pub struct DefinitionRequest {
@@ -39,7 +39,9 @@ pub async fn definition(
     // LSP server routing not yet implemented — requires a running language server process
     // managed by sera-runtime. Until then, return 501 Not Implemented.
     tracing::warn!(file = %body.file, "LSP definition: language server routing not yet available");
-    Err(AppError::Internal(anyhow::anyhow!("LSP server routing not yet implemented — requires running language server process")))
+    Err(AppError::Internal(anyhow::anyhow!(
+        "LSP server routing not yet implemented — requires running language server process"
+    )))
 }
 
 #[derive(Deserialize)]
@@ -63,7 +65,9 @@ pub async fn references(
 
     // LSP server routing not yet implemented — requires a running language server process
     tracing::warn!(file = %body.file, "LSP references: language server routing not yet available");
-    Err(AppError::Internal(anyhow::anyhow!("LSP server routing not yet implemented — requires running language server process")))
+    Err(AppError::Internal(anyhow::anyhow!(
+        "LSP server routing not yet implemented — requires running language server process"
+    )))
 }
 
 #[derive(Deserialize)]
@@ -97,5 +101,7 @@ pub async fn symbols(
 
     // LSP server routing not yet implemented — requires a running language server process
     tracing::warn!(file = %body.file, "LSP symbols: language server routing not yet available");
-    Err(AppError::Internal(anyhow::anyhow!("LSP server routing not yet implemented — requires running language server process")))
+    Err(AppError::Internal(anyhow::anyhow!(
+        "LSP server routing not yet implemented — requires running language server process"
+    )))
 }

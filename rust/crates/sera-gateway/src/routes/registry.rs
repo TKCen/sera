@@ -1,9 +1,9 @@
 //! Registry endpoints — advanced template and instance CRUD.
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -18,7 +18,7 @@ use crate::state::AppState;
 pub async fn list_templates(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<TemplateResponse>>, AppError> {
-    let rows = AgentRepository::list_templates(state.db.inner()).await?;
+    let rows = AgentRepository::list_templates(state.db.require_pg_pool()).await?;
     let templates: Vec<TemplateResponse> = rows
         .into_iter()
         .map(|r| TemplateResponse {
@@ -37,7 +37,7 @@ pub async fn get_template(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<TemplateResponse>, AppError> {
-    let row = AgentRepository::get_template(state.db.inner(), &name).await?;
+    let row = AgentRepository::get_template(state.db.require_pg_pool(), &name).await?;
     Ok(Json(TemplateResponse {
         name: row.name,
         display_name: row.display_name,
@@ -75,11 +75,11 @@ pub async fn upsert_template(
     .bind(&body.display_name)
     .bind(&body.category)
     .bind(&body.spec)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
-    let row = AgentRepository::get_template(state.db.inner(), &body.name).await?;
+    let row = AgentRepository::get_template(state.db.require_pg_pool(), &body.name).await?;
     Ok((
         StatusCode::CREATED,
         Json(TemplateResponse {
@@ -110,11 +110,11 @@ pub async fn update_template(
     .bind(&body.category)
     .bind(&body.spec)
     .bind(&name)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
-    let row = AgentRepository::get_template(state.db.inner(), &name).await?;
+    let row = AgentRepository::get_template(state.db.require_pg_pool(), &name).await?;
     Ok(Json(TemplateResponse {
         name: row.name,
         display_name: row.display_name,
@@ -131,7 +131,7 @@ pub async fn delete_template(
 ) -> Result<StatusCode, AppError> {
     let result = sqlx::query("DELETE FROM agent_templates WHERE name = $1")
         .bind(&name)
-        .execute(state.db.inner())
+        .execute(state.db.require_pg_pool())
         .await
         .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
@@ -144,4 +144,3 @@ pub async fn delete_template(
     }
     Ok(StatusCode::NO_CONTENT)
 }
-

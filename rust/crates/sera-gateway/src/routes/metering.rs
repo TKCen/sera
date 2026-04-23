@@ -1,9 +1,9 @@
 //! Metering and budget endpoints.
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -27,10 +27,18 @@ pub async fn get_agent_budget(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<BudgetResponse>, AppError> {
-    let status = MeteringRepository::check_budget(state.db.inner(), &agent_id).await?;
+    let status = MeteringRepository::check_budget(state.db.require_pg_pool(), &agent_id).await?;
     Ok(Json(BudgetResponse {
-        max_llm_tokens_per_hour: if status.hourly_quota > 0 { Some(status.hourly_quota) } else { None },
-        max_llm_tokens_per_day: if status.daily_quota > 0 { Some(status.daily_quota) } else { None },
+        max_llm_tokens_per_hour: if status.hourly_quota > 0 {
+            Some(status.hourly_quota)
+        } else {
+            None
+        },
+        max_llm_tokens_per_day: if status.daily_quota > 0 {
+            Some(status.daily_quota)
+        } else {
+            None
+        },
         current_hour_tokens: status.hourly_used,
         current_day_tokens: status.daily_used,
     }))
@@ -51,14 +59,18 @@ pub async fn update_agent_budget(
     Json(body): Json<UpdateBudgetRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Resolve: null or 0 → 0 (unlimited), absent → None (keep existing)
-    let hourly = body.max_llm_tokens_per_hour.map(|v| if v == 0 { 0 } else { v });
-    let daily = body.max_llm_tokens_per_day.map(|v| if v == 0 { 0 } else { v });
+    let hourly = body
+        .max_llm_tokens_per_hour
+        .map(|v| if v == 0 { 0 } else { v });
+    let daily = body
+        .max_llm_tokens_per_day
+        .map(|v| if v == 0 { 0 } else { v });
 
     if hourly.is_none() && daily.is_none() {
         return Ok(Json(serde_json::json!({"success": true})));
     }
 
-    MeteringRepository::upsert_quota(state.db.inner(), &agent_id, hourly, daily).await?;
+    MeteringRepository::upsert_quota(state.db.require_pg_pool(), &agent_id, hourly, daily).await?;
     Ok(Json(serde_json::json!({"success": true})))
 }
 
@@ -67,7 +79,7 @@ pub async fn reset_agent_budget(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let deleted = MeteringRepository::reset_usage(state.db.inner(), &agent_id).await?;
+    let deleted = MeteringRepository::reset_usage(state.db.require_pg_pool(), &agent_id).await?;
     Ok(Json(serde_json::json!({
         "success": true,
         "deletedRows": deleted
@@ -95,7 +107,7 @@ pub async fn record_usage(
     Json(body): Json<RecordUsageRequest>,
 ) -> Result<StatusCode, AppError> {
     MeteringRepository::record_usage(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         sera_db::metering::RecordUsageInput {
             agent_id: &body.agent_id,
             circle_id: body.circle_id.as_deref(),
@@ -127,7 +139,7 @@ pub async fn get_usage(
     State(state): State<AppState>,
     axum::extract::Query(_params): axum::extract::Query<UsageQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let rows = MeteringRepository::global_daily_usage(state.db.inner()).await?;
+    let rows = MeteringRepository::global_daily_usage(state.db.require_pg_pool()).await?;
     let data: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|r| {
@@ -145,7 +157,7 @@ pub async fn get_usage(
 pub async fn get_global_budget(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let rows = MeteringRepository::global_daily_usage(state.db.inner()).await?;
+    let rows = MeteringRepository::global_daily_usage(state.db.require_pg_pool()).await?;
     let usage: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|r| {
@@ -162,7 +174,7 @@ pub async fn get_global_budget(
 pub async fn get_agent_rankings(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let rows = MeteringRepository::agent_rankings(state.db.inner()).await?;
+    let rows = MeteringRepository::agent_rankings(state.db.require_pg_pool()).await?;
     let rankings: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|r| {
@@ -179,7 +191,7 @@ pub async fn get_agent_rankings(
 pub async fn get_metering_summary(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let row = MeteringRepository::today_summary(state.db.inner()).await?;
+    let row = MeteringRepository::today_summary(state.db.require_pg_pool()).await?;
     Ok(Json(serde_json::json!({
         "todayTotalTokens": row.total_tokens.unwrap_or(0)
     })))

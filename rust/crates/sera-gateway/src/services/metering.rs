@@ -7,8 +7,8 @@ use std::sync::Arc;
 use sqlx::PgPool;
 use thiserror::Error;
 
-use sera_db::metering::MeteringRepository;
 use sera_db::DbError;
+use sera_db::metering::MeteringRepository;
 use sera_types::metering::BudgetStatus;
 
 /// Metering service error types.
@@ -142,12 +142,12 @@ impl MeteringService {
     fn estimate_cost(model: &str, input_tokens: i64, output_tokens: i64) -> f64 {
         // Approximate pricing (input, output) per 1M tokens in USD
         let (input_rate, output_rate) = match model {
-            m if m.contains("gpt-4") => (0.03, 0.06),         // GPT-4: $30/$60 per 1M
-            m if m.contains("gpt-3.5") => (0.0015, 0.002),    // GPT-3.5: $1.50/$2 per 1M
+            m if m.contains("gpt-4") => (0.03, 0.06), // GPT-4: $30/$60 per 1M
+            m if m.contains("gpt-3.5") => (0.0015, 0.002), // GPT-3.5: $1.50/$2 per 1M
             m if m.contains("claude-3-opus") => (0.015, 0.075), // Claude 3 Opus
             m if m.contains("claude-3-sonnet") => (0.003, 0.015), // Claude 3 Sonnet
             m if m.contains("claude-3-haiku") => (0.00025, 0.00125), // Claude 3 Haiku
-            _ => (0.001, 0.002), // Default estimate
+            _ => (0.001, 0.002),                      // Default estimate
         };
 
         let input_cost = (input_tokens as f64 / 1_000_000.0) * input_rate;

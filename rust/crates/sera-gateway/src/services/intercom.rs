@@ -42,9 +42,7 @@ pub struct IntercomService {
 impl IntercomService {
     /// Create a new Intercom service.
     pub fn new(centrifugo: Arc<CentrifugoClient>) -> Self {
-        Self {
-            client: centrifugo,
-        }
+        Self { client: centrifugo }
     }
 
     /// Publish data to a channel.

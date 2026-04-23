@@ -7,20 +7,18 @@
 //! "Integration with gateway pipeline (`change_artifact: None` in sera.rs)".
 
 use axum::{
+    Json,
     extract::{Extension, Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 
 use sera_auth::{ActingContext, CapabilityToken, ChangeProposer};
 
-use sera_gateway::evolve_token::EvolveTokenError;
+use crate::evolve_token::EvolveTokenError;
 use sera_meta::artifact_pipeline::{DryRunOutcome, PipelineError};
 use sera_meta::constitutional::ConstitutionalRule;
-use sera_meta::{
-    BlastRadius, ChangeArtifact, ChangeArtifactScope, ChangeArtifactStatus,
-};
+use sera_meta::{BlastRadius, ChangeArtifact, ChangeArtifactScope, ChangeArtifactStatus};
 use sera_types::evolution::{ChangeArtifactId, ConstitutionalEnforcementPoint};
 use sera_types::hook::{HookContext, HookPoint};
 
@@ -102,8 +100,9 @@ pub struct OperatorKeyRequest {
 
 /// Parse a hex-encoded `ChangeArtifactId` from the URL path.
 fn parse_id(raw: &str) -> Result<ChangeArtifactId, AppError> {
-    let bytes = hex::decode(raw)
-        .map_err(|_| AppError::BadRequest("invalid change_artifact id: not valid hex".to_string()))?;
+    let bytes = hex::decode(raw).map_err(|_| {
+        AppError::BadRequest("invalid change_artifact id: not valid hex".to_string())
+    })?;
     if bytes.len() != 32 {
         return Err(AppError::BadRequest(format!(
             "invalid change_artifact id: expected 32 bytes, got {}",
@@ -342,11 +341,10 @@ pub async fn evaluate(
 
     fire_change_artifact_hook(&state, id, "evaluate").await?;
 
-    let snapshot = state
-        .evolution_pipeline
-        .get(&id)
-        .await
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("artifact missing after evaluate")))?;
+    let snapshot =
+        state.evolution_pipeline.get(&id).await.ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!("artifact missing after evaluate"))
+        })?;
     Ok(Json(serde_json::json!({
         "artifact": ArtifactView::from(&snapshot),
         "outcome": match outcome {
@@ -415,9 +413,7 @@ pub async fn supply_operator_key(
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Authorization gate: reject requests that arrive without an ActingContext
     // (auth middleware not configured) before touching the pipeline.
-    let Extension(ctx) = ctx.ok_or_else(|| {
-        AppError::Auth(sera_auth::AuthError::Unauthorized)
-    })?;
+    let Extension(ctx) = ctx.ok_or_else(|| AppError::Auth(sera_auth::AuthError::Unauthorized))?;
 
     // Only operator-scoped principals (operator_id is Some) may supply the key.
     // Agent-scoped callers and bare API keys without an operator_id are rejected.
@@ -451,17 +447,13 @@ pub async fn get(
     Path(id_hex): Path<String>,
 ) -> Result<Json<ArtifactView>, AppError> {
     let id = parse_id(&id_hex)?;
-    let snapshot = state
-        .evolution_pipeline
-        .get(&id)
-        .await
-        .ok_or_else(|| {
-            AppError::Db(sera_db::DbError::NotFound {
-                entity: "change_artifact",
-                key: "id",
-                value: id_hex.clone(),
-            })
-        })?;
+    let snapshot = state.evolution_pipeline.get(&id).await.ok_or_else(|| {
+        AppError::Db(sera_db::DbError::NotFound {
+            entity: "change_artifact",
+            key: "id",
+            value: id_hex.clone(),
+        })
+    })?;
     Ok(Json(ArtifactView::from(&snapshot)))
 }
 
@@ -708,7 +700,10 @@ mod tests {
         // Only 1 unique signer — still short of 3, apply must fail.
         let apply_err = pipeline.apply(&id).await.unwrap_err();
         assert!(
-            matches!(apply_err, PipelineError::InsufficientApprovals { have: 1, .. }),
+            matches!(
+                apply_err,
+                PipelineError::InsufficientApprovals { have: 1, .. }
+            ),
             "expected InsufficientApprovals, got: {apply_err}"
         );
     }
@@ -835,7 +830,10 @@ mod tests {
         let err = pipeline_err(PipelineError::NotFound("x".to_string()));
         assert!(matches!(
             err,
-            AppError::Db(sera_db::DbError::NotFound { entity: "change_artifact", .. })
+            AppError::Db(sera_db::DbError::NotFound {
+                entity: "change_artifact",
+                ..
+            })
         ));
     }
 
@@ -1018,9 +1016,7 @@ mod tests {
 
     /// Helper: build a Tier-3 ConstitutionalRuleSet artifact through propose +
     /// evaluate + 3 approvals, stopping just before apply.
-    async fn tier3_ready_for_operator_key(
-        pipeline: &ArtifactPipeline,
-    ) -> ChangeArtifactId {
+    async fn tier3_ready_for_operator_key(pipeline: &ArtifactPipeline) -> ChangeArtifactId {
         let proposer = ChangeProposer {
             principal_id: "eng-lead".to_string(),
             capability_token: CapabilityToken {
@@ -1133,7 +1129,10 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             err,
-            AppError::Db(sera_db::DbError::NotFound { entity: "change_artifact", .. })
+            AppError::Db(sera_db::DbError::NotFound {
+                entity: "change_artifact",
+                ..
+            })
         ));
     }
 
@@ -1165,7 +1164,7 @@ mod tests {
     // live Postgres, so we drive the pipeline directly after performing the
     // same verify() the handler does, reproducing the full gate.
 
-    use sera_gateway::evolve_token::EvolveTokenSigner;
+    use crate::evolve_token::EvolveTokenSigner;
 
     fn signed_token(signer: &EvolveTokenSigner, scope: BlastRadius) -> CapabilityToken {
         let mut tok = CapabilityToken {
@@ -1622,8 +1621,12 @@ mod tests {
         signer.sign(&mut token);
 
         // Both verify calls pass (the signature is valid).
-        signer.verify(&token, BlastRadius::SingleHookConfig).unwrap();
-        signer.verify(&token, BlastRadius::SingleHookConfig).unwrap();
+        signer
+            .verify(&token, BlastRadius::SingleHookConfig)
+            .unwrap();
+        signer
+            .verify(&token, BlastRadius::SingleHookConfig)
+            .unwrap();
 
         let pipeline = Arc::new(ArtifactPipeline::with_defaults());
 
@@ -1653,7 +1656,10 @@ mod tests {
         let id1 = pipeline.propose(art1).await.unwrap();
         let id2 = pipeline.propose(art2).await.unwrap();
 
-        assert_ne!(id1.hash, id2.hash, "distinct proposals must produce distinct IDs");
+        assert_ne!(
+            id1.hash, id2.hash,
+            "distinct proposals must produce distinct IDs"
+        );
         assert!(pipeline.get(&id1).await.is_some());
         assert!(pipeline.get(&id2).await.is_some());
     }
@@ -1673,7 +1679,9 @@ mod tests {
         signer.sign(&mut token);
 
         // Signature is valid — but caller claims a different principal.
-        signer.verify(&token, BlastRadius::SingleHookConfig).unwrap();
+        signer
+            .verify(&token, BlastRadius::SingleHookConfig)
+            .unwrap();
         let proposer_principal = "principal-b";
         let result: Result<(), AppError> = if token.id != proposer_principal {
             Err(AppError::Forbidden(format!(

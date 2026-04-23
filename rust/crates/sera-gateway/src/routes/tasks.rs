@@ -1,16 +1,17 @@
 //! Task queue endpoints.
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::envelope::{Op, Submission, W3cTraceContext};
+#[allow(unused_imports)]
+use crate::session_store::SessionStore as _;
 use sera_db::tasks::TaskRepository;
-use sera_gateway::envelope::{Op, Submission, W3cTraceContext};
-use sera_gateway::session_store::SessionStore as _;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -70,12 +71,14 @@ pub async fn list_tasks(
     let limit = params.limit.unwrap_or(50).min(500);
     // If status=all or no status, get full history; otherwise filter
     let rows = if params.status.as_deref() == Some("all") || params.status.is_none() {
-        TaskRepository::get_history(state.db.inner(), &agent_id, limit).await?
+        TaskRepository::get_history(state.db.require_pg_pool(), &agent_id, limit).await?
     } else {
         // Use history and filter in-memory (DB method doesn't support status filter yet)
-        let all = TaskRepository::get_history(state.db.inner(), &agent_id, limit).await?;
+        let all = TaskRepository::get_history(state.db.require_pg_pool(), &agent_id, limit).await?;
         let status_filter = params.status.unwrap_or_default();
-        all.into_iter().filter(|t| t.status == status_filter).collect()
+        all.into_iter()
+            .filter(|t| t.status == status_filter)
+            .collect()
     };
     Ok(Json(rows.into_iter().map(task_to_response).collect()))
 }
@@ -127,7 +130,7 @@ pub async fn enqueue_task(
     }
 
     let row = TaskRepository::enqueue(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &agent_id,
         &body.task,
         body.context.as_ref(),
@@ -142,7 +145,7 @@ pub async fn poll_next_task(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let row = TaskRepository::poll_next(state.db.inner(), &agent_id).await?;
+    let row = TaskRepository::poll_next(state.db.require_pg_pool(), &agent_id).await?;
     match row {
         Some(task) => Ok(Json(serde_json::to_value(task_to_response(task)).unwrap())),
         None => Ok(Json(serde_json::json!(null))),
@@ -194,7 +197,7 @@ pub async fn submit_task_result(
     }
 
     let row = TaskRepository::submit_result(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &task_id,
         body.result.as_ref(),
         body.error.as_deref(),
@@ -216,7 +219,7 @@ pub async fn get_task_history(
     Query(params): Query<HistoryQuery>,
 ) -> Result<Json<Vec<TaskResponse>>, AppError> {
     let limit = params.limit.unwrap_or(50).min(500);
-    let rows = TaskRepository::get_history(state.db.inner(), &agent_id, limit).await?;
+    let rows = TaskRepository::get_history(state.db.require_pg_pool(), &agent_id, limit).await?;
     Ok(Json(rows.into_iter().map(task_to_response).collect()))
 }
 
@@ -225,7 +228,7 @@ pub async fn get_task(
     State(state): State<AppState>,
     Path((_agent_id, task_id)): Path<(String, String)>,
 ) -> Result<Json<TaskResponse>, AppError> {
-    let row = TaskRepository::get_by_id(state.db.inner(), &task_id).await?;
+    let row = TaskRepository::get_by_id(state.db.require_pg_pool(), &task_id).await?;
     Ok(Json(task_to_response(row)))
 }
 
@@ -234,6 +237,6 @@ pub async fn cancel_task(
     State(state): State<AppState>,
     Path((_agent_id, task_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    TaskRepository::cancel(state.db.inner(), &task_id).await?;
+    TaskRepository::cancel(state.db.require_pg_pool(), &task_id).await?;
     Ok(Json(serde_json::json!({"success": true})))
 }

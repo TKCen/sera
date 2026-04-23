@@ -1,9 +1,9 @@
 //! Heartbeat service — stale agent detection and monitoring.
 
-use std::sync::Arc;
-use sqlx::PgPool;
-use time::OffsetDateTime;
 use sera_db::DbError;
+use sqlx::PgPool;
+use std::sync::Arc;
+use time::OffsetDateTime;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HeartbeatError {
@@ -61,7 +61,7 @@ impl HeartbeatService {
              FROM agent_instances
              WHERE last_heartbeat_at < NOW() - INTERVAL '1 second' * $1::int
              AND status NOT IN ('stopped', 'terminated')
-             ORDER BY last_heartbeat_at ASC"
+             ORDER BY last_heartbeat_at ASC",
         )
         .bind(threshold_secs)
         .fetch_all(self.pool.as_ref())

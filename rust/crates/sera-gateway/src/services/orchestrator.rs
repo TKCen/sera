@@ -7,10 +7,10 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use std::sync::Arc;
 use sera_config::DataRoot;
-use sera_db::{agents::AgentRepository, DbError};
+use sera_db::{DbError, agents::AgentRepository};
 use sera_tools::sandbox::{SandboxConfig, SandboxHandle, SandboxProvider};
+use std::sync::Arc;
 
 /// High-level agent lifecycle orchestration.
 ///
@@ -97,16 +97,13 @@ impl Orchestrator {
     ) -> Result<String, OrchestratorError> {
         Self::validate_manifest(&manifest)?;
 
-        let obj = manifest.as_object().ok_or_else(|| {
-            OrchestratorError::ManifestValidation("Invalid manifest".to_string())
-        })?;
+        let obj = manifest
+            .as_object()
+            .ok_or_else(|| OrchestratorError::ManifestValidation("Invalid manifest".to_string()))?;
 
-        let name = obj
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                OrchestratorError::ManifestValidation("'name' must be a string".to_string())
-            })?;
+        let name = obj.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+            OrchestratorError::ManifestValidation("'name' must be a string".to_string())
+        })?;
 
         let template_name = obj
             .get("template_name")
@@ -215,11 +212,7 @@ impl Orchestrator {
             .await
             .map_err(OrchestratorError::Db)?;
 
-        tracing::info!(
-            agent_id,
-            container_id,
-            "Started agent container"
-        );
+        tracing::info!(agent_id, container_id, "Started agent container");
 
         Ok(container_id)
     }
@@ -335,10 +328,12 @@ mod tests {
 
         let result = Orchestrator::validate_manifest(&manifest);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Missing required field: name"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Missing required field: name")
+        );
     }
 
     #[test]
@@ -350,10 +345,12 @@ mod tests {
 
         let result = Orchestrator::validate_manifest(&manifest);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Missing required field: template_name"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Missing required field: template_name")
+        );
     }
 
     #[test]
@@ -365,10 +362,12 @@ mod tests {
 
         let result = Orchestrator::validate_manifest(&manifest);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Missing required field: image"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Missing required field: image")
+        );
     }
 
     #[test]
@@ -404,9 +403,11 @@ mod tests {
 
         let result = Orchestrator::validate_manifest(&manifest);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("must be a JSON object"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("must be a JSON object")
+        );
     }
 }

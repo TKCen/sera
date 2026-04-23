@@ -3,9 +3,9 @@
 #![allow(dead_code, unused_imports)]
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -63,9 +63,7 @@ impl McpRegistry {
 }
 
 /// GET /api/mcp-servers — list all registered MCP servers
-pub async fn list_mcp_servers(
-    State(state): State<AppState>,
-) -> Json<Vec<McpServer>> {
+pub async fn list_mcp_servers(State(state): State<AppState>) -> Json<Vec<McpServer>> {
     let registry = state.mcp_registry.read().await;
     let servers: Vec<McpServer> = registry.list().into_iter().cloned().collect();
     Json(servers)
@@ -266,9 +264,7 @@ pub struct ExecuteToolResponse {
 }
 
 /// POST /api/tools/execute — execute a tool with provided arguments
-pub async fn execute_tool(
-    Json(_body): Json<ExecuteToolRequest>,
-) -> Json<ExecuteToolResponse> {
+pub async fn execute_tool(Json(_body): Json<ExecuteToolRequest>) -> Json<ExecuteToolResponse> {
     let start = std::time::Instant::now();
     Json(ExecuteToolResponse {
         success: true,
@@ -291,9 +287,7 @@ pub struct ValidateToolResponse {
 }
 
 /// POST /api/tools/validate — validate tool arguments
-pub async fn validate_tool(
-    Json(_body): Json<ValidateToolRequest>,
-) -> Json<ValidateToolResponse> {
+pub async fn validate_tool(Json(_body): Json<ValidateToolRequest>) -> Json<ValidateToolResponse> {
     Json(ValidateToolResponse {
         valid: true,
         errors: vec![],

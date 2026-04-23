@@ -1,16 +1,21 @@
 //! Permission request endpoints for filesystem/network access grants.
-#![allow(dead_code, unused_imports, clippy::type_complexity, clippy::too_many_arguments)]
+#![allow(
+    dead_code,
+    unused_imports,
+    clippy::type_complexity,
+    clippy::too_many_arguments
+)]
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use sera_gateway::envelope::{Op, Submission, W3cTraceContext};
-use sera_gateway::session_store::SessionStore as _;
+use crate::envelope::{Op, Submission, W3cTraceContext};
+use crate::session_store::SessionStore as _;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -133,7 +138,7 @@ pub async fn create_request(
     .bind(&body.access_level)
     .bind(&body.justification)
     .bind(now)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create permission request: {e}")))?;
 
@@ -163,27 +168,40 @@ pub async fn list_requests(
 ) -> Result<Json<Vec<PermissionRequestResponse>>, AppError> {
     let status_filter = query.status.unwrap_or_else(|| "pending".to_string());
 
-    let rows_result: Result<Vec<(uuid::Uuid, uuid::Uuid, String, String, String, Option<String>, String, Option<String>, Option<time::OffsetDateTime>, time::OffsetDateTime)>, _> =
-        if let Some(agent_id) = &query.agent_id {
-            let parsed_id = uuid::Uuid::parse_str(agent_id)
-                .map_err(|_| AppError::Internal(anyhow::anyhow!("Invalid agent ID format")))?;
-            sqlx::query_as(
+    let rows_result: Result<
+        Vec<(
+            uuid::Uuid,
+            uuid::Uuid,
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<time::OffsetDateTime>,
+            time::OffsetDateTime,
+        )>,
+        _,
+    > = if let Some(agent_id) = &query.agent_id {
+        let parsed_id = uuid::Uuid::parse_str(agent_id)
+            .map_err(|_| AppError::Internal(anyhow::anyhow!("Invalid agent ID format")))?;
+        sqlx::query_as(
                 "SELECT id, agent_instance_id, permission_type, resource, access_level, justification, status, reviewed_by, reviewed_at, created_at
                  FROM permission_requests WHERE status = $1 AND agent_instance_id = $2 ORDER BY created_at DESC"
             )
             .bind(&status_filter)
             .bind(parsed_id)
-            .fetch_all(state.db.inner())
+            .fetch_all(state.db.require_pg_pool())
             .await
-        } else {
-            sqlx::query_as(
+    } else {
+        sqlx::query_as(
                 "SELECT id, agent_instance_id, permission_type, resource, access_level, justification, status, reviewed_by, reviewed_at, created_at
                  FROM permission_requests WHERE status = $1 ORDER BY created_at DESC"
             )
             .bind(&status_filter)
-            .fetch_all(state.db.inner())
+            .fetch_all(state.db.require_pg_pool())
             .await
-        };
+    };
 
     // If the table doesn't exist, return empty array instead of 500
     let rows = match rows_result {
@@ -194,14 +212,16 @@ pub async fn list_requests(
                 tracing::warn!("permission_requests table not found, returning empty list");
                 return Ok(Json(vec![]));
             }
-            return Err(AppError::Internal(anyhow::anyhow!("Failed to list permission requests: {e}")));
+            return Err(AppError::Internal(anyhow::anyhow!(
+                "Failed to list permission requests: {e}"
+            )));
         }
     };
 
     let results: Vec<PermissionRequestResponse> = rows
         .into_iter()
-        .map(|(id, agent_id, ptype, resource, access, justification, status, reviewed_by, reviewed_at, created_at)| {
-            to_permission_response(
+        .map(
+            |(
                 id,
                 agent_id,
                 ptype,
@@ -212,8 +232,21 @@ pub async fn list_requests(
                 reviewed_by,
                 reviewed_at,
                 created_at,
-            )
-        })
+            )| {
+                to_permission_response(
+                    id,
+                    agent_id,
+                    ptype,
+                    resource,
+                    access,
+                    justification,
+                    status,
+                    reviewed_by,
+                    reviewed_at,
+                    created_at,
+                )
+            },
+        )
         .collect();
 
     Ok(Json(results))
@@ -224,15 +257,15 @@ pub async fn approve_request(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let parsed_id =
-        uuid::Uuid::parse_str(&id).map_err(|_| AppError::Internal(anyhow::anyhow!("Invalid ID format")))?;
+    let parsed_id = uuid::Uuid::parse_str(&id)
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("Invalid ID format")))?;
 
     let result = sqlx::query(
         "UPDATE permission_requests SET status = 'approved', reviewed_by = 'operator', reviewed_at = NOW()
          WHERE id = $1 AND status = 'pending'"
     )
     .bind(parsed_id)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to approve: {e}")))?;
 
@@ -244,7 +277,9 @@ pub async fn approve_request(
         }));
     }
 
-    Ok(Json(serde_json::json!({"status": "approved", "id": parsed_id.to_string()})))
+    Ok(Json(
+        serde_json::json!({"status": "approved", "id": parsed_id.to_string()}),
+    ))
 }
 
 /// POST /api/permission-requests/:id/deny — deny request
@@ -252,15 +287,15 @@ pub async fn deny_request(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let parsed_id =
-        uuid::Uuid::parse_str(&id).map_err(|_| AppError::Internal(anyhow::anyhow!("Invalid ID format")))?;
+    let parsed_id = uuid::Uuid::parse_str(&id)
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("Invalid ID format")))?;
 
     let result = sqlx::query(
         "UPDATE permission_requests SET status = 'denied', reviewed_by = 'operator', reviewed_at = NOW()
          WHERE id = $1 AND status = 'pending'"
     )
     .bind(parsed_id)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to deny: {e}")))?;
 
@@ -272,7 +307,9 @@ pub async fn deny_request(
         }));
     }
 
-    Ok(Json(serde_json::json!({"status": "denied", "id": parsed_id.to_string()})))
+    Ok(Json(
+        serde_json::json!({"status": "denied", "id": parsed_id.to_string()}),
+    ))
 }
 
 #[cfg(test)]

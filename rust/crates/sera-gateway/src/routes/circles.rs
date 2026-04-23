@@ -1,9 +1,9 @@
 //! Circles endpoint.
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -27,7 +27,7 @@ pub struct CircleResponse {
 pub async fn list_circles(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<CircleResponse>>, AppError> {
-    let rows = CircleRepository::list_circles(state.db.inner()).await?;
+    let rows = CircleRepository::list_circles(state.db.require_pg_pool()).await?;
     let circles: Vec<CircleResponse> = rows
         .into_iter()
         .map(|r| CircleResponse {
@@ -55,19 +55,22 @@ pub async fn create_circle(
 ) -> Result<(StatusCode, Json<CircleResponse>), AppError> {
     let id = uuid::Uuid::new_v4().to_string();
     CircleRepository::create_circle(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &id,
         &body.name,
         &body.display_name,
         body.description.as_deref(),
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(CircleResponse {
-        id,
-        name: body.name,
-        display_name: body.display_name,
-        description: body.description,
-    })))
+    Ok((
+        StatusCode::CREATED,
+        Json(CircleResponse {
+            id,
+            name: body.name,
+            display_name: body.display_name,
+            description: body.description,
+        }),
+    ))
 }
 
 /// GET /api/circles/{id} — get a single circle by id.
@@ -75,7 +78,7 @@ pub async fn get_circle(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<CircleResponse>, AppError> {
-    let row = CircleRepository::get_by_name(state.db.inner(), &id).await?;
+    let row = CircleRepository::get_by_name(state.db.require_pg_pool(), &id).await?;
     Ok(Json(CircleResponse {
         id: row.id.to_string(),
         name: row.name,
@@ -98,7 +101,7 @@ pub async fn update_circle(
     Json(body): Json<UpdateCircleRequest>,
 ) -> Result<Json<CircleResponse>, AppError> {
     // Get current circle first to merge updates
-    let current = CircleRepository::get_by_name(state.db.inner(), &id).await?;
+    let current = CircleRepository::get_by_name(state.db.require_pg_pool(), &id).await?;
 
     let display_name = body.display_name.unwrap_or(current.display_name);
     let description = body.description.or(current.description);
@@ -110,11 +113,11 @@ pub async fn update_circle(
     .bind(&display_name)
     .bind(&description)
     .bind(&id)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
-    let row = CircleRepository::get_by_name(state.db.inner(), &id).await?;
+    let row = CircleRepository::get_by_name(state.db.require_pg_pool(), &id).await?;
     Ok(Json(CircleResponse {
         id: row.id.to_string(),
         name: row.name,
@@ -128,7 +131,7 @@ pub async fn delete_circle(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    CircleRepository::delete_circle(state.db.inner(), &id).await?;
+    CircleRepository::delete_circle(state.db.require_pg_pool(), &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -159,10 +162,12 @@ pub async fn get_constitution(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ConstitutionResponse>, AppError> {
-    let row = CircleRepository::get_by_name(state.db.inner(), &id).await?;
-    let versions =
-        CircleRepository::get_constitution_versions(state.db.inner(), &row.id.to_string())
-            .await?;
+    let row = CircleRepository::get_by_name(state.db.require_pg_pool(), &id).await?;
+    let versions = CircleRepository::get_constitution_versions(
+        state.db.require_pg_pool(),
+        &row.id.to_string(),
+    )
+    .await?;
     let version = versions.last().map(|v| v.version).unwrap_or(0);
     Ok(Json(ConstitutionResponse {
         text: row.constitution,
@@ -177,29 +182,25 @@ pub async fn update_constitution(
     Json(body): Json<UpdateConstitutionRequest>,
 ) -> Result<Json<ConstitutionResponse>, AppError> {
     // Resolve the circle first so we have a stable UUID.
-    let row = CircleRepository::get_by_name(state.db.inner(), &id).await?;
+    let row = CircleRepository::get_by_name(state.db.require_pg_pool(), &id).await?;
     let circle_id = row.id.to_string();
 
     // Compute SHA-256 of the new text (empty string hash for None/clear).
     let text_ref = body.text.as_deref().unwrap_or("");
     let hash = hex::encode(Sha256::digest(text_ref.as_bytes()));
 
-    let changed_by = body
-        .changed_by
-        .as_deref()
-        .unwrap_or("unknown")
-        .to_string();
+    let changed_by = body.changed_by.as_deref().unwrap_or("unknown").to_string();
 
     // Write the updated constitution text and record the audit entry.
     CircleRepository::update_constitution(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &circle_id,
         body.text.as_deref(),
     )
     .await?;
 
     let new_version = CircleRepository::record_constitution_update(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &circle_id,
         &hash,
         &changed_by,
@@ -288,7 +289,7 @@ mod tests {
 
     #[test]
     fn update_constitution_request_deserializes_full() {
-        let input = r#"{"text":"# Rules\n- Be safe","changedBy":"alice"}"#;
+        let input = r##"{"text":"# Rules\n- Be safe","changedBy":"alice"}"##;
         let req: UpdateConstitutionRequest = serde_json::from_str(input).unwrap();
         assert_eq!(req.text.as_deref(), Some("# Rules\n- Be safe"));
         assert_eq!(req.changed_by.as_deref(), Some("alice"));

@@ -4,11 +4,11 @@
 //! GET  /v1/llm/models            — list available models
 
 use axum::{
+    Json,
     body::Body,
     extract::{Extension, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -115,13 +115,10 @@ pub async fn chat_completions(
     let agent_id = agent_id.as_str();
 
     // Resolve model name
-    let model_name = body
-        .model
-        .as_deref()
-        .unwrap_or(&state.config.llm.model);
+    let model_name = body.model.as_deref().unwrap_or(&state.config.llm.model);
 
     // ── 1. Budget gate ──────────────────────────────────────────────────────
-    match MeteringRepository::check_budget(state.db.inner(), agent_id).await {
+    match MeteringRepository::check_budget(state.db.require_pg_pool(), agent_id).await {
         Ok(budget) if !budget.allowed => {
             let period = if budget.hourly_used >= budget.hourly_quota {
                 "hourly"
@@ -166,7 +163,10 @@ pub async fn chat_completions(
 
     let (base_url, api_key) = match provider {
         Some(p) => (p.base_url.clone(), p.api_key.clone()),
-        None => (state.config.llm.base_url.clone(), state.config.llm.api_key.clone()),
+        None => (
+            state.config.llm.base_url.clone(),
+            state.config.llm.api_key.clone(),
+        ),
     };
     drop(providers);
 
@@ -233,12 +233,21 @@ pub async fn chat_completions(
     if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&response_bytes)
         && let Some(usage) = json.get("usage")
     {
-        let prompt = usage.get("prompt_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-        let completion = usage.get("completion_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-        let total = usage.get("total_tokens").and_then(|v| v.as_i64()).unwrap_or(prompt + completion);
+        let prompt = usage
+            .get("prompt_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let completion = usage
+            .get("completion_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let total = usage
+            .get("total_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(prompt + completion);
 
         // Record usage asynchronously (fire-and-forget)
-        let pool = state.db.inner().clone();
+        let pool = state.db.require_pg_pool().clone();
         let agent = agent_id.to_string();
         let model = model_name.to_string();
         tokio::spawn(async move {

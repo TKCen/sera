@@ -177,9 +177,7 @@ impl GitCliKnowledgeStore {
             )));
         }
 
-        let commit_hash = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .to_string();
+        let commit_hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
         // Tag the commit
         let version_count = self.version_count(agent_id).await?;
@@ -282,8 +280,7 @@ impl GitCliKnowledgeStore {
             )));
         }
 
-        String::from_utf8(output.stdout)
-            .map_err(|_| KnowledgeGitError::InvalidUtf8)
+        String::from_utf8(output.stdout).map_err(|_| KnowledgeGitError::InvalidUtf8)
     }
 
     /// Get a unified diff between two versions.
@@ -312,8 +309,7 @@ impl GitCliKnowledgeStore {
             )));
         }
 
-        String::from_utf8(output.stdout)
-            .map_err(|_| KnowledgeGitError::InvalidUtf8)
+        String::from_utf8(output.stdout).map_err(|_| KnowledgeGitError::InvalidUtf8)
     }
 }
 

@@ -1,11 +1,11 @@
 //! MCP Server Manager — lifecycle management for external MCP server processes.
 
-use std::collections::HashMap;
-use uuid::Uuid;
-use time::OffsetDateTime;
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use std::collections::HashMap;
 use std::sync::Arc;
+use time::OffsetDateTime;
+use tokio::sync::RwLock;
+use uuid::Uuid;
 
 /// Error type for MCP server management operations.
 #[derive(Debug, thiserror::Error)]
@@ -185,7 +185,11 @@ impl McpServerManager {
     }
 
     /// Update the status of a server.
-    pub async fn update_status(&self, server_id: Uuid, status: McpServerStatus) -> Result<(), McpError> {
+    pub async fn update_status(
+        &self,
+        server_id: Uuid,
+        status: McpServerStatus,
+    ) -> Result<(), McpError> {
         let mut servers = self.servers.write().await;
         let entry = servers
             .get_mut(&server_id)
@@ -216,7 +220,10 @@ mod tests {
             transport: McpTransport::Stdio,
         };
 
-        let id = manager.register_server(config).await.expect("should register");
+        let id = manager
+            .register_server(config)
+            .await
+            .expect("should register");
         assert!(!id.is_nil());
     }
 
@@ -340,10 +347,7 @@ mod tests {
             .await
             .expect("should register");
 
-        let retrieved = manager
-            .get_config(id)
-            .await
-            .expect("should get config");
+        let retrieved = manager.get_config(id).await.expect("should get config");
 
         assert_eq!(retrieved.name, config.name);
         assert_eq!(retrieved.command, config.command);
@@ -404,7 +408,10 @@ mod tests {
             .await
             .expect("should call tool");
 
-        assert_eq!(result.get("tool").and_then(|v| v.as_str()), Some("test_tool"));
+        assert_eq!(
+            result.get("tool").and_then(|v| v.as_str()),
+            Some("test_tool")
+        );
     }
 
     #[tokio::test]
@@ -464,8 +471,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&info).expect("should serialize");
-        let deserialized: McpServerInfo =
-            serde_json::from_str(&json).expect("should deserialize");
+        let deserialized: McpServerInfo = serde_json::from_str(&json).expect("should deserialize");
 
         assert_eq!(deserialized.id, info.id);
         assert_eq!(deserialized.name, info.name);
@@ -509,9 +515,12 @@ mod tests {
         let stopped_json = serde_json::json!("stopped");
         let error_json = serde_json::json!("error");
 
-        let running: McpServerStatus = serde_json::from_value(running_json).expect("should deserialize");
-        let stopped: McpServerStatus = serde_json::from_value(stopped_json).expect("should deserialize");
-        let error: McpServerStatus = serde_json::from_value(error_json).expect("should deserialize");
+        let running: McpServerStatus =
+            serde_json::from_value(running_json).expect("should deserialize");
+        let stopped: McpServerStatus =
+            serde_json::from_value(stopped_json).expect("should deserialize");
+        let error: McpServerStatus =
+            serde_json::from_value(error_json).expect("should deserialize");
 
         assert_eq!(running, McpServerStatus::Running);
         assert_eq!(stopped, McpServerStatus::Stopped);

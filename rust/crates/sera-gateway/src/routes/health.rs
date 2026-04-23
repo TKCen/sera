@@ -1,7 +1,7 @@
 //! Health check endpoints — public, no auth required.
 
-use axum::{extract::State, Json};
-use serde_json::{json, Value};
+use axum::{Json, extract::State};
+use serde_json::{Value, json};
 
 use crate::state::AppState;
 
@@ -17,7 +17,7 @@ pub async fn health_detail(State(state): State<AppState>) -> Json<Value> {
 
     // Database check
     let db_status = match sqlx::query_scalar::<_, i32>("SELECT 1")
-        .fetch_one(state.db.inner())
+        .fetch_one(state.db.require_pg_pool())
         .await
     {
         Ok(_) => "healthy",
@@ -38,7 +38,11 @@ pub async fn health_detail(State(state): State<AppState>) -> Json<Value> {
     }));
 
     // Centrifugo
-    let centrifugo_status = if state.centrifugo.is_some() { "healthy" } else { "degraded" };
+    let centrifugo_status = if state.centrifugo.is_some() {
+        "healthy"
+    } else {
+        "degraded"
+    };
     components.push(json!({
         "name": "centrifugo",
         "status": centrifugo_status,
@@ -57,9 +61,9 @@ pub async fn health_detail(State(state): State<AppState>) -> Json<Value> {
             COUNT(*) FILTER (WHERE status = 'running'), \
             COUNT(*) FILTER (WHERE status = 'stopped'), \
             COUNT(*) FILTER (WHERE status = 'error') \
-         FROM agent_instances"
+         FROM agent_instances",
     )
-    .fetch_one(state.db.inner())
+    .fetch_one(state.db.require_pg_pool())
     .await
     {
         Ok((total, running, stopped, errored)) => json!({

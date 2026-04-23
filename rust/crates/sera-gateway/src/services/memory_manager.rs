@@ -85,15 +85,8 @@ impl MemoryManager {
         name: &str,
         content: &str,
     ) -> Result<Uuid, MemoryError> {
-        let row = MemoryRepository::create_block(
-            &self.pool,
-            agent_id,
-            name,
-            content,
-            None,
-            false,
-        )
-        .await?;
+        let row = MemoryRepository::create_block(&self.pool, agent_id, name, content, None, false)
+            .await?;
         Ok(row.id)
     }
 

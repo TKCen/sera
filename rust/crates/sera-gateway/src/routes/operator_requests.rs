@@ -1,9 +1,9 @@
 //! Operator request endpoints.
 
 use axum::{
+    Json,
     extract::{Extension, Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -25,10 +25,7 @@ use crate::state::AppState;
 /// hook point that an `operator.request` MCP tool invocation should call
 /// before writing to the database, so the ownership check lives in a pure
 /// helper rather than on the axum handler signature.
-pub fn verify_agent_ownership(
-    ctx: &ActingContext,
-    claimed_agent_id: &str,
-) -> Result<(), AppError> {
+pub fn verify_agent_ownership(ctx: &ActingContext, claimed_agent_id: &str) -> Result<(), AppError> {
     match &ctx.agent_id {
         Some(caller_agent_id) if caller_agent_id == claimed_agent_id => Ok(()),
         Some(caller_agent_id) => Err(AppError::Forbidden(format!(
@@ -75,7 +72,7 @@ fn to_response(r: sera_db::operator_requests::OperatorRequestRow) -> OperatorReq
 pub async fn pending_count(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let count = OperatorRequestRepository::count_pending(state.db.inner()).await?;
+    let count = OperatorRequestRepository::count_pending(state.db.require_pg_pool()).await?;
     Ok(Json(serde_json::json!({"count": count})))
 }
 
@@ -94,7 +91,7 @@ pub async fn list_requests(
 ) -> Result<Json<Vec<OperatorRequestResponse>>, AppError> {
     let limit = params.limit.unwrap_or(50).min(500);
     let rows = OperatorRequestRepository::list(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         params.status.as_deref(),
         params.agent_id.as_deref(),
         limit,
@@ -139,7 +136,7 @@ pub async fn create_request(
     .bind(&body.title)
     .bind(&body.payload)
     .bind(now)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create operator request: {e}")))?;
 
@@ -174,7 +171,7 @@ pub async fn respond_to_request(
     Json(body): Json<RespondRequest>,
 ) -> Result<Json<OperatorRequestResponse>, AppError> {
     let row = OperatorRequestRepository::respond(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &id,
         &body.status,
         body.response.as_ref(),

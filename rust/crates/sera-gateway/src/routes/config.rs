@@ -1,10 +1,6 @@
 //! Config, system, and misc stub endpoints.
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{Json, extract::State, http::StatusCode};
 use serde::Serialize;
 
 use crate::error::AppError;
@@ -19,9 +15,7 @@ pub struct LlmConfigResponse {
 }
 
 /// GET /api/config/llm
-pub async fn get_llm_config(
-    State(state): State<AppState>,
-) -> Json<LlmConfigResponse> {
+pub async fn get_llm_config(State(state): State<AppState>) -> Json<LlmConfigResponse> {
     Json(LlmConfigResponse {
         base_url: state.config.llm.base_url.clone(),
         model: state.config.llm.model.clone(),
@@ -76,9 +70,7 @@ pub struct ProviderResponse {
 }
 
 /// GET /api/config/providers — list configured LLM providers
-pub async fn list_providers(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+pub async fn list_providers(State(state): State<AppState>) -> Json<serde_json::Value> {
     let providers = state.providers.read().await;
     let list: Vec<ProviderResponse> = providers
         .providers

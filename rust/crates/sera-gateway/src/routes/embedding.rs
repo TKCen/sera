@@ -2,9 +2,9 @@
 #![allow(dead_code, unused_imports)]
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -37,55 +37,76 @@ fn get_known_models() -> HashMap<String, KnownEmbeddingModel> {
     let mut models = HashMap::new();
 
     // Ollama models
-    models.insert("nomic-embed-text".to_string(), KnownEmbeddingModel {
-        id: "nomic-embed-text".to_string(),
-        provider: "ollama".to_string(),
-        dimension: 768,
-        description: Some("Nomic embed text (768-dim)".to_string()),
-    });
+    models.insert(
+        "nomic-embed-text".to_string(),
+        KnownEmbeddingModel {
+            id: "nomic-embed-text".to_string(),
+            provider: "ollama".to_string(),
+            dimension: 768,
+            description: Some("Nomic embed text (768-dim)".to_string()),
+        },
+    );
 
-    models.insert("all-minilm-l6-v2".to_string(), KnownEmbeddingModel {
-        id: "all-minilm-l6-v2".to_string(),
-        provider: "ollama".to_string(),
-        dimension: 384,
-        description: Some("All-MiniLM-L6-v2 (384-dim)".to_string()),
-    });
+    models.insert(
+        "all-minilm-l6-v2".to_string(),
+        KnownEmbeddingModel {
+            id: "all-minilm-l6-v2".to_string(),
+            provider: "ollama".to_string(),
+            dimension: 384,
+            description: Some("All-MiniLM-L6-v2 (384-dim)".to_string()),
+        },
+    );
 
-    models.insert("bge-small".to_string(), KnownEmbeddingModel {
-        id: "bge-small".to_string(),
-        provider: "ollama".to_string(),
-        dimension: 384,
-        description: Some("BGE Small (384-dim)".to_string()),
-    });
+    models.insert(
+        "bge-small".to_string(),
+        KnownEmbeddingModel {
+            id: "bge-small".to_string(),
+            provider: "ollama".to_string(),
+            dimension: 384,
+            description: Some("BGE Small (384-dim)".to_string()),
+        },
+    );
 
-    models.insert("bge-base".to_string(), KnownEmbeddingModel {
-        id: "bge-base".to_string(),
-        provider: "ollama".to_string(),
-        dimension: 768,
-        description: Some("BGE Base (768-dim)".to_string()),
-    });
+    models.insert(
+        "bge-base".to_string(),
+        KnownEmbeddingModel {
+            id: "bge-base".to_string(),
+            provider: "ollama".to_string(),
+            dimension: 768,
+            description: Some("BGE Base (768-dim)".to_string()),
+        },
+    );
 
     // OpenAI models
-    models.insert("text-embedding-ada-002".to_string(), KnownEmbeddingModel {
-        id: "text-embedding-ada-002".to_string(),
-        provider: "openai".to_string(),
-        dimension: 1536,
-        description: Some("OpenAI Ada (1536-dim)".to_string()),
-    });
+    models.insert(
+        "text-embedding-ada-002".to_string(),
+        KnownEmbeddingModel {
+            id: "text-embedding-ada-002".to_string(),
+            provider: "openai".to_string(),
+            dimension: 1536,
+            description: Some("OpenAI Ada (1536-dim)".to_string()),
+        },
+    );
 
-    models.insert("text-embedding-3-small".to_string(), KnownEmbeddingModel {
-        id: "text-embedding-3-small".to_string(),
-        provider: "openai".to_string(),
-        dimension: 1536,
-        description: Some("OpenAI 3 Small (1536-dim)".to_string()),
-    });
+    models.insert(
+        "text-embedding-3-small".to_string(),
+        KnownEmbeddingModel {
+            id: "text-embedding-3-small".to_string(),
+            provider: "openai".to_string(),
+            dimension: 1536,
+            description: Some("OpenAI 3 Small (1536-dim)".to_string()),
+        },
+    );
 
-    models.insert("text-embedding-3-large".to_string(), KnownEmbeddingModel {
-        id: "text-embedding-3-large".to_string(),
-        provider: "openai".to_string(),
-        dimension: 3072,
-        description: Some("OpenAI 3 Large (3072-dim)".to_string()),
-    });
+    models.insert(
+        "text-embedding-3-large".to_string(),
+        KnownEmbeddingModel {
+            id: "text-embedding-3-large".to_string(),
+            provider: "openai".to_string(),
+            dimension: 3072,
+            description: Some("OpenAI 3 Large (3072-dim)".to_string()),
+        },
+    );
 
     models
 }
@@ -148,11 +169,7 @@ pub async fn get_status(State(state): State<AppState>) -> Json<EmbeddingStatus> 
     let client = reqwest::Client::new();
 
     let start = std::time::Instant::now();
-    match client
-        .get(format!("{base_url}/api/tags"))
-        .send()
-        .await
-    {
+    match client.get(format!("{base_url}/api/tags")).send().await {
         Ok(resp) if resp.status().is_success() => Json(EmbeddingStatus {
             status: "available".to_string(),
             message: "Ollama is reachable".to_string(),
@@ -189,13 +206,12 @@ pub async fn list_models(
         .get(format!("{base_url}/api/tags"))
         .send()
         .await
-        .map_err(|e| {
-            AppError::Internal(anyhow::anyhow!("Ollama unreachable: {e}"))
-        })?;
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Ollama unreachable: {e}")))?;
 
-    let body: serde_json::Value = resp.json().await.map_err(|e| {
-        AppError::Internal(anyhow::anyhow!("Invalid Ollama response: {e}"))
-    })?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Invalid Ollama response: {e}")))?;
 
     let models = body
         .get("models")
@@ -336,12 +352,10 @@ pub async fn update_config(
 
     if dimension_changed {
         response["dimensionChanged"] = serde_json::json!(true);
-        response["warning"] = serde_json::json!(
-            format!(
-                "Vector dimension changed from {} to {}. Existing vectors are incompatible and will need to be re-indexed.",
-                old_config.dimensions, body.dimension
-            )
-        );
+        response["warning"] = serde_json::json!(format!(
+            "Vector dimension changed from {} to {}. Existing vectors are incompatible and will need to be re-indexed.",
+            old_config.dimensions, body.dimension
+        ));
     }
 
     Ok(Json(response))
@@ -424,7 +438,8 @@ pub async fn test_embedding_config(
             // Test OpenAI-compatible /v1/models endpoint
             let mut headers = reqwest::header::HeaderMap::new();
             if let Some(api_key) = &body.api_key
-                && let Ok(val) = format!("Bearer {}", api_key).parse() {
+                && let Ok(val) = format!("Bearer {}", api_key).parse()
+            {
                 headers.insert(reqwest::header::AUTHORIZATION, val);
             }
 
@@ -456,12 +471,10 @@ pub async fn test_embedding_config(
                     })
                 })
         }
-        _ => {
-            Ok(serde_json::json!({
-                "status": "error",
-                "message": format!("Unknown provider: {}", body.provider)
-            }))
-        }
+        _ => Ok(serde_json::json!({
+            "status": "error",
+            "message": format!("Unknown provider: {}", body.provider)
+        })),
     };
 
     Ok(Json(result.unwrap_or_else(|e| e)))
@@ -475,9 +488,7 @@ pub async fn test_embedding_config(
 /// similarity search). Until a provider is wired through
 /// `state.config.ollama`/OpenAI, this endpoint returns `503 Service
 /// Unavailable`.
-pub async fn embed_text(
-    Json(body): Json<EmbedRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
+pub async fn embed_text(Json(body): Json<EmbedRequest>) -> (StatusCode, Json<serde_json::Value>) {
     let _ = body.text;
     tracing::warn!(
         "POST /api/embedding/embed called but no embedding provider is configured in sera-gateway"
@@ -604,13 +615,12 @@ pub async fn test_embedding(
         }))
         .send()
         .await
-        .map_err(|e| {
-            AppError::Internal(anyhow::anyhow!("Ollama embed request failed: {e}"))
-        })?;
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Ollama embed request failed: {e}")))?;
 
-    let result: serde_json::Value = resp.json().await.map_err(|e| {
-        AppError::Internal(anyhow::anyhow!("Invalid embedding response: {e}"))
-    })?;
+    let result: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Invalid embedding response: {e}")))?;
 
     let embeddings = result
         .get("embeddings")

@@ -1,9 +1,9 @@
 //! Auth endpoints — API key management and session info.
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -39,7 +39,7 @@ pub async fn get_me() -> Json<serde_json::Value> {
 pub async fn list_api_keys(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ApiKeyResponse>>, AppError> {
-    let rows = ApiKeyRepository::list(state.db.inner(), None).await?;
+    let rows = ApiKeyRepository::list(state.db.require_pg_pool(), None).await?;
     let keys: Vec<ApiKeyResponse> = rows
         .into_iter()
         .map(|r| ApiKeyResponse {
@@ -72,7 +72,7 @@ pub async fn create_api_key(
     let roles = body.roles.unwrap_or_else(|| vec!["operator".to_string()]);
 
     let row = ApiKeyRepository::create(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &body.name,
         &key_hash,
         "bootstrap-operator",
@@ -97,7 +97,7 @@ pub async fn delete_api_key(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let revoked = ApiKeyRepository::revoke(state.db.inner(), &id).await?;
+    let revoked = ApiKeyRepository::revoke(state.db.require_pg_pool(), &id).await?;
     if !revoked {
         return Err(AppError::Db(sera_db::DbError::NotFound {
             entity: "api_key",

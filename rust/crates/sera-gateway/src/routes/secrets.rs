@@ -1,9 +1,9 @@
 //! Secrets vault endpoints.
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -40,7 +40,7 @@ pub struct SecretValueResponse {
 pub async fn list_secrets(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<SecretMetadataResponse>>, AppError> {
-    let rows = SecretsRepository::list(state.db.inner()).await?;
+    let rows = SecretsRepository::list(state.db.require_pg_pool()).await?;
     let secrets: Vec<SecretMetadataResponse> = rows
         .into_iter()
         .map(|r| SecretMetadataResponse {
@@ -61,7 +61,7 @@ pub async fn get_secret(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> Result<Json<SecretValueResponse>, AppError> {
-    let row = SecretsRepository::get_by_name(state.db.inner(), &key)
+    let row = SecretsRepository::get_by_name(state.db.require_pg_pool(), &key)
         .await?
         .ok_or_else(|| {
             AppError::Db(sera_db::DbError::NotFound {
@@ -110,7 +110,7 @@ pub async fn create_secret(
     let exposure = body.exposure.as_deref().unwrap_or("agent-env");
 
     SecretsRepository::upsert(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         sera_db::secrets::UpsertSecretInput {
             name: &body.key,
             encrypted_value: &encrypted_value,
@@ -132,7 +132,7 @@ pub async fn delete_secret(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let deleted = SecretsRepository::delete(state.db.inner(), &key).await?;
+    let deleted = SecretsRepository::delete(state.db.require_pg_pool(), &key).await?;
     if !deleted {
         return Err(AppError::Db(sera_db::DbError::NotFound {
             entity: "secret",

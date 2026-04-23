@@ -2,12 +2,12 @@
 //!
 //! Supports hot-reloading provider configs with graceful error recovery.
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{warn, debug};
+use tokio::sync::RwLock;
+use tracing::{debug, warn};
 
 use sera_config::providers::ProviderEntry;
 
@@ -77,14 +77,21 @@ impl DynamicProviderManager {
     pub async fn refresh_providers(&self) -> Result<(), ProviderManagerError> {
         match self.load_providers().await {
             Ok(new_providers) => {
-                debug!(count = new_providers.len(), "Loaded {} providers", new_providers.len());
+                debug!(
+                    count = new_providers.len(),
+                    "Loaded {} providers",
+                    new_providers.len()
+                );
                 self.validate_providers(&new_providers)?;
                 let mut cache = self.providers.write().await;
                 *cache = new_providers;
                 Ok(())
             }
             Err(e) => {
-                warn!("Failed to refresh providers: {}. Keeping previous config.", e);
+                warn!(
+                    "Failed to refresh providers: {}. Keeping previous config.",
+                    e
+                );
                 Err(e)
             }
         }
@@ -96,44 +103,60 @@ impl DynamicProviderManager {
     }
 
     /// Parse configuration from YAML or JSON string.
-    fn parse_config(&self, contents: &str) -> Result<Vec<DynamicProviderEntry>, ProviderManagerError> {
+    fn parse_config(
+        &self,
+        contents: &str,
+    ) -> Result<Vec<DynamicProviderEntry>, ProviderManagerError> {
         // Try YAML first
         if let Ok(config) = serde_yaml::from_str::<serde_yaml::Value>(contents)
-            && let Some(providers) = config.get("providers") {
-                return serde_yaml::from_value(providers.clone())
-                    .map_err(|e| ProviderManagerError::Parse(format!("YAML parse error: {}", e)));
-            }
+            && let Some(providers) = config.get("providers")
+        {
+            return serde_yaml::from_value(providers.clone())
+                .map_err(|e| ProviderManagerError::Parse(format!("YAML parse error: {}", e)));
+        }
 
         // Try JSON as fallback
         match serde_json::from_str::<serde_json::Value>(contents) {
             Ok(config) => {
                 if let Some(providers) = config.get("providers") {
-                    return serde_json::from_value(providers.clone())
-                        .map_err(|e| ProviderManagerError::Parse(format!("JSON parse error: {}", e)));
+                    return serde_json::from_value(providers.clone()).map_err(|e| {
+                        ProviderManagerError::Parse(format!("JSON parse error: {}", e))
+                    });
                 }
-                Err(ProviderManagerError::Parse("No 'providers' key found".to_string()))
+                Err(ProviderManagerError::Parse(
+                    "No 'providers' key found".to_string(),
+                ))
             }
-            Err(e) => Err(ProviderManagerError::Parse(format!("JSON parse error: {}", e))),
+            Err(e) => Err(ProviderManagerError::Parse(format!(
+                "JSON parse error: {}",
+                e
+            ))),
         }
     }
 
     /// Validate provider entries.
-    fn validate_providers(&self, providers: &[DynamicProviderEntry]) -> Result<(), ProviderManagerError> {
+    fn validate_providers(
+        &self,
+        providers: &[DynamicProviderEntry],
+    ) -> Result<(), ProviderManagerError> {
         for (idx, provider) in providers.iter().enumerate() {
             if provider.name.is_empty() {
-                return Err(ProviderManagerError::Validation(
-                    format!("Provider at index {} has empty name", idx),
-                ));
+                return Err(ProviderManagerError::Validation(format!(
+                    "Provider at index {} has empty name",
+                    idx
+                )));
             }
             if provider.api_url.is_empty() {
-                return Err(ProviderManagerError::Validation(
-                    format!("Provider '{}' has empty api_url", provider.name),
-                ));
+                return Err(ProviderManagerError::Validation(format!(
+                    "Provider '{}' has empty api_url",
+                    provider.name
+                )));
             }
             if provider.model.is_empty() {
-                return Err(ProviderManagerError::Validation(
-                    format!("Provider '{}' has empty model", provider.name),
-                ));
+                return Err(ProviderManagerError::Validation(format!(
+                    "Provider '{}' has empty model",
+                    provider.name
+                )));
             }
         }
         Ok(())
@@ -283,17 +306,25 @@ providers:
     enabled: true
     priority: 1
 "#;
-        temp_file.write_all(yaml.as_bytes()).expect("Failed to write temp file");
+        temp_file
+            .write_all(yaml.as_bytes())
+            .expect("Failed to write temp file");
         temp_file.flush().expect("Failed to flush temp file");
 
         let manager = DynamicProviderManager::new(temp_file.path().to_path_buf());
-        let providers = manager.load_providers().await.expect("Failed to load providers");
+        let providers = manager
+            .load_providers()
+            .await
+            .expect("Failed to load providers");
 
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].name, "test-provider");
 
         // Test refresh
-        manager.refresh_providers().await.expect("Failed to refresh");
+        manager
+            .refresh_providers()
+            .await
+            .expect("Failed to refresh");
         let cached = manager.get_providers().await;
         assert_eq!(cached.len(), 1);
         assert_eq!(cached[0].name, "test-provider");
@@ -312,7 +343,9 @@ providers:
     enabled: true
     priority: 1
 "#;
-        temp_file.write_all(yaml.as_bytes()).expect("Failed to write");
+        temp_file
+            .write_all(yaml.as_bytes())
+            .expect("Failed to write");
         temp_file.flush().expect("Failed to flush");
 
         // Just verify the file can be created and written

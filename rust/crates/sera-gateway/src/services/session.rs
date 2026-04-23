@@ -8,8 +8,8 @@ use std::sync::Arc;
 use sqlx::PgPool;
 use thiserror::Error;
 
-use sera_db::sessions::{MessageRow, SessionRepository, SessionRow};
 use sera_db::DbError;
+use sera_db::sessions::{MessageRow, SessionRepository, SessionRow};
 
 /// Session service error types.
 #[derive(Debug, Error)]
@@ -98,7 +98,7 @@ impl SessionService {
         let message = sqlx::query_as::<_, MessageRow>(
             "INSERT INTO chat_messages (id, session_id, role, content, metadata)
              VALUES ($1, $2, $3, $4, NULL)
-             RETURNING id, session_id, role, content, metadata, created_at"
+             RETURNING id, session_id, role, content, metadata, created_at",
         )
         .bind(id)
         .bind(session_uuid)

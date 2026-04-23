@@ -163,7 +163,10 @@ pub struct ConvergenceConfig {
 
 impl ConvergenceConfig {
     pub fn new(max_rounds: u32, min_improvement: f64) -> Self {
-        Self { max_rounds, min_improvement }
+        Self {
+            max_rounds,
+            min_improvement,
+        }
     }
 
     /// Decide whether to stop after `round` (0-indexed) given the latest
@@ -232,7 +235,10 @@ mod tests {
         assert_eq!(sccs.len(), 1);
         let mut comp = sccs[0].clone();
         comp.sort();
-        assert_eq!(comp, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        assert_eq!(
+            comp,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
     }
 
     #[test]
@@ -257,7 +263,10 @@ mod tests {
     #[tokio::test]
     async fn test_concat_aggregator() {
         let agg = ConcatAggregator;
-        let out = agg.aggregate(vec![json!(1), json!("two"), json!({"k": 3})]).await.unwrap();
+        let out = agg
+            .aggregate(vec![json!(1), json!("two"), json!({"k": 3})])
+            .await
+            .unwrap();
         assert_eq!(out, json!([1, "two", {"k": 3}]));
     }
 

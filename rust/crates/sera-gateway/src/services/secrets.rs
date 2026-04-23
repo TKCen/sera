@@ -3,10 +3,10 @@
 //! Provides encryption, decryption, and lifecycle management for secrets
 //! with secure key handling and comprehensive error types.
 
-use std::sync::Arc;
-use sqlx::PgPool;
-use sera_db::secrets::{SecretsRepository, SecretMetadataRow};
 use sera_db::DbError;
+use sera_db::secrets::{SecretMetadataRow, SecretsRepository};
+use sqlx::PgPool;
+use std::sync::Arc;
 
 /// High-level secrets management service.
 ///
@@ -34,7 +34,11 @@ impl SecretsManager {
     ///
     /// # Returns
     /// The UUID of the stored secret, or a SecretsError
-    pub async fn store_secret(&self, key: &str, plaintext: &str) -> Result<uuid::Uuid, SecretsError> {
+    pub async fn store_secret(
+        &self,
+        key: &str,
+        plaintext: &str,
+    ) -> Result<uuid::Uuid, SecretsError> {
         let (ciphertext, iv) = SecretsRepository::encrypt(plaintext, &self.master_key)
             .map_err(|e| SecretsError::Encryption(format!("encryption failed: {}", e)))?;
 
@@ -130,11 +134,11 @@ mod tests {
         let plaintext = "my-secret-value";
         let key = "test-master-key";
 
-        let (ciphertext, iv) = SecretsRepository::encrypt(plaintext, key)
-            .expect("encryption failed");
+        let (ciphertext, iv) =
+            SecretsRepository::encrypt(plaintext, key).expect("encryption failed");
 
-        let decrypted = SecretsRepository::decrypt(&ciphertext, &iv, key)
-            .expect("decryption failed");
+        let decrypted =
+            SecretsRepository::decrypt(&ciphertext, &iv, key).expect("decryption failed");
 
         assert_eq!(decrypted, plaintext);
     }
@@ -146,7 +150,10 @@ mod tests {
         let (ct1, _) = SecretsRepository::encrypt("secret1", key).expect("encryption 1 failed");
         let (ct2, _) = SecretsRepository::encrypt("secret2", key).expect("encryption 2 failed");
 
-        assert_ne!(ct1, ct2, "Different plaintexts should produce different ciphertexts");
+        assert_ne!(
+            ct1, ct2,
+            "Different plaintexts should produce different ciphertexts"
+        );
     }
 
     #[test]
@@ -162,7 +169,10 @@ mod tests {
         // IVs (nonces) should differ due to OsRng randomness
         assert_ne!(iv1, iv2, "Nonces should be different");
         // Ciphertexts should also differ
-        assert_ne!(ct1, ct2, "Ciphertexts should differ even for same plaintext");
+        assert_ne!(
+            ct1, ct2,
+            "Ciphertexts should differ even for same plaintext"
+        );
     }
 
     #[test]
@@ -171,8 +181,8 @@ mod tests {
         let key1 = "key1";
         let key2 = "key2";
 
-        let (ciphertext, iv) = SecretsRepository::encrypt(plaintext, key1)
-            .expect("encryption failed");
+        let (ciphertext, iv) =
+            SecretsRepository::encrypt(plaintext, key1).expect("encryption failed");
 
         let result = SecretsRepository::decrypt(&ciphertext, &iv, key2);
         assert!(result.is_err(), "Decryption with wrong key should fail");

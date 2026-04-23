@@ -2,13 +2,13 @@
 #![allow(dead_code, unused_imports, clippy::type_complexity)]
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{info, error};
+use tracing::{error, info};
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -50,15 +50,23 @@ pub async fn list_identities(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Vec<ServiceIdentity>>, AppError> {
-    let parsed_id =
-        uuid::Uuid::parse_str(&agent_id).map_err(|_| AppError::Internal(anyhow::anyhow!("Invalid agent ID format")))?;
+    let parsed_id = uuid::Uuid::parse_str(&agent_id)
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("Invalid agent ID format")))?;
 
-    let rows: Vec<(uuid::Uuid, uuid::Uuid, String, String, String, time::OffsetDateTime, Option<time::OffsetDateTime>)> = sqlx::query_as(
+    let rows: Vec<(
+        uuid::Uuid,
+        uuid::Uuid,
+        String,
+        String,
+        String,
+        time::OffsetDateTime,
+        Option<time::OffsetDateTime>,
+    )> = sqlx::query_as(
         "SELECT id, agent_instance_id, service_name, key_id, status, created_at, rotated_at
-         FROM service_identities WHERE agent_instance_id = $1 ORDER BY created_at DESC"
+         FROM service_identities WHERE agent_instance_id = $1 ORDER BY created_at DESC",
     )
     .bind(parsed_id)
-    .fetch_all(state.db.inner())
+    .fetch_all(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to list identities: {e}")))?;
 
@@ -84,8 +92,8 @@ pub async fn create_identity(
     Path(agent_id): Path<String>,
     Json(body): Json<CreateIdentityRequest>,
 ) -> Result<(StatusCode, Json<ServiceIdentity>), AppError> {
-    let parsed_id =
-        uuid::Uuid::parse_str(&agent_id).map_err(|_| AppError::Internal(anyhow::anyhow!("Invalid agent ID format")))?;
+    let parsed_id = uuid::Uuid::parse_str(&agent_id)
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("Invalid agent ID format")))?;
 
     let id = uuid::Uuid::new_v4();
     let key_id = format!("sk-{}", &uuid::Uuid::new_v4().to_string()[..12]);
@@ -104,7 +112,7 @@ pub async fn create_identity(
     .bind(&key_id)
     .bind(&key_hash)
     .bind(now)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create identity: {e}")))?;
 
@@ -134,7 +142,7 @@ pub async fn delete_identity(
 
     let result = sqlx::query("DELETE FROM service_identities WHERE id = $1")
         .bind(parsed_identity_id)
-        .execute(state.db.inner())
+        .execute(state.db.require_pg_pool())
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to delete identity: {e}")))?;
 
@@ -165,13 +173,13 @@ pub async fn rotate_key(
 
     let result = sqlx::query(
         "UPDATE service_identities SET key_id = $1, key_hash = $2, rotated_at = $3
-         WHERE id = $4"
+         WHERE id = $4",
     )
     .bind(&new_key_id)
     .bind(&new_key_hash)
     .bind(now)
     .bind(parsed_identity_id)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to rotate key: {e}")))?;
 

@@ -3,12 +3,12 @@
 //! Provides a unified interface for loading, listing, and querying circles
 //! from both YAML manifests and the database.
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use thiserror::Error;
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
 /// Circle definition from YAML manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,7 +144,10 @@ impl CircleRegistry {
             let path = entry.path();
 
             // Only process YAML files
-            if !matches!(path.extension().and_then(|s| s.to_str()), Some("yaml" | "yml")) {
+            if !matches!(
+                path.extension().and_then(|s| s.to_str()),
+                Some("yaml" | "yml")
+            ) {
                 continue;
             }
 
@@ -200,12 +203,7 @@ impl CircleRegistry {
         match sera_db::circles::CircleRepository::get_by_name(&self.pool, id).await {
             Ok(row) => {
                 // Merge with YAML definition if available
-                let def = self
-                    .definitions
-                    .read()
-                    .unwrap()
-                    .get(&row.name)
-                    .cloned();
+                let def = self.definitions.read().unwrap().get(&row.name).cloned();
 
                 let circle = if let Some(def) = def {
                     self.definition_to_circle(def, row.id.to_string())
@@ -265,7 +263,10 @@ impl CircleRegistry {
     }
 
     /// List all agents in a circle.
-    pub async fn list_agents_in_circle(&self, circle_id: &str) -> Result<Vec<String>, CircleRegistryError> {
+    pub async fn list_agents_in_circle(
+        &self,
+        circle_id: &str,
+    ) -> Result<Vec<String>, CircleRegistryError> {
         let circle = self.get_circle(circle_id).await?;
         Ok(circle.agents)
     }
@@ -339,8 +340,8 @@ knowledge:
 
         create_test_yaml(temp_dir.path(), "test", yaml_content);
 
-        let definitions = CircleRegistry::load_from_yaml(temp_dir.path())
-            .expect("Failed to load circles");
+        let definitions =
+            CircleRegistry::load_from_yaml(temp_dir.path()).expect("Failed to load circles");
 
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].metadata.name, "test-circle");
@@ -375,11 +376,14 @@ agents:
         create_test_yaml(temp_dir.path(), "circle1", circle1);
         create_test_yaml(temp_dir.path(), "circle2", circle2);
 
-        let definitions = CircleRegistry::load_from_yaml(temp_dir.path())
-            .expect("Failed to load circles");
+        let definitions =
+            CircleRegistry::load_from_yaml(temp_dir.path()).expect("Failed to load circles");
 
         assert_eq!(definitions.len(), 2);
-        let names: Vec<_> = definitions.iter().map(|d| d.metadata.name.as_str()).collect();
+        let names: Vec<_> = definitions
+            .iter()
+            .map(|d| d.metadata.name.as_str())
+            .collect();
         assert!(names.contains(&"circle1"));
         assert!(names.contains(&"circle2"));
     }
@@ -390,8 +394,8 @@ agents:
         let invalid_yaml = "{ invalid: [unclosed";
         create_test_yaml(temp_dir.path(), "invalid", invalid_yaml);
 
-        let definitions = CircleRegistry::load_from_yaml(temp_dir.path())
-            .expect("Failed to load circles");
+        let definitions =
+            CircleRegistry::load_from_yaml(temp_dir.path()).expect("Failed to load circles");
 
         // Invalid YAML should be skipped, not error
         assert_eq!(definitions.len(), 0);
@@ -400,8 +404,8 @@ agents:
     #[test]
     fn test_load_from_yaml_missing_directory() {
         let non_existent = PathBuf::from("/tmp/sera-nonexistent-12345");
-        let definitions = CircleRegistry::load_from_yaml(&non_existent)
-            .expect("Failed to load circles");
+        let definitions =
+            CircleRegistry::load_from_yaml(&non_existent).expect("Failed to load circles");
 
         // Non-existent directory should return empty list
         assert_eq!(definitions.len(), 0);
@@ -426,8 +430,8 @@ agents: []
         fs::write(temp_dir.path().join("readme.md"), "# Test").expect("Failed to write readme");
         fs::write(temp_dir.path().join("config.json"), "{}").expect("Failed to write json");
 
-        let definitions = CircleRegistry::load_from_yaml(temp_dir.path())
-            .expect("Failed to load circles");
+        let definitions =
+            CircleRegistry::load_from_yaml(temp_dir.path()).expect("Failed to load circles");
 
         // Only the YAML file should be loaded
         assert_eq!(definitions.len(), 1);
@@ -449,8 +453,8 @@ agents: []
 
         create_test_yaml(temp_dir.path(), "circle", circle_yaml);
 
-        let definitions = CircleRegistry::load_from_yaml(temp_dir.path())
-            .expect("Failed to load circles");
+        let definitions =
+            CircleRegistry::load_from_yaml(temp_dir.path()).expect("Failed to load circles");
 
         // Circle with empty name should be skipped
         assert_eq!(definitions.len(), 0);

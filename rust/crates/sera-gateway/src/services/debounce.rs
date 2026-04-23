@@ -90,9 +90,7 @@ impl DebounceBuffer {
             .unwrap_or(false);
 
         if ready {
-            self.sessions
-                .remove(session_key)
-                .map(|buf| buf.messages)
+            self.sessions.remove(session_key).map(|buf| buf.messages)
         } else {
             None
         }
@@ -113,11 +111,7 @@ impl DebounceBuffer {
 
         ready_keys
             .into_iter()
-            .filter_map(|key| {
-                self.sessions
-                    .remove(&key)
-                    .map(|buf| (key, buf.messages))
-            })
+            .filter_map(|key| self.sessions.remove(&key).map(|buf| (key, buf.messages)))
             .collect()
     }
 

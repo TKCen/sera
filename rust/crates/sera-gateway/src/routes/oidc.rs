@@ -2,9 +2,9 @@
 #![allow(dead_code, unused_imports)]
 
 use axum::{
-    extract::{Query, State},
-    http::{header, StatusCode},
     Json,
+    extract::{Query, State},
+    http::{StatusCode, header},
     response::Redirect,
 };
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,10 @@ fn insert_session(token: String, identity: OperatorIdentity) {
 /// Look up the operator identity behind an opaque session token. Returns
 /// `None` if the token is unknown or the store lock is poisoned.
 pub fn lookup_session(token: &str) -> Option<OperatorIdentity> {
-    SESSION_STORE.read().ok().and_then(|s| s.get(token).cloned())
+    SESSION_STORE
+        .read()
+        .ok()
+        .and_then(|s| s.get(token).cloned())
 }
 
 /// Remove a session mapping (logout). No-op on unknown tokens or poisoned
@@ -56,13 +59,15 @@ pub struct OidcConfig {
 }
 
 /// GET /api/auth/oidc-config — return minimal OIDC provider configuration
-pub async fn get_oidc_config(
-    State(state): State<AppState>,
-) -> Result<Json<OidcConfig>, AppError> {
-    let issuer = state.config.oidc_issuer
+pub async fn get_oidc_config(State(state): State<AppState>) -> Result<Json<OidcConfig>, AppError> {
+    let issuer = state
+        .config
+        .oidc_issuer
         .as_ref()
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("OIDC not configured")))?;
-    let client_id = state.config.oidc_client_id
+    let client_id = state
+        .config
+        .oidc_client_id
         .as_ref()
         .unwrap_or(&"sera-web".to_string())
         .clone();
@@ -74,16 +79,22 @@ pub async fn get_oidc_config(
 }
 
 /// GET /api/auth/login — initiate OIDC login flow (redirect to provider)
-pub async fn login(
-    State(state): State<AppState>,
-) -> Result<Redirect, AppError> {
-    let issuer = state.config.oidc_issuer.as_ref()
+pub async fn login(State(state): State<AppState>) -> Result<Redirect, AppError> {
+    let issuer = state
+        .config
+        .oidc_issuer
+        .as_ref()
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("OIDC not configured")))?;
-    let client_id = state.config.oidc_client_id.as_ref()
+    let client_id = state
+        .config
+        .oidc_client_id
+        .as_ref()
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("OIDC client_id not configured")))?;
 
     // Use WEB_ORIGIN (not SERA_EXTERNAL_URL) for frontend redirect
-    let web_origin = state.config.web_origin
+    let web_origin = state
+        .config
+        .web_origin
         .clone()
         .unwrap_or_else(|| "http://localhost:5173".to_string());
     let redirect_uri = format!("{}/auth/callback", web_origin);
@@ -146,15 +157,20 @@ pub async fn callback(
     State(state): State<AppState>,
     Json(body): Json<CallbackRequest>,
 ) -> Result<(StatusCode, Json<CallbackResponse>), AppError> {
-    let issuer = state.config.oidc_issuer.as_ref()
+    let issuer = state
+        .config
+        .oidc_issuer
+        .as_ref()
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("OIDC not configured")))?;
-    let client_id = body.client_id
+    let client_id = body
+        .client_id
         .as_deref()
         .or(state.config.oidc_client_id.as_deref())
         .unwrap_or("sera-web");
-    let client_secret = &state.config.oidc_client_secret
-        .as_ref()
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("OIDC client_secret not configured")))?;
+    let client_secret =
+        &state.config.oidc_client_secret.as_ref().ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!("OIDC client_secret not configured"))
+        })?;
 
     // Determine token endpoint — detect Keycloak pattern
     let base_issuer = issuer.trim_end_matches('/');
@@ -177,7 +193,8 @@ pub async fn callback(
     }
 
     let client = reqwest::Client::new();
-    let resp = client.post(&token_endpoint)
+    let resp = client
+        .post(&token_endpoint)
         .form(&form_data)
         .send()
         .await
@@ -187,10 +204,15 @@ pub async fn callback(
         let status = resp.status();
         let _err_text = resp.text().await.unwrap_or_default();
         // Don't expose sensitive error details to client
-        return Err(AppError::Internal(anyhow::anyhow!("Token exchange failed ({})", status)));
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "Token exchange failed ({})",
+            status
+        )));
     }
 
-    let token_data: serde_json::Value = resp.json().await
+    let token_data: serde_json::Value = resp
+        .json()
+        .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Invalid token response: {e}")))?;
 
     let id_token = token_data["id_token"]
@@ -267,7 +289,8 @@ fn map_groups_to_roles(groups: Vec<String>) -> Vec<String> {
     let mut role_mapping: HashMap<String, String> = HashMap::new();
 
     if let Ok(mapping_str) = std::env::var("OIDC_ROLE_MAPPING")
-        && let Ok(parsed) = serde_json::from_str::<HashMap<String, String>>(&mapping_str) {
+        && let Ok(parsed) = serde_json::from_str::<HashMap<String, String>>(&mapping_str)
+    {
         role_mapping = parsed;
     }
 
@@ -287,7 +310,7 @@ fn map_groups_to_roles(groups: Vec<String>) -> Vec<String> {
 
 /// Decode base64url string (no padding)
 fn base64_url_decode(s: &str) -> Result<String, String> {
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD};
 
     // Add padding if needed
     let mut padded = s.to_string();
@@ -302,6 +325,16 @@ fn base64_url_decode(s: &str) -> Result<String, String> {
         Ok(bytes) => String::from_utf8(bytes).map_err(|e| e.to_string()),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// POST /api/auth/logout — logout endpoint, invalidates session
+pub async fn logout(headers: axum::http::HeaderMap) -> Json<serde_json::Value> {
+    // Extract session token from Authorization header and remove from session store
+    if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
+        let token = auth.strip_prefix("Bearer ").unwrap_or(auth);
+        remove_session(token);
+    }
+    Json(serde_json::json!({"loggedOut": true}))
 }
 
 #[cfg(test)]
@@ -334,7 +367,10 @@ mod tests {
 
         // Remove — subsequent lookup must return None
         remove_session(&token);
-        assert!(lookup_session(&token).is_none(), "session must be gone after remove");
+        assert!(
+            lookup_session(&token).is_none(),
+            "session must be gone after remove"
+        );
     }
 
     #[test]
@@ -368,16 +404,4 @@ mod tests {
 
         remove_session(&token_b);
     }
-}
-
-/// POST /api/auth/logout — logout endpoint, invalidates session
-pub async fn logout(
-    headers: axum::http::HeaderMap,
-) -> Json<serde_json::Value> {
-    // Extract session token from Authorization header and remove from session store
-    if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        let token = auth.strip_prefix("Bearer ").unwrap_or(auth);
-        remove_session(token);
-    }
-    Json(serde_json::json!({"loggedOut": true}))
 }

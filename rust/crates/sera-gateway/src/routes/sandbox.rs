@@ -2,9 +2,9 @@
 #![allow(dead_code, unused_imports)]
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

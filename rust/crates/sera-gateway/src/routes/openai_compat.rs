@@ -3,9 +3,12 @@
 #![allow(dead_code, unused_imports)]
 
 use axum::{
-    extract::State,
-    response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
     Json,
+    extract::State,
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -131,7 +134,8 @@ pub async fn chat_completions(
                 error_type: "invalid_request_error".to_string(),
                 code: Some("missing_required_parameter".to_string()),
             },
-        }).into_response());
+        })
+        .into_response());
     }
 
     if body.messages.is_empty() {
@@ -141,7 +145,8 @@ pub async fn chat_completions(
                 error_type: "invalid_request_error".to_string(),
                 code: Some("invalid_request_error".to_string()),
             },
-        }).into_response());
+        })
+        .into_response());
     }
 
     let request_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
@@ -161,7 +166,8 @@ pub async fn chat_completions(
                     error_type: "invalid_request_error".to_string(),
                     code: Some("model_not_found".to_string()),
                 },
-            }).into_response());
+            })
+            .into_response());
         }
     };
 
@@ -304,9 +310,10 @@ pub async fn chat_completions(
                     .await
                     .map_err(|e| AppError::Internal(anyhow::anyhow!("Agent unavailable: {e}")))?;
 
-                let response_body: serde_json::Value =
-                    resp.json().await
-                        .map_err(|e| AppError::Internal(anyhow::anyhow!("Invalid response: {e}")))?;
+                let response_body: serde_json::Value = resp
+                    .json()
+                    .await
+                    .map_err(|e| AppError::Internal(anyhow::anyhow!("Invalid response: {e}")))?;
 
                 let content = response_body
                     .get("message")
@@ -354,10 +361,10 @@ async fn resolve_agent_for_model(state: &AppState, model: &str) -> Result<String
     let row: Option<(uuid::Uuid,)> = sqlx::query_as(
         "SELECT id FROM agent_instances
          WHERE template_name = $1 AND status = 'running'
-         LIMIT 1"
+         LIMIT 1",
     )
     .bind(model)
-    .fetch_optional(state.db.inner())
+    .fetch_optional(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("DB error: {e}")))?;
 
@@ -366,12 +373,11 @@ async fn resolve_agent_for_model(state: &AppState, model: &str) -> Result<String
     }
 
     // Fallback: any running agent
-    let fallback: Option<(uuid::Uuid,)> = sqlx::query_as(
-        "SELECT id FROM agent_instances WHERE status = 'running' LIMIT 1"
-    )
-    .fetch_optional(state.db.inner())
-    .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("DB error: {e}")))?;
+    let fallback: Option<(uuid::Uuid,)> =
+        sqlx::query_as("SELECT id FROM agent_instances WHERE status = 'running' LIMIT 1")
+            .fetch_optional(state.db.require_pg_pool())
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("DB error: {e}")))?;
 
     match fallback {
         Some((id,)) => Ok(id.to_string()),
@@ -383,7 +389,9 @@ async fn resolve_agent_for_model(state: &AppState, model: &str) -> Result<String
                     code: Some("model_not_found".to_string()),
                 },
             };
-            Err(AppError::Forbidden(serde_json::to_string(&error).unwrap_or_default()))
+            Err(AppError::Forbidden(
+                serde_json::to_string(&error).unwrap_or_default(),
+            ))
         }
     }
 }

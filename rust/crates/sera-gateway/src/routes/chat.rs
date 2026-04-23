@@ -1,20 +1,28 @@
 //! Chat endpoint — routes messages to agent containers via their chat server.
-#![allow(dead_code, unused_imports, unused_variables, clippy::too_many_arguments)]
+#![allow(
+    dead_code,
+    unused_imports,
+    unused_variables,
+    clippy::too_many_arguments
+)]
 
 use axum::{
-    extract::{Path, Query, State},
-    response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
-    http::StatusCode,
     Json,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 
-use sera_gateway::envelope::{EventMsg, Op, Submission, W3cTraceContext};
-use sera_gateway::harness_dispatch;
-use sera_gateway::session_store::SessionStore as _;
+use crate::envelope::{EventMsg, Op, Submission, W3cTraceContext};
 use crate::error::AppError;
+use crate::harness_dispatch;
+use crate::session_store::SessionStore as _;
 use crate::state::AppState;
 use sera_db::lane_queue::EnqueueResult;
 use sera_db::sessions::SessionRepository;
@@ -125,7 +133,7 @@ pub struct ChatRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
-    pub role: String,      // "user" | "assistant" | "system"
+    pub role: String, // "user" | "assistant" | "system"
     pub content: String,
 }
 
@@ -402,7 +410,9 @@ pub async fn chat(
 
         match resp.status() {
             reqwest::StatusCode::GATEWAY_TIMEOUT => {
-                return Err(AppError::Internal(anyhow::anyhow!("Agent timed out while processing")));
+                return Err(AppError::Internal(anyhow::anyhow!(
+                    "Agent timed out while processing"
+                )));
             }
             reqwest::StatusCode::SERVICE_UNAVAILABLE => {
                 return Err(AppError::Internal(anyhow::anyhow!(
@@ -412,15 +422,21 @@ pub async fn chat(
             _ => {}
         }
 
-        let response_body: ContainerChatResponse = resp.json().await.map_err(|e| {
-            AppError::Internal(anyhow::anyhow!("Invalid container response: {e}"))
-        })?;
+        let response_body: ContainerChatResponse = resp
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Invalid container response: {e}")))?;
 
-        let reply = response_body.result.unwrap_or_else(|| "No response generated.".to_string());
+        let reply = response_body
+            .result
+            .unwrap_or_else(|| "No response generated.".to_string());
 
         Ok(Json(ChatResponse {
             reply: Some(reply),
-            thought: response_body.error.as_ref().map(|e| format!("Error: {}", e)),
+            thought: response_body
+                .error
+                .as_ref()
+                .map(|e| format!("Error: {}", e)),
             thoughts: response_body.thoughts,
             citations: response_body.citations,
             session_id,
@@ -477,7 +493,7 @@ async fn try_dispatch_via_harness(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Harness dispatch error: {e}")))?;
 
     // Collect all events and extract reply from StreamingDelta / TurnCompleted.
-    let events: Vec<sera_gateway::envelope::Event> = event_stream.collect().await;
+    let events: Vec<crate::envelope::Event> = event_stream.collect().await;
 
     let mut reply_parts: Vec<String> = Vec::new();
     let mut error_msg: Option<String> = None;
@@ -541,7 +557,9 @@ async fn process_chat_background(
         .await?;
 
     let response_body: ContainerChatResponse = resp.json().await?;
-    let reply = response_body.result.unwrap_or_else(|| "No response generated.".to_string());
+    let reply = response_body
+        .result
+        .unwrap_or_else(|| "No response generated.".to_string());
 
     // Publish response to Centrifugo for the web UI token stream
     if let Some(centrifugo) = &state.centrifugo {
@@ -587,13 +605,12 @@ async fn resolve_agent(
 ) -> Result<String, AppError> {
     if let Some(id) = instance_id {
         // Check if agent exists and is running
-        let row: Option<(uuid::Uuid,)> = sqlx::query_as(
-            "SELECT id FROM agent_instances WHERE id = $1::uuid"
-        )
-        .bind(id)
-        .fetch_optional(state.db.inner())
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("DB error: {e}")))?;
+        let row: Option<(uuid::Uuid,)> =
+            sqlx::query_as("SELECT id FROM agent_instances WHERE id = $1::uuid")
+                .bind(id)
+                .fetch_optional(state.db.require_pg_pool())
+                .await
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("DB error: {e}")))?;
 
         if row.is_some() {
             return Ok(id.clone());
@@ -606,7 +623,7 @@ async fn resolve_agent(
             "SELECT id FROM agent_instances WHERE template_name = $1 AND status = 'running' LIMIT 1"
         )
         .bind(name)
-        .fetch_optional(state.db.inner())
+        .fetch_optional(state.db.require_pg_pool())
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("DB error: {e}")))?;
 
@@ -616,12 +633,11 @@ async fn resolve_agent(
     }
 
     // Fallback to any running agent
-    let row: Option<(uuid::Uuid,)> = sqlx::query_as(
-        "SELECT id FROM agent_instances WHERE status = 'running' LIMIT 1"
-    )
-    .fetch_optional(state.db.inner())
-    .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("DB error: {e}")))?;
+    let row: Option<(uuid::Uuid,)> =
+        sqlx::query_as("SELECT id FROM agent_instances WHERE status = 'running' LIMIT 1")
+            .fetch_optional(state.db.require_pg_pool())
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("DB error: {e}")))?;
 
     match row {
         Some((id,)) => Ok(id.to_string()),
@@ -632,29 +648,34 @@ async fn resolve_agent(
 }
 
 /// Look up the chat URL for an agent's running container.
-pub(crate) async fn get_agent_chat_url(state: &AppState, agent_id: &str) -> Result<String, AppError> {
-    let row: Option<(Option<String>,)> = sqlx::query_as(
-        "SELECT container_id FROM agent_instances WHERE id = $1::uuid"
-    )
-    .bind(agent_id)
-    .fetch_optional(state.db.inner())
-    .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("DB error looking up agent: {e}")))?;
+pub(crate) async fn get_agent_chat_url(
+    state: &AppState,
+    agent_id: &str,
+) -> Result<String, AppError> {
+    let row: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT container_id FROM agent_instances WHERE id = $1::uuid")
+            .bind(agent_id)
+            .fetch_optional(state.db.require_pg_pool())
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("DB error looking up agent: {e}")))?;
 
     match row {
         Some((Some(_container_id),)) => {
             // Use container name on sera_net with chat port 3100
             // Container naming: sera-agent-{name}-{instance_id[..8]}
             // Note: container.rs uses instance_id for naming, NOT container_id
-            let name_row: Option<(String,)> = sqlx::query_as(
-                "SELECT name FROM agent_instances WHERE id = $1::uuid"
-            )
-            .bind(agent_id)
-            .fetch_optional(state.db.inner())
-            .await
-            .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+            let name_row: Option<(String,)> =
+                sqlx::query_as("SELECT name FROM agent_instances WHERE id = $1::uuid")
+                    .bind(agent_id)
+                    .fetch_optional(state.db.require_pg_pool())
+                    .await
+                    .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
             let agent_name = name_row.map(|r| r.0).unwrap_or_default();
-            let container_name = format!("sera-agent-{}-{}", agent_name.to_lowercase(), &agent_id[..8.min(agent_id.len())]);
+            let container_name = format!(
+                "sera-agent-{}-{}",
+                agent_name.to_lowercase(),
+                &agent_id[..8.min(agent_id.len())]
+            );
             Ok(format!("http://{}:3100", container_name))
         }
         Some(_) => Err(AppError::Internal(anyhow::anyhow!(
@@ -706,14 +727,14 @@ pub async fn add_message(
 
     sqlx::query(
         "INSERT INTO chat_messages (id, session_id, role, content, metadata, created_at)
-         VALUES ($1::uuid, $2::uuid, $3, $4, $5, NOW())"
+         VALUES ($1::uuid, $2::uuid, $3, $4, $5, NOW())",
     )
     .bind(&message_id)
     .bind(&session_id)
     .bind(&body.role)
     .bind(&body.content)
     .bind(&body.metadata)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| {
         if e.to_string().contains("foreign key") {
@@ -728,10 +749,10 @@ pub async fn add_message(
     })?;
 
     let row: (Option<String>,) = sqlx::query_as(
-        "SELECT created_at AT TIME ZONE 'UTC' FROM chat_messages WHERE id = $1::uuid"
+        "SELECT created_at AT TIME ZONE 'UTC' FROM chat_messages WHERE id = $1::uuid",
     )
     .bind(&message_id)
-    .fetch_one(state.db.inner())
+    .fetch_one(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to fetch created_at: {e}")))?;
 
@@ -743,9 +764,13 @@ pub async fn add_message(
             role: body.role,
             content: Some(body.content),
             metadata: body.metadata,
-            created_at: iso8601_opt(
-                row.0.as_deref().and_then(|s| time::OffsetDateTime::parse(s, &time::format_description::well_known::Iso8601::DEFAULT).ok())
-            ),
+            created_at: iso8601_opt(row.0.as_deref().and_then(|s| {
+                time::OffsetDateTime::parse(
+                    s,
+                    &time::format_description::well_known::Iso8601::DEFAULT,
+                )
+                .ok()
+            })),
         }),
     ))
 }
@@ -759,29 +784,41 @@ pub async fn list_messages(
     let limit = params.limit.unwrap_or(50).min(500);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    let rows = sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid, String, Option<String>, Option<serde_json::Value>, Option<time::OffsetDateTime>)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            uuid::Uuid,
+            uuid::Uuid,
+            String,
+            Option<String>,
+            Option<serde_json::Value>,
+            Option<time::OffsetDateTime>,
+        ),
+    >(
         "SELECT id, session_id, role, content, metadata, created_at
          FROM chat_messages WHERE session_id = $1::uuid
          ORDER BY created_at ASC
-         LIMIT $2 OFFSET $3"
+         LIMIT $2 OFFSET $3",
     )
     .bind(&session_id)
     .bind(limit)
     .bind(offset)
-    .fetch_all(state.db.inner())
+    .fetch_all(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to fetch messages: {e}")))?;
 
     use super::iso8601_opt;
     let messages = rows
         .into_iter()
-        .map(|(id, _session_id, role, content, metadata, created_at)| MessageResponse {
-            id: id.to_string(),
-            role,
-            content,
-            metadata,
-            created_at: iso8601_opt(created_at),
-        })
+        .map(
+            |(id, _session_id, role, content, metadata, created_at)| MessageResponse {
+                id: id.to_string(),
+                role,
+                content,
+                metadata,
+                created_at: iso8601_opt(created_at),
+            },
+        )
         .collect();
 
     Ok(Json(messages))
@@ -804,13 +841,14 @@ pub async fn stream_chat(
     State(_state): State<AppState>,
 ) -> Sse<impl futures_util::stream::Stream<Item = Result<Event, Infallible>>> {
     let stream = futures_util::stream::iter(vec![
-        Ok(Event::default()
-            .event("message")
-            .data(serde_json::to_string(&StreamEventPayload {
+        Ok(Event::default().event("message").data(
+            serde_json::to_string(&StreamEventPayload {
                 session_id: uuid::Uuid::new_v4().to_string(),
                 message_id: uuid::Uuid::new_v4().to_string(),
                 delta: Some("This is a streaming response placeholder.".to_string()),
-            }).unwrap_or_default())),
+            })
+            .unwrap_or_default(),
+        )),
         Ok(Event::default()
             .event("done")
             .data(serde_json::json!({"status": "complete"}).to_string())),
@@ -1070,10 +1108,12 @@ mod tests {
     /// A Submission built from a ChatRequest carries the message as a Text block.
     #[test]
     fn submission_built_from_chat_request() {
-        use sera_gateway::envelope::{Op, Submission, W3cTraceContext};
+        use crate::envelope::{Op, Submission, W3cTraceContext};
         use sera_types::content_block::ContentBlock;
 
-        let items = vec![ContentBlock::Text { text: "ping".to_string() }];
+        let items = vec![ContentBlock::Text {
+            text: "ping".to_string(),
+        }];
         let submission = Submission {
             id: uuid::Uuid::new_v4(),
             op: Op::UserTurn {

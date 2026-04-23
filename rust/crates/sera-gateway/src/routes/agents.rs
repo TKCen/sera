@@ -1,15 +1,15 @@
 //! Agent and template read endpoints.
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use sera_db::agents::AgentRepository;
 use sera_db::DbError;
+use sera_db::agents::AgentRepository;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -60,7 +60,7 @@ pub struct InstanceResponse {
 pub async fn list_templates(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<TemplateResponse>>, AppError> {
-    let rows = AgentRepository::list_templates(state.db.inner()).await?;
+    let rows = AgentRepository::list_templates(state.db.require_pg_pool()).await?;
     let templates: Vec<TemplateResponse> = rows
         .into_iter()
         .map(|r| TemplateResponse {
@@ -80,7 +80,8 @@ pub async fn list_instances(
     Query(params): Query<ListInstancesQuery>,
 ) -> Result<Json<Vec<InstanceResponse>>, AppError> {
     let rows =
-        AgentRepository::list_instances(state.db.inner(), params.status.as_deref()).await?;
+        AgentRepository::list_instances(state.db.require_pg_pool(), params.status.as_deref())
+            .await?;
     let instances: Vec<InstanceResponse> = rows.into_iter().map(instance_to_response).collect();
     Ok(Json(instances))
 }
@@ -90,7 +91,7 @@ pub async fn get_instance(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<InstanceResponse>, AppError> {
-    let row = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let row = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
     Ok(Json(instance_to_response(row)))
 }
 
@@ -134,10 +135,10 @@ pub async fn create_instance(
     Json(body): Json<CreateInstanceRequest>,
 ) -> Result<(StatusCode, Json<InstanceResponse>), AppError> {
     // Verify template exists
-    AgentRepository::get_template(state.db.inner(), &body.template_ref).await?;
+    AgentRepository::get_template(state.db.require_pg_pool(), &body.template_ref).await?;
 
     // Check for duplicate name
-    if AgentRepository::instance_name_exists(state.db.inner(), &body.name).await? {
+    if AgentRepository::instance_name_exists(state.db.require_pg_pool(), &body.name).await? {
         return Err(AppError::Db(DbError::Conflict(format!(
             "Agent instance with name '{}' already exists",
             body.name
@@ -148,7 +149,7 @@ pub async fn create_instance(
     let workspace_path = format!("/workspaces/{}", body.name);
 
     AgentRepository::create_instance(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         sera_db::agents::CreateInstanceInput {
             id: &id,
             name: &body.name,
@@ -162,7 +163,7 @@ pub async fn create_instance(
     )
     .await?;
 
-    let row = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let row = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
     Ok((StatusCode::CREATED, Json(instance_to_response(row))))
 }
 
@@ -183,7 +184,7 @@ pub async fn update_instance(
     Json(body): Json<UpdateInstanceRequest>,
 ) -> Result<Json<InstanceResponse>, AppError> {
     AgentRepository::update_instance(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &id,
         body.name.as_deref(),
         body.display_name.as_deref(),
@@ -192,7 +193,7 @@ pub async fn update_instance(
     )
     .await?;
 
-    let row = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let row = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
     Ok(Json(instance_to_response(row)))
 }
 
@@ -201,7 +202,7 @@ pub async fn delete_instance(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let name = AgentRepository::delete_instance(state.db.inner(), &id).await?;
+    let name = AgentRepository::delete_instance(state.db.require_pg_pool(), &id).await?;
     Ok(Json(serde_json::json!({
         "deleted": { "id": id, "name": name }
     })))
@@ -212,23 +213,29 @@ pub async fn start_instance(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<InstanceResponse>, AppError> {
-    let instance = AgentRepository::get_instance(state.db.inner(), &id).await?;
-    let template_ref = instance.template_ref.as_deref().unwrap_or(&instance.template_name);
+    let instance = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
+    let template_ref = instance
+        .template_ref
+        .as_deref()
+        .unwrap_or(&instance.template_name);
 
     // Issue a JWT identity token for the agent container
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let identity_token = state.jwt.issue(sera_auth::JwtClaims {
-        sub: instance.name.clone(),
-        iss: "sera".to_string(),
-        aud: Vec::new(),
-        exp: now_secs + 86400 * 30, // 30 days
-        nbf: None,
-        agent_id: Some(instance.name.clone()),
-        instance_id: Some(id.clone()),
-    }).map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue agent JWT: {e}")))?;
+    let identity_token = state
+        .jwt
+        .issue(sera_auth::JwtClaims {
+            sub: instance.name.clone(),
+            iss: "sera".to_string(),
+            aud: Vec::new(),
+            exp: now_secs + 86400 * 30, // 30 days
+            nbf: None,
+            agent_id: Some(instance.name.clone()),
+            instance_id: Some(id.clone()),
+        })
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue agent JWT: {e}")))?;
 
     // ── Workspace provisioning ──────────────────────────────────────────────
     // Build the agent manifest YAML from template spec + instance overrides,
@@ -242,15 +249,15 @@ pub async fn start_instance(
     // HOST_WORKSPACES_DIR should be an absolute path (e.g. D:/projects/homelab/sera/workspaces
     // on Docker Desktop for Windows, or /home/user/sera/workspaces on Linux).
     // Falls back to /workspaces which works on native Linux Docker.
-    let host_workspaces = std::env::var("HOST_WORKSPACES_DIR")
-        .unwrap_or_else(|_| "/workspaces".to_string());
+    let host_workspaces =
+        std::env::var("HOST_WORKSPACES_DIR").unwrap_or_else(|_| "/workspaces".to_string());
     let workspace_host_dir = format!("{}/{}", host_workspaces, instance.name);
 
     // Create the directory inside our container (we have /workspaces mounted)
     std::fs::create_dir_all(&workspace_container_dir).ok();
 
     // Read template spec
-    let template = AgentRepository::get_template(state.db.inner(), template_ref).await?;
+    let template = AgentRepository::get_template(state.db.require_pg_pool(), template_ref).await?;
     let mut manifest = template.spec.clone();
 
     // Merge instance overrides on top of template spec
@@ -265,12 +272,15 @@ pub async fn start_instance(
 
     // Add metadata block for agent-runtime
     if let Some(obj) = manifest.as_object_mut() {
-        obj.insert("metadata".to_string(), serde_json::json!({
-            "name": instance.name,
-            "displayName": instance.display_name,
-            "instanceId": id,
-            "templateRef": template_ref,
-        }));
+        obj.insert(
+            "metadata".to_string(),
+            serde_json::json!({
+                "name": instance.name,
+                "displayName": instance.display_name,
+                "instanceId": id,
+                "templateRef": template_ref,
+            }),
+        );
     }
 
     // Write AGENT.yaml inside our container's mounted /workspaces
@@ -282,33 +292,67 @@ pub async fn start_instance(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&workspace_container_dir, std::fs::Permissions::from_mode(0o777));
+        let _ = std::fs::set_permissions(
+            &workspace_container_dir,
+            std::fs::Permissions::from_mode(0o777),
+        );
     }
 
     // Build bind mounts — use HOST path so Docker daemon can find the directory
     let _binds = [
         format!("{}:/workspace:rw", workspace_host_dir),
         // Memory mount - per instance
-        format!("{}/memory/{}:/memory:rw", host_workspaces.replace("/workspaces", ""), id),
+        format!(
+            "{}/memory/{}:/memory:rw",
+            host_workspaces.replace("/workspaces", ""),
+            id
+        ),
         // Knowledge mounts
-        format!("{}/knowledge/agents/{}:/knowledge/personal:ro", host_workspaces.replace("/workspaces", ""), instance.name),
-        format!("{}/knowledge/shared:/knowledge/shared:ro", host_workspaces.replace("/workspaces", "")),
+        format!(
+            "{}/knowledge/agents/{}:/knowledge/personal:ro",
+            host_workspaces.replace("/workspaces", ""),
+            instance.name
+        ),
+        format!(
+            "{}/knowledge/shared:/knowledge/shared:ro",
+            host_workspaces.replace("/workspaces", "")
+        ),
     ];
 
     let mut env_vars = std::collections::HashMap::new();
     env_vars.insert("AGENT_NAME".to_string(), instance.name.clone());
     env_vars.insert("AGENT_INSTANCE_ID".to_string(), id.clone());
-    env_vars.insert("SERA_CORE_URL".to_string(), "http://sera-core:3001".to_string());
+    env_vars.insert(
+        "SERA_CORE_URL".to_string(),
+        "http://sera-core:3001".to_string(),
+    );
     env_vars.insert("SERA_IDENTITY_TOKEN".to_string(), identity_token);
     env_vars.insert("WORKSPACE_PATH".to_string(), "/workspace".to_string());
-    env_vars.insert("AGENT_LIFECYCLE_MODE".to_string(),
-        instance.lifecycle_mode.as_deref().unwrap_or("ephemeral").to_string());
-    env_vars.insert("CENTRIFUGO_API_URL".to_string(),
-        std::env::var("CENTRIFUGO_API_URL").unwrap_or_else(|_| "http://centrifugo:8000/api".to_string()));
-    env_vars.insert("CENTRIFUGO_API_KEY".to_string(),
-        std::env::var("CENTRIFUGO_API_KEY").unwrap_or_else(|_| "sera-api-key".to_string()));
-    env_vars.insert("AGENT_HEARTBEAT_INTERVAL_MS".to_string(), "30000".to_string());
-    env_vars.insert("SERA_LLM_PROXY_URL".to_string(), "http://sera-core:3001/v1/llm".to_string());
+    env_vars.insert(
+        "AGENT_LIFECYCLE_MODE".to_string(),
+        instance
+            .lifecycle_mode
+            .as_deref()
+            .unwrap_or("ephemeral")
+            .to_string(),
+    );
+    env_vars.insert(
+        "CENTRIFUGO_API_URL".to_string(),
+        std::env::var("CENTRIFUGO_API_URL")
+            .unwrap_or_else(|_| "http://centrifugo:8000/api".to_string()),
+    );
+    env_vars.insert(
+        "CENTRIFUGO_API_KEY".to_string(),
+        std::env::var("CENTRIFUGO_API_KEY").unwrap_or_else(|_| "sera-api-key".to_string()),
+    );
+    env_vars.insert(
+        "AGENT_HEARTBEAT_INTERVAL_MS".to_string(),
+        "30000".to_string(),
+    );
+    env_vars.insert(
+        "SERA_LLM_PROXY_URL".to_string(),
+        "http://sera-core:3001/v1/llm".to_string(),
+    );
     env_vars.insert("AGENT_CHAT_PORT".to_string(), "3100".to_string());
 
     let config = sera_tools::sandbox::SandboxConfig {
@@ -330,15 +374,17 @@ pub async fn start_instance(
     let container_id = handle.0;
 
     // Update status and container_id
-    AgentRepository::update_status(state.db.inner(), &id, "running").await?;
-    sqlx::query("UPDATE agent_instances SET container_id = $1, updated_at = NOW() WHERE id::text = $2")
-        .bind(&container_id)
-        .bind(&id)
-        .execute(state.db.inner())
-        .await
-        .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+    AgentRepository::update_status(state.db.require_pg_pool(), &id, "running").await?;
+    sqlx::query(
+        "UPDATE agent_instances SET container_id = $1, updated_at = NOW() WHERE id::text = $2",
+    )
+    .bind(&container_id)
+    .bind(&id)
+    .execute(state.db.require_pg_pool())
+    .await
+    .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
-    let row = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let row = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
     Ok(Json(instance_to_response(row)))
 }
 
@@ -347,7 +393,7 @@ pub async fn stop_instance(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<InstanceResponse>, AppError> {
-    let instance = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let instance = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
 
     if let Some(container_id) = &instance.container_id {
         state
@@ -358,14 +404,16 @@ pub async fn stop_instance(
     }
 
     // Update status and clear container_id
-    AgentRepository::update_status(state.db.inner(), &id, "stopped").await?;
-    sqlx::query("UPDATE agent_instances SET container_id = NULL, updated_at = NOW() WHERE id::text = $1")
-        .bind(&id)
-        .execute(state.db.inner())
-        .await
-        .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+    AgentRepository::update_status(state.db.require_pg_pool(), &id, "stopped").await?;
+    sqlx::query(
+        "UPDATE agent_instances SET container_id = NULL, updated_at = NOW() WHERE id::text = $1",
+    )
+    .bind(&id)
+    .execute(state.db.require_pg_pool())
+    .await
+    .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
-    let row = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let row = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
     Ok(Json(instance_to_response(row)))
 }
 
@@ -375,7 +423,7 @@ pub async fn restart_instance(
     Path(id): Path<String>,
 ) -> Result<Json<InstanceResponse>, AppError> {
     // Stop the instance first
-    let instance = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let instance = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
 
     if let Some(container_id) = &instance.container_id {
         state
@@ -386,57 +434,69 @@ pub async fn restart_instance(
     }
 
     // Update status and clear container_id
-    AgentRepository::update_status(state.db.inner(), &id, "stopped").await?;
-    sqlx::query("UPDATE agent_instances SET container_id = NULL, updated_at = NOW() WHERE id::text = $1")
-        .bind(&id)
-        .execute(state.db.inner())
-        .await
-        .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+    AgentRepository::update_status(state.db.require_pg_pool(), &id, "stopped").await?;
+    sqlx::query(
+        "UPDATE agent_instances SET container_id = NULL, updated_at = NOW() WHERE id::text = $1",
+    )
+    .bind(&id)
+    .execute(state.db.require_pg_pool())
+    .await
+    .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
     // Now start it again by calling start_instance logic
-    let instance = AgentRepository::get_instance(state.db.inner(), &id).await?;
-    let template_ref = instance.template_ref.as_deref().unwrap_or(&instance.template_name);
+    let instance = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
+    let template_ref = instance
+        .template_ref
+        .as_deref()
+        .unwrap_or(&instance.template_name);
 
     // Issue a JWT identity token for the agent container
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let identity_token = state.jwt.issue(sera_auth::JwtClaims {
-        sub: instance.name.clone(),
-        iss: "sera".to_string(),
-        aud: Vec::new(),
-        exp: now_secs + 86400 * 30,
-        nbf: None,
-        agent_id: Some(instance.name.clone()),
-        instance_id: Some(id.clone()),
-    }).map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue agent JWT: {e}")))?;
+    let identity_token = state
+        .jwt
+        .issue(sera_auth::JwtClaims {
+            sub: instance.name.clone(),
+            iss: "sera".to_string(),
+            aud: Vec::new(),
+            exp: now_secs + 86400 * 30,
+            nbf: None,
+            agent_id: Some(instance.name.clone()),
+            instance_id: Some(id.clone()),
+        })
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to issue agent JWT: {e}")))?;
 
     // Workspace provisioning
     let workspace_container_dir = format!("/workspaces/{}", instance.name);
-    let host_workspaces = std::env::var("HOST_WORKSPACES_DIR")
-        .unwrap_or_else(|_| "/workspaces".to_string());
+    let host_workspaces =
+        std::env::var("HOST_WORKSPACES_DIR").unwrap_or_else(|_| "/workspaces".to_string());
     let workspace_host_dir = format!("{}/{}", host_workspaces, instance.name);
 
     std::fs::create_dir_all(&workspace_container_dir).ok();
 
-    let template = AgentRepository::get_template(state.db.inner(), template_ref).await?;
+    let template = AgentRepository::get_template(state.db.require_pg_pool(), template_ref).await?;
     let mut manifest = template.spec.clone();
 
     if let Some(overrides) = &instance.overrides
-        && let (Some(base), Some(over)) = (manifest.as_object_mut(), overrides.as_object()) {
-            for (k, v) in over {
-                base.insert(k.clone(), v.clone());
-            }
+        && let (Some(base), Some(over)) = (manifest.as_object_mut(), overrides.as_object())
+    {
+        for (k, v) in over {
+            base.insert(k.clone(), v.clone());
         }
+    }
 
     if let Some(obj) = manifest.as_object_mut() {
-        obj.insert("metadata".to_string(), serde_json::json!({
-            "name": instance.name,
-            "displayName": instance.display_name,
-            "instanceId": id,
-            "templateRef": template_ref,
-        }));
+        obj.insert(
+            "metadata".to_string(),
+            serde_json::json!({
+                "name": instance.name,
+                "displayName": instance.display_name,
+                "instanceId": id,
+                "templateRef": template_ref,
+            }),
+        );
     }
 
     if let Ok(yaml_str) = serde_yaml::to_string(&manifest) {
@@ -446,30 +506,64 @@ pub async fn restart_instance(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&workspace_container_dir, std::fs::Permissions::from_mode(0o777));
+        let _ = std::fs::set_permissions(
+            &workspace_container_dir,
+            std::fs::Permissions::from_mode(0o777),
+        );
     }
 
     let _binds = [
         format!("{}:/workspace:rw", workspace_host_dir),
-        format!("{}/memory/{}:/memory:rw", host_workspaces.replace("/workspaces", ""), id),
-        format!("{}/knowledge/agents/{}:/knowledge/personal:ro", host_workspaces.replace("/workspaces", ""), instance.name),
-        format!("{}/knowledge/shared:/knowledge/shared:ro", host_workspaces.replace("/workspaces", "")),
+        format!(
+            "{}/memory/{}:/memory:rw",
+            host_workspaces.replace("/workspaces", ""),
+            id
+        ),
+        format!(
+            "{}/knowledge/agents/{}:/knowledge/personal:ro",
+            host_workspaces.replace("/workspaces", ""),
+            instance.name
+        ),
+        format!(
+            "{}/knowledge/shared:/knowledge/shared:ro",
+            host_workspaces.replace("/workspaces", "")
+        ),
     ];
 
     let mut env_vars = std::collections::HashMap::new();
     env_vars.insert("AGENT_NAME".to_string(), instance.name.clone());
     env_vars.insert("AGENT_INSTANCE_ID".to_string(), id.clone());
-    env_vars.insert("SERA_CORE_URL".to_string(), "http://sera-core:3001".to_string());
+    env_vars.insert(
+        "SERA_CORE_URL".to_string(),
+        "http://sera-core:3001".to_string(),
+    );
     env_vars.insert("SERA_IDENTITY_TOKEN".to_string(), identity_token);
     env_vars.insert("WORKSPACE_PATH".to_string(), "/workspace".to_string());
-    env_vars.insert("AGENT_LIFECYCLE_MODE".to_string(),
-        instance.lifecycle_mode.as_deref().unwrap_or("ephemeral").to_string());
-    env_vars.insert("CENTRIFUGO_API_URL".to_string(),
-        std::env::var("CENTRIFUGO_API_URL").unwrap_or_else(|_| "http://centrifugo:8000/api".to_string()));
-    env_vars.insert("CENTRIFUGO_API_KEY".to_string(),
-        std::env::var("CENTRIFUGO_API_KEY").unwrap_or_else(|_| "sera-api-key".to_string()));
-    env_vars.insert("AGENT_HEARTBEAT_INTERVAL_MS".to_string(), "30000".to_string());
-    env_vars.insert("SERA_LLM_PROXY_URL".to_string(), "http://sera-core:3001/v1/llm".to_string());
+    env_vars.insert(
+        "AGENT_LIFECYCLE_MODE".to_string(),
+        instance
+            .lifecycle_mode
+            .as_deref()
+            .unwrap_or("ephemeral")
+            .to_string(),
+    );
+    env_vars.insert(
+        "CENTRIFUGO_API_URL".to_string(),
+        std::env::var("CENTRIFUGO_API_URL")
+            .unwrap_or_else(|_| "http://centrifugo:8000/api".to_string()),
+    );
+    env_vars.insert(
+        "CENTRIFUGO_API_KEY".to_string(),
+        std::env::var("CENTRIFUGO_API_KEY").unwrap_or_else(|_| "sera-api-key".to_string()),
+    );
+    env_vars.insert(
+        "AGENT_HEARTBEAT_INTERVAL_MS".to_string(),
+        "30000".to_string(),
+    );
+    env_vars.insert(
+        "SERA_LLM_PROXY_URL".to_string(),
+        "http://sera-core:3001/v1/llm".to_string(),
+    );
     env_vars.insert("AGENT_CHAT_PORT".to_string(), "3100".to_string());
 
     let config = sera_tools::sandbox::SandboxConfig {
@@ -490,15 +584,17 @@ pub async fn restart_instance(
 
     let container_id = handle.0;
 
-    AgentRepository::update_status(state.db.inner(), &id, "running").await?;
-    sqlx::query("UPDATE agent_instances SET container_id = $1, updated_at = NOW() WHERE id::text = $2")
-        .bind(&container_id)
-        .bind(&id)
-        .execute(state.db.inner())
-        .await
-        .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+    AgentRepository::update_status(state.db.require_pg_pool(), &id, "running").await?;
+    sqlx::query(
+        "UPDATE agent_instances SET container_id = $1, updated_at = NOW() WHERE id::text = $2",
+    )
+    .bind(&container_id)
+    .bind(&id)
+    .execute(state.db.require_pg_pool())
+    .await
+    .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
-    let row = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let row = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
     Ok(Json(instance_to_response(row)))
 }
 
@@ -518,13 +614,14 @@ pub async fn get_agent_status(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<AgentStatusResponse>, AppError> {
-    let instance = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let instance = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
 
     let uptime_seconds = instance.last_heartbeat_at.map(|ts| {
         (std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs() as i64) - (ts.unix_timestamp())
+            .as_secs() as i64)
+            - (ts.unix_timestamp())
     });
 
     let healthy = instance.status.as_deref().unwrap_or("created") == "running"
@@ -572,10 +669,10 @@ pub async fn get_agent_metrics(
 ) -> Result<Json<AgentMetricsResponse>, AppError> {
     use sera_db::metering::MeteringRepository;
 
-    let instance = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let instance = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
 
     // Get total tokens
-    let rankings = MeteringRepository::agent_rankings(state.db.inner()).await?;
+    let rankings = MeteringRepository::agent_rankings(state.db.require_pg_pool()).await?;
     let total_tokens = rankings
         .iter()
         .find(|r| r.agent_id == instance.name)
@@ -583,7 +680,8 @@ pub async fn get_agent_metrics(
         .unwrap_or(0);
 
     // Get daily usage
-    let daily_rows = MeteringRepository::agent_daily_usage(state.db.inner(), &instance.name).await?;
+    let daily_rows =
+        MeteringRepository::agent_daily_usage(state.db.require_pg_pool(), &instance.name).await?;
     let daily_usage = daily_rows
         .into_iter()
         .map(|r| DailyTokenUsage {
@@ -593,13 +691,18 @@ pub async fn get_agent_metrics(
         .collect();
 
     // Get quota and current usage
-    let quota_opt = MeteringRepository::get_quota(state.db.inner(), &instance.name).await?;
+    let quota_opt =
+        MeteringRepository::get_quota(state.db.require_pg_pool(), &instance.name).await?;
     let (hourly_limit, daily_limit) = quota_opt
         .map(|q| (q.max_tokens_per_hour as i64, q.max_tokens_per_day as i64))
         .unwrap_or((100_000, 1_000_000));
 
-    let hourly_used = MeteringRepository::get_usage_in_window(state.db.inner(), &instance.name, 1).await?;
-    let daily_used = MeteringRepository::get_usage_in_window(state.db.inner(), &instance.name, 24).await?;
+    let hourly_used =
+        MeteringRepository::get_usage_in_window(state.db.require_pg_pool(), &instance.name, 1)
+            .await?;
+    let daily_used =
+        MeteringRepository::get_usage_in_window(state.db.require_pg_pool(), &instance.name, 24)
+            .await?;
 
     Ok(Json(AgentMetricsResponse {
         id: instance.id.to_string(),
@@ -631,20 +734,20 @@ pub async fn add_agent_skill(
     use sera_db::skills::SkillRepository;
 
     // Verify agent exists
-    let _agent = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let _agent = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
 
     // Verify skill exists
-    SkillRepository::get_by_name(state.db.inner(), &body.skill_name).await?;
+    SkillRepository::get_by_name(state.db.require_pg_pool(), &body.skill_name).await?;
 
     // Insert into agent_skills junction table
     sqlx::query(
         "INSERT INTO agent_skills (agent_id, skill_name, created_at)
          VALUES ($1::uuid, $2, NOW())
-         ON CONFLICT DO NOTHING"
+         ON CONFLICT DO NOTHING",
     )
     .bind(&id)
     .bind(&body.skill_name)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
@@ -661,17 +764,16 @@ pub async fn remove_agent_skill(
     Path((id, skill_name)): Path<(String, String)>,
 ) -> Result<Json<Value>, AppError> {
     // Verify agent exists
-    let _agent = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let _agent = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
 
     // Delete from agent_skills
-    let result = sqlx::query(
-        "DELETE FROM agent_skills WHERE agent_id = $1::uuid AND skill_name = $2"
-    )
-    .bind(&id)
-    .bind(&skill_name)
-    .execute(state.db.inner())
-    .await
-    .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
+    let result =
+        sqlx::query("DELETE FROM agent_skills WHERE agent_id = $1::uuid AND skill_name = $2")
+            .bind(&id)
+            .bind(&skill_name)
+            .execute(state.db.require_pg_pool())
+            .await
+            .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::Db(sera_db::DbError::NotFound {

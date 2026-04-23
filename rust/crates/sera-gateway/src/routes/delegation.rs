@@ -1,9 +1,9 @@
 //! Delegation endpoints.
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -53,7 +53,8 @@ pub async fn list_delegations(
     State(state): State<AppState>,
     Query(params): Query<ListDelegationsQuery>,
 ) -> Result<Json<Vec<DelegationResponse>>, AppError> {
-    let rows = DelegationRepository::list(state.db.inner(), params.agent_id.as_deref()).await?;
+    let rows =
+        DelegationRepository::list(state.db.require_pg_pool(), params.agent_id.as_deref()).await?;
     Ok(Json(rows.into_iter().map(to_response).collect()))
 }
 
@@ -76,7 +77,7 @@ pub async fn issue_delegation(
 ) -> Result<(StatusCode, Json<DelegationResponse>), AppError> {
     let id = uuid::Uuid::new_v4().to_string();
     let row = DelegationRepository::issue(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &id,
         &body.principal_type,
         &body.principal_id,
@@ -95,7 +96,7 @@ pub async fn revoke_delegation(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    let revoked = DelegationRepository::revoke(state.db.inner(), &id).await?;
+    let revoked = DelegationRepository::revoke(state.db.require_pg_pool(), &id).await?;
     if !revoked {
         return Err(AppError::Db(sera_db::DbError::NotFound {
             entity: "delegation",
@@ -111,7 +112,7 @@ pub async fn get_delegation_children(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<DelegationResponse>>, AppError> {
-    let rows = DelegationRepository::get_children(state.db.inner(), &id).await?;
+    let rows = DelegationRepository::get_children(state.db.require_pg_pool(), &id).await?;
     Ok(Json(rows.into_iter().map(to_response).collect()))
 }
 
@@ -120,6 +121,6 @@ pub async fn get_agent_delegations(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Vec<DelegationResponse>>, AppError> {
-    let rows = DelegationRepository::list(state.db.inner(), Some(&agent_id)).await?;
+    let rows = DelegationRepository::list(state.db.require_pg_pool(), Some(&agent_id)).await?;
     Ok(Json(rows.into_iter().map(to_response).collect()))
 }

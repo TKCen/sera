@@ -1,9 +1,9 @@
 //! Memory blocks endpoints.
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -58,7 +58,7 @@ pub async fn list_blocks(
     Query(params): Query<BlocksQuery>,
 ) -> Result<Json<Vec<MemoryBlockResponse>>, AppError> {
     let rows =
-        MemoryRepository::list_blocks(state.db.inner(), params.agent_id.as_deref())
+        MemoryRepository::list_blocks(state.db.require_pg_pool(), params.agent_id.as_deref())
             .await?;
     Ok(Json(rows.into_iter().map(block_to_response).collect()))
 }
@@ -68,7 +68,7 @@ pub async fn get_block(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<MemoryBlockResponse>, AppError> {
-    let row = MemoryRepository::get_block(state.db.inner(), &id).await?;
+    let row = MemoryRepository::get_block(state.db.require_pg_pool(), &id).await?;
     Ok(Json(block_to_response(row)))
 }
 
@@ -89,7 +89,7 @@ pub async fn create_block(
     Json(body): Json<CreateBlockRequest>,
 ) -> Result<(StatusCode, Json<MemoryBlockResponse>), AppError> {
     let row = MemoryRepository::create_block(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &body.agent_instance_id,
         &body.name,
         body.content.as_deref().unwrap_or(""),
@@ -112,7 +112,8 @@ pub async fn update_block(
     Path(id): Path<String>,
     Json(body): Json<UpdateBlockRequest>,
 ) -> Result<Json<MemoryBlockResponse>, AppError> {
-    let row = MemoryRepository::update_block(state.db.inner(), &id, &body.content).await?;
+    let row =
+        MemoryRepository::update_block(state.db.require_pg_pool(), &id, &body.content).await?;
     Ok(Json(block_to_response(row)))
 }
 
@@ -121,7 +122,7 @@ pub async fn delete_block(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    let deleted = MemoryRepository::delete_block(state.db.inner(), &id).await?;
+    let deleted = MemoryRepository::delete_block(state.db.require_pg_pool(), &id).await?;
     if !deleted {
         return Err(AppError::Db(sera_db::DbError::NotFound {
             entity: "memory_block",
@@ -143,9 +144,7 @@ pub async fn search_memory(
     Query(_params): Query<SearchQuery>,
 ) -> Result<Json<MemorySearchResult>, AppError> {
     // Stub implementation: returns empty results
-    Ok(Json(MemorySearchResult {
-        results: vec![],
-    }))
+    Ok(Json(MemorySearchResult { results: vec![] }))
 }
 
 #[derive(Debug, Serialize)]
@@ -159,9 +158,7 @@ pub async fn get_memory_versions(
     Path(_agent_id): Path<String>,
 ) -> Result<Json<MemoryVersions>, AppError> {
     // Stub implementation: returns empty versions list
-    Ok(Json(MemoryVersions {
-        versions: vec![],
-    }))
+    Ok(Json(MemoryVersions { versions: vec![] }))
 }
 
 #[derive(Debug, Serialize)]
@@ -244,9 +241,7 @@ mod tests {
 
     #[test]
     fn memory_search_result_serializes() {
-        let result = MemorySearchResult {
-            results: vec![],
-        };
+        let result = MemorySearchResult { results: vec![] };
 
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["results"], serde_json::json!([]));
@@ -254,9 +249,7 @@ mod tests {
 
     #[test]
     fn memory_versions_serializes() {
-        let versions = MemoryVersions {
-            versions: vec![],
-        };
+        let versions = MemoryVersions { versions: vec![] };
 
         let json = serde_json::to_value(&versions).unwrap();
         assert_eq!(json["versions"], serde_json::json!([]));

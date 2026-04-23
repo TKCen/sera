@@ -1,9 +1,9 @@
 //! Notification service — multi-channel event dispatch.
 
-use std::sync::Arc;
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use sera_telemetry::centrifugo::CentrifugoClient;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use thiserror::Error;
 
 /// Notification event payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,7 +144,10 @@ impl NotificationService {
             match client.post(&url).json(&payload).send().await {
                 Ok(response) => {
                     if !response.status().is_success() {
-                        tracing::warn!("Webhook returned non-success status: {}", response.status());
+                        tracing::warn!(
+                            "Webhook returned non-success status: {}",
+                            response.status()
+                        );
                     }
                 }
                 Err(e) => {
@@ -200,7 +203,8 @@ mod tests {
         let serialized_webhook =
             serde_json::to_string(&webhook_ch).expect("should serialize Webhook");
 
-        let _: NotificationChannel = serde_json::from_str(&serialized_log).expect("should deserialize Log");
+        let _: NotificationChannel =
+            serde_json::from_str(&serialized_log).expect("should deserialize Log");
         let _: NotificationChannel =
             serde_json::from_str(&serialized_centrifugo).expect("should deserialize Centrifugo");
         let _: NotificationChannel =

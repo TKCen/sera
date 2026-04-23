@@ -1,9 +1,9 @@
 //! Schedules endpoint.
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -56,7 +56,7 @@ fn extract_task_prompt(task: &serde_json::Value) -> String {
 pub async fn list_schedules(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ScheduleResponse>>, AppError> {
-    let rows = ScheduleRepository::list_schedules(state.db.inner()).await?;
+    let rows = ScheduleRepository::list_schedules(state.db.require_pg_pool()).await?;
     let schedules: Vec<ScheduleResponse> = rows
         .into_iter()
         .map(|r| ScheduleResponse {
@@ -111,7 +111,7 @@ pub async fn create_schedule(
     };
 
     ScheduleRepository::create_schedule(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &id,
         body.agent_instance_id.as_deref(),
         &body.agent_name,
@@ -126,11 +126,14 @@ pub async fn create_schedule(
     )
     .await?;
 
-    Ok((StatusCode::CREATED, Json(serde_json::json!({
-        "id": id,
-        "name": body.name,
-        "status": status,
-    }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "id": id,
+            "name": body.name,
+            "status": status,
+        })),
+    ))
 }
 
 /// Request body for updating a schedule.
@@ -152,7 +155,7 @@ pub async fn update_schedule(
     Json(body): Json<UpdateScheduleRequest>,
 ) -> Result<Json<Value>, AppError> {
     ScheduleRepository::update_schedule(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &id,
         body.name.as_deref(),
         body.description.as_deref(),
@@ -172,13 +175,13 @@ pub async fn delete_schedule(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     // Check if manifest-sourced
-    let source = ScheduleRepository::get_source(state.db.inner(), &id).await?;
+    let source = ScheduleRepository::get_source(state.db.require_pg_pool(), &id).await?;
     if source == "manifest" {
         return Err(AppError::Forbidden(
             "Manifest-declared schedules cannot be deleted via API".to_string(),
         ));
     }
 
-    ScheduleRepository::delete_schedule(state.db.inner(), &id).await?;
+    ScheduleRepository::delete_schedule(state.db.require_pg_pool(), &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

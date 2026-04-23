@@ -12,8 +12,9 @@ pub fn iso8601_opt(dt: Option<time::OffsetDateTime>) -> Option<String> {
     dt.map(iso8601)
 }
 
-pub mod health;
+pub mod a2a;
 pub mod agents;
+pub mod agui;
 pub mod audit;
 pub mod auth;
 pub mod channels;
@@ -23,15 +24,13 @@ pub mod config;
 pub mod delegation;
 pub mod embedding;
 pub mod evolve;
+pub mod health;
 pub mod heartbeat;
 pub mod intercom;
 pub mod knowledge;
 pub mod llm_proxy;
 pub mod lsp;
 pub mod mcp;
-pub mod a2a;
-pub mod agui;
-pub mod plugins;
 pub mod memory;
 pub mod metering;
 pub mod oidc;
@@ -39,6 +38,7 @@ pub mod openai_compat;
 pub mod operator_requests;
 pub mod permission_requests;
 pub mod pipelines;
+pub mod plugins;
 pub mod providers;
 pub mod registry;
 pub mod sandbox;

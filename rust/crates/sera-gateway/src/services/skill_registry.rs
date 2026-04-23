@@ -165,9 +165,10 @@ impl SkillRegistry {
         if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
             for field in required {
                 if let Some(field_name) = field.as_str()
-                    && args.get(field_name).is_none() {
-                        errors.push(format!("Missing required field: {field_name}"));
-                    }
+                    && args.get(field_name).is_none()
+                {
+                    errors.push(format!("Missing required field: {field_name}"));
+                }
             }
         }
 

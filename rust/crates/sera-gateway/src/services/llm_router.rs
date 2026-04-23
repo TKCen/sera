@@ -157,12 +157,10 @@ impl LlmRouter {
 
         // If a model hint is provided, find a provider that supports it
         if let Some(hint) = model_hint
-            && let Some(provider) = available
-                .iter()
-                .find(|p| p.default_model.contains(hint))
-            {
-                return Ok(provider.clone());
-            }
+            && let Some(provider) = available.iter().find(|p| p.default_model.contains(hint))
+        {
+            return Ok(provider.clone());
+        }
 
         // Return the highest-priority available provider
         available
@@ -177,16 +175,15 @@ impl LlmRouter {
         provider: &ProviderConfig,
         request: &CompletionRequest,
     ) -> Result<CompletionResponse, LlmRouterError> {
-        let url = format!("{}/chat/completions", provider.api_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/chat/completions",
+            provider.api_url.trim_end_matches('/')
+        );
         let timeout = Duration::from_millis(provider.timeout_ms);
 
         let body = self.format_request(provider, request);
 
-        let mut req = self
-            .client
-            .post(&url)
-            .timeout(timeout)
-            .json(&body);
+        let mut req = self.client.post(&url).timeout(timeout).json(&body);
 
         // Add auth header based on provider type
         if let Some(key) = &provider.api_key {
@@ -299,13 +296,15 @@ impl LlmRouter {
                     return false;
                 }
                 if let Some(h) = health.get(&p.name)
-                    && h.circuit_open {
-                        // Check if reset period has passed
-                        if let Some(last) = h.last_failure
-                            && now.duration_since(last).as_secs() < self.circuit_reset_secs {
-                                return false;
-                            }
+                    && h.circuit_open
+                {
+                    // Check if reset period has passed
+                    if let Some(last) = h.last_failure
+                        && now.duration_since(last).as_secs() < self.circuit_reset_secs
+                    {
+                        return false;
                     }
+                }
                 true
             })
             .cloned()
@@ -387,7 +386,11 @@ mod tests {
         let body = router.format_request(&router.providers[0], &request);
         assert_eq!(body["model"], "gpt-4");
         assert_eq!(body["max_tokens"], 100);
-        assert!(body["temperature"].as_f64().is_some_and(|t| (t - 0.7).abs() < 0.01));
+        assert!(
+            body["temperature"]
+                .as_f64()
+                .is_some_and(|t| (t - 0.7).abs() < 0.01)
+        );
     }
 
     #[test]
@@ -476,10 +479,7 @@ mod tests {
         let mut disabled = test_provider("disabled", 1);
         disabled.enabled = false;
 
-        let router = LlmRouter::new(vec![
-            disabled,
-            test_provider("enabled", 2),
-        ]);
+        let router = LlmRouter::new(vec![disabled, test_provider("enabled", 2)]);
 
         let available = router.get_available_providers().await;
         assert_eq!(available.len(), 1);

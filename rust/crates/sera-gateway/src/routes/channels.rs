@@ -1,9 +1,9 @@
 //! Notification channel endpoints.
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +28,7 @@ pub struct ChannelResponse {
 pub async fn list_channels(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ChannelResponse>>, AppError> {
-    let rows = NotificationRepository::list(state.db.inner()).await?;
+    let rows = NotificationRepository::list(state.db.require_pg_pool()).await?;
     let channels: Vec<ChannelResponse> = rows
         .into_iter()
         .map(|r| ChannelResponse {
@@ -60,7 +60,7 @@ pub async fn create_channel(
 ) -> Result<(StatusCode, Json<ChannelResponse>), AppError> {
     let id = uuid::Uuid::new_v4().to_string();
     let row = NotificationRepository::create(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &id,
         &body.name,
         &body.r#type,
@@ -88,7 +88,7 @@ pub async fn delete_channel(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    let deleted = NotificationRepository::delete(state.db.inner(), &id).await?;
+    let deleted = NotificationRepository::delete(state.db.require_pg_pool(), &id).await?;
     if !deleted {
         return Err(AppError::Db(sera_db::DbError::NotFound {
             entity: "notification_channel",

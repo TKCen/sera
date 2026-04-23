@@ -1,8 +1,8 @@
 //! Heartbeat and lifecycle endpoints.
 
 use axum::{
-    extract::{Path, State},
     Json,
+    extract::{Path, State},
 };
 use serde::Serialize;
 
@@ -18,7 +18,7 @@ pub async fn heartbeat(
 ) -> Result<Json<serde_json::Value>, AppError> {
     sqlx::query("UPDATE agent_instances SET last_heartbeat_at = NOW() WHERE id::text = $1")
         .bind(&id)
-        .execute(state.db.inner())
+        .execute(state.db.require_pg_pool())
         .await
         .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
@@ -42,7 +42,7 @@ pub async fn get_lifecycle(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<LifecycleResponse>, AppError> {
-    let row = AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let row = AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
     Ok(Json(LifecycleResponse {
         id: row.id.to_string(),
         name: row.name,

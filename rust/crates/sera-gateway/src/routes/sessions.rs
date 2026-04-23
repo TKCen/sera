@@ -1,9 +1,9 @@
 //! Sessions endpoint.
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -36,7 +36,8 @@ pub async fn list_sessions(
     Query(params): Query<SessionsQuery>,
 ) -> Result<Json<Vec<SessionResponse>>, AppError> {
     let rows =
-        SessionRepository::list_sessions(state.db.inner(), params.agent_name.as_deref()).await?;
+        SessionRepository::list_sessions(state.db.require_pg_pool(), params.agent_name.as_deref())
+            .await?;
     let sessions: Vec<SessionResponse> = rows
         .into_iter()
         .map(|r| {
@@ -80,8 +81,8 @@ pub async fn get_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<SessionDetailResponse>, AppError> {
-    let row = SessionRepository::get_by_id(state.db.inner(), &id).await?;
-    let messages = SessionRepository::get_messages(state.db.inner(), &id).await?;
+    let row = SessionRepository::get_by_id(state.db.require_pg_pool(), &id).await?;
+    let messages = SessionRepository::get_messages(state.db.require_pg_pool(), &id).await?;
 
     let session = {
         use super::iso8601_opt;
@@ -131,7 +132,7 @@ pub async fn create_session(
 ) -> Result<(StatusCode, Json<SessionResponse>), AppError> {
     let id = uuid::Uuid::new_v4().to_string();
     let row = SessionRepository::create(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &id,
         &body.agent_name,
         body.title.as_deref(),
@@ -168,7 +169,7 @@ pub async fn update_session(
     Path(id): Path<String>,
     Json(body): Json<UpdateSessionRequest>,
 ) -> Result<Json<SessionResponse>, AppError> {
-    let row = SessionRepository::update_title(state.db.inner(), &id, &body.title).await?;
+    let row = SessionRepository::update_title(state.db.require_pg_pool(), &id, &body.title).await?;
     Ok(Json({
         use super::iso8601_opt;
         SessionResponse {
@@ -188,7 +189,7 @@ pub async fn delete_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let deleted = SessionRepository::delete(state.db.inner(), &id).await?;
+    let deleted = SessionRepository::delete(state.db.require_pg_pool(), &id).await?;
     if !deleted {
         return Err(AppError::Db(sera_db::DbError::NotFound {
             entity: "session",

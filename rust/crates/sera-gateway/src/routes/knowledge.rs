@@ -2,9 +2,9 @@
 #![allow(dead_code, unused_imports, clippy::type_complexity)]
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -49,7 +49,7 @@ pub async fn get_history(
     .bind(&circle_id)
     .bind(limit)
     .bind(offset)
-    .fetch_all(state.db.inner())
+    .fetch_all(state.db.require_pg_pool())
     .await;
 
     // If table doesn't exist yet, return empty
@@ -94,7 +94,7 @@ pub async fn list_merge_requests(
          ORDER BY created_at DESC",
     )
     .bind(&circle_id)
-    .fetch_all(state.db.inner())
+    .fetch_all(state.db.require_pg_pool())
     .await;
 
     match rows {
@@ -143,7 +143,7 @@ pub async fn create_merge_request(
     .bind(&body.source_agent)
     .bind(&body.changes)
     .bind(now)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| {
         AppError::Internal(anyhow::anyhow!(
@@ -174,7 +174,7 @@ pub async fn approve_merge_request(
     )
     .bind(&mr_id)
     .bind(&circle_id)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| {
         AppError::Internal(anyhow::anyhow!("Failed to approve: {e}"))
@@ -216,7 +216,7 @@ pub async fn reject_merge_request(
     )
     .bind(&mr_id)
     .bind(&circle_id)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| {
         AppError::Internal(anyhow::anyhow!("Failed to reject: {e}"))
@@ -253,7 +253,7 @@ pub async fn resolve_merge_conflict(
     )
     .bind(&mr_id)
     .bind(&circle_id)
-    .fetch_optional(state.db.inner())
+    .fetch_optional(state.db.require_pg_pool())
     .await
     .map_err(|e| {
         AppError::Internal(anyhow::anyhow!("Failed to fetch merge request: {e}"))
@@ -279,7 +279,7 @@ pub async fn resolve_merge_conflict(
         "UPDATE knowledge_merge_requests SET status = 'resolved', updated_at = NOW() WHERE id = $1::uuid"
     )
     .bind(&mr_id)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| {
         AppError::Internal(anyhow::anyhow!("Failed to resolve conflict: {e}"))

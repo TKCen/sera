@@ -181,8 +181,14 @@ impl CircuitBreaker {
     /// * `failure_threshold` - Number of failures before opening
     /// * `window_secs` - Time window for counting failures
     /// * `cooldown_secs` - Time to wait before attempting recovery
-    pub fn new(name: impl Into<String>, failure_threshold: u32, window_secs: u64, cooldown_secs: u64) -> Self {
-        let state = CircuitBreakerState::new(name.into(), failure_threshold, window_secs, cooldown_secs);
+    pub fn new(
+        name: impl Into<String>,
+        failure_threshold: u32,
+        window_secs: u64,
+        cooldown_secs: u64,
+    ) -> Self {
+        let state =
+            CircuitBreakerState::new(name.into(), failure_threshold, window_secs, cooldown_secs);
         Self {
             state: Arc::new(Mutex::new(state)),
         }
@@ -258,9 +264,8 @@ mod tests {
         let cb = CircuitBreaker::new("test", 3, 1, 1);
         assert_eq!(cb.current_state().await, "Closed");
 
-        let result: Result<i32, CircuitBreakerError<String>> = cb
-            .call_protected(|| async { Ok::<i32, String>(42) })
-            .await;
+        let result: Result<i32, CircuitBreakerError<String>> =
+            cb.call_protected(|| async { Ok::<i32, String>(42) }).await;
         assert!(result.is_ok());
     }
 
@@ -281,9 +286,8 @@ mod tests {
         assert!(matches!(result, Err(CircuitBreakerError::Inner(_))));
 
         // Third call should be rejected (circuit open)
-        let result: Result<i32, CircuitBreakerError<String>> = cb
-            .call_protected(|| async { Ok::<i32, String>(42) })
-            .await;
+        let result: Result<i32, CircuitBreakerError<String>> =
+            cb.call_protected(|| async { Ok::<i32, String>(42) }).await;
         assert!(matches!(result, Err(CircuitBreakerError::Open { .. })));
     }
 
@@ -297,18 +301,16 @@ mod tests {
             .await;
 
         // Should be open now
-        let result: Result<i32, CircuitBreakerError<String>> = cb
-            .call_protected(|| async { Ok::<i32, String>(42) })
-            .await;
+        let result: Result<i32, CircuitBreakerError<String>> =
+            cb.call_protected(|| async { Ok::<i32, String>(42) }).await;
         assert!(matches!(result, Err(CircuitBreakerError::Open { .. })));
 
         // Wait for cooldown
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
         // Should transition to HalfOpen and allow the call
-        let result: Result<i32, CircuitBreakerError<String>> = cb
-            .call_protected(|| async { Ok::<i32, String>(42) })
-            .await;
+        let result: Result<i32, CircuitBreakerError<String>> =
+            cb.call_protected(|| async { Ok::<i32, String>(42) }).await;
         assert!(result.is_ok());
 
         // Should be back to closed
@@ -334,9 +336,8 @@ mod tests {
         assert!(matches!(result, Err(CircuitBreakerError::Inner(_))));
 
         // Should be open again
-        let result: Result<i32, CircuitBreakerError<String>> = cb
-            .call_protected(|| async { Ok::<i32, String>(42) })
-            .await;
+        let result: Result<i32, CircuitBreakerError<String>> =
+            cb.call_protected(|| async { Ok::<i32, String>(42) }).await;
         assert!(matches!(result, Err(CircuitBreakerError::Open { .. })));
     }
 
@@ -358,9 +359,8 @@ mod tests {
             .await;
 
         // Circuit should still be closed (only one failure within window)
-        let result: Result<i32, CircuitBreakerError<String>> = cb
-            .call_protected(|| async { Ok::<i32, String>(42) })
-            .await;
+        let result: Result<i32, CircuitBreakerError<String>> =
+            cb.call_protected(|| async { Ok::<i32, String>(42) }).await;
         assert!(result.is_ok());
     }
 

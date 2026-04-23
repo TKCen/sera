@@ -1,12 +1,12 @@
 //! Audit service — ties together the audit repository, hash chain, and Centrifugo publishing.
 
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use sqlx::PgPool;
 use sera_db::audit::{AuditRepository, AuditRow};
 use sera_telemetry::centrifugo::CentrifugoClient;
 use sera_telemetry::hash_chain::AuditHashChain;
 use sera_types::audit::ActorType;
+use sqlx::PgPool;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuditError {
@@ -174,8 +174,8 @@ impl AuditService {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<AuditRow>, i64), AuditError> {
-        let entries = AuditRepository::get_entries(&self.pool, actor_id, event_type, limit, offset)
-            .await?;
+        let entries =
+            AuditRepository::get_entries(&self.pool, actor_id, event_type, limit, offset).await?;
         let count = AuditRepository::count_entries(&self.pool, actor_id, event_type).await?;
         Ok((entries, count))
     }

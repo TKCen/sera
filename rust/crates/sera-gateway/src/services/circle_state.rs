@@ -4,11 +4,11 @@
 //! and cross-agent message routing for circles that are actively
 //! participating in a session.
 
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 
 /// Runtime state for an active circle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,11 +49,14 @@ impl SharedMemory {
 
     /// Set a memory entry.
     pub fn set(&mut self, key: String, value: serde_json::Value, written_by: String) {
-        self.entries.insert(key, MemoryEntry {
-            value,
-            written_by,
-            written_at: Utc::now(),
-        });
+        self.entries.insert(
+            key,
+            MemoryEntry {
+                value,
+                written_by,
+                written_at: Utc::now(),
+            },
+        );
     }
 
     /// Delete a memory entry. Returns true if the key existed.
@@ -90,11 +93,7 @@ pub struct CircleMessage {
 
 impl CircleMessage {
     /// Create a new message with a generated UUID.
-    pub fn new(
-        from_agent: String,
-        to_agent: Option<String>,
-        content: serde_json::Value,
-    ) -> Self {
+    pub fn new(from_agent: String, to_agent: Option<String>, content: serde_json::Value) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             from_agent,
@@ -169,10 +168,7 @@ impl CircleCoordinator {
         state
             .message_queue
             .iter()
-            .filter(|msg| {
-                msg.to_agent.is_none()
-                    || msg.to_agent.as_deref() == Some(agent_id)
-            })
+            .filter(|msg| msg.to_agent.is_none() || msg.to_agent.as_deref() == Some(agent_id))
             .cloned()
             .collect()
     }
@@ -295,7 +291,11 @@ mod tests {
             .activate_circle("c1".into(), vec!["agent-a".into(), "agent-b".into()])
             .await;
 
-        let msg = CircleMessage::new("agent-a".into(), Some("agent-b".into()), json!({"key": "val"}));
+        let msg = CircleMessage::new(
+            "agent-a".into(),
+            Some("agent-b".into()),
+            json!({"key": "val"}),
+        );
         coord.send_message("c1", msg).await;
 
         // Only agent-b sees it
@@ -320,10 +320,18 @@ mod tests {
         coord.activate_circle("c1".into(), vec![]).await;
 
         coord
-            .write_memory("c1", "config".into(), json!({"timeout": 30}), "agent-a".into())
+            .write_memory(
+                "c1",
+                "config".into(),
+                json!({"timeout": 30}),
+                "agent-a".into(),
+            )
             .await;
 
-        let entry = coord.read_memory("c1", "config").await.expect("entry missing");
+        let entry = coord
+            .read_memory("c1", "config")
+            .await
+            .expect("entry missing");
         assert_eq!(entry.value, json!({"timeout": 30}));
         assert_eq!(entry.written_by, "agent-a");
     }

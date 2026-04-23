@@ -1,10 +1,6 @@
 //! Webhook endpoints.
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 
 use sera_db::webhooks::WebhookRepository;
@@ -27,7 +23,7 @@ pub struct WebhookResponse {
 pub async fn list_webhooks(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<WebhookResponse>>, AppError> {
-    let rows = WebhookRepository::list(state.db.inner()).await?;
+    let rows = WebhookRepository::list(state.db.require_pg_pool()).await?;
     let webhooks: Vec<WebhookResponse> = rows
         .into_iter()
         .map(|r| WebhookResponse {
@@ -57,7 +53,7 @@ pub async fn create_webhook(
     Json(body): Json<CreateWebhookRequest>,
 ) -> Result<(StatusCode, Json<WebhookResponse>), AppError> {
     let row = WebhookRepository::create(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &body.name,
         &body.url_path,
         &body.secret,

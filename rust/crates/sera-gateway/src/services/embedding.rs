@@ -80,9 +80,10 @@ impl EmbeddingCache {
 
         // Evict oldest if at capacity
         if self.cache.len() >= self.max_entries
-            && let Some(oldest) = self.lru_order.pop_front() {
-                self.cache.remove(&oldest);
-            }
+            && let Some(oldest) = self.lru_order.pop_front()
+        {
+            self.cache.remove(&oldest);
+        }
 
         self.lru_order.push_back(text.clone());
         self.cache.insert(text, vector);
@@ -174,10 +175,7 @@ impl AdHocEmbeddingClient {
         vector: Vec<f32>,
         payload: serde_json::Value,
     ) -> Result<(), EmbeddingError> {
-        let url = format!(
-            "{}/collections/{}/points",
-            self.qdrant_url, collection
-        );
+        let url = format!("{}/collections/{}/points", self.qdrant_url, collection);
 
         let point = serde_json::json!({
             "id": id,
@@ -247,9 +245,18 @@ impl AdHocEmbeddingClient {
                             })?
                             .iter()
                             .filter_map(|item| {
-                                let id = item.get("id").and_then(|v| v.as_str()).map(|s| s.to_string())?;
-                                let score = item.get("score").and_then(|v| v.as_f64()).map(|f| f as f32)?;
-                                let payload = item.get("payload").cloned().unwrap_or(serde_json::json!({}));
+                                let id = item
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string())?;
+                                let score = item
+                                    .get("score")
+                                    .and_then(|v| v.as_f64())
+                                    .map(|f| f as f32)?;
+                                let payload = item
+                                    .get("payload")
+                                    .cloned()
+                                    .unwrap_or(serde_json::json!({}));
                                 Some(SearchResult { id, score, payload })
                             })
                             .collect();

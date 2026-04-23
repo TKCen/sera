@@ -1,10 +1,10 @@
 //! Schedule service — cron and one-shot task scheduling.
 
-use std::time::Duration;
-use uuid::Uuid;
-use time::OffsetDateTime;
 use cron::Schedule;
 use std::str::FromStr;
+use std::time::Duration;
+use time::OffsetDateTime;
+use uuid::Uuid;
 
 use sera_db::{DbPool, schedules::ScheduleRepository, tasks::TaskRepository};
 
@@ -163,11 +163,14 @@ impl ScheduleService {
     pub async fn trigger_schedule(&self, id: Uuid) -> Result<(), ScheduleError> {
         // Look up the schedule to get agent_instance_id and task prompt
         let rows = ScheduleRepository::list_schedules(self.pool.inner()).await?;
-        let schedule = rows.into_iter().find(|r| r.id == id)
+        let schedule = rows
+            .into_iter()
+            .find(|r| r.id == id)
             .ok_or_else(|| ScheduleError::NotFound(id.to_string()))?;
 
-        let agent_instance_id = schedule.agent_instance_id
-            .ok_or_else(|| ScheduleError::NotFound(format!("schedule {id} has no agent_instance_id")))?;
+        let agent_instance_id = schedule.agent_instance_id.ok_or_else(|| {
+            ScheduleError::NotFound(format!("schedule {id} has no agent_instance_id"))
+        })?;
 
         // Extract prompt text from task JSON
         let task_text = if let Some(p) = schedule.task.get("prompt").and_then(|v| v.as_str()) {
@@ -194,7 +197,12 @@ impl ScheduleService {
         .await
         .map_err(ScheduleError::Db)?;
 
-        tracing::info!("Triggered schedule '{}' (id={}) for agent {}", schedule.name, id, agent_instance_id);
+        tracing::info!(
+            "Triggered schedule '{}' (id={}) for agent {}",
+            schedule.name,
+            id,
+            agent_instance_id
+        );
         Ok(())
     }
 
@@ -222,15 +230,11 @@ impl ScheduleService {
             }
 
             // Calculate next_run_at from expression
-            let next = schedule.expression.as_deref()
-                .and_then(Self::next_run_at);
+            let next = schedule.expression.as_deref().and_then(Self::next_run_at);
 
-            if let Err(e) = ScheduleRepository::update_run_times(
-                self.pool.inner(),
-                id,
-                now,
-                next,
-            ).await {
+            if let Err(e) =
+                ScheduleRepository::update_run_times(self.pool.inner(), id, now, next).await
+            {
                 tracing::error!("Failed to update run times for schedule '{}': {}", name, e);
             }
         }
@@ -259,9 +263,9 @@ impl ScheduleService {
         let name = format!("one-shot-{}", &id.to_string()[..8]);
 
         // Calculate scheduled time
-        let scheduled_at = OffsetDateTime::now_utc()
-            + Duration::from_millis(delay_ms);
-        let scheduled_str = scheduled_at.format(&time::format_description::well_known::Rfc3339)
+        let scheduled_at = OffsetDateTime::now_utc() + Duration::from_millis(delay_ms);
+        let scheduled_str = scheduled_at
+            .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_default();
 
         ScheduleRepository::create_schedule(

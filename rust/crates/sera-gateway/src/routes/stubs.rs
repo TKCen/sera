@@ -4,9 +4,9 @@
 #![allow(dead_code, unused_imports)]
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use sqlx::Row;
 
@@ -31,7 +31,6 @@ fn not_impl_with(planned: &str, bead: &str) -> (StatusCode, Json<serde_json::Val
         })),
     )
 }
-
 
 // ── Pipeline stubs ──────────────────────────────────────────────────────────
 
@@ -115,7 +114,7 @@ pub async fn agent_logs(
          LIMIT 200",
     )
     .bind(&id)
-    .fetch_all(state.db.inner())
+    .fetch_all(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
@@ -152,7 +151,7 @@ pub async fn agent_subagents(
          ORDER BY created_at DESC",
     )
     .bind(&id)
-    .fetch_all(state.db.inner())
+    .fetch_all(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
@@ -190,7 +189,7 @@ pub async fn pending_updates(
          JOIN agent_templates at ON ai.template_name = at.name
          WHERE at.updated_at > ai.updated_at OR at.updated_at IS NULL"
     )
-    .fetch_all(state.db.inner())
+    .fetch_all(state.db.require_pg_pool())
     .await
     .unwrap_or_default();
 
@@ -233,7 +232,9 @@ pub async fn list_tools(State(state): State<AppState>) -> Json<Vec<serde_json::V
     ];
 
     // Try to append skills from DB
-    if let Ok(skills) = sera_db::skills::SkillRepository::list_skills(state.db.inner()).await {
+    if let Ok(skills) =
+        sera_db::skills::SkillRepository::list_skills(state.db.require_pg_pool()).await
+    {
         for skill in skills {
             tools.push(serde_json::json!({
                 "id": skill.id.to_string(),
@@ -271,7 +272,9 @@ pub async fn tools_catalog(State(state): State<AppState>) -> Json<Vec<serde_json
     ];
 
     // Append skills from DB
-    if let Ok(skills) = sera_db::skills::SkillRepository::list_skills(state.db.inner()).await {
+    if let Ok(skills) =
+        sera_db::skills::SkillRepository::list_skills(state.db.require_pg_pool()).await
+    {
         for skill in skills {
             tools.push(serde_json::json!({
                 "name": skill.name,
@@ -288,7 +291,7 @@ pub async fn tools_catalog(State(state): State<AppState>) -> Json<Vec<serde_json
 pub async fn list_templates(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
-    let rows = sera_db::agents::AgentRepository::list_templates(state.db.inner()).await?;
+    let rows = sera_db::agents::AgentRepository::list_templates(state.db.require_pg_pool()).await?;
     let templates: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|r| {
@@ -315,7 +318,7 @@ pub async fn get_schedule(
          WHERE s.id = $1::uuid",
     )
     .bind(&id)
-    .fetch_optional(state.db.inner())
+    .fetch_optional(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
@@ -366,11 +369,11 @@ pub async fn schedule_runs(
              FROM task_queue tq
              WHERE tq.agent_instance_id::text = $1
              ORDER BY tq.created_at DESC
-             LIMIT $2"
+             LIMIT $2",
         )
         .bind(agent_id)
         .bind(limit)
-        .fetch_all(state.db.inner())
+        .fetch_all(state.db.require_pg_pool())
         .await
     } else {
         sqlx::query(
@@ -378,10 +381,10 @@ pub async fn schedule_runs(
                     tq.result, tq.context
              FROM task_queue tq
              ORDER BY tq.created_at DESC
-             LIMIT $1"
+             LIMIT $1",
         )
         .bind(limit)
-        .fetch_all(state.db.inner())
+        .fetch_all(state.db.require_pg_pool())
         .await
     };
 
@@ -430,7 +433,7 @@ pub async fn memory_overview(
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Total block count
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM core_memory_blocks")
-        .fetch_one(state.db.inner())
+        .fetch_one(state.db.require_pg_pool())
         .await
         .unwrap_or((0,));
 
@@ -438,7 +441,7 @@ pub async fn memory_overview(
     let agent_rows = sqlx::query(
         "SELECT agent_instance_id, COUNT(*) as block_count FROM core_memory_blocks GROUP BY agent_instance_id"
     )
-    .fetch_all(state.db.inner())
+    .fetch_all(state.db.require_pg_pool())
     .await
     .unwrap_or_default();
 
@@ -467,7 +470,9 @@ pub async fn agent_core_memory(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
-    let rows = sera_db::memory::MemoryRepository::list_blocks(state.db.inner(), Some(&agent_id)).await?;
+    let rows =
+        sera_db::memory::MemoryRepository::list_blocks(state.db.require_pg_pool(), Some(&agent_id))
+            .await?;
     let blocks: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|r| {
@@ -498,7 +503,7 @@ pub async fn update_core_memory(
     .bind(content)
     .bind(&agent_id)
     .bind(&name)
-    .execute(state.db.inner())
+    .execute(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
@@ -528,7 +533,8 @@ pub async fn agent_tools(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Get agent instance to find resolved capabilities
-    let agent = sera_db::agents::AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let agent =
+        sera_db::agents::AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
 
     let available = agent
         .resolved_capabilities
@@ -562,7 +568,7 @@ pub async fn agent_template_diff(
          WHERE ai.id = $1::uuid",
     )
     .bind(&id)
-    .fetch_optional(state.db.inner())
+    .fetch_optional(state.db.require_pg_pool())
     .await
     .map_err(|e| AppError::Db(sera_db::DbError::Sqlx(e)))?;
 
@@ -603,7 +609,7 @@ pub async fn memory_recent(
         "SELECT id, agent_instance_id, name, content, character_limit, is_read_only, created_at, updated_at
          FROM core_memory_blocks ORDER BY updated_at DESC LIMIT 20"
     )
-    .fetch_all(state.db.inner())
+    .fetch_all(state.db.require_pg_pool())
     .await
     .unwrap_or_default();
 
@@ -640,9 +646,12 @@ pub async fn memory_explorer_graph() -> (StatusCode, Json<serde_json::Value>) {
 pub async fn audit_verify(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let rows = sera_db::audit::AuditRepository::get_chain_for_verification(state.db.inner(), 1000)
-        .await
-        .unwrap_or_default();
+    let rows = sera_db::audit::AuditRepository::get_chain_for_verification(
+        state.db.require_pg_pool(),
+        1000,
+    )
+    .await
+    .unwrap_or_default();
 
     let total = rows.len() as i64;
     let mut checked = 0i64;
@@ -654,7 +663,9 @@ pub async fn audit_verify(
         // Verify prev_hash matches previous entry's hash
         if idx > 0 {
             let prev_row = &rows[idx - 1];
-            if let Some(ph) = &row.prev_hash && ph != &prev_row.hash {
+            if let Some(ph) = &row.prev_hash
+                && ph != &prev_row.hash
+            {
                 broken_links.push(serde_json::json!({
                     "sequence": row.sequence,
                     "expected": prev_row.hash,
@@ -673,9 +684,7 @@ pub async fn audit_verify(
 }
 
 /// GET /api/providers/dynamic
-pub async fn providers_dynamic(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+pub async fn providers_dynamic(State(state): State<AppState>) -> Json<serde_json::Value> {
     let providers = state.providers.read().await;
     let dynamic_providers = providers
         .providers
@@ -696,9 +705,7 @@ pub async fn providers_dynamic(
 }
 
 /// GET /api/providers/dynamic/statuses
-pub async fn providers_dynamic_statuses(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+pub async fn providers_dynamic_statuses(State(state): State<AppState>) -> Json<serde_json::Value> {
     let providers = state.providers.read().await;
     let statuses: Vec<serde_json::Value> = providers
         .providers
@@ -748,10 +755,10 @@ pub async fn agent_grants(
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     let rows = sqlx::query(
         "SELECT id, agent_instance_id, capability, action, granted_at, granted_by
-         FROM capability_grants WHERE agent_instance_id = $1::uuid"
+         FROM capability_grants WHERE agent_instance_id = $1::uuid",
     )
     .bind(&id)
-    .fetch_all(state.db.inner())
+    .fetch_all(state.db.require_pg_pool())
     .await
     .unwrap_or_default();
 
@@ -797,7 +804,8 @@ pub async fn agent_health_check(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let row = sera_db::agents::AgentRepository::get_instance(state.db.inner(), &id).await?;
+    let row =
+        sera_db::agents::AgentRepository::get_instance(state.db.require_pg_pool(), &id).await?;
 
     // Check heartbeat — extract OffsetDateTime from the row
     let heartbeat_ok = if let Some(hb) = row.last_heartbeat_at {
@@ -840,10 +848,10 @@ pub async fn session_commands(
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     let rows = sqlx::query(
         "SELECT id, session_id, task, status, result, error, created_at, started_at, completed_at
-         FROM task_queue WHERE session_id = $1 ORDER BY created_at DESC"
+         FROM task_queue WHERE session_id = $1 ORDER BY created_at DESC",
     )
     .bind(&sid)
-    .fetch_all(state.db.inner())
+    .fetch_all(state.db.require_pg_pool())
     .await
     .unwrap_or_default();
 
@@ -874,7 +882,9 @@ pub async fn delete_agent_block(
     State(state): State<AppState>,
     Path((_agent_id, block_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let deleted = sera_db::memory::MemoryRepository::delete_block(state.db.inner(), &block_id).await?;
+    let deleted =
+        sera_db::memory::MemoryRepository::delete_block(state.db.require_pg_pool(), &block_id)
+            .await?;
     if !deleted {
         return Err(AppError::Db(sera_db::DbError::NotFound {
             entity: "memory_block",
@@ -934,16 +944,14 @@ mod tests {
 
     #[tokio::test]
     async fn agent_context_debug_returns_501() {
-        let (status, Json(body)) =
-            agent_context_debug(Path("instance-id".to_string())).await;
+        let (status, Json(body)) = agent_context_debug(Path("instance-id".to_string())).await;
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
         assert_eq!(body["bead"], "sera-debug");
     }
 
     #[tokio::test]
     async fn agent_system_prompt_returns_501() {
-        let (status, Json(body)) =
-            agent_system_prompt(Path("instance-id".to_string())).await;
+        let (status, Json(body)) = agent_system_prompt(Path("instance-id".to_string())).await;
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
         assert_eq!(body["bead"], "sera-runtime");
     }
@@ -957,8 +965,7 @@ mod tests {
 
     #[tokio::test]
     async fn knowledge_history_returns_501() {
-        let (status, Json(body)) =
-            knowledge_history(Path("circle-id".to_string())).await;
+        let (status, Json(body)) = knowledge_history(Path("circle-id".to_string())).await;
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
         assert_eq!(body["bead"], "sera-knowledge");
     }
@@ -1000,7 +1007,14 @@ mod tests {
             "eventType": "lane_failure",
             "payload": {}
         });
-        for field in ["sequence", "timestamp", "actorType", "actorId", "eventType", "payload"] {
+        for field in [
+            "sequence",
+            "timestamp",
+            "actorType",
+            "actorId",
+            "eventType",
+            "payload",
+        ] {
             assert!(sample.get(field).is_some(), "missing {field}");
         }
     }
@@ -1019,8 +1033,14 @@ mod tests {
             "updatedAt": "2026-04-17T00:00:00Z"
         });
         for field in [
-            "id", "name", "templateName", "status", "lifecycleMode",
-            "lastHeartbeatAt", "createdAt", "updatedAt",
+            "id",
+            "name",
+            "templateName",
+            "status",
+            "lifecycleMode",
+            "lastHeartbeatAt",
+            "createdAt",
+            "updatedAt",
         ] {
             assert!(sample.get(field).is_some(), "missing {field}");
         }
@@ -1037,8 +1057,12 @@ mod tests {
             "changes": []
         });
         for field in [
-            "hasChanges", "instanceId", "templateName",
-            "templateUpdatedAt", "instanceAppliedAt", "changes",
+            "hasChanges",
+            "instanceId",
+            "templateName",
+            "templateUpdatedAt",
+            "instanceAppliedAt",
+            "changes",
         ] {
             assert!(sample.get(field).is_some(), "missing {field}");
         }

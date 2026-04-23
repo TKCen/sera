@@ -1,9 +1,9 @@
 //! Audit log endpoint.
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -48,7 +48,7 @@ pub async fn get_audit_log(
     let offset = params.offset.unwrap_or(0);
 
     let rows = AuditRepository::get_entries(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         params.actor_id.as_deref(),
         params.event_type.as_deref(),
         limit,
@@ -76,7 +76,7 @@ pub async fn get_audit_log(
         .collect();
 
     let total = AuditRepository::count_entries(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         params.actor_id.as_deref(),
         params.event_type.as_deref(),
     )
@@ -117,7 +117,7 @@ pub async fn get_audit_by_sequence(
 ) -> Result<Json<AuditEntryResponse>, AppError> {
     // Query by sequence — using get_entries with limit 1 to find specific sequence
     let rows = AuditRepository::get_entries(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         None,
         None,
         1000, // fetch enough to search
@@ -151,7 +151,7 @@ pub async fn append_audit(
     Json(body): Json<AppendAuditRequest>,
 ) -> Result<(StatusCode, Json<AppendAuditResponse>), AppError> {
     // Get the latest hash for chain continuation
-    let prev = AuditRepository::get_latest(state.db.inner()).await?;
+    let prev = AuditRepository::get_latest(state.db.require_pg_pool()).await?;
     let prev_hash = prev.as_ref().map(|r| r.hash.as_str());
 
     // Compute SHA-256 hash: prev_hash + actor_type + actor_id + event_type + payload
@@ -166,7 +166,7 @@ pub async fn append_audit(
     let hash = format!("{:x}", hasher.finalize());
 
     let sequence = AuditRepository::append(
-        state.db.inner(),
+        state.db.require_pg_pool(),
         &body.actor_type,
         &body.actor_id,
         body.acting_context.as_ref(),

@@ -6,27 +6,31 @@ use tokio::sync::{Mutex, RwLock};
 use sera_auth::JwtService;
 use sera_config::core_config::CoreConfig;
 use sera_config::providers::ProvidersConfig;
-use sera_db::DbPool;
 use sera_db::lane_queue::LaneQueue;
-use sera_telemetry::CentrifugoClient;
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_meta::artifact_pipeline::ArtifactPipeline;
 use sera_meta::constitutional::ConstitutionalRegistry;
+use sera_telemetry::CentrifugoClient;
 use sera_tools::sandbox::SandboxProvider;
 
-use sera_gateway::envelope::GenerationMarker;
-use sera_gateway::evolve_token::{EvolveTokenSigner, ProposalUsageStore};
-use sera_gateway::harness_dispatch::HarnessRegistry;
-use sera_gateway::kill_switch::KillSwitch;
-use sera_gateway::session_store::SessionStore;
-use sera_gateway::transcript_persist::TranscriptPersistence;
+use crate::db_backend::DbBackend;
+use crate::envelope::GenerationMarker;
+use crate::evolve_token::{EvolveTokenSigner, ProposalUsageStore};
+use crate::harness_dispatch::HarnessRegistry;
+use crate::kill_switch::KillSwitch;
 use crate::services::schedule_service::ScheduleService;
+use crate::session_store::SessionStore;
+use crate::transcript_persist::TranscriptPersistence;
 
 /// Shared application state.
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct AppState {
-    pub db: DbPool,
+    /// Pluggable database backend. Today's Postgres-only routes reach the
+    /// underlying `sqlx::PgPool` via `db.pg_pool().expect(...)`; SQLite-backed
+    /// deployments carry the same shape but surface the `SqliteDb` handle
+    /// instead. See [`crate::db_backend`].
+    pub db: Arc<dyn DbBackend>,
     pub config: Arc<CoreConfig>,
     pub jwt: Arc<JwtService>,
     pub providers: Arc<RwLock<ProvidersConfig>>,
@@ -36,7 +40,7 @@ pub struct AppState {
     pub mcp_registry: Arc<RwLock<crate::routes::mcp::McpRegistry>>,
     pub schedule_svc: Arc<ScheduleService>,
     pub harness_registry: HarnessRegistry,
-    pub plugin_registry: sera_gateway::harness_dispatch::PluginRegistry,
+    pub plugin_registry: crate::harness_dispatch::PluginRegistry,
     pub queue_backend: Arc<dyn sera_queue::QueueBackend>,
     pub generation_marker: GenerationMarker,
     pub kill_switch: Arc<KillSwitch>,

@@ -1,36 +1,23 @@
 //! `From` impls bridging sera-runtime error types into [`SeraError`].
 //!
 //! Covers:
-//! - [`RuntimeError`] — top-level runtime errors
 //! - [`ThinkError`] — LLM think-step errors
 //! - [`ToolError`] — tool dispatch errors
 //! - [`DelegationError`] — handoff/delegation errors
 //! - [`SubagentError`] — subagent lifecycle errors
 //! - [`LlmError`] — LLM client errors
 //! - [`ContextError`] — context engine errors
+//!
+//! The `From<RuntimeError>` impl lives in `sera-types::runtime` to satisfy
+//! Rust's orphan rules, since both types are external to this crate.
 
 use sera_errors::{SeraError, SeraErrorCode};
 
 use crate::context_engine::ContextError;
-use crate::error::RuntimeError;
 use crate::handoff::DelegationError;
 use crate::llm_client::LlmError;
 use crate::subagent::SubagentError;
 use crate::turn::{ThinkError, ToolError};
-
-impl From<RuntimeError> for SeraError {
-    fn from(err: RuntimeError) -> Self {
-        let code = match &err {
-            RuntimeError::Llm(_) => SeraErrorCode::Internal,
-            RuntimeError::Tool(_) => SeraErrorCode::Internal,
-            RuntimeError::ContextOverflow(_) => SeraErrorCode::ResourceExhausted,
-            RuntimeError::Io(_) => SeraErrorCode::Internal,
-            RuntimeError::Json(_) => SeraErrorCode::Serialization,
-            RuntimeError::Http(_) => SeraErrorCode::Unavailable,
-        };
-        SeraError::with_source(code, err.to_string(), err)
-    }
-}
 
 impl From<ThinkError> for SeraError {
     fn from(err: ThinkError) -> Self {
@@ -102,6 +89,7 @@ impl From<ContextError> for SeraError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sera_types::runtime::RuntimeError;
 
     // --- RuntimeError ---
 
@@ -114,14 +102,13 @@ mod tests {
 
     #[test]
     fn runtime_context_overflow_maps_to_resource_exhausted() {
-        let e: SeraError = RuntimeError::ContextOverflow(512).into();
+        let e: SeraError = RuntimeError::ContextOverflow { limit: 512, actual: 600 }.into();
         assert_eq!(e.code, SeraErrorCode::ResourceExhausted);
     }
 
     #[test]
     fn runtime_json_maps_to_serialization() {
-        let json_err = serde_json::from_str::<serde_json::Value>("bad").unwrap_err();
-        let e: SeraError = RuntimeError::Json(json_err).into();
+        let e: SeraError = RuntimeError::Json("bad json".into()).into();
         assert_eq!(e.code, SeraErrorCode::Serialization);
     }
 

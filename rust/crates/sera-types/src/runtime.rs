@@ -214,6 +214,45 @@ pub enum RuntimeError {
     /// An unexpected internal error.
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// An LLM client-level error (transport, auth, provider failure).
+    #[error("LLM client error: {0}")]
+    Llm(String),
+
+    /// A tool dispatch error (string description).
+    #[error("tool error: {0}")]
+    Tool(String),
+
+    /// An I/O error during runtime execution.
+    #[error("IO error: {0}")]
+    Io(String),
+
+    /// A JSON serialization/deserialization error.
+    #[error("JSON error: {0}")]
+    Json(String),
+
+    /// An HTTP transport error.
+    #[error("HTTP error: {0}")]
+    Http(String),
+}
+
+impl From<RuntimeError> for sera_errors::SeraError {
+    fn from(err: RuntimeError) -> Self {
+        use sera_errors::SeraErrorCode;
+        let code = match &err {
+            RuntimeError::ModelError(_) => SeraErrorCode::Internal,
+            RuntimeError::ContextOverflow { .. } => SeraErrorCode::ResourceExhausted,
+            RuntimeError::ToolExecutionFailed { .. } => SeraErrorCode::Internal,
+            RuntimeError::Timeout => SeraErrorCode::Timeout,
+            RuntimeError::Internal(_) => SeraErrorCode::Internal,
+            RuntimeError::Llm(_) => SeraErrorCode::Internal,
+            RuntimeError::Tool(_) => SeraErrorCode::Internal,
+            RuntimeError::Io(_) => SeraErrorCode::Internal,
+            RuntimeError::Json(_) => SeraErrorCode::Serialization,
+            RuntimeError::Http(_) => SeraErrorCode::Unavailable,
+        };
+        sera_errors::SeraError::with_source(code, err.to_string(), err)
+    }
 }
 
 // ── Trait ─────────────────────────────────────────────────────────────────────

@@ -6,7 +6,8 @@ use sera_auth::{
     capability::{CapabilityToken, CapabilityTokenError},
     casbin_adapter::CasbinAuthzAdapter,
 };
-use sera_types::evolution::{AgentCapability, BlastRadius, ChangeArtifactId};
+use sera_types::AgentCapability;
+use sera_types::evolution::{BlastRadius, ChangeArtifactId};
 
 // ---------------------------------------------------------------------------
 // Helpers

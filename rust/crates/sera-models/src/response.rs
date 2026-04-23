@@ -2,6 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
+// Re-export the canonical SPEC-runtime ToolCall shape. The `result` field is
+// optional and elided on serialize when `None`, so pre-existing JSON written
+// by sera-models remains wire-compatible.
+pub use sera_types::runtime::ToolCall;
+
 /// A response from a model provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelResponse {
@@ -24,17 +29,6 @@ pub enum FinishReason {
     Length,
     ContentFilter,
     ToolCalls,
-}
-
-/// A tool call made by the model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCall {
-    /// The tool call ID.
-    pub id: String,
-    /// The name of the tool.
-    pub name: String,
-    /// The arguments to the tool (JSON).
-    pub arguments: serde_json::Value,
 }
 
 /// Usage statistics for a completion.
@@ -126,6 +120,7 @@ mod tests {
             id: "call-001".into(),
             name: "bash".into(),
             arguments: json!({"cmd": "ls -la"}),
+            result: None,
         };
         let json = serde_json::to_string(&tc).expect("serialize ToolCall");
         let parsed: ToolCall = serde_json::from_str(&json).expect("deserialize ToolCall");
@@ -144,6 +139,7 @@ mod tests {
             id: "call-xyz".into(),
             name: "file_write".into(),
             arguments: args.clone(),
+            result: None,
         };
         let json = serde_json::to_string(&tc).expect("serialize");
         let parsed: ToolCall = serde_json::from_str(&json).expect("deserialize");
@@ -192,11 +188,13 @@ mod tests {
                     id: "c1".into(),
                     name: "search".into(),
                     arguments: json!({"query": "Rust async"}),
+                    result: None,
                 },
                 ToolCall {
                     id: "c2".into(),
                     name: "read_file".into(),
                     arguments: json!({"path": "src/main.rs"}),
+                    result: None,
                 },
             ]),
         };
@@ -246,5 +244,15 @@ mod tests {
         let parsed: ModelResponse = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.finish_reason, FinishReason::Length);
         assert_eq!(parsed.usage.completion_tokens, 512);
+    }
+
+    #[test]
+    fn tool_call_deserialize_without_result_field() {
+        // Back-compat: JSON without `result` (the legacy sera-models shape)
+        // should still deserialize cleanly via `#[serde(default)]`.
+        let legacy = r#"{"id":"c1","name":"bash","arguments":{"cmd":"ls"}}"#;
+        let parsed: ToolCall = serde_json::from_str(legacy).expect("deserialize legacy");
+        assert_eq!(parsed.id, "c1");
+        assert!(parsed.result.is_none());
     }
 }

@@ -5,7 +5,6 @@ pub mod agent;
 pub mod agent_tool;
 pub mod audit;
 pub mod capability;
-pub mod chat;
 pub mod circle;
 pub mod circle_activity;
 pub mod config_manifest;

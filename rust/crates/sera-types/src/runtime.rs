@@ -62,7 +62,7 @@ pub struct ToolCall {
     /// Arguments passed by the model (JSON object).
     pub arguments: serde_json::Value,
     /// The result of executing the tool, if it was executed.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<crate::tool::ToolResult>,
 }
 

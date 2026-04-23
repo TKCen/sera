@@ -10,7 +10,7 @@
 //! - [`error::HookError`] — all failure modes.
 //!
 //! WASM hook execution is supported via the `wasm` feature flag.
-//! When enabled, [`wasm_adapter::WasmHookAdapter`] provides WASM runtime support.
+//! When enabled, [`component_adapter::ComponentAdapter`] provides WIT component-model runtime support.
 //!
 //! # Example
 //!
@@ -34,10 +34,6 @@ pub mod manifest;
 pub mod registry;
 pub mod sera_errors;
 
-// WASM adapter is only compiled with the wasm feature
-#[cfg(feature = "wasm")]
-pub mod wasm_adapter;
-
 // Component-model adapter (WIT-based, sandboxed capability injection).
 #[cfg(feature = "wasm")]
 pub mod component_adapter;
@@ -53,7 +49,9 @@ pub use manifest::{
 pub use registry::{HookRegistry, HookTier};
 
 #[cfg(feature = "wasm")]
-pub use component_adapter::{ComponentAdapter, ComponentCapabilities, ComponentError};
+pub use component_adapter::{
+    ComponentAdapter, ComponentCapabilities, ComponentError, WasmHookMetadata,
+};
 
 #[cfg(test)]
 mod tests;

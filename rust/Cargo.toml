@@ -113,7 +113,7 @@ tokio-util = "0.7"
 
 # Knowledge / Vector
 qdrant-client = "1"
-git2 = "0.19"
+git2 = { version = "0.19", default-features = false }
 
 # OIDC
 openidconnect = "4"

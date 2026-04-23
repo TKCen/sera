@@ -10,6 +10,8 @@ sera-types = { workspace = true }
 sera-errors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+schemars = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
@@ -24,3 +26,5 @@ wasm = ["wasmtime", "wasmtime-wasi"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+tempfile = { workspace = true }
+wit-parser = "0.244"

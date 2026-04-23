@@ -82,9 +82,9 @@ Load selectively based on your task — do not load everything upfront:
 
 ## Environment
 
-- **Platform:** Windows 11 / bash shell — use Unix syntax (forward slashes) throughout
-- **Working directory:** `D:/projects/homelab/sera`
-- **Package manager:** bun workspaces (`core/` and `web/` are workspace packages)
+- **Platform:** WSL2 / bash shell — use Unix syntax (forward slashes) throughout
+- **Working directory:** `/home/entity/projects/sera`
+- **Package manager:** Rust (via Cargo) — active workspace in `rust/`
 - **`cd` does not persist between shell calls** — use absolute paths in every command
 
 ## Codebase map
@@ -111,7 +111,7 @@ sera/
     templates/ schemas/ sandbox-boundaries/ lists/ circles/ …    # Other pre-migration assets
 ```
 
-> **Note (2026-04-21):** The TS/Go codebase was moved under `legacy/` during the Rust migration. Active work lives in `rust/`; `legacy/` is kept for reference while Rust parity is finished. Sections below that reference `core/`, `web/`, `tui/`, `cli/`, or `tools/` at top-level paths (notably the Docker Compose section and the `bun install` learning) reflect the pre-migration layout — apply with `legacy/` prefix if touching them.
+> **Note (2026-04-21):** The TS/Go codebase was moved under `legacy/` during the Rust migration. Active work lives in `rust/`; `legacy/` is kept for reference while Rust parity is finished. Any sections that reference `core/`, `web/`, `tui/`, `cli/`, or `tools/` at top-level paths (outside `legacy/`) reflect the pre-migration layout — apply with `legacy/` prefix if touching them.
 
 ## Code Quality
 
@@ -154,19 +154,10 @@ Do **not** duplicate CLAUDE.md learnings into memory — learnings belong in CLA
 
 When completing a workflow loop or resolving a non-trivial issue, check whether a new learning should be added to the relevant CLAUDE.md and/or a memory should be saved.
 
-## Docker Compose (dev)
-
-- **Dev start command:** `docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d`
-- **Dev entrypoints:** `core/docker-entrypoint.dev.sh` and `web/docker-entrypoint.dev.sh` run `bun install` into the named volume on first boot — do not remove these
-- **Named volumes for node_modules:** The dev compose shadows `/app/node_modules` with named volumes (`node_modules_core`, `node_modules_web`). These start empty; the entrypoint scripts populate them. To force a fresh install: `docker compose ... down -v` then `up -d`
-- **Migrations run automatically:** `initDb()` in `core/src/index.ts` runs `node-pg-migrate` on startup — no manual migration step needed
-- **Shell scripts must use LF line endings:** Any `.sh` file mounted into a Linux container will break with CRLF. After creating shell scripts, run `sed -i 's/\r$//'` on them
-
 ## Learnings
 
 > Most learnings live in the workspace-specific CLAUDE.md files (`core/CLAUDE.md`, `web/CLAUDE.md`, etc.). Only cross-cutting items belong here.
 
-- **Use `npm install` on Windows, `bun install` in Docker**: Bun 1.3.x on Windows creates junction points that Windows treats as "untrusted mount points" — Node.js, tsc, and other tools cannot traverse them. Use `npm install` on the Windows host for compatible `node_modules`. Docker builds use `bun install` via `bun.lock`. Both `package-lock.json` and `bun.lock` must be kept in sync. Use `bunx` to run local binaries (e.g. `bunx vitest run`, `bunx tsc --noEmit`).
 - **Git Bash mangles absolute Linux paths in `docker exec`**: Prefix with `MSYS_NO_PATHCONV=1` when passing paths like `/app/...` to `docker exec`.
 - **Squid egress proxy fails on `docker restart`**: The squid PID file persists across restarts, causing `FATAL: Squid is already running`. Workaround: `docker compose down sera-egress-proxy && docker compose up -d sera-egress-proxy`. See #363.
 - **API endpoints require auth header**: All `/api/*` endpoints (except `/api/health/*`) require `Authorization: Bearer <key>`. Dev key: `sera_bootstrap_dev_123`.

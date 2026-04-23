@@ -110,12 +110,7 @@ pub struct IncomingEvent {
 
 impl IncomingEvent {
     /// Create a new message event from a channel.
-    pub fn message(
-        agent_id: &str,
-        session_key: &str,
-        principal: PrincipalRef,
-        text: &str,
-    ) -> Self {
+    pub fn message(agent_id: &str, session_key: &str, principal: PrincipalRef, text: &str) -> Self {
         Self {
             id: EventId::generate(),
             kind: EventKind::Message,
@@ -328,7 +323,8 @@ mod tests {
 
     #[test]
     fn event_with_recipient() {
-        let mut event = IncomingEvent::message("sera", "agent:sera:main", test_principal(), "Hello");
+        let mut event =
+            IncomingEvent::message("sera", "agent:sera:main", test_principal(), "Hello");
         event.recipient = Some("agent:reviewer".to_string());
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("recipient"));
@@ -338,8 +334,10 @@ mod tests {
 
     #[test]
     fn event_with_approval() {
-        let mut event = IncomingEvent::message("sera", "agent:sera:main", test_principal(), "rm -rf /");
-        event.requires_approval = Some(serde_json::json!({"scope": "tool_call", "urgency": "high"}));
+        let mut event =
+            IncomingEvent::message("sera", "agent:sera:main", test_principal(), "rm -rf /");
+        event.requires_approval =
+            Some(serde_json::json!({"scope": "tool_call", "urgency": "high"}));
         let json = serde_json::to_string(&event).unwrap();
         let parsed: IncomingEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.requires_approval.unwrap()["urgency"], "high");

@@ -8,8 +8,8 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use sera_types::event::IncomingEvent;
+use serde::{Deserialize, Serialize};
 
 use crate::error::DbError;
 use crate::lane_queue_counter::LaneCounterStoreDyn;
@@ -450,10 +450,7 @@ impl LaneQueue {
     ///
     /// Callers that need strict cross-pod admission control should configure a
     /// Postgres-backed store in the constructor.
-    pub async fn pending_count_for_lane_async(
-        &self,
-        session_key: &str,
-    ) -> Result<i64, DbError> {
+    pub async fn pending_count_for_lane_async(&self, session_key: &str) -> Result<i64, DbError> {
         if let Some(store) = self.counter_store.as_ref() {
             store.snapshot_dyn(session_key).await
         } else {
@@ -582,7 +579,7 @@ impl LaneQueue {
 mod tests {
     use super::*;
     use sera_types::{
-        event::{IncomingEvent, EventSource},
+        event::{EventSource, IncomingEvent},
         principal::{PrincipalId, PrincipalKind, PrincipalRef},
     };
 
@@ -1207,18 +1204,16 @@ mod tests {
         // `LaneQueue::new` must preserve the legacy single-pod default: no
         // persistent counter, `has_counter_store` returns false.
         let q = LaneQueue::new(4, QueueMode::Followup);
-        assert!(!q.has_counter_store(), "new() must not wire a counter store");
+        assert!(
+            !q.has_counter_store(),
+            "new() must not wire a counter store"
+        );
     }
 
     #[tokio::test]
     async fn enqueue_mirrors_pending_to_counter_store() {
-        let store: Arc<dyn LaneCounterStoreDyn> =
-            Arc::new(InMemoryLaneCounter::new());
-        let mut q = LaneQueue::new_with_counter_store(
-            4,
-            QueueMode::Followup,
-            Arc::clone(&store),
-        );
+        let store: Arc<dyn LaneCounterStoreDyn> = Arc::new(InMemoryLaneCounter::new());
+        let mut q = LaneQueue::new_with_counter_store(4, QueueMode::Followup, Arc::clone(&store));
 
         assert!(q.has_counter_store());
         q.enqueue(make_event("s1"));
@@ -1235,13 +1230,8 @@ mod tests {
         // Verify the full enqueue → dequeue → complete_run lifecycle leaves the
         // persistent count at zero. Dequeue must NOT perturb the store because
         // the job simply moves from "queued" to "in-flight" (net zero).
-        let store: Arc<dyn LaneCounterStoreDyn> =
-            Arc::new(InMemoryLaneCounter::new());
-        let mut q = LaneQueue::new_with_counter_store(
-            4,
-            QueueMode::Followup,
-            Arc::clone(&store),
-        );
+        let store: Arc<dyn LaneCounterStoreDyn> = Arc::new(InMemoryLaneCounter::new());
+        let mut q = LaneQueue::new_with_counter_store(4, QueueMode::Followup, Arc::clone(&store));
 
         q.enqueue(make_event("s1"));
         assert_eq!(wait_for_store(&store, "s1", 1).await, 1);
@@ -1263,19 +1253,12 @@ mod tests {
         // the same counter store must see a consistent global view of the
         // per-lane pending count — the admission-control invariant that
         // PostgresLaneCounter exists to guarantee in production.
-        let store: Arc<dyn LaneCounterStoreDyn> =
-            Arc::new(InMemoryLaneCounter::new());
+        let store: Arc<dyn LaneCounterStoreDyn> = Arc::new(InMemoryLaneCounter::new());
 
-        let mut pod_a = LaneQueue::new_with_counter_store(
-            4,
-            QueueMode::Followup,
-            Arc::clone(&store),
-        );
-        let mut pod_b = LaneQueue::new_with_counter_store(
-            4,
-            QueueMode::Followup,
-            Arc::clone(&store),
-        );
+        let mut pod_a =
+            LaneQueue::new_with_counter_store(4, QueueMode::Followup, Arc::clone(&store));
+        let mut pod_b =
+            LaneQueue::new_with_counter_store(4, QueueMode::Followup, Arc::clone(&store));
 
         // Each pod accepts one job for the same lane.
         pod_a.enqueue(make_event("lane-shared"));
@@ -1307,13 +1290,8 @@ mod tests {
         // To stage "multiple queued events cleared by interrupt" we start in
         // Followup mode (so enqueues accumulate), then flip to Interrupt and
         // issue a single enqueue that must clear all of them atomically.
-        let store: Arc<dyn LaneCounterStoreDyn> =
-            Arc::new(InMemoryLaneCounter::new());
-        let mut q = LaneQueue::new_with_counter_store(
-            4,
-            QueueMode::Followup,
-            Arc::clone(&store),
-        );
+        let store: Arc<dyn LaneCounterStoreDyn> = Arc::new(InMemoryLaneCounter::new());
+        let mut q = LaneQueue::new_with_counter_store(4, QueueMode::Followup, Arc::clone(&store));
 
         q.enqueue(make_event("s1")); // Ready; +1 → 1
         q.dequeue("s1"); // queued → in-flight; store unchanged at 1
@@ -1332,23 +1310,15 @@ mod tests {
 
     #[tokio::test]
     async fn pending_count_for_lane_async_uses_store_when_present() {
-        let store: Arc<dyn LaneCounterStoreDyn> =
-            Arc::new(InMemoryLaneCounter::new());
+        let store: Arc<dyn LaneCounterStoreDyn> = Arc::new(InMemoryLaneCounter::new());
         // Seed the store directly to simulate a sibling pod having enqueued
         // something before this pod came up.
         store.increment_dyn("s-seeded", 5).await.unwrap();
 
-        let q = LaneQueue::new_with_counter_store(
-            4,
-            QueueMode::Followup,
-            Arc::clone(&store),
-        );
+        let q = LaneQueue::new_with_counter_store(4, QueueMode::Followup, Arc::clone(&store));
         // Local lanes map is empty, but the authoritative store has 5.
         assert_eq!(q.lane_depth("s-seeded"), 0);
-        assert_eq!(
-            q.pending_count_for_lane_async("s-seeded").await.unwrap(),
-            5
-        );
+        assert_eq!(q.pending_count_for_lane_async("s-seeded").await.unwrap(), 5);
     }
 
     #[tokio::test]
@@ -1358,14 +1328,8 @@ mod tests {
         let mut q = LaneQueue::new(4, QueueMode::Followup);
         q.enqueue(make_event("s1"));
         q.enqueue(make_event("s1"));
-        assert_eq!(
-            q.pending_count_for_lane_async("s1").await.unwrap(),
-            2
-        );
+        assert_eq!(q.pending_count_for_lane_async("s1").await.unwrap(), 2);
         // And for an unseen lane.
-        assert_eq!(
-            q.pending_count_for_lane_async("missing").await.unwrap(),
-            0
-        );
+        assert_eq!(q.pending_count_for_lane_async("missing").await.unwrap(), 0);
     }
 }

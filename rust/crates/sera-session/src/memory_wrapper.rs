@@ -10,6 +10,7 @@
 //! and enforce the eviction/compaction policy based on the configured tier.
 
 use crate::transcript::{ContentBlock, Transcript, TranscriptEntry};
+use sera_types::memory::WorkingMemoryTier;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for a memory tier.
@@ -96,20 +97,6 @@ pub trait MemoryWrapper: Send + Sync {
 
     /// Get the accumulated summary (for Summarizing tier).
     fn summary(&self) -> Option<&str>;
-}
-
-/// Working memory tier type (matches sera_types::WorkingMemoryTier).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkingMemoryTier {
-    /// Tier 1: No limit — keeps full history.
-    Unconstrained,
-    /// Tier 2: Evicts oldest when token budget exceeded.
-    TokenBounded,
-    /// Tier 3: Fixed message-count sliding window.
-    SlidingWindow,
-    /// Tier 4: LLM-driven compaction when budget hit.
-    Summarizing,
 }
 
 // ---------------------------------------------------------------------------

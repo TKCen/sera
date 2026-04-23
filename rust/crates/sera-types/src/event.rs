@@ -79,7 +79,7 @@ pub enum EventSource {
 /// MVS scope: Message and System events only. No webhooks, no cron triggers,
 /// no approval events. Queue modes are simple FIFO.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Event {
+pub struct IncomingEvent {
     pub id: EventId,
     pub kind: EventKind,
     pub source: EventSource,
@@ -108,14 +108,9 @@ pub struct Event {
     pub metadata: serde_json::Value,
 }
 
-impl Event {
+impl IncomingEvent {
     /// Create a new message event from a channel.
-    pub fn message(
-        agent_id: &str,
-        session_key: &str,
-        principal: PrincipalRef,
-        text: &str,
-    ) -> Self {
+    pub fn message(agent_id: &str, session_key: &str, principal: PrincipalRef, text: &str) -> Self {
         Self {
             id: EventId::generate(),
             kind: EventKind::Message,
@@ -226,7 +221,7 @@ mod tests {
 
     #[test]
     fn message_event_construction() {
-        let event = Event::message("sera", "agent:sera:main", test_principal(), "Hello");
+        let event = IncomingEvent::message("sera", "agent:sera:main", test_principal(), "Hello");
         assert_eq!(event.kind, EventKind::Message);
         assert_eq!(event.source, EventSource::Channel);
         assert_eq!(event.agent_id, "sera");
@@ -236,15 +231,15 @@ mod tests {
 
     #[test]
     fn api_message_event() {
-        let event = Event::api_message("sera", "agent:sera:main", test_principal(), "Hi");
+        let event = IncomingEvent::api_message("sera", "agent:sera:main", test_principal(), "Hi");
         assert_eq!(event.source, EventSource::Api);
     }
 
     #[test]
     fn event_roundtrip() {
-        let event = Event::message("sera", "agent:sera:main", test_principal(), "test");
+        let event = IncomingEvent::message("sera", "agent:sera:main", test_principal(), "test");
         let json = serde_json::to_string(&event).unwrap();
-        let parsed: Event = serde_json::from_str(&json).unwrap();
+        let parsed: IncomingEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.agent_id, "sera");
         assert_eq!(parsed.text.as_deref(), Some("test"));
     }
@@ -302,7 +297,7 @@ mod tests {
 
     #[test]
     fn heartbeat_event() {
-        let event = Event::heartbeat("sera", "agent:sera:main");
+        let event = IncomingEvent::heartbeat("sera", "agent:sera:main");
         assert_eq!(event.kind, EventKind::Heartbeat);
         assert_eq!(event.source, EventSource::Internal);
         assert!(event.text.is_none());
@@ -310,7 +305,7 @@ mod tests {
 
     #[test]
     fn cron_event() {
-        let event = Event::cron("sera", "agent:sera:main", test_principal(), "dreaming");
+        let event = IncomingEvent::cron("sera", "agent:sera:main", test_principal(), "dreaming");
         assert_eq!(event.kind, EventKind::Cron);
         assert_eq!(event.source, EventSource::Scheduler);
         assert_eq!(event.text.as_deref(), Some("dreaming"));
@@ -319,7 +314,7 @@ mod tests {
     #[test]
     fn webhook_event() {
         let payload = serde_json::json!({"action": "push", "repo": "sera"});
-        let event = Event::webhook("sera", "agent:sera:main", test_principal(), payload);
+        let event = IncomingEvent::webhook("sera", "agent:sera:main", test_principal(), payload);
         assert_eq!(event.kind, EventKind::Webhook);
         assert_eq!(event.source, EventSource::Api);
         assert!(event.text.is_none());
@@ -328,20 +323,23 @@ mod tests {
 
     #[test]
     fn event_with_recipient() {
-        let mut event = Event::message("sera", "agent:sera:main", test_principal(), "Hello");
+        let mut event =
+            IncomingEvent::message("sera", "agent:sera:main", test_principal(), "Hello");
         event.recipient = Some("agent:reviewer".to_string());
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("recipient"));
-        let parsed: Event = serde_json::from_str(&json).unwrap();
+        let parsed: IncomingEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.recipient.as_deref(), Some("agent:reviewer"));
     }
 
     #[test]
     fn event_with_approval() {
-        let mut event = Event::message("sera", "agent:sera:main", test_principal(), "rm -rf /");
-        event.requires_approval = Some(serde_json::json!({"scope": "tool_call", "urgency": "high"}));
+        let mut event =
+            IncomingEvent::message("sera", "agent:sera:main", test_principal(), "rm -rf /");
+        event.requires_approval =
+            Some(serde_json::json!({"scope": "tool_call", "urgency": "high"}));
         let json = serde_json::to_string(&event).unwrap();
-        let parsed: Event = serde_json::from_str(&json).unwrap();
+        let parsed: IncomingEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.requires_approval.unwrap()["urgency"], "high");
     }
 }

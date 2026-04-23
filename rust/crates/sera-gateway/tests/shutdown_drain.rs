@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use sera_db::lane_queue::{LaneQueue, QueueMode};
 use sera_types::{
-    event::Event as DomainEvent,
+    event::IncomingEvent as DomainEvent,
     principal::{PrincipalId, PrincipalKind, PrincipalRef},
 };
 use tokio::sync::Mutex;

@@ -17,7 +17,7 @@ use crate::context_engine::ContextError;
 use crate::handoff::DelegationError;
 use crate::llm_client::LlmError;
 use crate::subagent::SubagentError;
-use crate::turn::{ThinkError, ToolError};
+use crate::turn::ThinkError;
 
 impl From<ThinkError> for SeraError {
     fn from(err: ThinkError) -> Self {
@@ -25,18 +25,6 @@ impl From<ThinkError> for SeraError {
     }
 }
 
-impl From<ToolError> for SeraError {
-    fn from(err: ToolError) -> Self {
-        let code = match &err {
-            ToolError::NotFound(_) => SeraErrorCode::NotFound,
-            ToolError::ExecutionFailed(_) => SeraErrorCode::Internal,
-            ToolError::InvalidArguments(_) => SeraErrorCode::InvalidInput,
-            ToolError::AbortedByHook { .. } => SeraErrorCode::Forbidden,
-            ToolError::PermissionDenied { .. } => SeraErrorCode::Forbidden,
-        };
-        SeraError::with_source(code, err.to_string(), err)
-    }
-}
 
 impl From<DelegationError> for SeraError {
     fn from(err: DelegationError) -> Self {
@@ -90,6 +78,7 @@ impl From<ContextError> for SeraError {
 mod tests {
     use super::*;
     use sera_types::runtime::RuntimeError;
+    use sera_types::tool::ToolError;
 
     // --- RuntimeError ---
 

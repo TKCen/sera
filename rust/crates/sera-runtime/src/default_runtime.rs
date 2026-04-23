@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn handoffs_builder_produces_correct_entries() {
         // Unit-test the builder logic directly without a full turn.
-        let agent_ids = vec!["researcher", "coder"];
+        let agent_ids = ["researcher", "coder"];
         let handoffs: Vec<crate::handoff::Handoff> = agent_ids
             .iter()
             .map(|agent_id| crate::handoff::Handoff {

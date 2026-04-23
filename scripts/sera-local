@@ -84,5 +84,6 @@ cd "$DATA_DIR"
 exec env \
   SERA_RUNTIME_BIN="$RUNTIME_BIN" \
   LLM_BASE_URL="$LLM_BASE_URL" \
+  SERA_DATA_ROOT="$DATA_DIR" \
   RUST_LOG="${RUST_LOG:-sera_gateway=info,sera_runtime=info}" \
   "$GATEWAY_BIN" start --config "$CONFIG" --port "$PORT"

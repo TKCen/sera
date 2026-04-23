@@ -46,7 +46,9 @@ use sera_runtime::skill_dispatch::SkillDispatchEngine;
 // sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +
 // SERA-issued nonce fallback). Wired into AppState + `/api/mail/inbound`.
 use sera_gateway::kill_switch::{KillSwitch, admin_sock_path, spawn_admin_socket};
-use sera_gateway::session_store::{InMemorySessionStore, SessionStore as _};
+use sera_gateway::session_store::{SessionStore, SqliteGitSessionStore};
+#[cfg(test)]
+use sera_gateway::session_store::InMemorySessionStore;
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_mail::{
     CorrelationOutcome, HeaderMailCorrelator, InMemoryEnvelopeIndex, InMemoryMailLookup,
@@ -561,8 +563,9 @@ struct AppState {
     kill_switch: Arc<KillSwitch>,
     /// Submission envelope store — every agent-facing route appends a
     /// Submission here before calling the underlying service (sera-r1g8).
-    /// In-memory stub until sera-r9ed lands with the PartTable+git backing.
-    session_store: Arc<InMemorySessionStore>,
+    /// Production boot uses SqliteGitSessionStore (sera-4i4i); tests keep
+    /// InMemorySessionStore to avoid writing shadow-git dirs to disk.
+    session_store: Arc<dyn SessionStore>,
 }
 
 // ── Phase-3 trait impls ──────────────────────────────────────────────────────
@@ -2402,7 +2405,16 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     );
 
     // 2. Open SQLite database.
-    let db_path = PathBuf::from("sera.db");
+    //
+    // sera-4i4i: data_root is the directory that holds all local-first
+    // persistence (sera.db, parts.sqlite, sessions/). Defaults to cwd so
+    // existing deployments keep working; override via SERA_DATA_ROOT.
+    let data_root = std::env::var("SERA_DATA_ROOT")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let db_path = data_root.join("sera.db");
     tracing::info!(path = %db_path.display(), "Opening SQLite database");
     let db = SqliteDb::open(&db_path)?;
 
@@ -2737,7 +2749,16 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         skill_engine,
         semantic_store,
         kill_switch: Arc::new(KillSwitch::new()),
-        session_store: Arc::new(InMemorySessionStore::new()),
+        // sera-4i4i: use SqliteGitSessionStore so envelopes survive restarts.
+        // db_path = <data_root>/parts.sqlite; sessions_root = <data_root>/sessions/.
+        session_store: {
+            let parts_db = data_root.join("parts.sqlite");
+            let sessions_root = data_root.join("sessions");
+            Arc::new(
+                SqliteGitSessionStore::open(&parts_db, &sessions_root)
+                    .expect("failed to initialize SqliteGitSessionStore"),
+            )
+        },
     });
 
     // 4. Start event processing loop.
@@ -3177,6 +3198,8 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
+            // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
         })
     }
@@ -3211,6 +3234,8 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
+            // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
         })
     }
@@ -3245,6 +3270,8 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
+            // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
         })
     }
@@ -3279,6 +3306,8 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
+            // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
         })
     }
@@ -4077,6 +4106,8 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
+            // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
         };
         let headers = HeaderMap::new();
@@ -4114,6 +4145,8 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
+            // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
         };
         let mut headers = HeaderMap::new();
@@ -4152,6 +4185,8 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
+            // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
         };
         let mut headers = HeaderMap::new();
@@ -4193,6 +4228,8 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
+            // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
         };
         let headers = HeaderMap::new();
@@ -4741,6 +4778,8 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
+            // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
         });
 
@@ -4817,6 +4856,8 @@ mod tests {
                     SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
                 ),
                 kill_switch: Arc::new(KillSwitch::new()),
+                // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
+                // writing shadow-git dirs to the filesystem during tests.
                 session_store: Arc::new(InMemorySessionStore::new()),
             })
         };

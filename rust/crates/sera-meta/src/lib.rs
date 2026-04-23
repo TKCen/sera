@@ -53,9 +53,10 @@ pub use validation::{
 // live in sera-auth (the canonical home for capability-related types); the
 // rest remain in sera-types.
 pub use sera_auth::{CapabilityToken, ChangeProposer};
+pub use sera_types::{AgentCapability};
 pub use sera_types::evolution::{
-    AgentCapability, BlastRadius, ChangeArtifactId, ConstitutionalEnforcementPoint,
-    ConstitutionalRule, EvolutionTier,
+    BlastRadius, ChangeArtifactId, ConstitutionalEnforcementPoint, ConstitutionalRule,
+    EvolutionTier,
 };
 
 /// Lifecycle status of a change artifact.

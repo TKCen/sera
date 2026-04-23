@@ -78,12 +78,5 @@ pub enum EvolutionTier {
 // CapabilityToken field, so it lives next to the token definition. Keeps
 // sera-types free of an inverted dependency on sera-auth.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentCapability {
-    MetaChange,
-    CodeChange,
-    MetaApprover,
-    ConfigRead,
-    ConfigPropose,
-}
+// AgentCapability moved to `capability.rs` — colocated with CapabilityToken
+// and CapabilityPolicy, where it belongs semantically.

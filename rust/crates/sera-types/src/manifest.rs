@@ -292,7 +292,10 @@ spec:
         assert_eq!(parsed.name, "daily-summary");
         assert_eq!(parsed.schedule_type, "cron");
         assert_eq!(parsed.expression, "0 9 * * *");
-        assert_eq!(parsed.description.as_deref(), Some("Summarize activity daily"));
+        assert_eq!(
+            parsed.description.as_deref(),
+            Some("Summarize activity daily")
+        );
         assert_eq!(parsed.status.as_deref(), Some("active"));
         assert_eq!(parsed.category.as_deref(), Some("reporting"));
     }
@@ -489,6 +492,9 @@ spec:
         assert_eq!(template.metadata.name, "byoh-rust-example");
         assert!(!template.metadata.builtin);
         let sandbox = template.spec.sandbox.as_ref().unwrap();
-        assert_eq!(sandbox.image.as_deref(), Some("sera-byoh-rust-agent:latest"));
+        assert_eq!(
+            sandbox.image.as_deref(),
+            Some("sera-byoh-rust-agent:latest")
+        );
     }
 }

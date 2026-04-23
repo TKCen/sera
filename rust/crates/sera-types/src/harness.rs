@@ -101,10 +101,7 @@ pub fn new_plugin_registry() -> PluginRegistry {
 }
 
 /// Validate that a plugin event namespace matches the registered plugin.
-pub fn validate_plugin_event_namespace(
-    plugin: &PluginRegistration,
-    event: &PluginEvent,
-) -> bool {
+pub fn validate_plugin_event_namespace(plugin: &PluginRegistration, event: &PluginEvent) -> bool {
     event.event_type.starts_with(&plugin.namespace)
 }
 

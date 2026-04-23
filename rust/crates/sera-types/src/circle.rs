@@ -322,7 +322,9 @@ mod tests {
                     *a,
                     TerminationCondition::MaxMessages(DEFAULT_TERMINATION_MAX_MESSAGES)
                 ));
-                assert!(matches!(*b, TerminationCondition::Timeout(d) if d.as_secs() == DEFAULT_TERMINATION_TIMEOUT_SECS));
+                assert!(
+                    matches!(*b, TerminationCondition::Timeout(d) if d.as_secs() == DEFAULT_TERMINATION_TIMEOUT_SECS)
+                );
             }
             other => panic!("unexpected default: {other:?}"),
         }
@@ -354,10 +356,7 @@ mod tests {
 
     #[test]
     fn retention_serde_round_trip() {
-        let r = BlackboardRetention::new(
-            NonZeroUsize::new(8),
-            Some(Duration::from_secs(60)),
-        );
+        let r = BlackboardRetention::new(NonZeroUsize::new(8), Some(Duration::from_secs(60)));
         let yaml = serde_yaml::to_string(&r).unwrap();
         let parsed: BlackboardRetention = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed, r);
@@ -367,7 +366,9 @@ mod tests {
 
     #[test]
     fn constitution_ref_inline_yaml_round_trip() {
-        let c = ConstitutionRef::Inline { text: "# Conventions\n- Use Rust\n".to_string() };
+        let c = ConstitutionRef::Inline {
+            text: "# Conventions\n- Use Rust\n".to_string(),
+        };
         let yaml = serde_yaml::to_string(&c).unwrap();
         assert!(yaml.contains("text:"), "expected 'text:' key, got: {yaml}");
         let parsed: ConstitutionRef = serde_yaml::from_str(&yaml).unwrap();
@@ -376,7 +377,9 @@ mod tests {
 
     #[test]
     fn constitution_ref_file_yaml_round_trip() {
-        let c = ConstitutionRef::File { file: std::path::PathBuf::from("circles/eng/constitution.md") };
+        let c = ConstitutionRef::File {
+            file: std::path::PathBuf::from("circles/eng/constitution.md"),
+        };
         let yaml = serde_yaml::to_string(&c).unwrap();
         assert!(yaml.contains("file:"), "expected 'file:' key, got: {yaml}");
         let parsed: ConstitutionRef = serde_yaml::from_str(&yaml).unwrap();
@@ -385,18 +388,28 @@ mod tests {
 
     #[test]
     fn constitution_ref_inline_json_round_trip() {
-        let c = ConstitutionRef::Inline { text: "hello world".to_string() };
+        let c = ConstitutionRef::Inline {
+            text: "hello world".to_string(),
+        };
         let json = serde_json::to_string(&c).unwrap();
-        assert!(json.contains(r#""text""#), "expected 'text' key, got: {json}");
+        assert!(
+            json.contains(r#""text""#),
+            "expected 'text' key, got: {json}"
+        );
         let parsed: ConstitutionRef = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, c);
     }
 
     #[test]
     fn constitution_ref_file_json_round_trip() {
-        let c = ConstitutionRef::File { file: std::path::PathBuf::from("path/to/doc.md") };
+        let c = ConstitutionRef::File {
+            file: std::path::PathBuf::from("path/to/doc.md"),
+        };
         let json = serde_json::to_string(&c).unwrap();
-        assert!(json.contains(r#""file""#), "expected 'file' key, got: {json}");
+        assert!(
+            json.contains(r#""file""#),
+            "expected 'file' key, got: {json}"
+        );
         let parsed: ConstitutionRef = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, c);
     }
@@ -408,12 +421,17 @@ mod tests {
             name: "engineering".to_string(),
             display_name: "Engineering Circle".to_string(),
             description: Some("Main eng team".to_string()),
-            constitution: Some(ConstitutionRef::Inline { text: "# Stack\n- Rust".to_string() }),
+            constitution: Some(ConstitutionRef::Inline {
+                text: "# Stack\n- Rust".to_string(),
+            }),
         };
         let yaml = serde_yaml::to_string(&circle).unwrap();
         let parsed: Circle = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed.name, "engineering");
-        assert!(matches!(parsed.constitution, Some(ConstitutionRef::Inline { .. })));
+        assert!(matches!(
+            parsed.constitution,
+            Some(ConstitutionRef::Inline { .. })
+        ));
     }
 
     // ── Party mode serde tests (sera-8d1.2) ──────────────────────────────────
@@ -518,6 +536,9 @@ mod tests {
             constitution: None,
         };
         let json = serde_json::to_string(&circle).unwrap();
-        assert!(!json.contains("constitution"), "field should be omitted: {json}");
+        assert!(
+            !json.contains("constitution"),
+            "field should be omitted: {json}"
+        );
     }
 }

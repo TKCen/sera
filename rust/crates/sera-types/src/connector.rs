@@ -413,7 +413,10 @@ mod tests {
         };
 
         let json = serde_json::to_string(&identity).unwrap();
-        assert!(!json.contains("account_id"), "None fields should be skipped");
+        assert!(
+            !json.contains("account_id"),
+            "None fields should be skipped"
+        );
 
         let parsed: ConnectorIdentity = serde_json::from_str(&json).unwrap();
         assert!(parsed.account_id.is_none());
@@ -435,7 +438,10 @@ mod tests {
             ConnectorError::AuthError("invalid token".to_string()).to_string(),
             "authentication error: invalid token"
         );
-        assert_eq!(ConnectorError::NotConnected.to_string(), "connector is not connected");
+        assert_eq!(
+            ConnectorError::NotConnected.to_string(),
+            "connector is not connected"
+        );
         assert_eq!(
             ConnectorError::ConfigError("missing token".to_string()).to_string(),
             "configuration error: missing token"

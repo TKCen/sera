@@ -15,7 +15,10 @@ fn contracts_dir() -> &'static Path {
 #[test]
 fn parse_all_agent_templates() {
     let dir = contracts_dir();
-    assert!(dir.exists(), "contracts/manifests/ directory not found at {dir:?}");
+    assert!(
+        dir.exists(),
+        "contracts/manifests/ directory not found at {dir:?}"
+    );
 
     let mut count = 0;
     for entry in fs::read_dir(dir).unwrap() {
@@ -32,20 +35,26 @@ fn parse_all_agent_templates() {
             continue;
         }
 
-        let contents = fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("Failed to read {filename}: {e}"));
+        let contents =
+            fs::read_to_string(&path).unwrap_or_else(|e| panic!("Failed to read {filename}: {e}"));
 
         let template: AgentTemplate = serde_yaml::from_str(&contents)
             .unwrap_or_else(|e| panic!("Failed to parse {filename}: {e}"));
 
-        assert_eq!(template.api_version, "sera/v1", "{filename}: wrong apiVersion");
+        assert_eq!(
+            template.api_version, "sera/v1",
+            "{filename}: wrong apiVersion"
+        );
         assert_eq!(template.kind, "AgentTemplate", "{filename}: wrong kind");
         assert!(!template.metadata.name.is_empty(), "{filename}: empty name");
 
         count += 1;
     }
 
-    assert!(count >= 3, "Expected at least 3 template files, found {count}");
+    assert!(
+        count >= 3,
+        "Expected at least 3 template files, found {count}"
+    );
 }
 
 #[test]
@@ -67,20 +76,26 @@ fn parse_all_sandbox_boundaries() {
             continue;
         }
 
-        let contents = fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("Failed to read {filename}: {e}"));
+        let contents =
+            fs::read_to_string(&path).unwrap_or_else(|e| panic!("Failed to read {filename}: {e}"));
 
         let boundary: SandboxBoundary = serde_yaml::from_str(&contents)
             .unwrap_or_else(|e| panic!("Failed to parse {filename}: {e}"));
 
-        assert_eq!(boundary.api_version, "sera/v1", "{filename}: wrong apiVersion");
+        assert_eq!(
+            boundary.api_version, "sera/v1",
+            "{filename}: wrong apiVersion"
+        );
         assert_eq!(boundary.kind, "SandboxBoundary", "{filename}: wrong kind");
         assert!(!boundary.metadata.name.is_empty(), "{filename}: empty name");
 
         count += 1;
     }
 
-    assert!(count >= 3, "Expected at least 3 sandbox boundary files, found {count}");
+    assert!(
+        count >= 3,
+        "Expected at least 3 sandbox boundary files, found {count}"
+    );
 }
 
 #[test]

@@ -128,7 +128,8 @@ impl FileMemory {
             if path.is_dir() {
                 self.collect_md_files(&path, out)?;
             } else if path.extension().and_then(|e| e.to_str()) == Some("md")
-                && let Ok(rel) = path.strip_prefix(&self.workspace) {
+                && let Ok(rel) = path.strip_prefix(&self.workspace)
+            {
                 // Normalise to forward slashes for cross-platform consistency.
                 let rel_str = rel.to_string_lossy().replace('\\', "/");
                 out.push(rel_str);
@@ -406,7 +407,9 @@ pub enum MemoryError {
 
 impl From<std::io::Error> for MemoryError {
     fn from(e: std::io::Error) -> Self {
-        MemoryError::IoError { reason: e.to_string() }
+        MemoryError::IoError {
+            reason: e.to_string(),
+        }
     }
 }
 
@@ -428,8 +431,13 @@ pub struct MemoryContext {
 /// SPEC-memory: all backend implementations must be Send + Sync.
 #[async_trait::async_trait]
 pub trait MemoryBackend: Send + Sync {
-    async fn write(&self, entry: MemoryEntry, ctx: &MemoryContext) -> Result<MemoryId, MemoryError>;
-    async fn search(&self, query: &MemoryQuery, ctx: &MemoryContext) -> Result<Vec<MemorySearchResult>, MemoryError>;
+    async fn write(&self, entry: MemoryEntry, ctx: &MemoryContext)
+    -> Result<MemoryId, MemoryError>;
+    async fn search(
+        &self,
+        query: &MemoryQuery,
+        ctx: &MemoryContext,
+    ) -> Result<Vec<MemorySearchResult>, MemoryError>;
     async fn get(&self, id: &MemoryId) -> Result<MemoryEntry, MemoryError>;
     async fn delete(&self, id: &MemoryId) -> Result<(), MemoryError>;
     async fn compact(&self, scope: &CompactionScope) -> Result<CompactionResult, MemoryError>;
@@ -453,14 +461,22 @@ impl FileMemoryBackend {
 
 #[async_trait::async_trait]
 impl MemoryBackend for FileMemoryBackend {
-    async fn write(&self, entry: MemoryEntry, _ctx: &MemoryContext) -> Result<MemoryId, MemoryError> {
+    async fn write(
+        &self,
+        entry: MemoryEntry,
+        _ctx: &MemoryContext,
+    ) -> Result<MemoryId, MemoryError> {
         let id = MemoryId::generate();
         let path = format!("{}.md", id.0);
         self.inner.write(&path, &entry.content)?;
         Ok(id)
     }
 
-    async fn search(&self, query: &MemoryQuery, _ctx: &MemoryContext) -> Result<Vec<MemorySearchResult>, MemoryError> {
+    async fn search(
+        &self,
+        query: &MemoryQuery,
+        _ctx: &MemoryContext,
+    ) -> Result<Vec<MemorySearchResult>, MemoryError> {
         let results = self.inner.search(&query.text)?;
         let out = results
             .into_iter()
@@ -481,7 +497,10 @@ impl MemoryBackend for FileMemoryBackend {
 
     async fn get(&self, id: &MemoryId) -> Result<MemoryEntry, MemoryError> {
         let path = format!("{}.md", id.0);
-        let content = self.inner.read(&path).map_err(|_| MemoryError::NotFound { id: id.0.clone() })?;
+        let content = self
+            .inner
+            .read(&path)
+            .map_err(|_| MemoryError::NotFound { id: id.0.clone() })?;
         Ok(MemoryEntry {
             id: id.clone(),
             content,
@@ -595,7 +614,9 @@ pub struct RecallStore {
 impl RecallStore {
     /// Create an empty store.
     pub fn new() -> Self {
-        Self { signals: Vec::new() }
+        Self {
+            signals: Vec::new(),
+        }
     }
 
     /// Record a new recall signal.
@@ -605,8 +626,11 @@ impl RecallStore {
 
     /// Compute aggregate `RecallStats` for a single memory entry.
     pub fn stats_for(&self, memory_id: &MemoryId) -> RecallStats {
-        let relevant: Vec<&RecallSignal> =
-            self.signals.iter().filter(|s| &s.memory_id == memory_id).collect();
+        let relevant: Vec<&RecallSignal> = self
+            .signals
+            .iter()
+            .filter(|s| &s.memory_id == memory_id)
+            .collect();
 
         let recall_count = relevant.len() as u32;
 
@@ -629,7 +653,13 @@ impl RecallStore {
             relevant.iter().map(|s| s.score).sum::<f64>() / recall_count as f64
         };
 
-        RecallStats { memory_id: memory_id.clone(), recall_count, unique_queries, last_recalled, average_score }
+        RecallStats {
+            memory_id: memory_id.clone(),
+            recall_count,
+            unique_queries,
+            last_recalled,
+            average_score,
+        }
     }
 
     /// Compute `RecallStats` for every memory entry that has at least one signal.
@@ -757,7 +787,9 @@ impl MemoryBlock {
         evictable.sort_by(|a, b| {
             let eff_a = a.priority as f32 / a.recency_boost.max(f32::EPSILON);
             let eff_b = b.priority as f32 / b.recency_boost.max(f32::EPSILON);
-            eff_a.partial_cmp(&eff_b).unwrap_or(std::cmp::Ordering::Equal)
+            eff_a
+                .partial_cmp(&eff_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         let mut output = String::new();
@@ -872,7 +904,10 @@ mod memory_block_tests {
         block.push(evictable_seg("lo", "Expendable.", 10, 1.0));
         let rendered = block.render();
         assert!(rendered.contains("Soul."), "soul must be present");
-        assert!(rendered.contains("Important."), "high-priority must be present");
+        assert!(
+            rendered.contains("Important."),
+            "high-priority must be present"
+        );
     }
 
     // ── soul is never trimmed even if oversized ──────────────────────────────
@@ -909,7 +944,10 @@ mod memory_block_tests {
         let rendered = block.render();
         let pos_high = rendered.find("HighBoost.").unwrap();
         let pos_low = rendered.find("LowBoost.").unwrap();
-        assert!(pos_high < pos_low, "higher recency_boost should appear earlier");
+        assert!(
+            pos_high < pos_low,
+            "higher recency_boost should appear earlier"
+        );
     }
 
     // ── record_turn returns true at flush_min_turns ──────────────────────────
@@ -918,7 +956,10 @@ mod memory_block_tests {
     fn record_turn_returns_true_at_flush_min_turns() {
         let mut block = MemoryBlock::with_flush_min_turns(5, 3); // budget=5, flush at 3
         // Soul segments are never truncated, so a long soul reliably forces is_over_budget.
-        block.push(soul_seg("soul", "This soul content is way too long for the budget."));
+        block.push(soul_seg(
+            "soul",
+            "This soul content is way too long for the budget.",
+        ));
         assert!(!block.record_turn()); // overflow_turns = 1
         assert!(!block.record_turn()); // overflow_turns = 2
         assert!(block.record_turn()); // overflow_turns = 3 = flush_min_turns → true
@@ -953,9 +994,7 @@ mod memory_block_tests {
         assert_eq!(parsed.id, "seg-abc");
         assert_eq!(parsed.priority, 3);
         assert!((parsed.recency_boost - 1.5).abs() < f32::EPSILON);
-        assert!(
-            matches!(parsed.kind, SegmentKind::MemoryRecall(ref id) if id == "recall-123")
-        );
+        assert!(matches!(parsed.kind, SegmentKind::MemoryRecall(ref id) if id == "recall-123"));
     }
 
     #[test]
@@ -1086,10 +1125,7 @@ mod tests {
         mem.write("sub/deep.md", "").unwrap();
         mem.write("sub/another.md", "").unwrap();
         let files = mem.list().unwrap();
-        assert_eq!(
-            files,
-            vec!["sub/another.md", "sub/deep.md", "top.md"]
-        );
+        assert_eq!(files, vec!["sub/another.md", "sub/deep.md", "top.md"]);
     }
 
     #[test]
@@ -1509,19 +1545,29 @@ Final keyword mention.";
 
     #[test]
     fn memory_error_display() {
-        let e = MemoryError::NotFound { id: "mem-1".to_string() };
+        let e = MemoryError::NotFound {
+            id: "mem-1".to_string(),
+        };
         assert_eq!(e.to_string(), "memory not found: mem-1");
 
-        let e = MemoryError::IoError { reason: "disk full".to_string() };
+        let e = MemoryError::IoError {
+            reason: "disk full".to_string(),
+        };
         assert_eq!(e.to_string(), "memory I/O error: disk full");
 
-        let e = MemoryError::SearchFailed { reason: "index offline".to_string() };
+        let e = MemoryError::SearchFailed {
+            reason: "index offline".to_string(),
+        };
         assert_eq!(e.to_string(), "search failed: index offline");
 
-        let e = MemoryError::CompactionFailed { reason: "timeout".to_string() };
+        let e = MemoryError::CompactionFailed {
+            reason: "timeout".to_string(),
+        };
         assert_eq!(e.to_string(), "compaction failed: timeout");
 
-        let e = MemoryError::Unavailable { reason: "backend down".to_string() };
+        let e = MemoryError::Unavailable {
+            reason: "backend down".to_string(),
+        };
         assert_eq!(e.to_string(), "memory backend unavailable: backend down");
     }
 
@@ -1557,7 +1603,10 @@ Final keyword mention.";
             entries_removed: 20,
             entries_merged: 50,
         };
-        assert_eq!(r.entries_before - r.entries_after, r.entries_removed + r.entries_merged);
+        assert_eq!(
+            r.entries_before - r.entries_after,
+            r.entries_removed + r.entries_merged
+        );
     }
 
     // ── IndexStatus serde roundtrip ─────────────────────────────────────────
@@ -1621,7 +1670,11 @@ Final keyword mention.";
         let dir = TempDir::new().unwrap();
         let backend = FileMemoryBackend::new(dir.path());
         let ctx = make_ctx("agent-1");
-        let entry = make_entry("mem-2", "rust async trait architecture", MemoryTier::LongTerm);
+        let entry = make_entry(
+            "mem-2",
+            "rust async trait architecture",
+            MemoryTier::LongTerm,
+        );
         backend.write(entry, &ctx).await.unwrap();
         let query = MemoryQuery {
             text: "async trait".to_string(),
@@ -1652,9 +1705,18 @@ Final keyword mention.";
         let dir = TempDir::new().unwrap();
         let backend = FileMemoryBackend::new(dir.path());
         let ctx = make_ctx("agent-1");
-        backend.write(make_entry("m1", "one", MemoryTier::LongTerm), &ctx).await.unwrap();
-        backend.write(make_entry("m2", "two", MemoryTier::LongTerm), &ctx).await.unwrap();
-        backend.write(make_entry("m3", "three", MemoryTier::ShortTerm), &ctx).await.unwrap();
+        backend
+            .write(make_entry("m1", "one", MemoryTier::LongTerm), &ctx)
+            .await
+            .unwrap();
+        backend
+            .write(make_entry("m2", "two", MemoryTier::LongTerm), &ctx)
+            .await
+            .unwrap();
+        backend
+            .write(make_entry("m3", "three", MemoryTier::ShortTerm), &ctx)
+            .await
+            .unwrap();
         let stats = backend.stats().await;
         assert_eq!(stats.total_entries, 3);
     }
@@ -1711,7 +1773,10 @@ Final keyword mention.";
         };
         // All components 1.0 → weights sum to 1.0.
         let total = score.total_score();
-        assert!((total - 1.0).abs() < 1e-10, "weights must sum to 1.0, got {total}");
+        assert!(
+            (total - 1.0).abs() < 1e-10,
+            "weights must sum to 1.0, got {total}"
+        );
 
         // Verify individual weights.
         let only_relevance = DreamingScore {
@@ -1725,7 +1790,11 @@ Final keyword mention.";
         };
         assert!((only_relevance.total_score() - 0.30).abs() < f64::EPSILON);
 
-        let only_frequency = DreamingScore { relevance: 0.0, frequency: 1.0, ..only_relevance.clone() };
+        let only_frequency = DreamingScore {
+            relevance: 0.0,
+            frequency: 1.0,
+            ..only_relevance.clone()
+        };
         assert!((only_frequency.total_score() - 0.24).abs() < f64::EPSILON);
     }
 

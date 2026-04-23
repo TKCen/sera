@@ -67,10 +67,7 @@ pub enum AgentAction {
         args: serde_json::Value,
     },
     #[serde(rename = "delegation")]
-    Delegation {
-        agent_role: String,
-        task: String,
-    },
+    Delegation { agent_role: String, task: String },
     #[serde(rename = "final_answer")]
     FinalAnswer {
         answer: String,
@@ -85,7 +82,12 @@ mod tests {
 
     #[test]
     fn chat_role_roundtrip() {
-        for role in [ChatRole::User, ChatRole::Assistant, ChatRole::System, ChatRole::Tool] {
+        for role in [
+            ChatRole::User,
+            ChatRole::Assistant,
+            ChatRole::System,
+            ChatRole::Tool,
+        ] {
             let json = serde_json::to_string(&role).unwrap();
             let parsed: ChatRole = serde_json::from_str(&json).unwrap();
             assert_eq!(role, parsed);

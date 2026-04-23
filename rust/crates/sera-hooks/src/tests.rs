@@ -243,7 +243,11 @@ async fn executor_empty_chain_succeeds() {
 #[tokio::test]
 async fn executor_single_passthrough_hook() {
     let executor = ChainExecutor::new(Arc::new(make_registry()));
-    let c = chain("pass-chain", HookPoint::PreRoute, vec![instance("passthrough")]);
+    let c = chain(
+        "pass-chain",
+        HookPoint::PreRoute,
+        vec![instance("passthrough")],
+    );
     let ctx = HookContext::new(HookPoint::PreRoute);
     let result = executor.execute_chain(&c, ctx).await.unwrap();
     assert!(result.is_success());
@@ -446,8 +450,16 @@ async fn execute_at_point_filters_by_point() {
     let executor = ChainExecutor::new(Arc::new(make_registry()));
 
     let chains = vec![
-        chain("pre-route-chain", HookPoint::PreRoute, vec![instance("passthrough")]),
-        chain("post-route-chain", HookPoint::PostRoute, vec![instance("reject")]),
+        chain(
+            "pre-route-chain",
+            HookPoint::PreRoute,
+            vec![instance("passthrough")],
+        ),
+        chain(
+            "post-route-chain",
+            HookPoint::PostRoute,
+            vec![instance("reject")],
+        ),
     ];
 
     let ctx = HookContext::new(HookPoint::PreRoute);
@@ -479,7 +491,11 @@ async fn execute_at_point_multiple_matching_chains_sequential() {
 
     let chains = vec![
         chain("chain-a", HookPoint::PreRoute, vec![instance("modifying")]),
-        chain("chain-b", HookPoint::PreRoute, vec![instance("passthrough")]),
+        chain(
+            "chain-b",
+            HookPoint::PreRoute,
+            vec![instance("passthrough")],
+        ),
     ];
 
     let ctx = HookContext::new(HookPoint::PreRoute);
@@ -501,8 +517,16 @@ async fn execute_at_point_stops_on_reject() {
     let executor = ChainExecutor::new(Arc::new(make_registry()));
 
     let chains = vec![
-        chain("reject-chain", HookPoint::PreRoute, vec![instance("reject")]),
-        chain("never-runs", HookPoint::PreRoute, vec![instance("passthrough")]),
+        chain(
+            "reject-chain",
+            HookPoint::PreRoute,
+            vec![instance("reject")],
+        ),
+        chain(
+            "never-runs",
+            HookPoint::PreRoute,
+            vec![instance("passthrough")],
+        ),
     ];
 
     let ctx = HookContext::new(HookPoint::PreRoute);
@@ -786,8 +810,7 @@ async fn permission_overrides_with_ttl_tracked() {
         }
         async fn execute(&self, _ctx: &HookContext) -> Result<HookResult, HookError> {
             Ok(HookResult::pass_with_permissions(
-                PermissionOverrides::grant(["ephemeral:token"])
-                    .with_ttl(Duration::from_millis(50)),
+                PermissionOverrides::grant(["ephemeral:token"]).with_ttl(Duration::from_millis(50)),
             ))
         }
     }
@@ -856,7 +879,10 @@ impl Hook for InputAssertHook {
             Some(v) if v == &self.expected => Ok(HookResult::pass()),
             other => Err(HookError::ExecutionFailed {
                 hook: "input-assert".to_string(),
-                reason: format!("expected updated_input={:?}, got {:?}", self.expected, other),
+                reason: format!(
+                    "expected updated_input={:?}, got {:?}",
+                    self.expected, other
+                ),
             }),
         }
     }
@@ -945,7 +971,11 @@ async fn cancellation_fires_mid_chain_returns_aborted_outcome() {
         .unwrap();
     let elapsed = start.elapsed();
 
-    assert!(result.is_aborted(), "expected aborted, got {:?}", result.outcome);
+    assert!(
+        result.is_aborted(),
+        "expected aborted, got {:?}",
+        result.outcome
+    );
     // The in-flight hook never completed, so hooks_executed stays at 0.
     assert_eq!(result.hooks_executed, 0);
     // Sanity: we did not wait for the 2s sleep.
@@ -1111,11 +1141,17 @@ async fn execute_chain_runs_internal_before_plugin() {
 
     let mut r = HookRegistry::new();
     r.register_with_tier(
-        Box::new(LoggingHook { name: "plugin-hook".to_string(), log: log.clone() }),
+        Box::new(LoggingHook {
+            name: "plugin-hook".to_string(),
+            log: log.clone(),
+        }),
         HookTier::Plugin,
     );
     r.register_with_tier(
-        Box::new(LoggingHook { name: "internal-hook".to_string(), log: log.clone() }),
+        Box::new(LoggingHook {
+            name: "internal-hook".to_string(),
+            log: log.clone(),
+        }),
         HookTier::Internal,
     );
 
@@ -1133,8 +1169,11 @@ async fn execute_chain_runs_internal_before_plugin() {
     assert_eq!(result.hooks_executed, 2);
 
     let order = log.lock().unwrap().clone();
-    assert_eq!(order, vec!["internal-hook", "plugin-hook"],
-        "internal hook must run before plugin hook regardless of chain order");
+    assert_eq!(
+        order,
+        vec!["internal-hook", "plugin-hook"],
+        "internal hook must run before plugin hook regardless of chain order"
+    );
 }
 
 #[tokio::test]
@@ -1159,7 +1198,9 @@ async fn plugin_tier_cancel_does_not_block_remaining_plugin_hooks() {
                 author: None,
             }
         }
-        async fn init(&mut self, _c: serde_json::Value) -> Result<(), HookError> { Ok(()) }
+        async fn init(&mut self, _c: serde_json::Value) -> Result<(), HookError> {
+            Ok(())
+        }
         async fn execute(&self, _ctx: &HookContext) -> Result<HookResult, HookError> {
             self.log.lock().unwrap().push("plugin-reject".to_string());
             Ok(HookResult::reject("plugin blocked"))
@@ -1168,7 +1209,10 @@ async fn plugin_tier_cancel_does_not_block_remaining_plugin_hooks() {
 
     let mut r = HookRegistry::new();
     r.register_with_tier(
-        Box::new(LoggingHook { name: "internal-first".to_string(), log: log.clone() }),
+        Box::new(LoggingHook {
+            name: "internal-first".to_string(),
+            log: log.clone(),
+        }),
         HookTier::Internal,
     );
     r.register_with_tier(
@@ -1176,7 +1220,10 @@ async fn plugin_tier_cancel_does_not_block_remaining_plugin_hooks() {
         HookTier::Plugin,
     );
     r.register_with_tier(
-        Box::new(LoggingHook { name: "plugin-after-reject".to_string(), log: log.clone() }),
+        Box::new(LoggingHook {
+            name: "plugin-after-reject".to_string(),
+            log: log.clone(),
+        }),
         HookTier::Plugin,
     );
 
@@ -1185,9 +1232,9 @@ async fn plugin_tier_cancel_does_not_block_remaining_plugin_hooks() {
         "plugin-cancel-test",
         HookPoint::PreRoute,
         vec![
-            instance("plugin-reject"),          // listed first but is Plugin tier
-            instance("internal-first"),          // listed second but is Internal tier
-            instance("plugin-after-reject"),     // Plugin, should not run after reject
+            instance("plugin-reject"),       // listed first but is Plugin tier
+            instance("internal-first"),      // listed second but is Internal tier
+            instance("plugin-after-reject"), // Plugin, should not run after reject
         ],
     );
     let ctx = HookContext::new(HookPoint::PreRoute);
@@ -1199,6 +1246,9 @@ async fn plugin_tier_cancel_does_not_block_remaining_plugin_hooks() {
     let order = log.lock().unwrap().clone();
     // internal-first ran (Internal tier, before Plugin), then plugin-reject ran,
     // then plugin-after-reject did NOT run (chain short-circuited on Reject).
-    assert_eq!(order, vec!["internal-first", "plugin-reject"],
-        "internal hook must precede plugin hooks; plugin-after-reject must not run after reject");
+    assert_eq!(
+        order,
+        vec!["internal-first", "plugin-reject"],
+        "internal hook must precede plugin hooks; plugin-after-reject must not run after reject"
+    );
 }

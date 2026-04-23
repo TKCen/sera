@@ -42,6 +42,27 @@ pub enum HookError {
         #[source]
         signal: HookAbortSignal,
     },
+
+    /// A sandboxed WASM hook attempted to use a capability that the host has
+    /// not granted. Returned only by the component-model adapter.
+    #[error("hook '{hook}' denied capability '{capability}': {reason}")]
+    CapabilityDenied {
+        hook: String,
+        capability: String,
+        reason: String,
+    },
+}
+
+/// Errors produced during HookChain manifest parsing and validation.
+#[derive(Debug, thiserror::Error)]
+pub enum ManifestError {
+    /// The YAML could not be parsed.
+    #[error("manifest parse error: {0}")]
+    Parse(String),
+
+    /// The manifest was parsed but failed validation.
+    #[error("manifest invalid: {0}")]
+    Invalid(String),
 }
 
 /// Signal raised from inside a hook to abort the entire hook pipeline.

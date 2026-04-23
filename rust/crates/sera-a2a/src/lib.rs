@@ -99,7 +99,7 @@ pub struct AuthenticationInfo {
 
 /// A2A Task — the central unit of work in the A2A protocol.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Task {
+pub struct A2ATask {
     pub id: String,
     pub status: TaskStatus,
     #[serde(default)]
@@ -220,13 +220,13 @@ pub trait A2aAdapter: Send + Sync + 'static {
     async fn discover(&self, endpoint: &str) -> Result<Vec<AgentCard>, A2aError>;
 
     /// Send a task to an external A2A agent.
-    async fn send_task(&self, agent_url: &str, task: &Task) -> Result<Task, A2aError>;
+    async fn send_task(&self, agent_url: &str, task: &A2ATask) -> Result<A2ATask, A2aError>;
 
     /// Get the status of a previously delegated task.
-    async fn get_task(&self, agent_url: &str, task_id: &str) -> Result<Task, A2aError>;
+    async fn get_task(&self, agent_url: &str, task_id: &str) -> Result<A2ATask, A2aError>;
 
     /// Cancel a previously delegated task.
-    async fn cancel_task(&self, agent_url: &str, task_id: &str) -> Result<Task, A2aError>;
+    async fn cancel_task(&self, agent_url: &str, task_id: &str) -> Result<A2ATask, A2aError>;
 }
 
 /// SERA's A2A agent card builder — produces the card SERA publishes
@@ -331,7 +331,7 @@ impl A2aClient {
     }
 
     /// Send a task to an external A2A agent (`tasks/send`).
-    pub async fn send_task(&self, endpoint: &str, task: &Task) -> Result<Task, A2aError> {
+    pub async fn send_task(&self, endpoint: &str, task: &A2ATask) -> Result<A2ATask, A2aError> {
         let params = serde_json::to_value(task).map_err(|e| A2aError::Serialization {
             reason: e.to_string(),
         })?;
@@ -339,13 +339,13 @@ impl A2aClient {
     }
 
     /// Fetch task status (`tasks/get`).
-    pub async fn get_task(&self, endpoint: &str, task_id: &str) -> Result<Task, A2aError> {
+    pub async fn get_task(&self, endpoint: &str, task_id: &str) -> Result<A2ATask, A2aError> {
         let params = serde_json::json!({ "id": task_id });
         self.call(endpoint, methods::TASKS_GET, params).await
     }
 
     /// Cancel a task (`tasks/cancel`).
-    pub async fn cancel_task(&self, endpoint: &str, task_id: &str) -> Result<Task, A2aError> {
+    pub async fn cancel_task(&self, endpoint: &str, task_id: &str) -> Result<A2ATask, A2aError> {
         let params = serde_json::json!({ "id": task_id });
         self.call(endpoint, methods::TASKS_CANCEL, params).await
     }
@@ -660,7 +660,7 @@ mod tests {
     #[tokio::test]
     async fn client_send_task_roundtrips_payload() {
         let client = A2aClient::new(EchoTransport);
-        let task = Task {
+        let task = A2ATask {
             id: "t-1".into(),
             status: TaskStatus::Submitted,
             artifacts: vec![],
@@ -757,7 +757,7 @@ mod tests {
             Ok(req.params)
         });
         let client = A2aClient::new(LoopbackTransport::new(router));
-        let task = Task {
+        let task = A2ATask {
             id: "loop-1".into(),
             status: TaskStatus::Working,
             artifacts: vec![],

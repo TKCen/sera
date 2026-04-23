@@ -86,7 +86,7 @@ pub use scc::{cyclic_sccs, has_cycle, tarjan_scc, Scc};
 
 // Re-exports — coordinator-scoped workflow memory (SPEC-workflow-engine §memory).
 pub use memory_manager::{
-    AgentId, InstanceId, MemoryManager, StepSummary, WorkflowMemoryManager as CoordinatorMemoryManager,
+    AgentId, CoordinatorMemoryManager, InstanceId, MemoryManager, StepSummary,
     WorkflowMemorySnapshot,
 };
 

@@ -30,6 +30,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub use sera_types::CircuitState;
+
 /// Length of the rolling latency window used to compute p95.
 const LATENCY_WINDOW: usize = 100;
 
@@ -53,33 +55,6 @@ impl ModelRef {
             model: model.into(),
         }
     }
-}
-
-/// Circuit-breaker state for a single [`ModelRef`]. See §8 of the design doc.
-///
-/// Transitions are driven by [`HealthStore::record_success`] / [`HealthStore::record_error`]
-/// against a [`CircuitConfig`]:
-///
-/// - `Closed` → `Open` once `err_rate_10m > err_rate_threshold` AND
-///   `total_requests > min_samples_for_open`.
-/// - `Open` → `HalfOpen` once `cooldown` has elapsed since `circuit_opened_at`.
-///   A [`HealthStore::snapshot`] or a [`RoutingPolicy::select`] call is all it
-///   takes to observe the transition — the store performs the clock check
-///   lazily on read, so no scheduler is needed.
-/// - `HalfOpen` → `Closed` on the first recorded success (probe succeeded).
-/// - `HalfOpen` → `Open` on the first recorded error (probe failed, cooldown
-///   restarts from the fresh `circuit_opened_at`).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CircuitState {
-    /// Happy path — candidate is selectable normally.
-    #[default]
-    Closed,
-    /// Cooldown has elapsed; a single probe is allowed through to learn the
-    /// current upstream state.
-    HalfOpen,
-    /// Candidate is filtered out of selection until cooldown elapses.
-    Open,
 }
 
 /// Tunables for the circuit-breaker state machine. See [`CircuitConfig::defaults`].

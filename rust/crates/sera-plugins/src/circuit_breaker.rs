@@ -10,16 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::error::PluginError;
 
-/// State of the circuit breaker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CircuitState {
-    /// Normal operation — requests pass through.
-    Closed,
-    /// Tripped — requests are immediately rejected.
-    Open,
-    /// Probing — a single request is allowed through to test recovery.
-    HalfOpen,
-}
+pub use sera_types::CircuitState;
 
 /// Internal mutable state of the breaker.
 #[derive(Debug)]

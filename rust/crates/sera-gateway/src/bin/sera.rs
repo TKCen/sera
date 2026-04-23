@@ -233,8 +233,17 @@ impl StdioHarness {
         let mut stdin = self.stdin.lock().await;
         let mut stdout = self.stdout.lock().await;
 
-        stdin.write_all(json_line.as_bytes()).await?;
-        stdin.flush().await?;
+        // If `write_all`/`flush` fails (typically `BrokenPipe`), poll the child's
+        // exit status so the error surfaced to the API caller explains *why* the
+        // runtime is gone instead of just reporting the OS-level pipe error.
+        // Without this, sera-un35-style regressions look like "Broken pipe
+        // (os error 32)" with no root-cause context.
+        if let Err(e) = stdin.write_all(json_line.as_bytes()).await {
+            return Err(self.child_exit_context(e).await);
+        }
+        if let Err(e) = stdin.flush().await {
+            return Err(self.child_exit_context(e).await);
+        }
 
         let mut result = TurnEvents::default();
         let mut line = String::new();
@@ -353,6 +362,26 @@ impl StdioHarness {
         Ok(result)
     }
 
+    /// Annotate a stdin I/O error with the runtime child's exit status when the
+    /// child has already terminated. A `BrokenPipe` on write almost always
+    /// means the child exited; `try_wait` lets us report the exit code so the
+    /// API caller sees "child exited with status …" instead of a bare
+    /// "Broken pipe (os error 32)" (sera-un35 diagnostic).
+    async fn child_exit_context(&self, io_err: std::io::Error) -> anyhow::Error {
+        let mut child = self.child.lock().await;
+        match child.try_wait() {
+            Ok(Some(status)) => anyhow::anyhow!(
+                "sera-runtime child exited before submission could be written (status: {status}); stdin error: {io_err}"
+            ),
+            Ok(None) => anyhow::anyhow!(
+                "sera-runtime stdin write failed while child still running: {io_err}"
+            ),
+            Err(wait_err) => anyhow::anyhow!(
+                "sera-runtime stdin write failed ({io_err}); try_wait also failed: {wait_err}"
+            ),
+        }
+    }
+
     /// Send a graceful shutdown command to the runtime process.
     ///
     /// Called from `run_start`'s drain phase after a SIGTERM/Ctrl+C signal.
@@ -397,6 +426,13 @@ impl StdioHarness {
     /// stdout that simply never produces output.
     async fn spawn_mock_hang() -> anyhow::Result<Self> {
         Self::spawn_with_script("while IFS= read -r line; do :; done").await
+    }
+
+    /// Spawn a mock runtime that exits immediately with status 42 without
+    /// reading stdin. Used to exercise the `child_exit_context` diagnostic
+    /// path — the next `send_turn` write hits a broken pipe (sera-un35).
+    async fn spawn_mock_dead() -> anyhow::Result<Self> {
+        Self::spawn_with_script("exit 42").await
     }
 
     /// Spawn a mock runtime that replies with canned events whose
@@ -4675,6 +4711,31 @@ mod tests {
         assert!(
             start.elapsed() < std::time::Duration::from_secs(1),
             "timeout must fire near its bound, not after the test harness limit"
+        );
+    }
+
+    /// sera-un35 regression guard: when the child exits before the gateway
+    /// writes the submission, `send_turn` must surface the child's exit status
+    /// instead of a bare "Broken pipe (os error 32)". Future occurrences of the
+    /// un35 class should then include an actionable status code in the error.
+    #[tokio::test]
+    async fn send_turn_annotates_broken_pipe_with_child_exit_status() {
+        let harness = StdioHarness::spawn_mock_dead().await.unwrap();
+        // Give the shell a moment to exit so the pipe is actually broken.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let err = harness
+            .send_turn(Vec::new(), "test-session")
+            .await
+            .expect_err("write to a dead child must fail");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("sera-runtime child exited"),
+            "expected exit annotation, got: {msg}"
+        );
+        assert!(
+            msg.contains("42"),
+            "expected exit code 42 in error, got: {msg}"
         );
     }
 

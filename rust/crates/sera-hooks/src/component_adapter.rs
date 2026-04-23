@@ -1,9 +1,9 @@
 //! WIT component-model adapter for sera-hooks.
 //!
-//! Loads WASM *components* (not legacy core modules — see [`crate::wasm_adapter`]
-//! for the older path) built against `wit/sera-hooks.wit`. Third-party authors
-//! use `wit-bindgen` in any supported language to implement the `sera:hooks/hook`
-//! export and link against the `sera:hooks/host-capabilities` import.
+//! Loads WASM *components* built against `wit/sera-hooks.wit`. Third-party
+//! authors use `wit-bindgen` in any supported language to implement the
+//! `sera:hooks/hook` export and link against the
+//! `sera:hooks/host-capabilities` import.
 //!
 //! # Capability sandbox
 //!
@@ -20,10 +20,6 @@
 //! populated with ONLY these four imports; any component that imports
 //! `wasi:filesystem`, `wasi:sockets`, `wasi:http`, etc. will fail to link and
 //! the adapter returns [`ComponentError::CapabilityDenied`].
-//!
-//! The existing [`crate::wasm_adapter::WasmHookAdapter`] uses a core-module ABI
-//! with JSON over linear memory; it predates the component model. Both adapters
-//! coexist — callers pick based on module format.
 
 #![cfg(feature = "wasm")]
 
@@ -42,7 +38,6 @@ use sera_types::hook::{HookContext, HookMetadata, HookPoint, HookResult, WasmCon
 
 use crate::error::HookError;
 use crate::hook_trait::Hook as HookTrait;
-use crate::wasm_adapter::WasmHookMetadata;
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
@@ -85,6 +80,19 @@ pub enum ComponentError {
 
 /// Result type for component operations.
 pub type ComponentResult<T> = Result<T, ComponentError>;
+
+// ── Hook metadata ─────────────────────────────────────────────────────────────
+
+/// Metadata for a WASM hook component.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WasmHookMetadata {
+    /// Name of the WASM module.
+    pub module_name: String,
+    /// Version string from the module.
+    pub version: Option<String>,
+    /// Custom metadata from the module.
+    pub custom: serde_json::Value,
+}
 
 // ── Host capability state ─────────────────────────────────────────────────────
 
@@ -305,8 +313,8 @@ pub fn capability_names() -> Vec<&'static str> {
 impl ComponentAdapter {
     /// Load a component from bytes.
     ///
-    /// Accepts a compiled `.wasm` component binary. Core modules are rejected
-    /// — use [`crate::wasm_adapter::WasmHookAdapter`] for those.
+    /// Accepts a compiled `.wasm` component binary. Core modules (pre-component-model
+    /// ABI) are not supported; only WIT components are accepted.
     pub fn from_bytes(
         bytes: impl AsRef<[u8]>,
         metadata: WasmHookMetadata,

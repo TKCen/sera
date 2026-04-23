@@ -43,13 +43,13 @@ pub struct PluginManifest {
     #[serde(rename = "apiVersion")]
     pub api_version: String,
     pub kind: String,
-    pub metadata: ManifestMetadata,
+    pub metadata: PluginManifestMetadata,
     pub spec: ManifestSpec,
 }
 
 /// Manifest metadata block.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ManifestMetadata {
+pub struct PluginManifestMetadata {
     pub name: String,
     #[serde(default)]
     pub labels: std::collections::HashMap<String, String>,

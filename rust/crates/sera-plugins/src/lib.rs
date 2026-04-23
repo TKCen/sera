@@ -60,7 +60,8 @@ pub use types::{
 // ── Manifest ─────────────────────────────────────────────────────────────────
 /// Re-exported manifest types for callers that want flat imports.
 pub use manifest::{
-    ManifestMetadata, ManifestSpec, PluginKind, PluginManifest, PluginManifestV1, PluginService,
+    ManifestSpec, PluginKind, PluginManifest, PluginManifestMetadata, PluginManifestV1,
+    PluginService,
     PluginVolume,
 };
 

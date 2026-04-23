@@ -63,7 +63,7 @@ impl LaneQueue {
             lane: lane.clone(),
             payload,
             enqueued_at: Utc::now(),
-            mode: mode.clone(),
+            mode,
         };
 
         match mode {

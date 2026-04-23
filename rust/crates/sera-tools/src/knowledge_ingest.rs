@@ -514,13 +514,13 @@ impl KnowledgeIngestPipeline {
 
 // ── Tool trait integration ────────────────────────────────────────────────────
 
-use crate::registry::Tool;
+use crate::registry::ToolDescriptor;
 
 /// `knowledge-ingest` tool — registered with `ToolRegistry` so the agent
 /// runtime can discover it by name.
 pub struct KnowledgeIngestTool;
 
-impl Tool for KnowledgeIngestTool {
+impl ToolDescriptor for KnowledgeIngestTool {
     fn name(&self) -> &str {
         "knowledge-ingest"
     }

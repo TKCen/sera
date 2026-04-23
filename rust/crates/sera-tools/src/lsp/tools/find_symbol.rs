@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::lsp::error::{LspError, ToolError};
 use crate::lsp::name_path::{NamePath, NamePathSegment};
 use crate::lsp::state::{normalize_path, LspToolsState};
-use crate::registry::Tool;
+use crate::registry::ToolDescriptor;
 
 use super::{ByteRange, SymbolEntry, SymbolKind};
 
@@ -78,7 +78,7 @@ impl Default for FindSymbolTool {
     }
 }
 
-impl Tool for FindSymbolTool {
+impl ToolDescriptor for FindSymbolTool {
     fn name(&self) -> &str {
         Self::NAME
     }

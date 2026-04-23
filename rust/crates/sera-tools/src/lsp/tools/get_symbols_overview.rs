@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::lsp::cache::CacheKey;
 use crate::lsp::error::{LspError, ToolError};
 use crate::lsp::state::{normalize_path, LspToolsState};
-use crate::registry::Tool;
+use crate::registry::ToolDescriptor;
 
 #[cfg(test)]
 use std::sync::Arc;
@@ -56,7 +56,7 @@ impl Default for GetSymbolsOverviewTool {
     }
 }
 
-impl Tool for GetSymbolsOverviewTool {
+impl ToolDescriptor for GetSymbolsOverviewTool {
     fn name(&self) -> &str {
         Self::NAME
     }

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A tool that can be registered and retrieved by name.
-pub trait Tool: Send + Sync {
+pub trait ToolDescriptor: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
 }
@@ -12,7 +12,7 @@ pub trait Tool: Send + Sync {
 /// Registry for managing tools by name.
 #[derive(Default)]
 pub struct ToolRegistry {
-    tools: HashMap<String, Arc<dyn Tool>>,
+    tools: HashMap<String, Arc<dyn ToolDescriptor>>,
 }
 
 impl ToolRegistry {
@@ -24,12 +24,12 @@ impl ToolRegistry {
     }
 
     /// Register a tool. Replaces any existing tool with the same name.
-    pub fn register(&mut self, tool: Arc<dyn Tool>) {
+    pub fn register(&mut self, tool: Arc<dyn ToolDescriptor>) {
         self.tools.insert(tool.name().to_string(), tool);
     }
 
     /// Get a tool by name.
-    pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+    pub fn get(&self, name: &str) -> Option<Arc<dyn ToolDescriptor>> {
         self.tools.get(name).cloned()
     }
 

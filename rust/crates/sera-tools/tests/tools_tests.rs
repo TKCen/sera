@@ -199,11 +199,11 @@ fn queue_mode_serde_roundtrip() {
 // ---------------------------------------------------------------------------
 // 14. Tool registry register and get
 // ---------------------------------------------------------------------------
-use sera_tools::registry::{Tool, ToolRegistry};
+use sera_tools::registry::{ToolDescriptor, ToolRegistry};
 
 struct EchoTool;
 
-impl Tool for EchoTool {
+impl ToolDescriptor for EchoTool {
     fn name(&self) -> &str {
         "echo"
     }

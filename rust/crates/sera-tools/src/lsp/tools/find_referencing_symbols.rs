@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::lsp::error::{LspError, ToolError};
 use crate::lsp::name_path::NamePath;
 use crate::lsp::state::{normalize_path, LspToolsState};
-use crate::registry::Tool;
+use crate::registry::ToolDescriptor;
 
 use super::find_symbol::{uri_to_path, SymbolMatch};
 use super::{ByteRange, SymbolEntry, SymbolKind};
@@ -62,7 +62,7 @@ impl Default for FindReferencingSymbolsTool {
     }
 }
 
-impl Tool for FindReferencingSymbolsTool {
+impl ToolDescriptor for FindReferencingSymbolsTool {
     fn name(&self) -> &str {
         Self::NAME
     }

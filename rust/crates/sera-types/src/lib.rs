@@ -24,7 +24,6 @@ pub mod manifest;
 pub mod memory;
 pub mod metering;
 pub mod model;
-pub mod observability;
 pub mod policy;
 pub mod principal;
 pub mod runtime;

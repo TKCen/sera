@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Opaque identifier for a change artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ChangeArtifactId(pub String);
+pub struct ArtifactRef(pub String);
 
 /// A single entry in the version log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,7 +13,7 @@ pub struct ConfigVersionEntry {
     /// Monotonically increasing version number (1-based after first append).
     pub version: u64,
     /// The change artifact that produced this entry.
-    pub change_artifact: ChangeArtifactId,
+    pub change_artifact: ArtifactRef,
     /// Optional opaque signature bytes (hex-encoded).
     pub signature: Option<String>,
     /// Hash of the previous entry (all-zeros hex string for genesis).
@@ -62,7 +62,7 @@ impl ConfigVersionLog {
     /// The `prev_hash` is taken from `tail_hash()` automatically.
     pub fn append(
         &mut self,
-        change_artifact: ChangeArtifactId,
+        change_artifact: ArtifactRef,
         signature: Option<String>,
         payload: serde_json::Value,
     ) -> &ConfigVersionEntry {
@@ -119,7 +119,7 @@ impl Default for ConfigVersionLog {
 /// Compute the SHA-256 hash for a log entry.
 fn compute_hash(
     version: u64,
-    change_artifact: &ChangeArtifactId,
+    change_artifact: &ArtifactRef,
     prev_hash: &str,
     payload: &serde_json::Value,
 ) -> String {

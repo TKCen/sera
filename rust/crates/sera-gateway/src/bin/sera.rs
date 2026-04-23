@@ -939,7 +939,14 @@ async fn chat_handler(
             .append_envelope(&session_key, &envelope)
             .await
         {
-            tracing::warn!(error = %e, agent = %agent_name, session_key = %session_key, "session_store.append_envelope failed for chat_handler; continuing");
+            // Fail-closed (sera-igsd): the envelope store is the audit trail
+            // that makes chat turns auditable and replayable per SPEC-gateway.
+            // If we cannot persist the record, the operation's contract is
+            // broken — return 500 so the client can retry rather than silently
+            // succeed with a missing audit entry.
+            tracing::error!(error = %e, agent = %agent_name, session_key = %session_key, "session_store.append_envelope failed; rejecting turn (fail-closed)");
+            release_lane(&state, &session_key).await;
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     }
 

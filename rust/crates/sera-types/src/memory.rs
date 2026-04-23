@@ -243,11 +243,27 @@ impl MemoryId {
     pub fn generate() -> Self {
         Self(uuid::Uuid::new_v4().to_string())
     }
+    /// Borrow the inner id as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl std::fmt::Display for MemoryId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl From<String> for MemoryId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for MemoryId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
     }
 }
 

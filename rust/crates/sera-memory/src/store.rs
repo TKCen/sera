@@ -220,44 +220,7 @@ pub struct MemoryHit {
     pub raw_score: f32,
 }
 
-/// Stable identifier for a semantic-memory row.
-///
-/// Backends are free to choose the id space (UUIDv4 in `PgVectorStore`;
-/// hash-derived in `InMemorySemanticStore`); the wrapper keeps the public
-/// surface opaque so callers don't accidentally couple to a specific
-/// backing representation.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct MemoryId(pub String);
-
-impl MemoryId {
-    /// Wrap any string-like into a [`MemoryId`].
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    /// Borrow the inner id as a string slice.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for MemoryId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl From<String> for MemoryId {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<&str> for MemoryId {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
+pub use sera_types::memory::MemoryId;
 
 /// A single semantic-memory row — content + embedding + metadata.
 ///

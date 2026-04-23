@@ -55,7 +55,7 @@ use sera_mail::{
     MailCorrelator, parse_raw_message,
 };
 use sera_types::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
-use sera_types::event::Event as DomainEvent;
+use sera_types::event::IncomingEvent as DomainEvent;
 use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
 use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
 

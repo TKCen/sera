@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use sera_types::event::Event;
+use sera_types::event::IncomingEvent;
 
 use crate::error::DbError;
 use crate::lane_queue_counter::LaneCounterStoreDyn;
@@ -51,14 +51,14 @@ pub enum EnqueueResult {
 /// An event wrapped with queue-level metadata.
 #[derive(Debug, Clone)]
 pub struct QueuedEvent {
-    pub event: Event,
+    pub event: IncomingEvent,
     pub enqueued_at: std::time::Instant,
     /// True if this event should be injected at a tool boundary (steer/steer_backlog modes).
     pub is_steer: bool,
 }
 
 impl QueuedEvent {
-    fn new(event: Event) -> Self {
+    fn new(event: IncomingEvent) -> Self {
         Self {
             event,
             enqueued_at: std::time::Instant::now(),
@@ -66,7 +66,7 @@ impl QueuedEvent {
         }
     }
 
-    fn new_steer(event: Event) -> Self {
+    fn new_steer(event: IncomingEvent) -> Self {
         Self {
             event,
             enqueued_at: std::time::Instant::now(),
@@ -252,7 +252,7 @@ impl LaneQueue {
     /// * [`EnqueueResult::Queued`] — a run is active; the event has been buffered.
     /// * [`EnqueueResult::Steer`] — the event has been stored as a steer injection.
     /// * [`EnqueueResult::Interrupt`] — the caller should abort the active run.
-    pub fn enqueue(&mut self, event: Event) -> EnqueueResult {
+    pub fn enqueue(&mut self, event: IncomingEvent) -> EnqueueResult {
         // Reject new jobs once the queue has been closed for shutdown.
         if self.closed {
             return EnqueueResult::Closed;
@@ -582,7 +582,7 @@ impl LaneQueue {
 mod tests {
     use super::*;
     use sera_types::{
-        event::{Event, EventSource},
+        event::{IncomingEvent, EventSource},
         principal::{PrincipalId, PrincipalKind, PrincipalRef},
     };
 
@@ -593,8 +593,8 @@ mod tests {
         }
     }
 
-    fn make_event(session_key: &str) -> Event {
-        Event::message("sera", session_key, principal(), "hello")
+    fn make_event(session_key: &str) -> IncomingEvent {
+        IncomingEvent::message("sera", session_key, principal(), "hello")
     }
 
     // --- basic happy path --------------------------------------------------
@@ -1163,7 +1163,7 @@ mod tests {
 
     #[test]
     fn queued_event_preserves_source() {
-        let event = Event {
+        let event = IncomingEvent {
             source: EventSource::Api,
             ..make_event("s1")
         };

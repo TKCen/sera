@@ -6,42 +6,65 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::content_block::ContentBlock;
 use crate::runtime::TokenUsage;
 
 // ── Submission (SQ input) ───────────────────────────────────────────────────
 
 /// A submission entering the gateway's submission queue.
+///
+/// `session_key` and `parent_session_key` are envelope-level routing metadata
+/// (sera-zx5w): the gateway stamps each submission with the target session's
+/// key so the runtime can correlate frames without embedding correlation data
+/// inside every [`Op`] variant. Both fields are optional for backwards
+/// compatibility with pre-zx5w senders.
+///
+/// `trace` is `#[serde(default)]` so submissions arriving over NDJSON from
+/// non-W3C-aware callers (e.g. the runtime harness) deserialize successfully.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Submission {
     pub id: Uuid,
     pub op: Op,
+    #[serde(default)]
     pub trace: W3cTraceContext,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change_artifact: Option<String>,
+    /// Session this submission targets. Used by the runtime to route frames
+    /// and by the gateway for per-session persistence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_key: Option<String>,
+    /// Parent session key — set when this submission belongs to a child
+    /// session spawned by another turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_key: Option<String>,
 }
 
 /// Operations that can be submitted to the gateway.
+///
+/// `items` is `Vec<serde_json::Value>` rather than `Vec<ContentBlock>` because
+/// the wire NDJSON carries role-scoped conversation messages (e.g.
+/// `{"role":"user","content":"..."}`) that pass through the runtime to the LLM
+/// without structural re-typing. Callers that construct typed content blocks
+/// must serialize them to `serde_json::Value` at the call site (sera-zx5w).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Op {
     UserTurn {
-        items: Vec<ContentBlock>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        items: Vec<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         approval_policy: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         sandbox_policy: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         model_override: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         effort: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         final_output_schema: Option<serde_json::Value>,
     },
     Steer {
-        items: Vec<ContentBlock>,
+        items: Vec<serde_json::Value>,
     },
     Interrupt,
     System(SystemOp),
@@ -81,29 +104,68 @@ pub enum RegisterOp {
 // ── Event (EQ output) ───────────────────────────────────────────────────────
 
 /// An event emitted from the gateway's event queue.
+///
+/// `parent_session_key` is carried on every frame so consumers can route
+/// events for child sessions without parsing the `msg` body (sera-zx5w).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub id: Uuid,
     pub submission_id: Uuid,
     pub msg: EventMsg,
+    #[serde(default)]
     pub trace: W3cTraceContext,
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_key: Option<String>,
 }
 
 /// Event message variants.
+///
+/// `ToolCallBegin`/`ToolCallEnd` use the wire names emitted by the runtime
+/// (sera-zx5w); their `tool` / `arguments` / `result` shape mirrors the
+/// legacy runtime-local envelope so existing gateways parse unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventMsg {
-    StreamingDelta { delta: String },
-    TurnStarted { turn_id: Uuid },
-    TurnCompleted { turn_id: Uuid, tokens: TokenUsage },
-    ToolCallStarted { call_id: String, tool_name: String },
-    ToolCallCompleted { call_id: String, result: serde_json::Value },
-    HitlRequest { approval_id: Uuid, description: String },
+    StreamingDelta {
+        delta: String,
+    },
+    TurnStarted {
+        turn_id: Uuid,
+    },
+    TurnCompleted {
+        turn_id: Uuid,
+        #[serde(default)]
+        tokens: TokenUsage,
+    },
+    ToolCallBegin {
+        turn_id: Uuid,
+        call_id: String,
+        tool: String,
+        arguments: serde_json::Value,
+    },
+    ToolCallEnd {
+        turn_id: Uuid,
+        call_id: String,
+        result: String,
+    },
+    HitlRequest {
+        approval_id: Uuid,
+        description: String,
+    },
     CompactionStarted,
-    CompactionCompleted { tokens_before: u32, tokens_after: u32 },
-    SessionTransition { from: String, to: String },
-    Error { code: String, message: String },
+    CompactionCompleted {
+        tokens_before: u32,
+        tokens_after: u32,
+    },
+    SessionTransition {
+        from: String,
+        to: String,
+    },
+    Error {
+        code: String,
+        message: String,
+    },
 }
 
 /// W3C trace context for distributed tracing.

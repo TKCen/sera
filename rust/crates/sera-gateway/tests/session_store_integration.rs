@@ -7,7 +7,6 @@ use std::sync::Arc;
 use sera_gateway::session_store::{
     SessionStore, SqliteGitSessionStore, StoredSubmission, SubmissionRef,
 };
-use sera_types::content_block::ContentBlock;
 use sera_types::envelope::{Event, EventMsg, Op, Submission, W3cTraceContext};
 use tempfile::TempDir;
 
@@ -23,9 +22,10 @@ fn turn(text: &str) -> Submission {
     Submission {
         id: uuid::Uuid::new_v4(),
         op: Op::UserTurn {
-            items: vec![ContentBlock::Text {
-                text: text.to_string(),
-            }],
+            items: vec![serde_json::json!({
+                "type": "text",
+                "text": text,
+            })],
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
@@ -35,6 +35,8 @@ fn turn(text: &str) -> Submission {
         },
         trace: W3cTraceContext::default(),
         change_artifact: None,
+        session_key: None,
+        parent_session_key: None,
     }
 }
 
@@ -48,6 +50,7 @@ fn streaming_event(submission_id: uuid::Uuid, delta: &str) -> Event {
         // Freeze timestamp to keep the assertion stable if someone reruns.
         trace: W3cTraceContext::default(),
         timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_767_225_600, 0).unwrap(),
+        parent_session_key: None,
     }
 }
 

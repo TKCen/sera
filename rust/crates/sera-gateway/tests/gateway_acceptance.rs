@@ -29,6 +29,8 @@ fn envelope_submission_roundtrip() {
         },
         trace: W3cTraceContext::default(),
         change_artifact: None,
+        session_key: None,
+        parent_session_key: None,
     };
     let json = serde_json::to_string(&sub).unwrap();
     let parsed: Submission = serde_json::from_str(&json).unwrap();
@@ -47,6 +49,7 @@ fn envelope_event_roundtrip() {
         },
         trace: W3cTraceContext::default(),
         timestamp: chrono::Utc::now(),
+        parent_session_key: None,
     };
     let json = serde_json::to_string(&evt).unwrap();
     let parsed: Event = serde_json::from_str(&json).unwrap();
@@ -102,6 +105,8 @@ async fn in_process_transport_dispatch() {
         op: Op::Interrupt,
         trace: W3cTraceContext::default(),
         change_artifact: None,
+        session_key: None,
+        parent_session_key: None,
     };
     let sub_id = sub.id;
 
@@ -119,6 +124,7 @@ async fn in_process_transport_dispatch() {
         msg: EventMsg::StreamingDelta { delta: "ok".into() },
         trace: W3cTraceContext::default(),
         timestamp: chrono::Utc::now(),
+        parent_session_key: None,
     };
     let evt_id = evt.id;
     event_tx.send(evt).await.unwrap();
@@ -149,6 +155,7 @@ impl AgentHarness for MockHarness {
                 msg: EventMsg::StreamingDelta { delta: name },
                 trace: W3cTraceContext::default(),
                 timestamp: chrono::Utc::now(),
+                parent_session_key: None,
             };
         };
         Ok(Box::pin(stream))
@@ -188,6 +195,8 @@ async fn harness_dispatch_routes_to_correct_harness() {
         op: Op::Interrupt,
         trace: W3cTraceContext::default(),
         change_artifact: None,
+        session_key: None,
+        parent_session_key: None,
     };
 
     let mut stream = dispatch(&sub, "agent-b", &registry).await.unwrap();
@@ -233,9 +242,7 @@ fn rest_chat_handler_wraps_as_submission() {
     let sub = Submission {
         id: Uuid::new_v4(),
         op: Op::UserTurn {
-            items: vec![sera_types::ContentBlock::Text {
-                text: "Hello".to_string(),
-            }],
+            items: vec![serde_json::json!({"type": "text", "text": "Hello"})],
             cwd: Some("/workspace".into()),
             approval_policy: None,
             sandbox_policy: None,
@@ -245,6 +252,8 @@ fn rest_chat_handler_wraps_as_submission() {
         },
         trace: W3cTraceContext::default(),
         change_artifact: None,
+        session_key: None,
+        parent_session_key: None,
     };
     let json = serde_json::to_string(&sub).unwrap();
     assert!(json.contains("Hello"));
@@ -268,9 +277,7 @@ async fn session_store_chat_envelope_recorded() {
     let sub = Submission {
         id: Uuid::new_v4(),
         op: Op::UserTurn {
-            items: vec![sera_types::ContentBlock::Text {
-                text: "hello agent".to_string(),
-            }],
+            items: vec![serde_json::json!({"type": "text", "text": "hello agent"})],
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
@@ -280,6 +287,8 @@ async fn session_store_chat_envelope_recorded() {
         },
         trace: W3cTraceContext::default(),
         change_artifact: None,
+        session_key: None,
+        parent_session_key: None,
     };
     let sub_id = sub.id;
 
@@ -295,11 +304,8 @@ async fn session_store_chat_envelope_recorded() {
     match &all[0].submission.op {
         Op::UserTurn { items, .. } => {
             assert_eq!(items.len(), 1);
-            if let sera_types::ContentBlock::Text { text } = &items[0] {
-                assert_eq!(text, "hello agent");
-            } else {
-                panic!("expected Text content block");
-            }
+            assert_eq!(items[0]["type"], "text");
+            assert_eq!(items[0]["text"], "hello agent");
         }
         other => panic!("expected UserTurn, got {:?}", other),
     }
@@ -313,9 +319,7 @@ async fn session_store_task_enqueue_envelope_recorded() {
     let sub = Submission {
         id: Uuid::new_v4(),
         op: Op::UserTurn {
-            items: vec![sera_types::ContentBlock::Text {
-                text: "summarise document".to_string(),
-            }],
+            items: vec![serde_json::json!({"type": "text", "text": "summarise document"})],
             cwd: None,
             approval_policy: Some("agent-xyz".to_string()),
             sandbox_policy: None,
@@ -325,6 +329,8 @@ async fn session_store_task_enqueue_envelope_recorded() {
         },
         trace: W3cTraceContext::default(),
         change_artifact: None,
+        session_key: None,
+        parent_session_key: None,
     };
     let sub_id = sub.id;
     let session = "agent-xyz";
@@ -352,9 +358,9 @@ async fn session_store_permission_request_envelope_recorded() {
     let sub = Submission {
         id: Uuid::new_v4(),
         op: Op::UserTurn {
-            items: vec![sera_types::ContentBlock::Text {
-                text: "permission_request:filesystem:/workspace/data:read".to_string(),
-            }],
+            items: vec![
+                serde_json::json!({"type": "text", "text": "permission_request:filesystem:/workspace/data:read"}),
+            ],
             cwd: None,
             approval_policy: Some("instance-abc".to_string()),
             sandbox_policy: None,
@@ -364,6 +370,8 @@ async fn session_store_permission_request_envelope_recorded() {
         },
         trace: W3cTraceContext::default(),
         change_artifact: None,
+        session_key: None,
+        parent_session_key: None,
     };
     let sub_id = sub.id;
     let session = "instance-abc";
@@ -383,9 +391,7 @@ async fn session_store_intercom_dm_envelope_recorded() {
     let sub = Submission {
         id: Uuid::new_v4(),
         op: Op::UserTurn {
-            items: vec![sera_types::ContentBlock::Text {
-                text: "intercom_dm:agent-a:agent-b".to_string(),
-            }],
+            items: vec![serde_json::json!({"type": "text", "text": "intercom_dm:agent-a:agent-b"})],
             cwd: None,
             approval_policy: Some("agent-b".to_string()),
             sandbox_policy: None,
@@ -395,6 +401,8 @@ async fn session_store_intercom_dm_envelope_recorded() {
         },
         trace: W3cTraceContext::default(),
         change_artifact: None,
+        session_key: None,
+        parent_session_key: None,
     };
     let sub_id = sub.id;
     let session = "agent-a";
@@ -431,9 +439,7 @@ async fn session_store_sequence_preserves_order_and_ids() {
     let chat_sub = Submission {
         id: chat_id,
         op: Op::UserTurn {
-            items: vec![sera_types::ContentBlock::Text {
-                text: "start a research task".to_string(),
-            }],
+            items: vec![serde_json::json!({"type": "text", "text": "start a research task"})],
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
@@ -443,15 +449,15 @@ async fn session_store_sequence_preserves_order_and_ids() {
         },
         trace: W3cTraceContext::default(),
         change_artifact: None,
+        session_key: None,
+        parent_session_key: None,
     };
 
     // 2. Task enqueue submission
     let task_sub = Submission {
         id: task_id,
         op: Op::UserTurn {
-            items: vec![sera_types::ContentBlock::Text {
-                text: "research task".to_string(),
-            }],
+            items: vec![serde_json::json!({"type": "text", "text": "research task"})],
             cwd: None,
             approval_policy: Some("agent-research".to_string()),
             sandbox_policy: None,
@@ -461,15 +467,17 @@ async fn session_store_sequence_preserves_order_and_ids() {
         },
         trace: W3cTraceContext::default(),
         change_artifact: None,
+        session_key: None,
+        parent_session_key: None,
     };
 
     // 3. Task result submission
     let result_sub = Submission {
         id: result_id,
         op: Op::UserTurn {
-            items: vec![sera_types::ContentBlock::Text {
-                text: format!("task_result:{task_id}"),
-            }],
+            items: vec![
+                serde_json::json!({"type": "text", "text": format!("task_result:{task_id}")}),
+            ],
             cwd: None,
             approval_policy: Some("agent-research".to_string()),
             sandbox_policy: None,
@@ -479,6 +487,8 @@ async fn session_store_sequence_preserves_order_and_ids() {
         },
         trace: W3cTraceContext::default(),
         change_artifact: None,
+        session_key: None,
+        parent_session_key: None,
     };
 
     // Append in sequence — simulates a complete agent workflow

@@ -1,126 +1,24 @@
-//! NDJSON Submission/Event stdio transport for sera-runtime (P0-6).
+//! NDJSON Submission/Event stdio transport for sera-runtime (P0-6, sera-zx5w).
 //!
 //! This module implements the runtime's half of the `AppServerTransport::Stdio`
 //! contract: one Submission JSON object per line on stdin, one Event JSON object
 //! per line on stdout. The first frame emitted is a canonical
-//! [`HandshakeFrame`] from `sera_types::envelope`; subsequent frames are the
-//! protocol-v1 [`Event`] envelope defined below (serde-compatible with
-//! `sera_gateway::bin::sera::StdioHarness`).
+//! [`HandshakeFrame`] from `sera_types::envelope`; subsequent frames use the
+//! canonical [`Submission`] / [`Event`] envelope from the same module (sera-zx5w
+//! collapsed the previously-duplicated runtime-local types onto canonical).
 //!
-//! The local [`Submission`], [`Event`], [`Op`], [`SystemOp`] and [`EventMsg`]
-//! types are intentionally duplicated here rather than pulled from
-//! `sera_types::envelope`:
-//!
-//! * `sera-runtime` must not depend on `sera-gateway` (cycle), and the gateway's
-//!   [`StdioHarness`](sera_gateway::bin::sera::StdioHarness) currently emits the
-//!   v1 shape. Switching both sides to canonical types simultaneously is P1
-//!   follow-up work — tracked via `TODO(P0-6/P1-canonical-envelope)`.
-//! * The handshake is already on the canonical `HandshakeFrame`, so v2
-//!   consumers can negotiate without reading any event body.
+//! Wire compatibility: the canonical envelope was extended (not the other way
+//! around) so existing NDJSON sessions parse unchanged. Envelope-level
+//! `session_key` / `parent_session_key` on [`Submission`] replace the former
+//! per-op fields, and [`Event`] now carries `parent_session_key` directly.
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
-use sera_types::envelope::HandshakeFrame;
+use sera_types::envelope::{Event, EventMsg, HandshakeFrame, Op, Submission, SystemOp};
 use sera_types::runtime::{AgentRuntime, TokenUsage, TurnContext, TurnOutcome};
 
 use crate::config::RuntimeConfig;
 use crate::default_runtime::DefaultRuntime;
-
-// ── Protocol-v1 envelope (runtime ↔ gateway stdio) ──────────────────────────
-
-/// Local NDJSON submission type — serde-compatible with `sera-gateway`'s
-/// `Submission`. Defined locally to avoid a cyclic dependency (`sera-gateway`
-/// depends on `sera-runtime`). See module-level docs for the P1 plan to
-/// migrate onto `sera_types::envelope`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Submission {
-    pub id: uuid::Uuid,
-    pub op: Op,
-}
-
-/// Local operation enum — mirrors `sera-gateway`'s `Op`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum Op {
-    UserTurn {
-        items: Vec<serde_json::Value>,
-        #[serde(default)]
-        model_override: Option<String>,
-        /// Session key provided by the gateway for per-session context tracking.
-        #[serde(default)]
-        session_key: Option<String>,
-        /// Parent session key — set when this turn belongs to a child session.
-        #[serde(default)]
-        parent_session_key: Option<String>,
-    },
-    Steer {
-        items: Vec<serde_json::Value>,
-        #[serde(default)]
-        session_key: Option<String>,
-        /// Parent session key — propagated from the spawning session.
-        #[serde(default)]
-        parent_session_key: Option<String>,
-    },
-    Interrupt,
-    System(SystemOp),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "system_op", rename_all = "snake_case")]
-pub enum SystemOp {
-    Shutdown,
-    HealthCheck,
-}
-
-/// Local NDJSON event type — serde-compatible with `sera-gateway`'s `Event`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Event {
-    pub id: uuid::Uuid,
-    /// Nil UUID for handshake frames (no associated submission).
-    pub submission_id: uuid::Uuid,
-    pub msg: EventMsg,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    /// Parent session key carried on every frame so consumers can route child events.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_session_key: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum EventMsg {
-    TurnStarted {
-        turn_id: uuid::Uuid,
-    },
-    /// Terminal turn frame carrying the provider-reported token usage for this
-    /// turn. Consumers (e.g. the gateway) parse `tokens` to report usage back
-    /// through `/api/chat` responses.
-    TurnCompleted {
-        turn_id: uuid::Uuid,
-        #[serde(default)]
-        tokens: TokenUsage,
-    },
-    StreamingDelta {
-        delta: String,
-    },
-    /// Tool call started — emitted for each tool invocation during the turn.
-    ToolCallBegin {
-        turn_id: uuid::Uuid,
-        call_id: String,
-        tool: String,
-        arguments: serde_json::Value,
-    },
-    /// Tool call completed — emitted after tool execution with the result.
-    ToolCallEnd {
-        turn_id: uuid::Uuid,
-        call_id: String,
-        result: String,
-    },
-    Error {
-        code: String,
-        message: String,
-    },
-}
 
 // ── NDJSON loop ─────────────────────────────────────────────────────────────
 
@@ -177,6 +75,7 @@ pub async fn run_ndjson_loop(
                             code: "parse_error".to_string(),
                             message: format!("failed to parse submission: {e}"),
                         },
+                        trace: Default::default(),
                         timestamp: chrono::Utc::now(),
                         parent_session_key: None,
                     },
@@ -209,12 +108,10 @@ async fn process_submission(
 ) -> anyhow::Result<()> {
     let turn_id = uuid::Uuid::new_v4();
 
-    // Extract parent_session_key from the submission op for propagation.
-    let submission_parent_key = match &submission.op {
-        Op::UserTurn { parent_session_key, .. } => parent_session_key.clone(),
-        Op::Steer { parent_session_key, .. } => parent_session_key.clone(),
-        _ => None,
-    };
+    // Envelope-level parent_session_key is carried through on every emitted
+    // frame so consumers can route child-session events without parsing the
+    // message body (sera-zx5w — was previously a per-op field).
+    let submission_parent_key = submission.parent_session_key.clone();
 
     // Emit TurnStarted
     emit(
@@ -223,6 +120,7 @@ async fn process_submission(
             id: uuid::Uuid::new_v4(),
             submission_id: submission.id,
             msg: EventMsg::TurnStarted { turn_id },
+            trace: Default::default(),
             timestamp: chrono::Utc::now(),
             parent_session_key: submission_parent_key.clone(),
         },
@@ -256,6 +154,7 @@ async fn process_submission(
                     id: uuid::Uuid::new_v4(),
                     submission_id: submission.id,
                     msg: EventMsg::StreamingDelta { delta: response },
+                    trace: Default::default(),
                     timestamp: chrono::Utc::now(),
                     parent_session_key: submission_parent_key.clone(),
                 },
@@ -335,6 +234,7 @@ async fn process_submission(
                         code: "turn_error".to_string(),
                         message: format!("{e:?}"),
                     },
+                    trace: Default::default(),
                     timestamp: chrono::Utc::now(),
                     parent_session_key: submission_parent_key.clone(),
                 },
@@ -353,6 +253,7 @@ async fn process_submission(
                 turn_id,
                 tokens: tokens_for_completion,
             },
+            trace: Default::default(),
             timestamp: chrono::Utc::now(),
             parent_session_key: submission_parent_key,
         },
@@ -407,6 +308,7 @@ async fn emit_tool_events_from_transcript(
                                 tool: tool_name,
                                 arguments,
                             },
+                            trace: Default::default(),
                             timestamp: chrono::Utc::now(),
                             parent_session_key: parent_session_key.clone(),
                         },
@@ -435,6 +337,7 @@ async fn emit_tool_events_from_transcript(
                         call_id,
                         result: result_content,
                     },
+                    trace: Default::default(),
                     timestamp: chrono::Utc::now(),
                     parent_session_key: parent_session_key.clone(),
                 },
@@ -457,6 +360,7 @@ async fn emit_delta(
             id: uuid::Uuid::new_v4(),
             submission_id: submission.id,
             msg: EventMsg::StreamingDelta { delta },
+            trace: Default::default(),
             timestamp: chrono::Utc::now(),
             parent_session_key: parent_session_key.clone(),
         },
@@ -472,25 +376,29 @@ async fn emit(stdout: &mut tokio::io::Stdout, event: Event) -> anyhow::Result<()
     Ok(())
 }
 
-/// Convert a local [`Submission`] into a [`TurnContext`] for the runtime.
+/// Convert a canonical [`Submission`] into a [`TurnContext`] for the runtime.
+///
+/// `session_key` / `parent_session_key` are envelope-level fields (sera-zx5w);
+/// only the `items` list is pulled from the [`Op`] variant.
 fn submission_to_turn_context(
     submission: &Submission,
     agent_id: &str,
     turn_id: uuid::Uuid,
     tool_defs: &[sera_types::tool::ToolDefinition],
 ) -> TurnContext {
-    let (messages, session_key_override, parent_session_key) = match &submission.op {
-        Op::UserTurn { items, session_key, parent_session_key, .. } => {
-            (items.clone(), session_key.clone(), parent_session_key.clone())
-        }
-        Op::Steer { items, session_key, parent_session_key } => {
-            (items.clone(), session_key.clone(), parent_session_key.clone())
-        }
-        Op::Interrupt | Op::System(_) => (vec![], None, None),
+    let messages = match &submission.op {
+        Op::UserTurn { items, .. } => items.clone(),
+        Op::Steer { items } => items.clone(),
+        Op::Interrupt
+        | Op::System(_)
+        | Op::ApprovalResponse { .. }
+        | Op::Register(_) => vec![],
     };
 
     // Use gateway-provided session_key when available, otherwise generate one.
-    let session_key = session_key_override
+    let session_key = submission
+        .session_key
+        .clone()
         .unwrap_or_else(|| format!("session:{agent_id}:{}", submission.id));
 
     TurnContext {
@@ -500,8 +408,11 @@ fn submission_to_turn_context(
         messages,
         available_tools: tool_defs.to_vec(),
         metadata: HashMap::new(),
+        // Envelope-level `change_artifact` is a string tag for audit persistence;
+        // TurnContext carries a typed `ChangeArtifactId` that only sera-meta
+        // populates. Leave as None until wired through.
         change_artifact: None,
-        parent_session_key,
+        parent_session_key: submission.parent_session_key.clone(),
         tool_use_behavior: Default::default(),
     }
 }
@@ -523,19 +434,20 @@ mod tests {
 
     #[test]
     fn submission_user_turn_with_session_key_roundtrip() {
+        // session_key is now envelope-level (sera-zx5w).
         let json = r#"{
             "id": "00000000-0000-0000-0000-000000000000",
             "op": {
                 "type": "user_turn",
-                "items": [{"role":"user","content":"hi"}],
-                "session_key": "session:agent-x:abc"
-            }
+                "items": [{"role":"user","content":"hi"}]
+            },
+            "session_key": "session:agent-x:abc"
         }"#;
         let sub: Submission = serde_json::from_str(json).unwrap();
+        assert_eq!(sub.session_key.as_deref(), Some("session:agent-x:abc"));
         match sub.op {
-            Op::UserTurn { items, session_key, .. } => {
+            Op::UserTurn { items, .. } => {
                 assert_eq!(items.len(), 1);
-                assert_eq!(session_key.as_deref(), Some("session:agent-x:abc"));
             }
             _ => panic!("expected UserTurn"),
         }
@@ -564,6 +476,7 @@ mod tests {
                     total_tokens: 30,
                 },
             },
+            trace: Default::default(),
             timestamp: chrono::Utc::now(),
             parent_session_key: None,
         };

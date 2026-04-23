@@ -543,7 +543,6 @@ impl SessionStore for InMemorySessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sera_types::content_block::ContentBlock;
     use sera_types::envelope::{EventMsg, Op, W3cTraceContext};
     use tempfile::TempDir;
 
@@ -551,9 +550,10 @@ mod tests {
         Submission {
             id: uuid::Uuid::new_v4(),
             op: Op::UserTurn {
-                items: vec![ContentBlock::Text {
-                    text: text.to_string(),
-                }],
+                items: vec![serde_json::json!({
+                    "type": "text",
+                    "text": text,
+                })],
                 cwd: None,
                 approval_policy: None,
                 sandbox_policy: None,
@@ -563,6 +563,8 @@ mod tests {
             },
             trace: W3cTraceContext::default(),
             change_artifact: None,
+            session_key: None,
+            parent_session_key: None,
         }
     }
 
@@ -575,6 +577,7 @@ mod tests {
             },
             trace: W3cTraceContext::default(),
             timestamp: chrono::Utc::now(),
+            parent_session_key: None,
         }
     }
 

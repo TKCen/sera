@@ -953,13 +953,13 @@ async fn chat_handler(
     // even flagged/rejected turns leave a record of intent.
     {
         use sera_gateway::envelope::{Op, Submission, W3cTraceContext};
-        use sera_types::content_block::ContentBlock;
         let envelope = Submission {
             id: uuid::Uuid::new_v4(),
             op: Op::UserTurn {
-                items: vec![ContentBlock::Text {
-                    text: req.message.clone(),
-                }],
+                items: vec![serde_json::json!({
+                    "type": "text",
+                    "text": req.message.clone(),
+                })],
                 cwd: None,
                 approval_policy: None,
                 sandbox_policy: None,
@@ -969,6 +969,8 @@ async fn chat_handler(
             },
             trace: W3cTraceContext::default(),
             change_artifact: None,
+            session_key: Some(session_key.clone()),
+            parent_session_key: None,
         };
         if let Err(e) = state
             .session_store

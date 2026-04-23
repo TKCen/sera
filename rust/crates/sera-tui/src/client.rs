@@ -121,7 +121,7 @@ impl Agent {
 
 /// Session summary.
 #[derive(Debug, Clone)]
-pub struct Session {
+pub struct SessionSummary {
     pub id: String,
     pub agent_id: String,
     /// ISO-8601 timestamp of session creation.  Not yet rendered in the
@@ -132,7 +132,7 @@ pub struct Session {
     pub state: String,
 }
 
-impl Session {
+impl SessionSummary {
     fn from_json(v: &serde_json::Value) -> Self {
         let s = |k: &str| {
             v.get(k)
@@ -429,7 +429,7 @@ impl GatewayClient {
     pub async fn list_sessions(
         &self,
         agent_id: Option<&str>,
-    ) -> Result<Vec<Session>, ClientError> {
+    ) -> Result<Vec<SessionSummary>, ClientError> {
         let mut path = "/api/sessions".to_owned();
         if let Some(a) = agent_id {
             path.push_str(&format!("?agent_id={a}"));
@@ -437,7 +437,7 @@ impl GatewayClient {
         match self.get_json(&path).await {
             Ok(body) => Ok(body
                 .as_array()
-                .map(|arr| arr.iter().map(Session::from_json).collect())
+                .map(|arr| arr.iter().map(SessionSummary::from_json).collect())
                 .unwrap_or_default()),
             Err(ClientError::NotAvailable(_)) => Ok(Vec::new()),
             Err(e) => Err(e),
@@ -674,13 +674,13 @@ mod tests {
     #[test]
     fn session_from_json_handles_both_field_names() {
         let v = serde_json::json!({"id": "s1", "agent_id": "a1", "state": "active"});
-        let s = Session::from_json(&v);
+        let s = SessionSummary::from_json(&v);
         assert_eq!(s.id, "s1");
         assert_eq!(s.agent_id, "a1");
         assert_eq!(s.state, "active");
 
         let v2 = serde_json::json!({"id": "s2", "agent_instance_id": "a2", "status": "idle"});
-        let s2 = Session::from_json(&v2);
+        let s2 = SessionSummary::from_json(&v2);
         assert_eq!(s2.agent_id, "a2");
         assert_eq!(s2.state, "idle");
     }

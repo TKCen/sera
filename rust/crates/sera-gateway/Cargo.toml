@@ -56,8 +56,10 @@ tokio-stream.workspace = true
 tokio-util.workspace = true
 async-stream.workspace = true
 futures-util.workspace = true
-# qdrant-client and git2 deferred — native deps need Docker build env
+# qdrant-client deferred — native deps need Docker build env
 # openidconnect deferred — uses reqwest directly for token exchange
+# git2 backs the shadow-repo half of two-layer session persistence (sera-r9ed).
+git2.workspace = true
 rand.workspace = true
 cron.workspace = true
 chrono.workspace = true

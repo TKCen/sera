@@ -8,29 +8,12 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
+use sera_queue::QueueMode;
 use sera_types::event::IncomingEvent;
 use serde::{Deserialize, Serialize};
 
 use crate::error::DbError;
 use crate::lane_queue_counter::LaneCounterStoreDyn;
-
-/// How queued messages are handled while a run is active for this session.
-///
-/// SPEC-gateway §5.2
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum QueueMode {
-    /// Coalesce queued messages into one follow-up turn after current run completes.
-    Collect,
-    /// Wait until current run ends, process queued messages as sequential follow-up turns.
-    Followup,
-    /// Inject incoming message at next tool boundary in current run.
-    Steer,
-    /// Steer now AND preserve for follow-up after current run.
-    SteerBacklog,
-    /// Abort active run, start new run with newest message.
-    Interrupt,
-}
 
 /// Result of an enqueue operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

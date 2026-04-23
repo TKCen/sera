@@ -55,17 +55,6 @@ pub struct DedupeKey {
     pub message_id: String,
 }
 
-/// Queue processing mode.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum QueueMode {
-    Collect,
-    Followup,
-    Steer,
-    SteerBacklog,
-    Interrupt,
-}
-
 /// Worker failure classification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

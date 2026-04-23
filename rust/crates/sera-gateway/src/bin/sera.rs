@@ -31,7 +31,8 @@ use sera_config::manifest_loader::{
     ManifestSet, load_manifest_file, parse_manifests, resolve_provider_api_key,
 };
 use sera_config::secrets::SecretResolver;
-use sera_db::lane_queue::{LaneQueue, QueueMode};
+use sera_db::lane_queue::LaneQueue;
+use sera_queue::QueueMode;
 use sera_db::lane_queue_counter::{InMemoryLaneCounter, LaneCounterStoreDyn, PostgresLaneCounter};
 use sera_db::sqlite::SqliteDb;
 // sera-vzce: SqliteMemoryStore is the zero-infra SemanticMemoryStore tier

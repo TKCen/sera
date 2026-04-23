@@ -410,7 +410,7 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::{Agent, GatewayClient, HitlRequest, Session, StreamEvent, SseUpdate};
+    use crate::client::{Agent, GatewayClient, HitlRequest, SessionSummary, StreamEvent, SseUpdate};
 
     fn client() -> GatewayClient {
         GatewayClient::new("http://127.0.0.1:1", "test", std::time::Duration::from_millis(1))
@@ -526,7 +526,7 @@ mod tests {
     #[test]
     fn apply_sse_event_lands_on_session_view() {
         let mut app = App::new(client(), TuiKeybindings::defaults());
-        app.session.set_session(Session {
+        app.session.set_session(SessionSummary {
             id: "s1".into(),
             agent_id: "a1".into(),
             created_at: String::new(),

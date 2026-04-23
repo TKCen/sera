@@ -7,7 +7,7 @@ use ratatui::widgets::{List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use super::agent_list::make_block;
-use crate::client::{ConnectionState, Session, StreamEvent, TranscriptEntry};
+use crate::client::{ConnectionState, SessionSummary, StreamEvent, TranscriptEntry};
 
 /// Viewer state for a single session.  Owns:
 /// * metadata (agent id, session id, state)
@@ -15,7 +15,7 @@ use crate::client::{ConnectionState, Session, StreamEvent, TranscriptEntry};
 /// * tool events (SSE only, non-message events)
 /// * scroll bookkeeping — auto-scrolls to tail unless the user has paused
 pub struct SessionView {
-    pub session: Option<Session>,
+    pub session: Option<SessionSummary>,
     pub transcript: Vec<TranscriptEntry>,
     pub tool_log: Vec<String>,
     pub scroll_offset: u16,
@@ -35,7 +35,7 @@ impl SessionView {
         }
     }
 
-    pub fn set_session(&mut self, session: Session) {
+    pub fn set_session(&mut self, session: SessionSummary) {
         self.session = Some(session);
         self.transcript.clear();
         self.tool_log.clear();
@@ -241,8 +241,8 @@ fn truncate_or_dash(s: &str, max: usize) -> String {
 mod tests {
     use super::*;
 
-    fn sess(id: &str) -> Session {
-        Session {
+    fn sess(id: &str) -> SessionSummary {
+        SessionSummary {
             id: id.to_owned(),
             agent_id: "agent-1".to_owned(),
             created_at: "2026-04-18T00:00:00Z".to_owned(),

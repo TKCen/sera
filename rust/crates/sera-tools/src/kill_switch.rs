@@ -6,9 +6,14 @@ pub enum KillSwitchCommand {
     Rollback,
 }
 
-/// Errors from kill switch operations.
+/// Errors from tool-level kill switch socket operations (bind / IO).
+///
+/// This is distinct from `sera_gateway::kill_switch::ToolKillError`, which
+/// models the gateway-level emergency-stop state machine. `ToolKillError`
+/// covers only the lower-level socket bind/IO failures used by the CON-04
+/// boot health check and the `listen` helper in this crate.
 #[derive(Debug, thiserror::Error)]
-pub enum KillSwitchError {
+pub enum ToolKillError {
     #[error("failed to bind socket: {reason}")]
     BindFailed { reason: String },
     #[error("io error: {reason}")]
@@ -20,9 +25,9 @@ pub enum KillSwitchError {
 /// Verifies the socket path is valid and the runtime can bind to it.
 /// On Unix systems, attempts to bind a `UnixListener` to the path.
 /// On non-Unix systems, stubs out (returns Ok).
-pub fn boot_health_check(socket_path: &str) -> Result<(), KillSwitchError> {
+pub fn boot_health_check(socket_path: &str) -> Result<(), ToolKillError> {
     if socket_path.is_empty() {
-        return Err(KillSwitchError::BindFailed {
+        return Err(ToolKillError::BindFailed {
             reason: "socket path is empty".to_string(),
         });
     }
@@ -36,7 +41,7 @@ pub fn boot_health_check(socket_path: &str) -> Result<(), KillSwitchError> {
         if let Some(parent) = path.parent()
             && !parent.exists()
         {
-            return Err(KillSwitchError::BindFailed {
+            return Err(ToolKillError::BindFailed {
                 reason: format!("parent directory does not exist: {}", parent.display()),
             });
         }
@@ -44,7 +49,7 @@ pub fn boot_health_check(socket_path: &str) -> Result<(), KillSwitchError> {
         // Attempt to bind to validate the path is usable.
         // Remove stale socket file if present.
         if path.exists() {
-            std::fs::remove_file(path).map_err(|e| KillSwitchError::BindFailed {
+            std::fs::remove_file(path).map_err(|e| ToolKillError::BindFailed {
                 reason: format!("could not remove stale socket: {e}"),
             })?;
         }
@@ -58,7 +63,7 @@ pub fn boot_health_check(socket_path: &str) -> Result<(), KillSwitchError> {
                 let _ = std::fs::remove_file(path);
                 Ok(())
             }
-            Err(e) => Err(KillSwitchError::BindFailed {
+            Err(e) => Err(ToolKillError::BindFailed {
                 reason: e.to_string(),
             }),
         }
@@ -73,14 +78,14 @@ pub fn boot_health_check(socket_path: &str) -> Result<(), KillSwitchError> {
 
 /// Listen on a Unix socket for kill switch commands (async, Unix-only).
 #[cfg(unix)]
-pub async fn listen(socket_path: &str) -> Result<KillSwitchCommand, KillSwitchError> {
+pub async fn listen(socket_path: &str) -> Result<KillSwitchCommand, ToolKillError> {
     use tokio::net::UnixListener;
 
-    let listener = UnixListener::bind(socket_path).map_err(|e| KillSwitchError::BindFailed {
+    let listener = UnixListener::bind(socket_path).map_err(|e| ToolKillError::BindFailed {
         reason: e.to_string(),
     })?;
 
-    let (_stream, _addr) = listener.accept().await.map_err(|e| KillSwitchError::IoError {
+    let (_stream, _addr) = listener.accept().await.map_err(|e| ToolKillError::IoError {
         reason: e.to_string(),
     })?;
 
@@ -97,7 +102,7 @@ mod tests {
     fn boot_health_check_rejects_empty_path() {
         let err = boot_health_check("").unwrap_err();
         assert!(
-            matches!(err, KillSwitchError::BindFailed { .. }),
+            matches!(err, ToolKillError::BindFailed { .. }),
             "expected BindFailed, got {err}"
         );
         assert!(err.to_string().contains("empty"));
@@ -164,7 +169,7 @@ mod tests {
 
     #[test]
     fn kill_switch_error_bind_failed_display() {
-        let err = KillSwitchError::BindFailed {
+        let err = ToolKillError::BindFailed {
             reason: "permission denied".to_string(),
         };
         assert!(err.to_string().contains("permission denied"));
@@ -172,7 +177,7 @@ mod tests {
 
     #[test]
     fn kill_switch_error_io_error_display() {
-        let err = KillSwitchError::IoError {
+        let err = ToolKillError::IoError {
             reason: "broken pipe".to_string(),
         };
         assert!(err.to_string().contains("broken pipe"));

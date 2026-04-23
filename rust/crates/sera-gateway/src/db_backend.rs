@@ -1,33 +1,18 @@
-//! Pluggable database backend for the sera-gateway library.
+//! Pluggable database backend abstraction for sera-gateway.
 //!
-//! Today every route/service handler in `crate::routes` and `crate::services`
-//! holds `&sqlx::PgPool` — the Postgres flavour is baked into every call site.
-//! The MVS binary in `src/bin/sera.rs`, by contrast, runs against an
-//! `Arc<Mutex<SqliteDb>>`. Long-term we want both deployments to share a
-//! single set of handlers, chosen at boot via manifest config.
+//! The MVS binary in `src/bin/sera.rs` runs against an
+//! `Arc<Mutex<SqliteDb>>`. A future Postgres-backed deployment would carry
+//! the same [`DbBackend`] shape, chosen at boot via manifest config. This
+//! trait keeps the door open for that swap without committing to a specific
+//! wiring today.
 //!
-//! This module introduces the smallest possible abstraction that unblocks
-//! module wiring (sera-vsvz / sera-3l84.1): a [`DbBackend`] trait that
-//! [`crate::state::AppState`] can hold as `Arc<dyn DbBackend>`, plus two
-//! concrete impls:
+//! Two concrete impls live here:
 //!
 //! * [`PgPoolBackend`] — wraps [`sera_db::DbPool`] and exposes the inner
-//!   `sqlx::PgPool` so today's Postgres-only repositories keep working.
+//!   `sqlx::PgPool` for Postgres deployments.
 //! * [`SqliteDbBackend`] — wraps [`sera_db::sqlite::SqliteDb`] behind an
 //!   `Arc<Mutex<…>>` so SQLite-backed deployments can carry the same
-//!   `AppState` shape.
-//!
-//! Subsequent beads (sera-3l84.2/.3) will port individual handlers off the
-//! raw `pg_pool()` accessor onto typed repository methods that dispatch on
-//! [`DbBackendKind`].
-//!
-//! ## Non-goals (for this bead)
-//!
-//! * A cross-backend `execute(query, params)` surface — `sera_db::*`
-//!   repositories are Postgres-only today; porting them is 3l84.2.
-//! * Removing call sites that still reach `pg_pool()`; those are tolerated
-//!   until handlers are migrated.
-//! * Any `bin/sera.rs` changes — the binary keeps its local AppState.
+//!   backend-trait shape.
 
 use std::sync::Arc;
 
@@ -46,7 +31,8 @@ pub enum DbBackendKind {
     Sqlite,
 }
 
-/// Abstraction over the database backend carried by [`crate::state::AppState`].
+/// Abstraction over the database backend carried in an application's
+/// shared state.
 ///
 /// The trait surface is intentionally narrow: it exposes typed accessors for
 /// each concrete backend rather than a synthetic query API. Call sites that

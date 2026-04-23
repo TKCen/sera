@@ -10,6 +10,7 @@ sqlite-vec = ["dep:sqlite-vec"]
 
 [dependencies]
 sera-memory = { workspace = true, features = ["pgvector", "sqlite", "sqlite-vec"] }
+sera-queue.workspace = true
 sera-types.workspace = true
 sera-errors.workspace = true
 rusqlite.workspace = true

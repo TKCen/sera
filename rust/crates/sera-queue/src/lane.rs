@@ -4,7 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Controls how an event is placed into the lane queue.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum QueueMode {
     /// Normal FIFO accumulation.
     Collect,
@@ -62,7 +63,7 @@ impl LaneQueue {
             lane: lane.clone(),
             payload,
             enqueued_at: Utc::now(),
-            mode: mode.clone(),
+            mode,
         };
 
         match mode {

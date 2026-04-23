@@ -17,7 +17,7 @@ use tokio::sync::RwLock;
 
 #[cfg(test)]
 use sera_a2a::InProcRouter;
-use sera_a2a::{A2aClient, A2aRequest, A2aResponse, Capabilities, Task};
+use sera_a2a::{A2aClient, A2aRequest, A2aResponse, Capabilities, A2ATask};
 
 // ---------------------------------------------------------------------------
 // Peer registry (in-process store, injected into AppState)
@@ -65,12 +65,12 @@ pub struct SendMessageRequest {
     /// URL of the target A2A peer.
     pub peer_url: String,
     /// The task to send.
-    pub task: Task,
+    pub task: A2ATask,
 }
 
 #[derive(Debug, Serialize)]
 pub struct SendMessageResponse {
-    pub task: Task,
+    pub task: A2ATask,
 }
 
 #[derive(Debug, Deserialize)]

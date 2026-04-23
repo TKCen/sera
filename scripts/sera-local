@@ -80,7 +80,12 @@ echo "sera-local: chat via: curl -s http://localhost:${PORT}/api/chat -H 'Conten
 echo
 
 cd "$DATA_DIR"
+# Local dev default: permit turns without a ConstitutionalGate HookChain.
+# Prior to sera-jo8l this was auto-set when Instance.spec.tier == "local";
+# now that tier is purged, sera-local carries the default explicitly.
+# Operators can override by exporting SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=0.
 exec env \
+  SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE="${SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE:-1}" \
   SERA_RUNTIME_BIN="$RUNTIME_BIN" \
   LLM_BASE_URL="$LLM_BASE_URL" \
   SERA_DATA_ROOT="$DATA_DIR" \

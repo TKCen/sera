@@ -30,7 +30,7 @@ pub use config_store::{ConfigStore, ConfigStoreError, ManifestValue};
 pub use layer_merge::{LayeredManifestSet, ManifestLayer};
 pub use schema_registry::SchemaRegistry;
 pub use shadow_store::ShadowConfigStore;
-pub use version_log::{ChangeArtifactId, ConfigVersionEntry, ConfigVersionLog};
+pub use version_log::{ArtifactRef, ConfigVersionEntry, ConfigVersionLog};
 
 use std::env;
 

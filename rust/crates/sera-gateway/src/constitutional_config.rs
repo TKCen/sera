@@ -26,7 +26,7 @@ use std::collections::HashSet;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use sera_meta::constitutional::{ConstitutionalRegistry, ConstitutionalRule};
+use sera_meta::constitutional::{ConstitutionalRegistry, ConstitutionalRuleEntry};
 use sera_meta::ChangeArtifactScope;
 use sera_types::evolution::{BlastRadius, ConstitutionalEnforcementPoint};
 use sera_types::evolution::ConstitutionalRule as ConstitutionalRuleBase;
@@ -49,7 +49,7 @@ pub struct RuleEntry {
 }
 
 impl RuleEntry {
-    /// Convert into a [`ConstitutionalRule`].
+    /// Convert into a [`ConstitutionalRuleEntry`].
     ///
     /// The `content_hash` is derived from `id || description` so that the
     /// hash changes whenever either field changes, giving a stable but
@@ -57,7 +57,7 @@ impl RuleEntry {
     /// bytes in the config file.
     ///
     /// Returns `Err` if `id` is empty or whitespace-only.
-    fn into_rule(self) -> Result<ConstitutionalRule, String> {
+    fn into_rule(self) -> Result<ConstitutionalRuleEntry, String> {
         if self.id.trim().is_empty() {
             return Err("rule id must be non-empty".to_string());
         }
@@ -69,7 +69,7 @@ impl RuleEntry {
         let mut content_hash = [0u8; 32];
         content_hash.copy_from_slice(&digest[..32]);
 
-        Ok(ConstitutionalRule::new(
+        Ok(ConstitutionalRuleEntry::new(
             ConstitutionalRuleBase {
                 id: self.id,
                 description: self.description,

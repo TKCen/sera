@@ -64,7 +64,7 @@ fn default_max_summary_tokens() -> u32 {
 /// Statistics about a memory tier's current state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MemoryStats {
+pub struct WorkingMemoryStats {
     pub entry_count: u32,
     pub estimated_tokens: u32,
     pub tier: String,
@@ -86,7 +86,7 @@ pub trait MemoryWrapper: Send + Sync {
     fn last_n(&self, n: usize) -> Vec<TranscriptEntry>;
 
     /// Get current statistics.
-    fn stats(&self) -> MemoryStats;
+    fn stats(&self) -> WorkingMemoryStats;
 
     /// Check if eviction or compaction is needed.
     fn needs_maintenance(&self) -> bool;
@@ -149,11 +149,11 @@ impl MemoryWrapper for UnconstrainedMemory {
         self.transcript.last_n(n).to_vec()
     }
 
-    fn stats(&self) -> MemoryStats {
+    fn stats(&self) -> WorkingMemoryStats {
         let entry_count = self.transcript.len() as u32;
         // Rough estimate: 256 tokens per entry on average
         let estimated_tokens = entry_count * 256;
-        MemoryStats {
+        WorkingMemoryStats {
             entry_count,
             estimated_tokens,
             tier: "unconstrained".to_string(),
@@ -280,8 +280,8 @@ impl MemoryWrapper for TokenMemory {
         self.transcript.last_n(n).to_vec()
     }
 
-    fn stats(&self) -> MemoryStats {
-        MemoryStats {
+    fn stats(&self) -> WorkingMemoryStats {
+        WorkingMemoryStats {
             entry_count: self.transcript.len() as u32,
             estimated_tokens: self.estimated_tokens,
             tier: "token_bounded".to_string(),
@@ -384,9 +384,9 @@ impl MemoryWrapper for SlidingWindowMemory {
         self.transcript.last_n(n).to_vec()
     }
 
-    fn stats(&self) -> MemoryStats {
+    fn stats(&self) -> WorkingMemoryStats {
         let entry_count = self.transcript.len() as u32;
-        MemoryStats {
+        WorkingMemoryStats {
             entry_count,
             estimated_tokens: entry_count * 256,
             tier: "sliding_window".to_string(),
@@ -548,8 +548,8 @@ impl MemoryWrapper for SummarizeMemory {
         self.transcript.last_n(n).to_vec()
     }
 
-    fn stats(&self) -> MemoryStats {
-        MemoryStats {
+    fn stats(&self) -> WorkingMemoryStats {
+        WorkingMemoryStats {
             entry_count: self.transcript.len() as u32,
             estimated_tokens: self.estimated_tokens,
             tier: "summarizing".to_string(),

@@ -11,6 +11,7 @@ use std::path::Path;
 // Row types
 // ---------------------------------------------------------------------------
 
+#[cfg(not(feature = "postgres"))]
 #[derive(Debug, Clone)]
 pub struct SessionRow {
     pub id: String,
@@ -33,6 +34,7 @@ pub struct TranscriptRow {
     pub created_at: String,
 }
 
+#[cfg(not(feature = "postgres"))]
 #[derive(Debug, Clone)]
 pub struct AuditRow {
     pub id: i64,

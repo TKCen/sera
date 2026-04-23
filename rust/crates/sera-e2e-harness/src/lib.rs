@@ -320,8 +320,7 @@ fn minimal_sera_yaml(llm_base_url: &str, model: &str) -> String {
 kind: Instance
 metadata:
   name: sera-e2e
-spec:
-  tier: local
+spec: {{}}
 ---
 apiVersion: sera.dev/v1
 kind: Provider

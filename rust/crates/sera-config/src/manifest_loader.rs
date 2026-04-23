@@ -269,8 +269,7 @@ apiVersion: sera.dev/v1
 kind: Instance
 metadata:
   name: my-sera
-spec:
-  tier: local
+spec: {}
 ---
 apiVersion: sera.dev/v1
 kind: Provider
@@ -318,7 +317,7 @@ spec:
     fn instance_spec_extraction() {
         let set = parse_manifests(MVS_CONFIG).unwrap();
         let spec = set.instance_spec().unwrap().unwrap();
-        assert_eq!(spec.tier, "local");
+        assert!(spec.docs_dir.is_none());
     }
 
     #[test]
@@ -375,8 +374,7 @@ apiVersion: sera.dev/v1
 kind: Instance
 metadata:
   name: test
-spec:
-  tier: local
+spec: {}
 "#;
         let set = parse_manifests(yaml).unwrap();
         assert_eq!(set.instances.len(), 1);
@@ -422,8 +420,7 @@ apiVersion: noslash
 kind: Instance
 metadata:
   name: test
-spec:
-  tier: local
+spec: {}
 "#;
         let err = parse_manifests(yaml).unwrap_err();
         assert!(err.to_string().contains("invalid apiVersion"));

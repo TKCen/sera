@@ -172,10 +172,9 @@ pub enum ConfigManifestError {
 // ── MVS Kind-Specific Spec Types ────────────────────────────────────────────
 
 /// Instance spec — top-level SERA instance configuration.
-/// MVS scope: tier and basic settings only.
+/// MVS scope: basic settings only.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstanceSpec {
-    pub tier: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub docs_dir: Option<String>,
 }
@@ -286,8 +285,7 @@ apiVersion: sera.dev/v1
 kind: Instance
 metadata:
   name: my-sera
-spec:
-  tier: local
+spec: {}
 "#;
         let raw: RawManifest = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(raw.api_version, "sera.dev/v1");
@@ -297,8 +295,7 @@ spec:
         let manifest = ConfigManifest::from_raw(raw).unwrap();
         assert_eq!(manifest.kind, ResourceKind::Instance);
 
-        let spec: InstanceSpec = serde_json::from_value(manifest.spec).unwrap();
-        assert_eq!(spec.tier, "local");
+        let _spec: InstanceSpec = serde_json::from_value(manifest.spec).unwrap();
     }
 
     #[test]
@@ -417,15 +414,14 @@ kind: Instance
 metadata:
   name: test
   labels:
-    tier: local
+    env: local
     team: platform
   annotations:
     description: Test instance
-spec:
-  tier: local
+spec: {}
 "#;
         let raw: RawManifest = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(raw.metadata.labels.get("tier").unwrap(), "local");
+        assert_eq!(raw.metadata.labels.get("env").unwrap(), "local");
         assert_eq!(raw.metadata.annotations.get("description").unwrap(), "Test instance");
     }
 }

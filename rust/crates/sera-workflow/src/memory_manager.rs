@@ -1,10 +1,10 @@
-//! `WorkflowMemoryManager` — coordinator-scoped step summary store.
+//! `CoordinatorMemoryManager` — coordinator-scoped step summary store.
 //!
 //! Tracks per-agent [`StepSummary`] records keyed by workflow instance.
-//! The coordinator calls [`WorkflowMemoryManager::record_agent_step`] after
-//! each agent turn, queries [`WorkflowMemoryManager::snapshot`] to get an
+//! The coordinator calls [`CoordinatorMemoryManager::record_agent_step`] after
+//! each agent turn, queries [`CoordinatorMemoryManager::snapshot`] to get an
 //! aggregated view for routing decisions, and calls
-//! [`WorkflowMemoryManager::evict`] on workflow completion to free memory.
+//! [`CoordinatorMemoryManager::evict`] on workflow completion to free memory.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -107,24 +107,24 @@ impl InstanceBucket {
 }
 
 // =========================================================================
-// WorkflowMemoryManager — the canonical impl
+// CoordinatorMemoryManager
 // =========================================================================
 
 /// Coordinator-scoped memory store for Circle workflows.
 ///
 /// Thread-safe; cheaply cloneable via inner `Arc`.
 #[derive(Clone, Default)]
-pub struct WorkflowMemoryManager {
+pub struct CoordinatorMemoryManager {
     coordinator_scoped_summary: Arc<Mutex<HashMap<InstanceId, InstanceBucket>>>,
 }
 
-impl WorkflowMemoryManager {
+impl CoordinatorMemoryManager {
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-impl MemoryManager for WorkflowMemoryManager {
+impl MemoryManager for CoordinatorMemoryManager {
     /// Append a [`StepSummary`] to the given workflow instance's bucket.
     fn record_agent_step(&self, instance_id: &str, step: StepSummary) {
         self.coordinator_scoped_summary
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn record_agent_step_appends_to_instance_bucket() {
-        let mgr = WorkflowMemoryManager::new();
+        let mgr = CoordinatorMemoryManager::new();
         mgr.record_agent_step("inst-1", step("agent-a", "ok", 10));
         mgr.record_agent_step("inst-1", step("agent-a", "ok", 20));
         let snap = mgr.snapshot("inst-1");
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn snapshot_aggregates_per_agent() {
-        let mgr = WorkflowMemoryManager::new();
+        let mgr = CoordinatorMemoryManager::new();
         mgr.record_agent_step("inst-2", step("agent-a", "ok", 100));
         mgr.record_agent_step("inst-2", step("agent-b", "ok", 200));
         mgr.record_agent_step("inst-2", step("agent-b", "ok", 50));
@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn evict_removes_instance() {
-        let mgr = WorkflowMemoryManager::new();
+        let mgr = CoordinatorMemoryManager::new();
         mgr.record_agent_step("inst-3", step("agent-a", "ok", 5));
         mgr.evict("inst-3");
         let snap = mgr.snapshot("inst-3");
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn snapshot_empty_instance_returns_empty_map() {
-        let mgr = WorkflowMemoryManager::new();
+        let mgr = CoordinatorMemoryManager::new();
         let snap = mgr.snapshot("nonexistent-instance");
         assert!(snap.per_agent.is_empty());
         assert_eq!(snap.total_tokens, 0);
@@ -217,7 +217,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_record_from_multiple_tasks_safe() {
         use std::sync::Arc;
-        let mgr = Arc::new(WorkflowMemoryManager::new());
+        let mgr = Arc::new(CoordinatorMemoryManager::new());
         let mut handles = Vec::new();
         for i in 0u32..8 {
             let m = mgr.clone();

@@ -1,155 +1,98 @@
 # SERA 2.0 — Session Handoff
 
 > **Purpose:** Bootstrap the next session quickly. One file to read to rebuild context.
-> **Date:** 2026-04-23
-> **Session:** Phase 1 canonicalization — sera-3l84 epic (gateway single-path refactor) + supporting fixes
-> **Previous handoff:** 2026-04-21 → `git show e88224ae:docs/plan/HANDOFF.md`. Earlier handoffs chained from there.
+> **Date:** 2026-04-23 (session 2, evening)
+> **Session:** Duplicate-implementation cleanup + un35 P1 regression closeout
+> **Previous handoff:** earlier 2026-04-23 → `git show 697c099f:docs/plan/HANDOFF.md`. Chain back from there.
 
 ---
 
-## Session outcome — 6 PRs merged, sera-3l84 epic closed
+## Session outcome — 9 PRs merged, 5 parallel lanes + one amend
 
-- **#1011** (`sera-4i4i`) — `SqliteGitSessionStore` wired into gateway production boot path. Envelopes now persist to shadow-git across restarts; `SERA_DATA_ROOT` env + `scripts/sera-local --data-dir` expose the root. Test AppState fixtures intentionally keep `InMemorySessionStore`.
-- **#1012** (`sera-vsvz`, 3l84.1) — wired `mod routes; state; services; db_backend; error` in `lib.rs` + introduced `DbBackend` trait with `SqliteDbBackend` + `PgPoolBackend` impls. Foundation for config-level DB swap.
-- **#1013** (`sera-jw8o`) — `DEFAULT_TURN_TIMEOUT` raised 120s → 600s. 120s was triggering spurious lane-wedge errors on thinking/local models (qwen3.6-35b, Claude extended thinking). `SERA_TURN_TIMEOUT_SECS` env override stays.
-- **#1014** (`sera-y3fd`) — fix `cargo check --features wasm` (wasmtime v44 renamed `wasmtime_wasi::preview1` → `wasmtime_wasi::p1`). 2 latent clippy warnings fixed along the way.
-- **#1015** (`sera-jo8l`, 3l84.4) — purged `Instance.spec.tier` field and all `tier_is_local` branches from the codebase. Local/enterprise distinction is now driven by config (`SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE` env + absence of Postgres DATABASE_URL), not a hard-coded tier gate. Net: 14 tier refs → 0.
-- **#1016** (`sera-s31i`, 3l84.2, **pivoted** from original scope) — **deleted the orphan `src/routes/` + `src/services/` + `src/state.rs` + `src/error.rs` + `src/sera_errors.rs` tree**: 68 files, **−21,105 LOC**. Kept `db_backend.rs` + `routes/{a2a,agui,plugins}.rs` (which bin/sera.rs references via `#[path]`). The executor's own smoke test inside the PR returned a real model reply.
-- **#1017** (`sera-df7h`, in flight) — `scripts/sera-local` defaults `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=1` now that jo8l removed the tier-conditional auto-set. Necessary but not sufficient — see regression below.
+Every lane landed. The un35 P1 regression flagged as must-fix-first did not reproduce on current main; it was almost certainly cleared by `sera-df7h` (#1017 the prior session) and the filing snapshot was stale. Diagnostic annotation was added so a future recurrence surfaces an actionable error instead of a bare "Broken pipe".
 
-### ⚠️ Post-session smoke test uncovered a regression (`sera-un35` P1)
-`/api/chat` on current main returns `[sera] Runtime error: Broken pipe (os error 32)`. Runtime harness child's stdin pipe breaks between handshake and first `send_turn`. Root cause not yet identified — the executor of #1016 had a green smoke test before that merge, but the combined state after all 6 merges no longer works. Full details in `bd show sera-un35`.
+- **#1019** (`sera-6i18` P3) — CLAUDE.md: drop stale Docker Compose / bun install refs, update dev path to WSL2.
+- **#1020** (`sera-igsd` P2) — chat_handler fails closed on SessionStore emission errors. Releases the lane, logs at error, returns 500. tasks/permission_requests/intercom still log-and-continue (mechanical follow-up; see `sera-<new>` if filed).
+- **#1021** (`sera-dxib` P4) — delete legacy `sera-hooks/src/wasm_adapter.rs` (510 LOC). `ComponentAdapter` remains the one-true host.
+- **#1022** (`sera-iwbq` P2) — delete dead duplicate `sera_types::queue::QueueBackend` (405 LOC). `sera_queue::QueueBackend` is canonical.
+- **#1023** (`sera-zx5w` P2) — collapse `sera-runtime::stdio::{Submission,Op,Event,EventMsg}` onto `sera_types::envelope::*`. Design choice: `session_key`/`parent_session_key` live at envelope-level on `Submission`, not inside `Op::UserTurn` (correlation metadata, not turn content). `Op::UserTurn.items` is now `Vec<serde_json::Value>` matching wire reality. Canonical-only fields (`cwd`/`approval_policy`/`sandbox_policy`/`effort`/`final_output_schema`) retained as `#[serde(default)]` tolerated extras for future wiring. `EventMsg::ToolCallStarted/Completed` → `ToolCallBegin/End` to match wire names. Follow-up commit fixed 23 compile errors in `tests/gateway_acceptance.rs` (12 fixture sites).
+- **#1024** (`sera-3rmo` P2) — guard against empty `execute_turn` reply in `/api/chat`. Returns 502 with `{"error":"runtime returned empty reply"}` + rich log (session_id, agent, usage, tools_ran). Does NOT chase the deployed-container root cause — that's a separate operability concern.
+- **#1025** (`sera-un35` P1) — diagnostic hardening of `StdioHarness::send_turn`: stdin write/flush errors now annotate with the runtime child's exit status via `child_exit_context()`. Operator sees `"sera-runtime child exited before submission could be written (status: ...)"` instead of bare `Broken pipe (os error 32)`. Regression itself did not reproduce on fresh build + fresh `.sera-local` state against current main; likely cleared by #1017 df7h.
+- **#1009** + **#1010** — dependabot dep bumps (uuid 10→14 in `legacy/`, git2 0.19→0.20 in `rust/`). Green at time of merge.
 
----
-
-## Architectural decisions baked this session (DO NOT re-litigate)
-
-- **Single-path gateway.** `bin/sera.rs` is the one canonical handler set. There is no library-side `routes/` tree competing with it anymore. A future cross-cutting library refactor is possible but must start from this single source of truth.
-- **No "tier" concept in code.** The local-vs-enterprise distinction is purely config: operators set `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=1` for permissive mode, and the DB backend is chosen by `DbBackend` trait impl (SQLite default, Postgres via explicit manifest/env). Do not re-introduce a `tier:` field.
-- **`DbBackend` trait stays even though routes/ is gone.** It's the config-swap point for future Postgres support. `bin/sera.rs` currently always uses `SqliteDbBackend`; a `PgPoolBackend` is available when someone wires it in.
-- **Envelope persistence is real.** `SqliteGitSessionStore` runs in production — `parts.sqlite` + `sessions/<id>/git/` dirs appear under `$SERA_DATA_ROOT` after the first `/api/chat` hit. Test fixtures keep `InMemorySessionStore` — don't "unify" that.
-- **Turn-timeout default is 600s.** Per-agent manifest override (`spec.turn_timeout_secs`) is a potential follow-up, not in scope today. `SERA_TURN_TIMEOUT_SECS` env override is the only knob for now.
-- **sera-hooks WIT + HookChain manifest is public API** (from sera-s4b1 two sessions ago). `ComponentAdapter` is the forward-looking component-model path; legacy `wasm_adapter.rs` coexists until `sera-dxib` deprecation ships.
+All 9 merges pulled into local main. `.clawhip/` is the only untracked path (tmux monitoring artefact — leave it).
 
 ---
 
-## ⚠️ Known regression — fix FIRST before anything else
+## Architectural decisions reinforced this session
 
-**`sera-un35` P1** — `/api/chat` returns `[sera] Runtime error: Broken pipe (os error 32)` on `scripts/sera-local` after today's merges. The runtime harness child's stdin pipe breaks between handshake and first `send_turn`. SqliteGitSessionStore persistence still works, LM Studio responds, gateway health/readiness OK. Between the earlier green smoke test (#1011-era) and post-#1016, something in the `#1012..#1016` chain broke the spawn pipeline. See bead notes for investigation pointers.
-
-**`sera-df7h` P1** — `scripts/sera-local` now defaults `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=1` (PR #1017 in flight). Correct fix, but does NOT resolve sera-un35 alone.
-
----
-
-## Primary goal (pick one — ask if unsure)
-
-### 1. Fix deployed HTTP chat silent failure (`sera-3rmo` P2)
-
-A sibling agent on the deployed Docker container hit `POST /api/chat` returning `200 OK` with `response: ""`. Discord path works. Does NOT reproduce locally on sera-local + LM Studio. Two real bugs to fix:
-
-- **Silent-failure masking** (quick fix): `bin/sera.rs:1178` returns `ChatResponse { response: result.reply, ... }` without checking `reply.is_empty()`. Add: if reply is empty, log at error level + return 502 Bad Gateway. That alone makes the root cause visible.
-- **Root cause** (deeper): Discord uses same `execute_turn` as HTTP, but HTTP fails. Diff has to be in setup BEFORE `execute_turn` — harness registration, lane admission, or runtime child pipe wiring. Compare `chat_handler` (L824) vs `process_message` (L1688) setup paths.
-
-### 2. Fix usage tokens always 0 (`sera-xoie` P3)
-
-`/api/chat` response has `usage: {prompt_tokens: 0, completion_tokens: 0, total_tokens: 0}` despite LM Studio returning real usage. Somewhere between sera-runtime's model client and `MvsTurnResult.usage`, the field is dropped. Start: search for `usage` / `UsageInfo` / `TokenUsage` in `sera-runtime` stdio handling.
-
-### 3. Fail-open vs fail-closed decision (`sera-igsd` P2)
-
-Envelope-emission `SessionStore::append_envelope` currently fails open — if the store is down, routes succeed silently with no audit trail. SPEC-gateway claims envelopes are "auditable + replayable"; fail-open contradicts that. Decide: availability > durability (keep) or durability > availability (flip to 502).
-
-### 4. Op taxonomy beyond UserTurn (`sera-qrsh` P3)
-
-Every wrapped route currently emits `Op::UserTurn` (task enqueues, intercom DMs, permission requests — all wrong semantically). Add dedicated `Op::Task`, `Op::TaskResult`, `Op::PermissionRequest`, `Op::AgentDm`, `Op::IntercomPublish` variants. Requires modifying `sera-types::envelope::Op`.
-
-### 5. Canonicalize envelope types (`sera-zx5w` P2)
-
-`sera-runtime::stdio::{Submission,Op,Event,EventMsg}` duplicates `sera-types::envelope::*`. Already drifted: stdio's `Op::UserTurn` has `session_key`/`parent_session_key` fields the canonical one doesn't. Collapse onto canonical.
+- **Envelope shape is owned by `sera-types`.** `sera-runtime::stdio` no longer ships its own `Submission`/`Op`/`Event` types. If you change the wire shape, touch `sera-types/src/envelope.rs` and let every crate re-compile against it.
+- **Correlation metadata is envelope-level, not Op-level.** `session_key` and `parent_session_key` belong to `Submission`. `Op::UserTurn` carries only turn content. Don't add correlation fields back to Ops.
+- **Fail-closed on audit writes** (chat path). SessionStore emission failure means the audit trail is broken — reject the turn with 500 rather than silently succeed. Same principle applies to future tasks/intercom/permission callers (not yet wired).
+- **Empty reply is a bug, not a success.** If `execute_turn` returns an empty string, that's a silent failure surface — emit 502 and log. Do not let an empty string travel as a 200 response body.
+- **Dead code earns no keep-alive tax.** `wasm_adapter.rs` (510 LOC) and `sera_types::queue` (405 LOC) both had zero live consumers and were deleted outright rather than deprecated with TODO comments. Prefer delete over deprecate when the consumer count is zero.
 
 ---
 
-## Follow-up pool (filed today)
+## Open follow-up beads (nothing P0/P1 outstanding)
 
-- `sera-3rmo` P2 — `/api/chat` silent empty-reply masking (see primary goal 1)
-- `sera-xoie` P3 — usage tokens always 0 (see primary goal 2)
-- `sera-igsd` P2 — fail-open vs fail-closed SessionStore emission (see primary goal 3)
-- `sera-qrsh` P3 — Op variants beyond UserTurn (see primary goal 4)
-- `sera-zx5w` P2 — canonical envelope types (see primary goal 5)
-- `sera-iwbq` P2 — retire `sera_types::queue::QueueBackend`, keep `sera_queue::QueueBackend`
-- `sera-bb39` P3 — pick one home for `TranscriptEntry` (sera-session vs sera-types)
-- `sera-0ym4` P4 — delete legacy `session_persist.rs` stubs (was orphaned already, kept because session_persist isn't part of the deletion in #1016)
-- `sera-dxib` P4 — deprecate pre-component-model `wasm_adapter.rs` (post sera-s4b1 grace)
-- `sera-msal` P3 — end-to-end WASM component-build smoke (needs CI image with `wasm-tools`/`wasm32-wasip2`)
-- `sera-dsht` P3 — upstream LCM to public hermes-agent repo + re-anchor sera-context-lcm to submodule
-- `sera-6i18` P3 — CLAUDE.md staleness (Docker Compose + `bun install` + working-dir path references to pre-migration layout)
-- `sera-4yz5` P2 — OSS launch polish (README/CONTRIBUTING/landing), **blocked** on Phase 1 close
-- Pre-existing clippy warnings in `sera-testing/src/contracts.rs` (`LifecycleMode clone_on_copy` ×2) — not mine, file a bead if they bite.
+P2:
+- **`sera-qrsh`** — `sera-gateway`: define dedicated `Op` variants for tasks / permission_requests / intercom routes (currently all wrapped as `Op::UserTurn`, which is semantically wrong for replay). Requires `sera-types::envelope::Op` extension + re-wrap at the 4 call sites in `bin/sera.rs`. Blocked only by 1023 merging — now unblocked.
+- **`sera-3rmo` followups** — the 3rmo fix closed the silent-failure hole on the local path but did NOT chase WHY the deployed container's `execute_turn` returns empty. That's a separate Docker-env investigation. File a fresh bead if it reproduces.
+- **`sera-igsd` followups** — apply fail-closed semantics to tasks/permission_requests/intercom emission paths (still log-and-continue). Also: a `FailingSessionStore`-based unit test was drafted by the executor but deferred; file a small bead for its re-introduction once the AppState constructor is easier to mock.
+- **`sera-4yz5`** (OSS README / LANDING page) — still blocked on code stability; current code IS now stable, so this is ready to work whenever someone wants to announce Sera.
 
----
+P3:
+- **`sera-xoie`** — `/api/chat` usage tokens always 0. Runtime→gateway propagation drops them. Likely LM Studio `usage` field not being read in the runtime's model client.
+- **`sera-bb39`** — pick one home for `TranscriptEntry` (`sera-session` vs `sera-types`).
+- **`sera-dsht`** — upstream LCM to public hermes-agent repo + re-anchor `sera-context-lcm` to submodule. External-repo work, not local.
+- **`sera-msal`** — sera-hooks E2E WASM component build in CI (blocked on `wasm-tools` / `wasm32-wasip2` availability in CI image).
 
-## CRITICAL INSIGHT — the routes/ tree was a historical mirage
-
-The deletion in #1016 removed ~21K LOC of speculative Postgres-backed scaffolding that **was never reachable from the binary's axum router**. It compiled under `--all-targets` but `src/lib.rs` didn't declare `mod routes; mod state; mod services;`, and `bin/sera.rs` used `#[path]` imports for the few route files it actually mounted (a2a, agui, plugins).
-
-Developers (including Claude Code agents) kept extending it thinking they were extending the live server. **sera-r1g8's envelope wrapping for `/api/agents/:id/tasks`, `/api/intercom/*`, `/api/permission-requests` was unreachable in production for that reason** — confirmed via 404 response from sera-local.
-
-**If any future work needs OIDC, MCP management, schedules, training exports, embedding, evolve pipeline, secrets management, etc., port the feature inline into `bin/sera.rs` against SqliteDb.** Don't re-create the orphan pattern. The deletion was fully aggressive — if something breaks because of it, the feature was never running anyway.
+P4:
+- **`sera-0ym4`** — ergonomic cleanup around `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE` (too shouty; rename or flip default once operator docs catch up).
 
 ---
 
-## Workflow (unchanged)
+## Primary goal for next session (pick one — ask if unsure)
 
-- Start with `bd ready` + `bd show <id>`. Follow-up pool above is P2-P4; pick consciously.
-- Worktrees per lane at `/home/entity/projects/sera-wt/<lane>`, off `origin/main`.
-- Working Principles (`CLAUDE.md`): **Think Before Coding / Simplicity First / Surgical Changes / Goal-Driven Execution**. Today's s31i executor stopped before implementing because the bead was under-specified — that was the correct move, and the pivot produced a much better PR as a result.
-- Ask clarifying questions before fan-out on design-heavy beads.
-- If you spot adjacent work, file a bead — do not sprawl.
+### 1. Land `sera-qrsh` — proper `Op` taxonomy for non-UserTurn envelope emissions
+Now unblocked by #1023. The current code wraps task-result, permission-request, intercom-publish, intercom-dm all as `Op::UserTurn` — replay tooling cannot tell them apart. Define `Op::TaskResult`, `Op::PermissionRequest`, `Op::IntercomPublish`, `Op::AgentDm`, re-wrap the 4 emission sites in `bin/sera.rs`, update SPEC-gateway if applicable. Medium-size refactor, mostly mechanical, well-scoped.
 
----
+### 2. Propagate LM Studio `usage` through runtime→gateway (`sera-xoie`)
+Small functional bug with a diagnostic payoff. `{"prompt_tokens":0,"completion_tokens":0,...}` in every `ChatResponse` is bad telemetry. Start at the runtime's model client, follow the field through `StdioHarness::send_turn`'s return.
 
-## Executor ops notes (refreshed this session)
+### 3. Write README / LANDING (`sera-4yz5`)
+Code is stable enough now. This is the gating artefact for making Sera publicly interesting. Architecture diagram, vision, quick-start, 'Why SERA vs LangChain/AutoGen/CrewAI'. Larger than a bead implementation but high-leverage.
 
-- **Main is protected** — direct push rejected. Feature branch + PR only.
-- **Race-condition on local branch delete after `gh pr merge --delete-branch`**: fails with "cannot delete branch ... used by worktree". Workflow: merge first (works), then `git worktree remove --force <path>` + `git branch -D <branch>` to clean up.
-- **CI workflow may fail to auto-trigger on a PR push** (rare — happened once today on #1016). Workaround: `gh pr update-branch <n>` forces re-trigger. Watch if this pattern recurs.
-- **GitHub can return 504** on `gh pr view` / `gh pr merge` — usually transient, retry after ~5s.
-- **Sub-agent cargo contention**: multiple parallel executors in separate worktrees hit cargo's shared package-cache lock. Eventually resolves; the `Blocking waiting for file lock` message is harmless.
-- **Turn timeout is 600s now.** If you're timing out during development against a slow local model, set `SERA_TURN_TIMEOUT_SECS=1800`.
-- **`.omc/state/` is cwd-relative** — `cd` back out of `rust/` between state-touching commands.
-- **Sonnet for mechanical plumbing** (SessionStore wiring, tier purge, type-import swaps). **Opus for design-heavy refactors** (module wiring, orphan-tree deletion, handler merges). Today's s31i deletion PR was Opus because the scoping call mattered.
-- **Ultrawork persistence mode** has a 50-turn hook cap. Cancel via `state_clear(mode=ultrawork)` + `state_clear(mode=skill-active)` when at cap. Scheduled wakeups continue to fire regardless.
+### 4. Fail-closed parity for remaining emission sites (igsd followup)
+tasks/permission_requests/intercom emission still fail-open. Mechanical mirror of what #1020 did for chat. Small bead.
 
 ---
 
-## Validation recipe (confirm E2E still works)
+## Environment reminders
 
-```bash
-scripts/sera-local --data-dir /tmp/sera-test
-# in another shell:
-curl -s http://localhost:42540/api/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"agent":"sera","message":"hi","stream":false}'
-
-# Verify persistence landed to disk:
-find /tmp/sera-test -type d
-# Expect: /tmp/sera-test/sessions/<session_id>/git/... with HEAD + refs/heads/main
-```
-
-Expect a real response from `gemma-4-e2b` (LM Studio at `:1234` must be running with that model loaded) plus a SQLite `parts.sqlite` + a shadow-git repo per session.
+- `scripts/sera-local` defaults `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=1` since #1017. Override on the command line if you need strict mode.
+- `DEFAULT_TURN_TIMEOUT = 600s` (from #1013). Override via `SERA_TURN_TIMEOUT_SECS`.
+- Canonical envelope types live in `rust/crates/sera-types/src/envelope.rs`. Do NOT add a shadow type in any other crate.
+- LM Studio loopback: `http://host.docker.internal:1234` from containers, `http://localhost:1234` from host/WSL.
+- `bd` is the only task tracker. Do not use TodoWrite/TaskCreate/markdown checklists.
 
 ---
 
-## Design decisions from prior sessions (still baked)
+## Wiki pointers (LLM wiki at `.omc/wiki/`)
 
-- Dual-transport plugin model (stdio + gRPC both first-class; no dev/prod split).
-- `ContextEngine` capability in `PluginCapability` enum.
-- Independent SDK release cadence across crates.io / PyPI / npm.
-- Proto is canonical; JSON Schema mirrors adjacent (CI drift check).
-- Constitutional-gate permissive mode is now explicitly config-driven (`SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=1`), not tier-gated.
-- Admin kill-switch socket path cascade: `/var/lib/sera/admin.sock` → `$XDG_RUNTIME_DIR/sera-admin.sock` → `${TMPDIR:-/tmp}/sera-admin-$USER.sock`.
-- `SERA_E2E_MODEL` env controls harness manifest's model field (unset → `e2e-mock` wiremock, set → real LLM).
-- sera-context-lcm vendors a minimal LCM subset instead of git submodule — hermes-agent's LCM isn't on any public branch yet; `sera-dsht` tracks the upstream + re-anchor option.
+Use `wiki_query <keyword>` for architecture docs. Pages refreshed this session:
+- `phase0-complete-architecture-status.md` / `phase1-complete-e2e-gap.md` — phase gates passed.
+- `crate-spec-mapping.md` — current crate→SPEC mapping.
+- `in-process-hooks-first.md` — decision still stands; ComponentAdapter is the forward path.
+- `thiserror-source-field.md` — gotcha to remember when touching error enums.
 
 ---
 
-*Today we deleted 21,000 lines of speculative scaffolding to reveal the gateway we actually have. Sera's home now has one front door, not two.*
+## Session tally
+
+- 9 PRs merged (7 code + 2 dependabot).
+- 9 beads closed (`sera-6i18`, `sera-igsd`, `sera-dxib`, `sera-iwbq`, `sera-zx5w`, `sera-3rmo`, `sera-un35`, plus the dependabot flows).
+- 6 parallel lanes (un35 opus, zx5w opus, iwbq sonnet, igsd sonnet, 3rmo sonnet, 6i18 haiku) + 1 opportunistic lane (dxib sonnet) + 1 recovery amend (zx5w gateway_acceptance fixture fix via sonnet).
+- Net LOC: large negative (−405 iwbq, −510 dxib, and several hundred more via surgical cleanups).
+- Zero open regressions. Zero open P0/P1 beads.

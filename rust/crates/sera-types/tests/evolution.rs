@@ -1,3 +1,4 @@
+use sera_types::AgentCapability;
 use sera_types::evolution::*;
 use std::collections::HashSet;
 

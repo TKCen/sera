@@ -7,9 +7,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::error::ModelError;
-use crate::response::ModelResponse;
-use sera_types::model::ModelRequest;
+use sera_types::model::{ModelError, ModelRequest, ModelResponse};
 
 // ---------------------------------------------------------------------------
 // Credential — sera-hjem multi-account auth
@@ -239,8 +237,9 @@ pub trait ModelProvider: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::response::{FinishReason, Usage};
     use async_trait::async_trait;
+    use sera_types::model::FinishReason;
+    use sera_types::runtime::TokenUsage;
     use serde_json::json;
 
     // ── ProviderConfig::base_url() ────────────────────────────────────────────
@@ -547,14 +546,15 @@ mod tests {
 
     fn make_mock_response() -> ModelResponse {
         ModelResponse {
-            content: "pong".into(),
+            content: Some("pong".into()),
             finish_reason: FinishReason::Stop,
-            usage: Usage {
+            usage: TokenUsage {
                 prompt_tokens: 5,
                 completion_tokens: 1,
                 total_tokens: 6,
             },
-            tool_calls: None,
+            tool_calls: Vec::new(),
+            model: "mock-model".into(),
         }
     }
 
@@ -571,7 +571,7 @@ mod tests {
 
         let result = provider.chat(make_mock_request()).await
             .expect("mock chat should succeed");
-        assert_eq!(result.content, "pong");
+        assert_eq!(result.content.as_deref(), Some("pong"));
         assert_eq!(result.finish_reason, FinishReason::Stop);
         assert_eq!(result.usage.total_tokens, 6);
     }
@@ -631,7 +631,7 @@ mod tests {
                 model: "gpt-4o".into(),
                 base_url: None,
             },
-            error: || ModelError::Authentication("401 Unauthorized".into()),
+            error: || ModelError::AuthenticationFailed,
         };
 
         let err = provider.chat(make_mock_request()).await
@@ -650,12 +650,15 @@ mod tests {
                 model: "gpt-4o".into(),
                 base_url: None,
             },
-            error: || ModelError::RateLimit,
+            error: || ModelError::RateLimited { retry_after_ms: None },
         };
 
         let err = provider.chat(make_mock_request()).await
             .expect_err("should return error");
-        assert_eq!(err.to_string(), "rate limit exceeded");
+        assert!(
+            err.to_string().contains("rate limited"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]
@@ -665,12 +668,15 @@ mod tests {
                 api_key: "k".into(),
                 model: "claude-3-5-sonnet".into(),
             },
-            error: || ModelError::ContextLengthExceeded,
+            error: || ModelError::ContextLengthExceeded { limit: 4096, requested: 5000 },
         };
 
         let err = provider.chat(make_mock_request()).await
             .expect_err("should return error");
-        assert_eq!(err.to_string(), "context length exceeded");
+        assert!(
+            err.to_string().contains("context length exceeded"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]
@@ -704,7 +710,7 @@ mod tests {
 
         let err = provider.chat(make_mock_request()).await
             .expect_err("should return error");
-        assert_eq!(err.to_string(), "timeout waiting for response");
+        assert_eq!(err.to_string(), "request timed out");
     }
 
     // ── sera-hjem: Credential / ProviderCredentials backward-compat ──────────

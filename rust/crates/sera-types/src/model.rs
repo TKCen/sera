@@ -154,6 +154,46 @@ pub enum ModelError {
     /// The request timed out before a response was received.
     #[error("request timed out")]
     Timeout,
+
+    /// A provider response failed serialization / deserialization.
+    ///
+    /// Transport-layer adapters convert `serde_json::Error` via its `Display`.
+    #[error("request serialization failed: {0}")]
+    Serialization(String),
+
+    /// An HTTP transport error occurred while calling the provider.
+    ///
+    /// Transport-layer adapters convert `reqwest::Error` via its `Display`.
+    #[error("HTTP request failed: {0}")]
+    Http(String),
+
+    /// The provider returned a response that could not be interpreted.
+    #[error("invalid response from provider: {0}")]
+    InvalidResponse(String),
+
+    /// The provider is configured but not reachable (e.g. connection refused,
+    /// endpoint offline).
+    #[error("provider not available: {0}")]
+    NotAvailable(String),
+}
+
+impl From<ModelError> for sera_errors::SeraError {
+    fn from(err: ModelError) -> Self {
+        use sera_errors::SeraErrorCode;
+        let code = match &err {
+            ModelError::ProviderError(_) => SeraErrorCode::Internal,
+            ModelError::RateLimited { .. } => SeraErrorCode::RateLimited,
+            ModelError::ContextLengthExceeded { .. } => SeraErrorCode::InvalidInput,
+            ModelError::AuthenticationFailed => SeraErrorCode::Unauthorized,
+            ModelError::InvalidRequest(_) => SeraErrorCode::InvalidInput,
+            ModelError::Timeout => SeraErrorCode::Timeout,
+            ModelError::Serialization(_) => SeraErrorCode::Serialization,
+            ModelError::Http(_) => SeraErrorCode::Unavailable,
+            ModelError::InvalidResponse(_) => SeraErrorCode::Internal,
+            ModelError::NotAvailable(_) => SeraErrorCode::Unavailable,
+        };
+        sera_errors::SeraError::with_source(code, err.to_string(), err)
+    }
 }
 
 // ── ModelAdapter trait ────────────────────────────────────────────────────────
@@ -399,6 +439,54 @@ mod tests {
         );
 
         assert_eq!(ModelError::Timeout.to_string(), "request timed out");
+
+        assert_eq!(
+            ModelError::Serialization("bad json".to_string()).to_string(),
+            "request serialization failed: bad json"
+        );
+
+        assert_eq!(
+            ModelError::Http("connection reset".to_string()).to_string(),
+            "HTTP request failed: connection reset"
+        );
+
+        assert_eq!(
+            ModelError::InvalidResponse("unexpected null".to_string()).to_string(),
+            "invalid response from provider: unexpected null"
+        );
+
+        assert_eq!(
+            ModelError::NotAvailable("openai".to_string()).to_string(),
+            "provider not available: openai"
+        );
+    }
+
+    #[test]
+    fn model_error_into_sera_error_maps_code() {
+        use sera_errors::{SeraError, SeraErrorCode};
+
+        let e: SeraError = ModelError::AuthenticationFailed.into();
+        assert_eq!(e.code, SeraErrorCode::Unauthorized);
+
+        let e: SeraError = ModelError::RateLimited { retry_after_ms: None }.into();
+        assert_eq!(e.code, SeraErrorCode::RateLimited);
+
+        let e: SeraError = ModelError::Timeout.into();
+        assert_eq!(e.code, SeraErrorCode::Timeout);
+
+        let e: SeraError = ModelError::NotAvailable("openai".into()).into();
+        assert_eq!(e.code, SeraErrorCode::Unavailable);
+        assert!(e.message.contains("openai"));
+
+        let e: SeraError = ModelError::Serialization("bad json".into()).into();
+        assert_eq!(e.code, SeraErrorCode::Serialization);
+
+        let e: SeraError = ModelError::Http("conn reset".into()).into();
+        assert_eq!(e.code, SeraErrorCode::Unavailable);
+
+        let e: SeraError =
+            ModelError::ContextLengthExceeded { limit: 1, requested: 2 }.into();
+        assert_eq!(e.code, SeraErrorCode::InvalidInput);
     }
 
     // ── ResponseFormat ────────────────────────────────────────────────────────

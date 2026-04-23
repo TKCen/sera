@@ -24,9 +24,7 @@
 //! ```
 
 pub mod account_pool;
-pub mod error;
 pub mod provider;
-pub mod response;
 pub mod routing;
 pub mod sera_errors;
 pub mod thinking;
@@ -35,9 +33,10 @@ pub use account_pool::{
     AccountGuard, AccountPool, AccountState, CooldownConfig, CooldownReason, PoolError,
     ProviderAccount,
 };
-pub use error::ModelError;
+// Re-export canonical SPEC-runtime model types from sera-types so downstream
+// callers can keep using `sera_models::ModelResponse` / `ModelError` etc.
+pub use sera_types::model::{FinishReason, ModelError, ModelResponse};
 pub use provider::{Credential, ModelProvider, ProviderConfig, ProviderCredentials};
-pub use response::ModelResponse;
 pub use routing::{
     AgentPreferences, CatalogError, CatalogRefreshConfig, CircuitConfig, CircuitState,
     HealthStore, ModelCatalogRegistry, ModelHealth, ModelInfo, ModelRef, ProviderCatalog,

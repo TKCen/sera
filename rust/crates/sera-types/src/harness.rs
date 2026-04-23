@@ -86,11 +86,11 @@ pub struct PluginEvent {
 }
 
 /// Plugin registry for plugin hooks.
-pub type PluginRegistry = Arc<RwLock<Vec<PluginRegistration>>>;
+pub type PluginRegistry = Arc<RwLock<Vec<PluginHookEntry>>>;
 
 /// A registered plugin.
 #[derive(Debug, Clone)]
-pub struct PluginRegistration {
+pub struct PluginHookEntry {
     pub name: String,
     pub namespace: String,
 }
@@ -101,7 +101,7 @@ pub fn new_plugin_registry() -> PluginRegistry {
 }
 
 /// Validate that a plugin event namespace matches the registered plugin.
-pub fn validate_plugin_event_namespace(plugin: &PluginRegistration, event: &PluginEvent) -> bool {
+pub fn validate_plugin_event_namespace(plugin: &PluginHookEntry, event: &PluginEvent) -> bool {
     event.event_type.starts_with(&plugin.namespace)
 }
 
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn validate_plugin_event_namespace_matching_prefix() {
-        let plugin = PluginRegistration {
+        let plugin = PluginHookEntry {
             name: "my-plugin".to_string(),
             namespace: "my_plugin.".to_string(),
         };
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn validate_plugin_event_namespace_exact_match() {
-        let plugin = PluginRegistration {
+        let plugin = PluginHookEntry {
             name: "my-plugin".to_string(),
             namespace: "my_plugin".to_string(),
         };
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn validate_plugin_event_namespace_no_match() {
-        let plugin = PluginRegistration {
+        let plugin = PluginHookEntry {
             name: "my-plugin".to_string(),
             namespace: "my_plugin.".to_string(),
         };
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn validate_plugin_event_namespace_empty_namespace_matches_all() {
-        let plugin = PluginRegistration {
+        let plugin = PluginHookEntry {
             name: "catch-all".to_string(),
             namespace: String::new(),
         };

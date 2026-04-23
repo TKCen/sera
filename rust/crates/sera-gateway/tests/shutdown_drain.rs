@@ -8,7 +8,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use sera_db::lane_queue::{LaneQueue, QueueMode};
+use sera_db::lane_queue::LaneQueue;
+use sera_queue::QueueMode;
 use sera_types::{
     event::IncomingEvent as DomainEvent,
     principal::{PrincipalId, PrincipalKind, PrincipalRef},

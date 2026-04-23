@@ -6,16 +6,16 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use async_stream::stream;
+use async_trait::async_trait;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 use tokio::sync::Mutex;
 use tokio_stream::Stream;
+use tokio_tungstenite::MaybeTlsStream;
+use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::MaybeTlsStream;
 
 use crate::envelope::{Event, Submission};
 
@@ -37,9 +37,9 @@ pub struct WebSocketTransport {
 impl WebSocketTransport {
     /// Connect to a WebSocket server at `url` and return a transport instance.
     pub async fn connect(url: &str) -> Result<Self, TransportError> {
-        let (ws_stream, _response) = connect_async(url)
-            .await
-            .map_err(|e| TransportError::ConnectionFailed(format!("WebSocket connect failed: {e}")))?;
+        let (ws_stream, _response) = connect_async(url).await.map_err(|e| {
+            TransportError::ConnectionFailed(format!("WebSocket connect failed: {e}"))
+        })?;
 
         let (write, read) = ws_stream.split();
 
@@ -69,12 +69,10 @@ impl Transport for WebSocketTransport {
     async fn recv_events(
         &self,
     ) -> Result<Pin<Box<dyn Stream<Item = Event> + Send>>, TransportError> {
-        let read = self
-            .ws_read
-            .lock()
-            .await
-            .take()
-            .ok_or_else(|| TransportError::ReceiveFailed("event stream already taken".into()))?;
+        let read =
+            self.ws_read.lock().await.take().ok_or_else(|| {
+                TransportError::ReceiveFailed("event stream already taken".into())
+            })?;
 
         let event_stream = stream! {
             let mut read = read;

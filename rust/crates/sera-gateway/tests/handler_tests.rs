@@ -37,7 +37,7 @@ mod error_handling_tests {
     fn not_found_error_format() {
         let error_msg = "agent_instance with id=inst-123 not found";
         let response = json!({"error": error_msg});
-        
+
         assert!(response["error"].as_str().unwrap().contains("not found"));
         assert!(response["error"].as_str().unwrap().contains("inst-123"));
     }
@@ -62,7 +62,7 @@ mod error_handling_tests {
     fn internal_error_hides_details() {
         let response = json!({"error": "Internal server error"});
         assert_eq!(response["error"], "Internal server error");
-        
+
         // Should NOT contain stack traces, file paths, or system details
         let error_str = response["error"].as_str().unwrap();
         assert!(!error_str.contains("/home/"));

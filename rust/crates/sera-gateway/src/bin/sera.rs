@@ -39,13 +39,14 @@ use sera_db::sqlite::SqliteDb;
 // path. Wired in the boot path below via backend selection on
 // SERA_MEMORY_BACKEND + DATABASE_URL.
 use sera_memory::PgVectorStore;
-#[allow(unused_imports)]
-use sera_memory::{SqliteMemoryStore, DEFAULT_SQLITE_VEC_DIMENSIONS};
 use sera_memory::SemanticMemoryStore;
+#[allow(unused_imports)]
+use sera_memory::{DEFAULT_SQLITE_VEC_DIMENSIONS, SqliteMemoryStore};
 use sera_runtime::skill_dispatch::SkillDispatchEngine;
 // sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +
 // SERA-issued nonce fallback). Wired into AppState + `/api/mail/inbound`.
 use sera_gateway::kill_switch::{KillSwitch, admin_sock_path, spawn_admin_socket};
+use sera_gateway::session_store::{InMemorySessionStore, SessionStore as _};
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_mail::{
     CorrelationOutcome, HeaderMailCorrelator, InMemoryEnvelopeIndex, InMemoryMailLookup,
@@ -558,6 +559,10 @@ struct AppState {
     /// Unix admin socket; causes all HTTP submissions to be rejected with 503
     /// until disarmed with `DISARM`.
     kill_switch: Arc<KillSwitch>,
+    /// Submission envelope store — every agent-facing route appends a
+    /// Submission here before calling the underlying service (sera-r1g8).
+    /// In-memory stub until sera-r9ed lands with the PartTable+git backing.
+    session_store: Arc<InMemorySessionStore>,
 }
 
 // ── Phase-3 trait impls ──────────────────────────────────────────────────────
@@ -903,6 +908,37 @@ async fn chat_handler(
     async fn release_lane(state: &Arc<AppState>, session_key: &str) {
         let mut lq = state.lane_queue.lock().await;
         lq.complete_run(session_key);
+    }
+
+    // ── Submission envelope emission (sera-r1g8) ──────────────────────────
+    // Every admitted chat turn is an observable action — emit before HITL so
+    // even flagged/rejected turns leave a record of intent.
+    {
+        use sera_gateway::envelope::{Op, Submission, W3cTraceContext};
+        use sera_types::content_block::ContentBlock;
+        let envelope = Submission {
+            id: uuid::Uuid::new_v4(),
+            op: Op::UserTurn {
+                items: vec![ContentBlock::Text {
+                    text: req.message.clone(),
+                }],
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model_override: None,
+                effort: None,
+                final_output_schema: None,
+            },
+            trace: W3cTraceContext::default(),
+            change_artifact: None,
+        };
+        if let Err(e) = state
+            .session_store
+            .append_envelope(&session_key, &envelope)
+            .await
+        {
+            tracing::warn!(error = %e, agent = %agent_name, session_key = %session_key, "session_store.append_envelope failed for chat_handler; continuing");
+        }
     }
 
     // ── HITL pattern gate ────────────────────────────────────────────────
@@ -2695,6 +2731,7 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         skill_engine,
         semantic_store,
         kill_switch: Arc::new(KillSwitch::new()),
+        session_store: Arc::new(InMemorySessionStore::new()),
     });
 
     // 4. Start event processing loop.
@@ -3134,6 +3171,7 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            session_store: Arc::new(InMemorySessionStore::new()),
         })
     }
 
@@ -3167,6 +3205,7 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            session_store: Arc::new(InMemorySessionStore::new()),
         })
     }
 
@@ -3200,6 +3239,7 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            session_store: Arc::new(InMemorySessionStore::new()),
         })
     }
 
@@ -3233,6 +3273,7 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            session_store: Arc::new(InMemorySessionStore::new()),
         })
     }
 
@@ -4030,6 +4071,7 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            session_store: Arc::new(InMemorySessionStore::new()),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -4066,6 +4108,7 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            session_store: Arc::new(InMemorySessionStore::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -4103,6 +4146,7 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            session_store: Arc::new(InMemorySessionStore::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -4143,6 +4187,7 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            session_store: Arc::new(InMemorySessionStore::new()),
         };
         let headers = HeaderMap::new();
         assert_eq!(
@@ -4690,6 +4735,7 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            session_store: Arc::new(InMemorySessionStore::new()),
         });
 
         let app = build_router(Arc::clone(&state));
@@ -4765,6 +4811,7 @@ mod tests {
                     SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
                 ),
                 kill_switch: Arc::new(KillSwitch::new()),
+                session_store: Arc::new(InMemorySessionStore::new()),
             })
         };
         let app = build_router(state);

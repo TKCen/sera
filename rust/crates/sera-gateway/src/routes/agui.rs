@@ -6,17 +6,17 @@
 #![allow(dead_code)]
 
 use axum::{
+    Json,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::sse::{Event, KeepAlive, Sse},
-    Json,
 };
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use futures_util::StreamExt;
 
 use sera_agui::AgUiEvent;
 
@@ -38,9 +38,7 @@ impl AguiHub {
 
     /// Subscribe a new client. Returns a `ChannelSink` for emitting and a
     /// receiver stream for the SSE handler to drain.
-    pub fn subscribe(
-        &mut self,
-    ) -> tokio::sync::mpsc::UnboundedReceiver<AgUiEvent> {
+    pub fn subscribe(&mut self) -> tokio::sync::mpsc::UnboundedReceiver<AgUiEvent> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         self.senders.push(tx);
         rx
@@ -120,11 +118,7 @@ where
 
     let event_stream = UnboundedReceiverStream::new(rx).map(|agui_event| {
         let data = agui_event.to_sse_data().unwrap_or_else(|_| "{}".into());
-        Ok::<Event, Infallible>(
-            Event::default()
-                .event(agui_event.event_type())
-                .data(data),
-        )
+        Ok::<Event, Infallible>(Event::default().event(agui_event.event_type()).data(data))
     });
 
     Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()))
@@ -160,10 +154,10 @@ where
 mod tests {
     use super::*;
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode},
         routing::{get, post},
-        Router,
     };
     use tower::ServiceExt;
 

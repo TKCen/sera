@@ -34,9 +34,9 @@ impl StdioTransport {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        let child = cmd.spawn().map_err(|e| {
-            TransportError::ConnectionFailed(format!("failed to spawn: {e}"))
-        })?;
+        let child = cmd
+            .spawn()
+            .map_err(|e| TransportError::ConnectionFailed(format!("failed to spawn: {e}")))?;
 
         Ok(Self {
             child: Arc::new(Mutex::new(child)),

@@ -165,7 +165,9 @@ impl EvolveTokenSigner {
     /// signer that always fails verification with [`EvolveTokenError::EmptySecret`].
     pub fn new(secret: impl Into<Vec<u8>>) -> Self {
         Self {
-            current: Arc::new(RwLock::new(SigningKey { secret: secret.into() })),
+            current: Arc::new(RwLock::new(SigningKey {
+                secret: secret.into(),
+            })),
             history: Arc::new(RwLock::new(RotationHistory::default())),
             grace: Duration::from_secs(ROTATION_GRACE_SECS),
         }
@@ -174,7 +176,9 @@ impl EvolveTokenSigner {
     /// Create a signer with a custom grace period. Primarily for tests.
     pub fn with_grace(secret: impl Into<Vec<u8>>, grace: Duration) -> Self {
         Self {
-            current: Arc::new(RwLock::new(SigningKey { secret: secret.into() })),
+            current: Arc::new(RwLock::new(SigningKey {
+                secret: secret.into(),
+            })),
             history: Arc::new(RwLock::new(RotationHistory::default())),
             grace,
         }
@@ -200,7 +204,9 @@ impl EvolveTokenSigner {
 
         // Archive the old key.
         history_guard.push(HistoryEntry {
-            key: SigningKey { secret: current_guard.secret.clone() },
+            key: SigningKey {
+                secret: current_guard.secret.clone(),
+            },
             rotated_at: Instant::now(),
         });
 
@@ -266,11 +272,7 @@ impl EvolveTokenSigner {
         // key. That is adequate for signing: both signer and verifier use
         // the same Rust binary, so the exact byte layout only needs to be
         // reproducible across a single process.
-        let mut scopes: Vec<String> = token
-            .scopes
-            .iter()
-            .map(|s| format!("{s:?}"))
-            .collect();
+        let mut scopes: Vec<String> = token.scopes.iter().map(|s| format!("{s:?}")).collect();
         scopes.sort();
         out.extend_from_slice(&(scopes.len() as u32).to_le_bytes());
         for s in &scopes {
@@ -352,12 +354,10 @@ impl EvolveTokenSigner {
         } else {
             // Try grace-period keys from history.
             let history_guard = self.history.read().expect("history RwLock poisoned");
-            history_guard
-                .active_grace_keys(self.grace)
-                .any(|k| {
-                    let exp = Self::mac_with_key(&k.secret, token);
-                    constant_time_eq_64(&exp, &token.signature)
-                })
+            history_guard.active_grace_keys(self.grace).any(|k| {
+                let exp = Self::mac_with_key(&k.secret, token);
+                constant_time_eq_64(&exp, &token.signature)
+            })
         };
 
         if !sig_ok {
@@ -386,9 +386,7 @@ impl EvolveTokenSigner {
 
 /// Error returned when a token has exhausted its `max_proposals` budget.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[error(
-    "proposal limit reached for token '{token_id}': max_proposals={limit}"
-)]
+#[error("proposal limit reached for token '{token_id}': max_proposals={limit}")]
 pub struct ProposalLimitError {
     pub token_id: String,
     pub limit: u32,
@@ -425,10 +423,7 @@ impl ProposalUsageTracker {
     /// Returns `Ok(())` when `used < max_proposals` and the counter has been
     /// bumped. Returns [`ProposalLimitError`] when `used >= max_proposals`;
     /// the counter is **not** incremented in that case.
-    pub fn check_and_record(
-        &self,
-        token: &CapabilityToken,
-    ) -> Result<(), ProposalLimitError> {
+    pub fn check_and_record(&self, token: &CapabilityToken) -> Result<(), ProposalLimitError> {
         let mut counts = self.counts.lock().expect("proposal_usage mutex poisoned");
         let used = counts.entry(token.id.clone()).or_insert(0);
         if *used >= token.max_proposals {
@@ -646,7 +641,11 @@ mod tests {
         signer.rotate(b"key-a".to_vec());
         // The history should be empty — no entry should have been pushed.
         let history = signer.history.read().expect("poisoned");
-        assert_eq!(history.entries.len(), 0, "same-key rotate must not push history");
+        assert_eq!(
+            history.entries.len(),
+            0,
+            "same-key rotate must not push history"
+        );
     }
 
     #[test]
@@ -767,9 +766,14 @@ mod tests {
         let tok_y = tracker_token("tok-y", 1);
         // Exhaust tok-x
         tracker.check_and_record(&tok_x).expect("tok-x first ok");
-        tracker.check_and_record(&tok_x).expect_err("tok-x second fails");
+        tracker
+            .check_and_record(&tok_x)
+            .expect_err("tok-x second fails");
         // tok-y is still fresh
-        assert!(tracker.check_and_record(&tok_y).is_ok(), "tok-y should succeed");
+        assert!(
+            tracker.check_and_record(&tok_y).is_ok(),
+            "tok-y should succeed"
+        );
     }
 
     #[test]
@@ -778,8 +782,13 @@ mod tests {
         let tracker = ProposalUsageTracker::new();
         let tok = tracker_token("tok-r", 1);
         tracker.check_and_record(&tok).expect("first ok");
-        tracker.check_and_record(&tok).expect_err("should be exhausted");
+        tracker
+            .check_and_record(&tok)
+            .expect_err("should be exhausted");
         tracker.reset("tok-r");
-        assert!(tracker.check_and_record(&tok).is_ok(), "after reset should succeed");
+        assert!(
+            tracker.check_and_record(&tok).is_ok(),
+            "after reset should succeed"
+        );
     }
 }

@@ -38,7 +38,14 @@ fn file_appender_hourly_builds_without_panic() {
 /// `SERA_LOG_LEVEL` parsing — verify common filter strings don't crash.
 #[test]
 fn log_level_filter_parses() {
-    for level in ["info", "debug", "warn", "error", "trace", "info,sera_gateway=debug"] {
+    for level in [
+        "info",
+        "debug",
+        "warn",
+        "error",
+        "trace",
+        "info,sera_gateway=debug",
+    ] {
         let filter = tracing_subscriber::EnvFilter::new(level);
         drop(filter);
     }

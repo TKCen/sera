@@ -138,7 +138,10 @@ async fn lane_run_guard_drop_does_not_race_with_drain() {
         !outcome.timed_out,
         "drain must not time out after synchronous complete_run"
     );
-    assert_eq!(outcome.remaining, 0, "no remaining jobs after sync complete_run");
+    assert_eq!(
+        outcome.remaining, 0,
+        "no remaining jobs after sync complete_run"
+    );
     assert!(queue.lock().await.is_closed());
 }
 

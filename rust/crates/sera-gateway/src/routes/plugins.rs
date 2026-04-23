@@ -7,9 +7,9 @@
 #![allow(dead_code)]
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -110,10 +110,7 @@ where
 
     let registry = state.plugin_registry();
     // Verify the plugin exists; return 404 if not.
-    let _info = registry
-        .get(&id)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+    let _info = registry.get(&id).await.map_err(|_| StatusCode::NOT_FOUND)?;
 
     // gRPC dispatch not yet implemented — return 501 with a stub response.
     // Filed as follow-up: full gRPC wiring via tonic.
@@ -148,10 +145,10 @@ where
 mod tests {
     use super::*;
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode},
         routing::{get, post},
-        Router,
     };
     use sera_plugins::{
         GrpcTransportConfig, PluginCapability, PluginRegistration, PluginTransport, PluginVersion,

@@ -1,8 +1,8 @@
 //! Discord Gateway connector — connects via raw WebSocket, handles heartbeat,
 //! and dispatches MESSAGE_CREATE events through an mpsc channel.
 
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
@@ -107,10 +107,7 @@ pub fn parse_heartbeat_interval(payload: &Value) -> Option<u64> {
     if payload.get("op")?.as_u64()? != OP_HELLO {
         return None;
     }
-    payload
-        .get("d")?
-        .get("heartbeat_interval")?
-        .as_u64()
+    payload.get("d")?.get("heartbeat_interval")?.as_u64()
 }
 
 /// Strip Discord mention tags (`<@123>` and `<@!123>`) from a message string,
@@ -121,10 +118,7 @@ pub fn strip_mentions(content: &str) -> String {
         LazyLock::new(|| regex::Regex::new(r"<@!?\d+>").expect("valid regex"));
     let stripped = RE.replace_all(content, "");
     // Collapse multiple spaces and trim edges
-    stripped
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    stripped.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Try to extract a `DiscordMessage` from a Dispatch (opcode 0) payload
@@ -132,7 +126,7 @@ pub fn strip_mentions(content: &str) -> String {
 ///
 /// Returns `None` if the payload is not a MESSAGE_CREATE dispatch, or if the
 /// message author is a bot.
-/// 
+///
 /// The `is_dm` and `mentions_bot` fields are set based on the raw payload data.
 pub fn parse_message_create(payload: &Value, bot_user_id: Option<&str>) -> Option<DiscordMessage> {
     if payload.get("op")?.as_u64()? != OP_DISPATCH {
@@ -154,9 +148,10 @@ pub fn parse_message_create(payload: &Value, bot_user_id: Option<&str>) -> Optio
     let mentions_bot = if let Some(bot_id) = bot_user_id {
         d.get("mentions")
             .and_then(|m| m.as_array())
-            .map(|arr| arr.iter().any(|u| {
-                u.get("id").and_then(Value::as_str) == Some(bot_id)
-            }))
+            .map(|arr| {
+                arr.iter()
+                    .any(|u| u.get("id").and_then(Value::as_str) == Some(bot_id))
+            })
             .unwrap_or(false)
     } else {
         false
@@ -351,7 +346,10 @@ impl DiscordConnector {
             sequence.store(s, Ordering::Relaxed);
         }
 
-        let op = payload.get("op").and_then(Value::as_u64).unwrap_or(u64::MAX);
+        let op = payload
+            .get("op")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX);
 
         match op {
             OP_DISPATCH => {

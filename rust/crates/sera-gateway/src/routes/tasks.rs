@@ -6,8 +6,11 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use sera_db::tasks::TaskRepository;
+use sera_gateway::envelope::{Op, Submission, W3cTraceContext};
+use sera_gateway::session_store::SessionStore as _;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -91,6 +94,38 @@ pub async fn enqueue_task(
     Path(agent_id): Path<String>,
     Json(body): Json<EnqueueTaskRequest>,
 ) -> Result<(StatusCode, Json<TaskResponse>), AppError> {
+    // Emit a Submission envelope before the DB write so this action is
+    // auditable and replayable even if the write fails.
+    //
+    // Spec shape decision (bead sera-r1g8): task enqueue has no dedicated
+    // Op variant yet. We use Op::UserTurn with a single Text item carrying
+    // the task description — consistent with how chat messages are wrapped —
+    // and set approval_policy to the agent id for correlation. A dedicated
+    // Op::Task variant is deferred until the task-queue spec is finalised.
+    let envelope = Submission {
+        id: Uuid::new_v4(),
+        op: Op::UserTurn {
+            items: vec![sera_types::content_block::ContentBlock::Text {
+                text: body.task.clone(),
+            }],
+            cwd: None,
+            approval_policy: Some(agent_id.clone()),
+            sandbox_policy: None,
+            model_override: None,
+            effort: None,
+            final_output_schema: body.context.clone(),
+        },
+        trace: W3cTraceContext::default(),
+        change_artifact: None,
+    };
+    if let Err(e) = state
+        .session_store
+        .append_envelope(&agent_id, &envelope)
+        .await
+    {
+        tracing::warn!(error = %e, agent_id = %agent_id, "session_store.append_envelope failed for enqueue_task; continuing");
+    }
+
     let row = TaskRepository::enqueue(
         state.db.inner(),
         &agent_id,
@@ -125,9 +160,39 @@ pub struct SubmitResultRequest {
 /// POST /api/agents/:id/tasks/:taskId/result
 pub async fn submit_task_result(
     State(state): State<AppState>,
-    Path((_agent_id, task_id)): Path<(String, String)>,
+    Path((agent_id, task_id)): Path<(String, String)>,
     Json(body): Json<SubmitResultRequest>,
 ) -> Result<Json<TaskResponse>, AppError> {
+    // Emit envelope before the DB write — task result submission is an
+    // observable mutation (changes task status from running → completed/failed).
+    //
+    // Spec shape decision (bead sera-r1g8): same Op::UserTurn approach as
+    // enqueue_task. The result payload is carried in final_output_schema so
+    // replay tooling can reconstruct the outcome without a separate DB query.
+    let envelope = Submission {
+        id: Uuid::new_v4(),
+        op: Op::UserTurn {
+            items: vec![sera_types::content_block::ContentBlock::Text {
+                text: format!("task_result:{task_id}"),
+            }],
+            cwd: None,
+            approval_policy: Some(agent_id.clone()),
+            sandbox_policy: None,
+            model_override: None,
+            effort: None,
+            final_output_schema: body.result.clone(),
+        },
+        trace: W3cTraceContext::default(),
+        change_artifact: None,
+    };
+    if let Err(e) = state
+        .session_store
+        .append_envelope(&agent_id, &envelope)
+        .await
+    {
+        tracing::warn!(error = %e, agent_id = %agent_id, task_id = %task_id, "session_store.append_envelope failed for submit_task_result; continuing");
+    }
+
     let row = TaskRepository::submit_result(
         state.db.inner(),
         &task_id,

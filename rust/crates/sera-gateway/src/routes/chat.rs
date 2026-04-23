@@ -13,6 +13,7 @@ use std::convert::Infallible;
 
 use sera_gateway::envelope::{EventMsg, Op, Submission, W3cTraceContext};
 use sera_gateway::harness_dispatch;
+use sera_gateway::session_store::SessionStore as _;
 use crate::error::AppError;
 use crate::state::AppState;
 use sera_db::lane_queue::EnqueueResult;
@@ -276,6 +277,33 @@ pub async fn chat(
             .into_response());
     }
 
+    // 2b. Emit Submission envelope — every admitted chat turn is an observable
+    // action that must flow through the SessionStore for auditability and
+    // replay (SPEC-gateway §3, sera-r1g8).
+    let chat_envelope = Submission {
+        id: uuid::Uuid::new_v4(),
+        op: Op::UserTurn {
+            items: vec![ContentBlock::Text {
+                text: body.message.clone(),
+            }],
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            model_override: None,
+            effort: None,
+            final_output_schema: None,
+        },
+        trace: W3cTraceContext::default(),
+        change_artifact: None,
+    };
+    if let Err(e) = state
+        .session_store
+        .append_envelope(&session_id, &chat_envelope)
+        .await
+    {
+        tracing::warn!(error = %e, agent_id = %agent_id, session_id = %session_id, "session_store.append_envelope failed for chat; continuing");
+    }
+
     // Hold a guard that releases the active lane run on every exit path
     // (Ok, Err, or panic). This matches the `lq.complete_run(&session_key)`
     // calls that follow `execute_turn` in bin/sera.rs.
@@ -284,7 +312,7 @@ pub async fn chat(
         session_key: session_key.clone(),
     };
 
-    // 2b. Enqueue the chat task onto the LaneQueue so the runtime worker loop
+    // 2c. Enqueue the chat task onto the LaneQueue so the runtime worker loop
     // can observe / replay / process it. The gateway still dispatches
     // synchronously below to produce the HTTP response; the runtime consumer
     // is wired separately via sera-runtime's worker loop (not yet implemented).

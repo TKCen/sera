@@ -11,7 +11,7 @@ use sera_commands::CommandRegistry;
 /// Build the default command registry with all CLI commands registered.
 pub fn build_registry() -> CommandRegistry {
     let mut registry = CommandRegistry::new();
-    registry.register(commands::PingCommand);
+    registry.register(commands::HealthCheckCommand);
     registry.register(commands::LoginCommand::new());
     registry.register(commands::WhoamiCommand::new());
     registry.register(commands::LogoutCommand::new());

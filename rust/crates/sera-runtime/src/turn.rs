@@ -159,7 +159,7 @@ pub struct TurnContext {
     pub change_artifact: Option<String>,
     pub react_mode: ReactMode,
     pub doom_loop_count: u32,
-    pub enforcement_mode: sera_hitl::EnforcementMode,
+    pub enforcement_mode: sera_hitl::HitlMode,
     pub approval_routing: sera_hitl::ApprovalRouting,
     /// Pending steer event from the lane queue (injected at next tool boundary).
     /// Set by the gateway when the session has a queued steer message.
@@ -837,7 +837,7 @@ mod tests {
             change_artifact: None,
             react_mode: ReactMode::Default,
             doom_loop_count: 0,
-            enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
+            enforcement_mode: sera_hitl::HitlMode::Autonomous,
             approval_routing: sera_hitl::ApprovalRouting::Autonomous,
             pending_steer: None,
             tool_use_behavior: ToolUseBehavior::Auto,
@@ -1121,7 +1121,7 @@ mod tests {
     #[tokio::test]
     async fn act_hitl_strict_mode_returns_waiting_for_approval() {
         let mut ctx = make_turn_ctx(vec![]);
-        ctx.enforcement_mode = sera_hitl::EnforcementMode::Strict;
+        ctx.enforcement_mode = sera_hitl::HitlMode::Strict;
         ctx.approval_routing = sera_hitl::ApprovalRouting::Static {
             targets: vec![sera_hitl::ApprovalTarget::Role { name: "admin".to_string() }],
         };

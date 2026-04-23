@@ -11,4 +11,4 @@ pub mod ping;
 pub use agent::{AgentListCommand, AgentRunCommand, AgentShowCommand};
 pub use auth::{LoginCommand, LogoutCommand, WhoamiCommand};
 pub use chat::ChatCommand;
-pub use ping::PingCommand;
+pub use ping::HealthCheckCommand;

@@ -37,7 +37,7 @@ async fn ping_fails_on_non_success_status() {
     assert!(result.is_err(), "expected error for 503 response");
 }
 
-/// Verify the registry wires up PingCommand correctly.
+/// Verify the registry wires up HealthCheckCommand correctly.
 #[test]
 fn registry_contains_ping() {
     let registry = sera_cli::build_registry();

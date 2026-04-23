@@ -43,6 +43,24 @@ pub use versioning::BuildIdentity;
 
 use serde::{Deserialize, Serialize};
 
+/// Three-state circuit-breaker state shared across model routing and plugin failure isolation.
+///
+/// Transitions:
+/// - `Closed` → `Open` after threshold failures
+/// - `Open` → `HalfOpen` after cooldown elapses
+/// - `HalfOpen` → `Closed` on success; `HalfOpen` → `Open` on failure
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CircuitState {
+    /// Normal operation — requests pass through.
+    #[default]
+    Closed,
+    /// Cooldown has elapsed; a single probe is allowed through to test recovery.
+    HalfOpen,
+    /// Tripped — requests are rejected until cooldown elapses.
+    Open,
+}
+
 /// Lifecycle mode for agent instances.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

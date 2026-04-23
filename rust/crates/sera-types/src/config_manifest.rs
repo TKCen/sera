@@ -136,11 +136,12 @@ pub struct ConfigManifest {
 impl ConfigManifest {
     /// Parse and validate a RawManifest into a ConfigManifest.
     pub fn from_raw(raw: RawManifest) -> Result<Self, ConfigManifestError> {
-        let api_version = ApiVersion::parse(&raw.api_version).ok_or_else(|| {
-            ConfigManifestError::InvalidApiVersion(raw.api_version.clone())
-        })?;
+        let api_version = ApiVersion::parse(&raw.api_version)
+            .ok_or_else(|| ConfigManifestError::InvalidApiVersion(raw.api_version.clone()))?;
 
-        let kind = raw.kind.parse::<ResourceKind>()
+        let kind = raw
+            .kind
+            .parse::<ResourceKind>()
             .map_err(|_| ConfigManifestError::UnknownKind(raw.kind.clone()))?;
 
         Ok(Self {
@@ -343,7 +344,13 @@ spec:
         let spec: AgentSpec = serde_json::from_value(manifest.spec).unwrap();
         assert_eq!(spec.provider, "lm-studio");
         assert_eq!(spec.model.as_deref(), Some("gemma-4-12b"));
-        assert!(spec.persona.unwrap().immutable_anchor.unwrap().contains("Sera"));
+        assert!(
+            spec.persona
+                .unwrap()
+                .immutable_anchor
+                .unwrap()
+                .contains("Sera")
+        );
         assert_eq!(spec.tools.unwrap().allow.len(), 4);
     }
 
@@ -422,6 +429,9 @@ spec: {}
 "#;
         let raw: RawManifest = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(raw.metadata.labels.get("env").unwrap(), "local");
-        assert_eq!(raw.metadata.annotations.get("description").unwrap(), "Test instance");
+        assert_eq!(
+            raw.metadata.annotations.get("description").unwrap(),
+            "Test instance"
+        );
     }
 }

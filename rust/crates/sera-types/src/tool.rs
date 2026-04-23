@@ -99,7 +99,9 @@ pub fn tool_is_allowed(tool_name: &str, allow_patterns: &[String]) -> bool {
     if allow_patterns.is_empty() {
         return true; // Empty allow list = allow all
     }
-    allow_patterns.iter().any(|p| tool_matches_pattern(tool_name, p))
+    allow_patterns
+        .iter()
+        .any(|p| tool_matches_pattern(tool_name, p))
 }
 
 // ── Spec-aligned Tool architecture (SPEC-tools) ─────────────────────────────
@@ -185,7 +187,11 @@ impl ToolPolicy {
     /// Check if a tool is allowed by this policy.
     /// Deny patterns take precedence over allow patterns.
     pub fn allows(&self, tool_name: &str) -> bool {
-        if self.deny_patterns.iter().any(|p| tool_matches_pattern(tool_name, p)) {
+        if self
+            .deny_patterns
+            .iter()
+            .any(|p| tool_matches_pattern(tool_name, p))
+        {
             return false;
         }
         tool_is_allowed(tool_name, &self.allow_patterns)
@@ -1026,7 +1032,9 @@ mod tests {
         assert!(!ToolUseBehavior::Required.forbids_tools());
         assert!(ToolUseBehavior::Required.forced_name().is_none());
 
-        let specific = ToolUseBehavior::Specific { name: "read_file".to_string() };
+        let specific = ToolUseBehavior::Specific {
+            name: "read_file".to_string(),
+        };
         assert!(specific.is_forced());
         assert!(!specific.forbids_tools());
         assert_eq!(specific.forced_name(), Some("read_file"));
@@ -1038,7 +1046,9 @@ mod tests {
             ToolUseBehavior::Auto,
             ToolUseBehavior::None,
             ToolUseBehavior::Required,
-            ToolUseBehavior::Specific { name: "shell".to_string() },
+            ToolUseBehavior::Specific {
+                name: "shell".to_string(),
+            },
         ];
         for behavior in cases {
             let json = serde_json::to_string(&behavior).unwrap();
@@ -1061,16 +1071,32 @@ mod tests {
 
         let specific: ToolUseBehavior =
             serde_json::from_str(r#"{"mode":"specific","name":"read_file"}"#).unwrap();
-        assert_eq!(specific, ToolUseBehavior::Specific { name: "read_file".to_string() });
+        assert_eq!(
+            specific,
+            ToolUseBehavior::Specific {
+                name: "read_file".to_string()
+            }
+        );
     }
 
     #[test]
     fn tool_use_behavior_openai_translator() {
-        assert_eq!(ToolUseBehavior::Auto.to_openai_tool_choice(), serde_json::json!("auto"));
-        assert_eq!(ToolUseBehavior::None.to_openai_tool_choice(), serde_json::json!("none"));
-        assert_eq!(ToolUseBehavior::Required.to_openai_tool_choice(), serde_json::json!("required"));
-        let tc = ToolUseBehavior::Specific { name: "read_file".to_string() }
-            .to_openai_tool_choice();
+        assert_eq!(
+            ToolUseBehavior::Auto.to_openai_tool_choice(),
+            serde_json::json!("auto")
+        );
+        assert_eq!(
+            ToolUseBehavior::None.to_openai_tool_choice(),
+            serde_json::json!("none")
+        );
+        assert_eq!(
+            ToolUseBehavior::Required.to_openai_tool_choice(),
+            serde_json::json!("required")
+        );
+        let tc = ToolUseBehavior::Specific {
+            name: "read_file".to_string(),
+        }
+        .to_openai_tool_choice();
         assert_eq!(tc["type"], "function");
         assert_eq!(tc["function"]["name"], "read_file");
     }
@@ -1089,8 +1115,10 @@ mod tests {
             ToolUseBehavior::Required.to_anthropic_tool_choice(),
             serde_json::json!({"type": "any"})
         );
-        let tc = ToolUseBehavior::Specific { name: "shell".to_string() }
-            .to_anthropic_tool_choice();
+        let tc = ToolUseBehavior::Specific {
+            name: "shell".to_string(),
+        }
+        .to_anthropic_tool_choice();
         assert_eq!(tc["type"], "tool");
         assert_eq!(tc["name"], "shell");
     }
@@ -1098,13 +1126,21 @@ mod tests {
     #[test]
     fn tool_use_behavior_validation_auto_always_valid() {
         assert!(ToolUseBehavior::Auto.validate(&[]).is_ok());
-        assert!(ToolUseBehavior::Auto.validate(&["any_tool".to_string()]).is_ok());
+        assert!(
+            ToolUseBehavior::Auto
+                .validate(&["any_tool".to_string()])
+                .is_ok()
+        );
     }
 
     #[test]
     fn tool_use_behavior_validation_none_always_valid() {
         assert!(ToolUseBehavior::None.validate(&[]).is_ok());
-        assert!(ToolUseBehavior::None.validate(&["any_tool".to_string()]).is_ok());
+        assert!(
+            ToolUseBehavior::None
+                .validate(&["any_tool".to_string()])
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1127,18 +1163,22 @@ mod tests {
     fn tool_use_behavior_validation_specific_known_tool_ok() {
         let tools = vec!["read_file".to_string(), "write_file".to_string()];
         assert!(
-            ToolUseBehavior::Specific { name: "read_file".to_string() }
-                .validate(&tools)
-                .is_ok()
+            ToolUseBehavior::Specific {
+                name: "read_file".to_string()
+            }
+            .validate(&tools)
+            .is_ok()
         );
     }
 
     #[test]
     fn tool_use_behavior_validation_specific_unknown_tool_fails() {
         let tools = vec!["read_file".to_string()];
-        let err = ToolUseBehavior::Specific { name: "shell".to_string() }
-            .validate(&tools)
-            .unwrap_err();
+        let err = ToolUseBehavior::Specific {
+            name: "shell".to_string(),
+        }
+        .validate(&tools)
+        .unwrap_err();
         match &err {
             ToolUseValidationError::UnknownTool { name, available } => {
                 assert_eq!(name, "shell");
@@ -1152,9 +1192,11 @@ mod tests {
 
     #[test]
     fn tool_use_behavior_validation_specific_empty_tools_fails() {
-        let err = ToolUseBehavior::Specific { name: "shell".to_string() }
-            .validate(&[])
-            .unwrap_err();
+        let err = ToolUseBehavior::Specific {
+            name: "shell".to_string(),
+        }
+        .validate(&[])
+        .unwrap_err();
         assert!(matches!(err, ToolUseValidationError::UnknownTool { .. }));
     }
 }

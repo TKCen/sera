@@ -364,17 +364,27 @@ mod tests {
         );
 
         assert_eq!(
-            ModelError::RateLimited { retry_after_ms: Some(5000) }.to_string(),
+            ModelError::RateLimited {
+                retry_after_ms: Some(5000)
+            }
+            .to_string(),
             "rate limited (retry after Some(5000) ms)"
         );
 
         assert_eq!(
-            ModelError::RateLimited { retry_after_ms: None }.to_string(),
+            ModelError::RateLimited {
+                retry_after_ms: None
+            }
+            .to_string(),
             "rate limited (retry after None ms)"
         );
 
         assert_eq!(
-            ModelError::ContextLengthExceeded { limit: 4096, requested: 5000 }.to_string(),
+            ModelError::ContextLengthExceeded {
+                limit: 4096,
+                requested: 5000
+            }
+            .to_string(),
             "context length exceeded: limit 4096, requested 5000"
         );
 

@@ -68,7 +68,10 @@ fn context_memory_alias_yaml_roundtrip() {
 #[test]
 fn unknown_hook_point_name_fails() {
     let result = serde_json::from_str::<HookPoint>("\"not_a_real_point\"");
-    assert!(result.is_err(), "unknown hook point name should fail to parse");
+    assert!(
+        result.is_err(),
+        "unknown hook point name should fail to parse"
+    );
 }
 
 #[test]

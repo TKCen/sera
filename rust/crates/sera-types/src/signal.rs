@@ -44,10 +44,7 @@ pub enum Signal {
         requires: Vec<AgentCapability>,
     },
     /// Human review requested. Always routed to HITL.
-    Review {
-        artifact_id: String,
-        prompt: String,
-    },
+    Review { artifact_id: String, prompt: String },
     /// Agent started working on a task.
     Started {
         task_id: String,
@@ -169,7 +166,11 @@ pub struct Dispatch {
     #[serde(default)]
     pub signal_on: Vec<SignalType>,
     /// Optional timeout for the whole dispatch.
-    #[serde(default, with = "duration_ms_opt", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "duration_ms_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub timeout: Option<Duration>,
     #[serde(default)]
     pub retry_policy: RetryPolicy,
@@ -189,10 +190,7 @@ impl Dispatch {
 mod duration_ms_opt {
     use super::*;
 
-    pub fn serialize<S: serde::Serializer>(
-        v: &Option<Duration>,
-        s: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: serde::Serializer>(v: &Option<Duration>, s: S) -> Result<S::Ok, S::Error> {
         match v {
             Some(d) => s.serialize_some(&(d.as_millis() as u64)),
             None => s.serialize_none(),

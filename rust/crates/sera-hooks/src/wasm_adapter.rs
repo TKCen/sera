@@ -98,7 +98,7 @@ pub struct WasmHookMetadata {
 #[cfg(feature = "wasm")]
 struct StoreData {
     limits: wasmtime::StoreLimits,
-    wasi: wasmtime_wasi::preview1::WasiP1Ctx,
+    wasi: wasmtime_wasi::p1::WasiP1Ctx,
 }
 
 // ── WASM Hook Adapter ─────────────────────────────────────────────────────────
@@ -212,7 +212,7 @@ impl WasmHookAdapter {
 
                 // Link WASI preview-1.
                 let mut linker: Linker<StoreData> = Linker::new(&engine);
-                wasmtime_wasi::preview1::add_to_linker_sync(&mut linker, |data| &mut data.wasi)
+                wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |data| &mut data.wasi)
                     .map_err(|e| WasmError::Linking(e.to_string()))?;
 
                 let instance = linker

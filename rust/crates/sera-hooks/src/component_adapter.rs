@@ -172,8 +172,8 @@ fn host_state_set(caps: &ComponentCapabilities, key: String, mut value: String) 
 }
 
 fn host_emit_audit(caps: &ComponentCapabilities, event_type: String, payload_json: String) {
-    let payload = serde_json::from_str::<JsonValue>(&payload_json)
-        .unwrap_or_else(|_| JsonValue::String(payload_json));
+    let payload =
+        serde_json::from_str::<JsonValue>(&payload_json).unwrap_or(JsonValue::String(payload_json));
     caps.audit_events
         .lock()
         .expect("audit lock poisoned")
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_bytes() {
-        let err = ComponentAdapter::from_bytes(&[0u8, 1, 2], meta("bad"), WasmConfig::default())
+        let err = ComponentAdapter::from_bytes([0u8, 1, 2], meta("bad"), WasmConfig::default())
             .unwrap_err();
         assert!(matches!(err, ComponentError::Load(_)));
     }

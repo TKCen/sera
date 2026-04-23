@@ -20,7 +20,7 @@ pub enum RuntimeManifest {
         #[serde(rename = "apiVersion")]
         api_version: String,
         kind: String,
-        metadata: ManifestMetadata,
+        metadata: AgentManifestMetadata,
         spec: AgentSpec,
     },
     /// Flat format (legacy): identity and model at top-level
@@ -28,7 +28,7 @@ pub enum RuntimeManifest {
         #[serde(rename = "apiVersion")]
         api_version: String,
         kind: String,
-        metadata: ManifestMetadata,
+        metadata: AgentManifestMetadata,
         identity: IdentityConfig,
         model: ModelConfig,
         #[serde(default)]
@@ -50,7 +50,7 @@ pub enum RuntimeManifest {
 
 /// Manifest metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ManifestMetadata {
+pub struct AgentManifestMetadata {
     pub name: String,
     #[serde(default)]
     pub namespace: String,
@@ -437,7 +437,7 @@ mod tests {
         let manifest = RuntimeManifest::SpecWrapped {
             api_version: "v1".to_string(),
             kind: "Agent".to_string(),
-            metadata: ManifestMetadata {
+            metadata: AgentManifestMetadata {
                 name: "test-agent".to_string(),
                 namespace: "default".to_string(),
                 labels: BTreeMap::new(),

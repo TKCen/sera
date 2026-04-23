@@ -6,6 +6,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
+pub use sera_types::connector::ConnectorError;
+
 /// Connector trait — delivers and receives messages from external channels.
 #[async_trait]
 pub trait Connector: Send + Sync {
@@ -14,15 +16,6 @@ pub trait Connector: Send + Sync {
 
     /// Human-readable name of this connector.
     fn name(&self) -> &str;
-}
-
-/// Connector errors.
-#[derive(Debug, thiserror::Error)]
-pub enum ConnectorError {
-    #[error("delivery failed: {0}")]
-    DeliveryFailed(String),
-    #[error("channel not found: {0}")]
-    ChannelNotFound(String),
 }
 
 /// Registry of active connectors.

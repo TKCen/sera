@@ -83,6 +83,8 @@ pub enum ConnectorError {
     NotConnected,
     #[error("configuration error: {0}")]
     ConfigError(String),
+    #[error("channel not found: {0}")]
+    ChannelNotFound(String),
 }
 
 // ── OutboundMessage ───────────────────────────────────────────────────────────

@@ -1,0 +1,95 @@
+[build-system]
+requires = ["hatchling>=1.22"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sera-context-lcm"
+version = "0.1.0"
+description = "SERA ContextEngine plugin — wraps hermes-agent's Lossless Context Management"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+authors = [{ name = "SERA Contributors" }]
+keywords = ["sera", "plugin", "context-engine", "lcm", "hermes"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+  "sera-plugin-sdk",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "mypy>=1.10",
+  "ruff>=0.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/sera-project/sera"
+Issues = "https://github.com/sera-project/sera/issues"
+
+[project.scripts]
+sera-context-lcm = "sera_context_lcm.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sera_context_lcm"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src",
+  "README.md",
+  "LICENSE",
+  "plugin.yaml",
+  "pyproject.toml",
+]
+
+[tool.hatch.envs.default]
+dependencies = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "mypy>=1.10",
+  "ruff>=0.5",
+]
+
+[tool.hatch.envs.default.scripts]
+test = "pytest -q {args:tests}"
+lint = "ruff check src tests"
+typecheck = "mypy src"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["src/sera_context_lcm/_lcm_core"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B018"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+packages = ["sera_context_lcm"]
+mypy_path = "src"
+ignore_missing_imports = true
+exclude = ["_lcm_core/"]
+
+[[tool.mypy.overrides]]
+module = "sera_context_lcm._lcm_core.*"
+ignore_errors = true
+ignore_missing_imports = true

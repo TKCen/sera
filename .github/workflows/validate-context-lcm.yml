@@ -1,0 +1,58 @@
+name: CI — Validate context-lcm plugin
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "sdk/python/sera-context-lcm/**"
+      - "sdk/python/sera-plugin-sdk/**"
+      - "rust/proto/plugin/**"
+      - ".github/workflows/validate-context-lcm.yml"
+  push:
+    branches: [main]
+    paths:
+      - "sdk/python/sera-context-lcm/**"
+      - "sdk/python/sera-plugin-sdk/**"
+      - "rust/proto/plugin/**"
+      - ".github/workflows/validate-context-lcm.yml"
+
+jobs:
+  validate-context-lcm:
+    name: validate-context-lcm
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install hatch
+
+      - name: Install sera-plugin-sdk (editable)
+        working-directory: sdk/python/sera-plugin-sdk
+        run: python -m pip install -e '.[dev]'
+
+      - name: Install sera-context-lcm (editable + dev)
+        working-directory: sdk/python/sera-context-lcm
+        run: python -m pip install -e '.[dev]'
+
+      - name: Ruff
+        working-directory: sdk/python/sera-context-lcm
+        run: ruff check src tests
+
+      - name: Mypy
+        working-directory: sdk/python/sera-context-lcm
+        run: mypy src
+
+      - name: Pytest
+        working-directory: sdk/python/sera-context-lcm
+        run: pytest -q
+
+      - name: Build wheel
+        working-directory: sdk/python/sera-context-lcm
+        run: hatch build

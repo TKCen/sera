@@ -1,0 +1,19 @@
+apiVersion: sera.dev/v1
+kind: Plugin
+metadata:
+  name: sera-context-lcm
+  labels:
+    origin: "sera-yf9r"
+spec:
+  capabilities:
+    - ContextEngine
+  transport: stdio
+  stdio:
+    # command[0] must be an absolute path — sera never does $PATH resolution at
+    # spawn time (see rust/crates/sera-plugins/src/manifest.rs validate_stdio_command).
+    # Operators should adjust the interpreter path to the venv that owns the
+    # installed `sera-context-lcm` package.
+    command: ["/usr/bin/python3", "-m", "sera_context_lcm"]
+    env: {}
+  health_check_interval: 30s
+  version: "0.1.0"

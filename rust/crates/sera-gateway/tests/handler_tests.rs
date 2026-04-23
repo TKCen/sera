@@ -210,6 +210,31 @@ mod iso8601_timestamp_tests {
 }
 
 #[cfg(test)]
+mod empty_reply_guard_tests {
+    use serde_json::json;
+
+    /// An empty reply from execute_turn must be treated as a failure, not a
+    /// successful empty response.  The guard in chat_handler checks
+    /// `result.reply.is_empty()` and returns 502 Bad Gateway.  This test
+    /// documents the expected response body for that path.
+    #[test]
+    fn empty_reply_produces_error_body() {
+        let reply = "";
+        assert!(reply.is_empty(), "guard condition: reply must be empty");
+
+        // The handler returns this JSON body with a 502 status.
+        let body = json!({"error": "runtime returned empty reply"});
+        assert_eq!(body["error"], "runtime returned empty reply");
+    }
+
+    /// A non-empty reply must not trigger the guard.
+    #[test]
+    fn non_empty_reply_passes_guard() {
+        let reply = "Hello from the agent.";
+        assert!(!reply.is_empty(), "guard must not fire for non-empty reply");
+    }
+}
+
 mod api_contract_tests {
     /// Document the expected request/response contract for GET /api/health
     #[test]

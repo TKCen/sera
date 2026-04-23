@@ -29,7 +29,6 @@ pub mod metering;
 pub mod observability;
 pub mod policy;
 pub mod principal;
-pub mod queue;
 pub mod sandbox;
 pub mod secrets;
 pub mod session;

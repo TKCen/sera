@@ -28,7 +28,6 @@ pub mod principal;
 pub mod runtime;
 pub mod sandbox;
 pub mod secrets;
-pub mod session;
 pub mod signal;
 pub mod skill;
 pub mod tool;

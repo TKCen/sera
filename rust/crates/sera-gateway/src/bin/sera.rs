@@ -1349,7 +1349,13 @@ enum StreamState {
 /// lane slot is released by the caller after `execute_turn` returns, so a
 /// timeout here guarantees the slot is eventually freed even if the harness
 /// never responds. Override with `SERA_TURN_TIMEOUT_SECS`.
-const DEFAULT_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+///
+/// 10 minutes accommodates thinking models (Claude extended thinking, local
+/// reasoning models like qwen3.6-35b on modest hardware) that routinely take
+/// 2–5 minutes per turn, while still bounding a truly wedged runtime. Operators
+/// needing longer bounds (e.g. long multi-step tool chains) set
+/// `SERA_TURN_TIMEOUT_SECS`.
+const DEFAULT_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
 fn turn_timeout() -> std::time::Duration {
     std::env::var("SERA_TURN_TIMEOUT_SECS")

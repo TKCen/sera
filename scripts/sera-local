@@ -10,8 +10,8 @@
 #   sera-local --help               Show this help
 #
 # Defaults target a host-local LM Studio on :1234 with google/gemma-4-e2b loaded.
-# The manifest sets tier=local so the runtime's constitutional gate is permissive
-# (no HookChain required). Ctrl-C stops the gateway.
+# Set SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=1 to run without a HookChain.
+# Ctrl-C stops the gateway.
 
 set -euo pipefail
 
@@ -50,8 +50,7 @@ apiVersion: sera.dev/v1
 kind: Instance
 metadata:
   name: sera-local
-spec:
-  tier: local
+spec: {}
 ---
 apiVersion: sera.dev/v1
 kind: Provider

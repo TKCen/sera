@@ -10,8 +10,7 @@ apiVersion: sera.dev/v1
 kind: Instance
 metadata:
   name: my-sera
-spec:
-  tier: local
+spec: {}
 ---
 apiVersion: sera.dev/v1
 kind: Provider

@@ -2112,7 +2112,6 @@ kind: Instance
 metadata:
   name: my-sera
 spec:
-  tier: local
 ---
 apiVersion: sera.dev/v1
 kind: Provider
@@ -2645,20 +2644,6 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         exe_dir.join("sera-runtime").to_string_lossy().to_string()
     });
 
-    // Determine whether the manifest declares a local-tier instance.  When
-    // `Instance.spec.tier == "local"` the runtime has no ConstitutionalGate
-    // HookChain wired, so we forward the permissive flag via env so operators
-    // running a local sera.yaml can complete turns without a policy install.
-    let tier_is_local = manifests
-        .instance_spec()
-        .ok()
-        .flatten()
-        .map(|s| s.tier.eq_ignore_ascii_case("local"))
-        .unwrap_or(false);
-    if tier_is_local {
-        tracing::info!("constitutional gate permissive: reason=tier-local");
-    }
-
     let mut harnesses = std::collections::HashMap::new();
 
     for agent_name in manifests.agent_names() {
@@ -2692,9 +2677,12 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         env.insert("LLM_MODEL".to_string(), model.clone());
         env.insert("LLM_API_KEY".to_string(), api_key_val);
         env.insert("AGENT_ID".to_string(), agent_name.to_string());
-        // Forward permissive-gate flag to the runtime process so it can skip
-        // the ConstitutionalGate check on local-tier deployments.
-        if tier_is_local {
+        // Forward permissive-gate flag to the runtime process when the operator
+        // has set SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE in the environment.
+        if std::env::var("SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false)
+        {
             env.insert(
                 "SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE".to_string(),
                 "true".to_string(),

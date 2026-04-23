@@ -235,11 +235,10 @@ async fn main() -> anyhow::Result<()> {
     // behaviour byte-for-byte.
 
     // Determine whether to permit turns when no ConstitutionalGate HookChain
-    // is installed.  Two opt-in paths; env takes precedence over tier-local.
-    //
-    // 1. `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=1|true` (explicit operator opt-in)
-    // 2. Injected by the gateway when `Instance.spec.tier == "local"` (the
-    //    gateway sets the same env var, so the runtime only needs one read path).
+    // is installed.  Opt-in via env var:
+    //   SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=1|true  (explicit operator opt-in)
+    // The gateway forwards this env var when the operator has set it, so the
+    // runtime only needs one read path.
     let permissive_gate = resolve_allow_missing_gate();
 
     let context_engine = Box::new(ContextPipeline::new());
@@ -428,10 +427,8 @@ fn build_llm_client(config: &RuntimeConfig) -> LlmClient {
 /// Read `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE` and return `true` when the
 /// operator has explicitly opted in (value `"1"` or `"true"`, case-insensitive).
 ///
-/// The gateway forwards this env var into the runtime process when it detects
-/// `Instance.spec.tier == "local"` in the manifest, so the runtime sees only
-/// one read path regardless of whether the trigger was explicit env or
-/// tier-auto-permit.
+/// The gateway forwards this env var when the operator has set it, so the
+/// runtime sees a single read path.
 fn resolve_allow_missing_gate() -> bool {
     let val = std::env::var("SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE")
         .map(|v| v.eq_ignore_ascii_case("true") || v == "1")

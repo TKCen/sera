@@ -29,25 +29,15 @@ impl From<&str> for ActionId {
     }
 }
 
-/// A single block of content within a conversation message.
+/// A single block of content within a conversation message or transcript.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
-    Text {
-        text: String,
-    },
-    ToolUse {
-        id: String,
-        name: String,
-        input: serde_json::Value,
-    },
-    ToolResult {
-        tool_use_id: String,
-        tool_name: String,
-        output: String,
-        #[serde(default)]
-        error: bool,
-    },
+    Text { text: String },
+    ToolUse { id: String, name: String, input: serde_json::Value },
+    ToolResult { tool_use_id: String, content: String, is_error: bool },
+    Image { media_type: String, data: String },
+    Thinking { thinking: String },
 }
 
 /// Role of a participant in a conversation.

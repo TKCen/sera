@@ -46,9 +46,9 @@ use sera_runtime::skill_dispatch::SkillDispatchEngine;
 // sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +
 // SERA-issued nonce fallback). Wired into AppState + `/api/mail/inbound`.
 use sera_gateway::kill_switch::{KillSwitch, admin_sock_path, spawn_admin_socket};
-use sera_gateway::session_store::{SessionStore, SqliteGitSessionStore};
 #[cfg(test)]
 use sera_gateway::session_store::InMemorySessionStore;
+use sera_gateway::session_store::{SessionStore, SqliteGitSessionStore};
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_mail::{
     CorrelationOutcome, HeaderMailCorrelator, InMemoryEnvelopeIndex, InMemoryMailLookup,
@@ -905,9 +905,8 @@ async fn chat_handler(
     // Helper: release the lane slot we acquired above. Called on every exit
     // path. The Discord loop does the equivalent explicitly (see
     // `process_message` ~L1310); the HTTP chat handler follows the same
-    // pattern rather than the `LaneRunGuard` RAII pattern in
-    // `sera_gateway::routes::chat` because AppState is not cloneable into a
-    // guard without restructuring.
+    // pattern rather than wrapping the release in an RAII guard because
+    // AppState is not cloneable into a guard without restructuring.
     async fn release_lane(state: &Arc<AppState>, session_key: &str) {
         let mut lq = state.lane_queue.lock().await;
         lq.complete_run(session_key);
@@ -3094,10 +3093,9 @@ fn build_router(state: Arc<AppState>) -> Router {
             post(party::start_party::<AppState>),
         )
         // TODO(sera-8d1.4-follow): wire GET/PUT /api/circles/{id}/constitution
-        // once routes/circles.rs constitution handlers are refactored to use a
-        // trait (they currently depend on the Postgres-backed `crate::state::AppState`
-        // and `crate::error::AppError` from the library, incompatible with this
-        // binary's SqliteDb-backed AppState).
+        // when the constitution-get/put handlers get reimplemented against
+        // this binary's SqliteDb-backed AppState (the previous orphan
+        // Postgres-only implementation was deleted in sera-s31i).
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             kill_switch_gate,

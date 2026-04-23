@@ -34,9 +34,8 @@ fn conversation_message_tool_use_tool_result_pairing() {
             },
             ContentBlock::ToolResult {
                 tool_use_id: "call-1".into(),
-                tool_name: "memory_read".into(),
-                output: "# Notes".into(),
-                error: false,
+                content: "# Notes".into(),
+                is_error: false,
             },
         ],
         usage: Some(TokenUsage {

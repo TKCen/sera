@@ -13,16 +13,6 @@ services:
     build:
       context: ..
       dockerfile: rust/Dockerfile.sera
-      cache:
-        - type: volume
-          source: sera-cargo-registry
-          target: /root/.cargo/registry
-        - type: volume
-          source: sera-cargo-cache
-          target: /root/.cargo/cache
-        - type: volume
-          source: sera-sccache-cache
-          target: /build/.sccache
     volumes:
       - ./sera.yaml:/app/sera.yaml:ro
       - sera-data:/app/data
@@ -31,6 +21,7 @@ services:
       - SERA_API_KEY=${SERA_API_KEY:-}
       - RUST_LOG=${RUST_LOG:-info}
       - SERA_RUNTIME_BIN=/usr/local/bin/sera-runtime
+      - SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=${SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE:-1}
     # Bridge networking so published ports reach the host on WSL2 Docker Desktop.
     # (network_mode: host binds to the Docker Desktop VM netns, not the WSL2
     # distro, so `ports:` is ignored and host curl to localhost:3001 times out.)

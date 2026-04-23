@@ -11,7 +11,7 @@
 //! A CapabilityToken is both:
 //! - a **signed** token carried on the wire — `signature: [u8; 64]` is a
 //!   gateway-side HMAC-SHA-512 produced by
-//!   [`sera_gateway::evolve_token::EvolveTokenSigner`]; and
+//!   [`EvolveTokenSigner`]; and
 //! - a **narrowable** token at the auth layer — `narrow` produces a subset
 //!   scope view, and `has` / `consume_proposal` enforce the budgets at the
 //!   policy gate.
@@ -71,7 +71,7 @@ mod bytes64 {
 /// A bounded, narrowable, signed capability token.
 ///
 /// Tokens are issued by [`CapabilityTokenIssuer`] and signed by the
-/// gateway's [`sera_gateway::evolve_token::EvolveTokenSigner`] (HMAC-SHA-512
+/// gateway's [`EvolveTokenSigner`] (HMAC-SHA-512
 /// over the canonical serialisation). The issuer and signer are intentionally
 /// orthogonal: the issuer constructs the token *value*; the signer installs
 /// the MAC on the serialised form.
@@ -170,7 +170,7 @@ impl CapabilityToken {
 
 /// Constructs unsigned [`CapabilityToken`]s from a scope set and expiry
 /// policy. Signing is orthogonal and lives in
-/// [`sera_gateway::evolve_token::EvolveTokenSigner`]: the issuer produces the
+/// [`EvolveTokenSigner`]: the issuer produces the
 /// value, the signer installs the MAC.
 ///
 /// The default implementation is [`DefaultCapabilityTokenIssuer`].

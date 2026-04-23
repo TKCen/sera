@@ -1149,6 +1149,30 @@ async fn chat_handler(
         // `complete_run` call in the Discord message loop after `execute_turn`.
         release_lane(&state, &session_key).await;
 
+        // Guard: an empty reply is a silent failure — the runtime returned
+        // Ok(events) but produced no text. Log richly so the root cause can
+        // be chased later, then return 502 so callers don't silently discard
+        // an empty response.
+        if result.reply.is_empty() {
+            tracing::error!(
+                session_id = %session_id,
+                agent = %agent_name,
+                prompt_tokens = result.usage.prompt_tokens,
+                completion_tokens = result.usage.completion_tokens,
+                total_tokens = result.usage.total_tokens,
+                tool_events_count = result.tool_events.len(),
+                tools_ran = !result.tool_events.is_empty(),
+                "execute_turn returned empty reply; runtime produced no text"
+            );
+            return Ok((
+                StatusCode::BAD_GATEWAY,
+                axum::Json(serde_json::json!({
+                    "error": "runtime returned empty reply"
+                })),
+            )
+                .into_response());
+        }
+
         // Save tool events and assistant response.
         let db = state.db.lock().await;
         persist_tool_events(&db, &session_id, &result.tool_events);

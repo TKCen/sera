@@ -14,6 +14,7 @@ impl From<HookError> for SeraError {
             HookError::HookTimeout { .. } => SeraErrorCode::Timeout,
             HookError::InvalidHookPoint { .. } => SeraErrorCode::InvalidInput,
             HookError::Aborted { .. } => SeraErrorCode::Forbidden,
+            HookError::CapabilityDenied { .. } => SeraErrorCode::Forbidden,
         };
         SeraError::with_source(code, err.to_string(), err)
     }

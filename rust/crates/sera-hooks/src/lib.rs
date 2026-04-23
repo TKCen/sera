@@ -28,21 +28,32 @@
 
 pub mod cancel;
 pub mod error;
-pub mod sera_errors;
 pub mod executor;
 pub mod hook_trait;
+pub mod manifest;
 pub mod registry;
+pub mod sera_errors;
 
 // WASM adapter is only compiled with the wasm feature
 #[cfg(feature = "wasm")]
 pub mod wasm_adapter;
 
+// Component-model adapter (WIT-based, sandboxed capability injection).
+#[cfg(feature = "wasm")]
+pub mod component_adapter;
+
 // Convenient re-exports.
 pub use cancel::HookCancellation;
-pub use error::{HookAbortSignal, HookError};
+pub use error::{HookAbortSignal, HookError, ManifestError};
 pub use executor::ChainExecutor;
 pub use hook_trait::Hook;
+pub use manifest::{
+    HookChainManifest, HookChainManifestMetadata, HookChainManifestSpec, HookInstanceManifest,
+};
 pub use registry::{HookRegistry, HookTier};
+
+#[cfg(feature = "wasm")]
+pub use component_adapter::{ComponentAdapter, ComponentCapabilities, ComponentError};
 
 #[cfg(test)]
 mod tests;

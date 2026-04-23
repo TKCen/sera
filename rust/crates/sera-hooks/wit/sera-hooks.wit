@@ -1,0 +1,181 @@
+// SERA hook component-model interface.
+//
+// PUBLIC CONTRACT — third parties compile against this file via `wit-bindgen`.
+// Changes to this file are semver-breaking for every third-party hook author.
+//
+// Mirrors the in-process `Hook` trait from `rust/crates/sera-hooks/src/hook_trait.rs`:
+//   - `init(config)` — called once at load.
+//   - `execute(ctx) -> hook-result` — called per invocation.
+//   - Lifecycle: Continue / Reject / Redirect, matching the native trait.
+//
+// Source spec: `docs/plan/specs/SPEC-hooks.md` §2.2 (Hook Trait), §5 (WASM Runtime).
+
+package sera:hooks@0.1.0;
+
+// ── Shared types ──────────────────────────────────────────────────────────────
+
+interface types {
+    // The 20 lifecycle points where chains can fire. Order and spelling MUST
+    // match `sera_types::hook::HookPoint` (serde snake_case representation).
+    enum hook-point {
+        pre-route,
+        post-route,
+        pre-turn,
+        context-persona,
+        context-memory,
+        context-skill,
+        context-tool,
+        on-llm-start,
+        pre-tool,
+        post-tool,
+        on-llm-end,
+        post-turn,
+        constitutional-gate,
+        pre-deliver,
+        post-deliver,
+        pre-memory-write,
+        on-session-transition,
+        on-approval-request,
+        on-workflow-trigger,
+        on-change-artifact-proposed,
+    }
+
+    // Static hook metadata returned from `hook.metadata()`.
+    record hook-metadata {
+        name: string,
+        description: string,
+        version: string,
+        supported-points: list<hook-point>,
+        author: option<string>,
+    }
+
+    // Context threaded through a chain. JSON-encoded blobs match the Rust
+    // `serde_json::Value` fields in `sera_types::hook::HookContext` — hooks
+    // parse what they need and ignore the rest.
+    record hook-context {
+        point: hook-point,
+        // JSON-encoded `serde_json::Value` (or absent).
+        event-json: option<string>,
+        session-json: option<string>,
+        tool-call-json: option<string>,
+        tool-result-json: option<string>,
+        principal-json: option<string>,
+        // Metadata key/value pairs. Values are JSON-encoded.
+        metadata: list<tuple<string, string>>,
+        // Optional change-artifact id (ULID).
+        change-artifact-id: option<string>,
+    }
+
+    // Permission-override adjustments a hook can return alongside Continue.
+    record permission-overrides {
+        grant: list<string>,
+        revoke: list<string>,
+        // TTL in milliseconds. 0 = no TTL.
+        ttl-ms: u64,
+    }
+
+    // Continue payload — chain keeps executing.
+    record hook-continue {
+        // JSON-encoded metadata key/value updates merged into context.metadata.
+        context-updates: list<tuple<string, string>>,
+        // Optional replacement input for downstream hooks.
+        updated-input-json: option<string>,
+        // Optional permission overrides.
+        overrides: option<permission-overrides>,
+    }
+
+    // Reject payload — chain short-circuits with a denial.
+    record hook-reject {
+        reason: string,
+        code: option<string>,
+    }
+
+    // Redirect payload — chain short-circuits by rerouting.
+    record hook-redirect {
+        target: string,
+        reason: option<string>,
+    }
+
+    // Union of the three terminal/non-terminal results. Continue is the
+    // non-terminal case; the other two end the chain.
+    variant hook-result {
+        %continue(hook-continue),
+        reject(hook-reject),
+        redirect(hook-redirect),
+    }
+
+    // Errors a hook may return from init/execute.
+    variant hook-error {
+        // Init failed because the provided config was malformed or rejected.
+        invalid-config(string),
+        // A runtime error — analogous to `HookError::ExecutionFailed`.
+        execution-failed(string),
+        // The hook ran out of an internal budget (e.g. regex iterations).
+        // This is advisory; the host has its own fuel budget which takes
+        // precedence.
+        budget-exhausted(string),
+        // Catch-all for other unrecoverable errors.
+        other(string),
+    }
+}
+
+// ── Sandboxed capability surface (host → component) ───────────────────────────
+//
+// Hooks receive ONLY the capabilities listed in this interface. The host
+// rejects imports for anything not defined here. No filesystem, no subprocess,
+// no raw network. Outbound HTTP is gated through `wasi:http` with a per-chain
+// allow-list (see SPEC-hooks §5.4) and is NOT bound here — the host omits the
+// `wasi:http` import unless explicitly configured per chain.
+
+interface host-capabilities {
+    // Structured log message at the specified severity. The host records this
+    // on the gateway's `tracing` subscriber; hooks cannot write to stdout.
+    enum log-level {
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+    }
+    log: func(level: log-level, message: string);
+
+    // Read a key from the hook-local scratchpad (per-invocation). Returns
+    // `none` when absent. Scratchpad state does NOT persist across invocations.
+    state-get: func(key: string) -> option<string>;
+
+    // Write a key to the hook-local scratchpad. Values MUST be JSON-encoded
+    // when they represent structured data. Size-bounded by the host.
+    state-set: func(key: string, value: string);
+
+    // Emit a structured audit event. The host attaches hook identity and
+    // correlation ids; hooks cannot forge those. Payload MUST be a JSON object.
+    emit-audit: func(event-type: string, payload-json: string);
+}
+
+// ── Hook export (component → host) ────────────────────────────────────────────
+
+interface hook {
+    use types.{hook-context, hook-metadata, hook-result, hook-error};
+
+    // Called once at load. `config-json` is the JSON-encoded per-instance
+    // config block from `HookInstance.config`. Returning an error aborts
+    // registration.
+    init: func(config-json: string) -> result<_, hook-error>;
+
+    // Return static metadata. Must be cheap; called once per registration.
+    metadata: func() -> hook-metadata;
+
+    // Execute against a context. Called per invocation. Must be side-effect
+    // free with respect to the host except via the `host-capabilities` imports.
+    execute: func(ctx: hook-context) -> result<hook-result, hook-error>;
+}
+
+// ── World ─────────────────────────────────────────────────────────────────────
+//
+// Third-party hooks target this world. Imports are the sandboxed capability
+// surface; the single export is the `hook` interface.
+
+world sera-hook {
+    import host-capabilities;
+    export hook;
+}

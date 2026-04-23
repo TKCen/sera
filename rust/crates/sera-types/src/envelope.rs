@@ -263,7 +263,11 @@ mod tests {
     #[test]
     fn supports_returns_true_for_known_feature() {
         let caps = ProtocolCapabilities {
-            features: vec!["steer".to_string(), "hitl".to_string(), "hooks@v2".to_string()],
+            features: vec![
+                "steer".to_string(),
+                "hitl".to_string(),
+                "hooks@v2".to_string(),
+            ],
         };
         assert!(caps.supports("steer"));
         assert!(caps.supports("hitl"));
@@ -298,7 +302,10 @@ mod tests {
         assert_eq!(parsed.protocol_version, "2.0");
         assert_eq!(parsed.frame_type, "handshake");
         assert_eq!(parsed.agent_id.as_deref(), Some("agent-001"));
-        assert_eq!(parsed.parent_session_key.as_deref(), Some("parent-sess-xyz"));
+        assert_eq!(
+            parsed.parent_session_key.as_deref(),
+            Some("parent-sess-xyz")
+        );
         assert!(parsed.capabilities.supports("steer"));
         assert!(parsed.capabilities.supports("hitl"));
         assert!(parsed.capabilities.supports("hooks@v2"));

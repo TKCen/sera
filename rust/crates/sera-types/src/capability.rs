@@ -160,7 +160,11 @@ mod tests {
     #[test]
     fn exec_capability_commands() {
         let cap = ExecCapability {
-            commands: Some(vec!["ls".to_string(), "cat".to_string(), "echo".to_string()]),
+            commands: Some(vec![
+                "ls".to_string(),
+                "cat".to_string(),
+                "echo".to_string(),
+            ]),
         };
         let json = serde_json::to_string(&cap).unwrap();
         let parsed: ExecCapability = serde_json::from_str(&json).unwrap();

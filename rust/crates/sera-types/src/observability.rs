@@ -112,7 +112,10 @@ mod tests {
         assert_eq!(parsed.trace_id, "trace-abc123");
         assert_eq!(parsed.span_id, "span-001");
         assert_eq!(parsed.parent_span_id, Some("span-000".to_string()));
-        assert_eq!(parsed.baggage.get("session").map(String::as_str), Some("sess-1"));
+        assert_eq!(
+            parsed.baggage.get("session").map(String::as_str),
+            Some("sess-1")
+        );
     }
 
     #[test]

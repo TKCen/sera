@@ -195,20 +195,47 @@ mod tests {
 
     #[test]
     fn from_str_all_variants() {
-        assert_eq!("none".parse::<ThinkingLevel>().unwrap(), ThinkingLevel::None);
+        assert_eq!(
+            "none".parse::<ThinkingLevel>().unwrap(),
+            ThinkingLevel::None
+        );
         assert_eq!("low".parse::<ThinkingLevel>().unwrap(), ThinkingLevel::Low);
-        assert_eq!("medium".parse::<ThinkingLevel>().unwrap(), ThinkingLevel::Medium);
-        assert_eq!("high".parse::<ThinkingLevel>().unwrap(), ThinkingLevel::High);
-        assert_eq!("xhigh".parse::<ThinkingLevel>().unwrap(), ThinkingLevel::XHigh);
-        assert_eq!("x_high".parse::<ThinkingLevel>().unwrap(), ThinkingLevel::XHigh);
+        assert_eq!(
+            "medium".parse::<ThinkingLevel>().unwrap(),
+            ThinkingLevel::Medium
+        );
+        assert_eq!(
+            "high".parse::<ThinkingLevel>().unwrap(),
+            ThinkingLevel::High
+        );
+        assert_eq!(
+            "xhigh".parse::<ThinkingLevel>().unwrap(),
+            ThinkingLevel::XHigh
+        );
+        assert_eq!(
+            "x_high".parse::<ThinkingLevel>().unwrap(),
+            ThinkingLevel::XHigh
+        );
     }
 
     #[test]
     fn from_str_case_insensitive() {
-        assert_eq!("NONE".parse::<ThinkingLevel>().unwrap(), ThinkingLevel::None);
-        assert_eq!("HIGH".parse::<ThinkingLevel>().unwrap(), ThinkingLevel::High);
-        assert_eq!("XHigh".parse::<ThinkingLevel>().unwrap(), ThinkingLevel::XHigh);
-        assert_eq!("Medium".parse::<ThinkingLevel>().unwrap(), ThinkingLevel::Medium);
+        assert_eq!(
+            "NONE".parse::<ThinkingLevel>().unwrap(),
+            ThinkingLevel::None
+        );
+        assert_eq!(
+            "HIGH".parse::<ThinkingLevel>().unwrap(),
+            ThinkingLevel::High
+        );
+        assert_eq!(
+            "XHigh".parse::<ThinkingLevel>().unwrap(),
+            ThinkingLevel::XHigh
+        );
+        assert_eq!(
+            "Medium".parse::<ThinkingLevel>().unwrap(),
+            ThinkingLevel::Medium
+        );
     }
 
     #[test]
@@ -239,9 +266,18 @@ mod tests {
     fn openai_reasoning_effort_mapping() {
         assert_eq!(ThinkingLevel::None.to_openai_reasoning_effort(), None);
         assert_eq!(ThinkingLevel::Low.to_openai_reasoning_effort(), Some("low"));
-        assert_eq!(ThinkingLevel::Medium.to_openai_reasoning_effort(), Some("medium"));
-        assert_eq!(ThinkingLevel::High.to_openai_reasoning_effort(), Some("high"));
-        assert_eq!(ThinkingLevel::XHigh.to_openai_reasoning_effort(), Some("high"));
+        assert_eq!(
+            ThinkingLevel::Medium.to_openai_reasoning_effort(),
+            Some("medium")
+        );
+        assert_eq!(
+            ThinkingLevel::High.to_openai_reasoning_effort(),
+            Some("high")
+        );
+        assert_eq!(
+            ThinkingLevel::XHigh.to_openai_reasoning_effort(),
+            Some("high")
+        );
     }
 
     #[test]

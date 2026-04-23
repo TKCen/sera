@@ -100,8 +100,7 @@ impl SessionState {
             | (SessionState::Paused, SessionState::Archived)
             | (SessionState::Paused, SessionState::Destroyed)
             // Shadow sessions can only be destroyed
-            | (SessionState::Shadow, SessionState::Destroyed)
-            // Destroyed is terminal — no transitions
+            | (SessionState::Shadow, SessionState::Destroyed) // Destroyed is terminal — no transitions
         )
     }
 
@@ -298,10 +297,7 @@ impl SessionStateMachine {
     /// On success, records the transition in history and returns the hook chain
     /// name if one is configured for this transition. Returns an error if the
     /// transition is not in the allowed table or the machine is already in `to`.
-    pub fn transition(
-        &mut self,
-        to: SessionState,
-    ) -> Result<Option<String>, SessionError> {
+    pub fn transition(&mut self, to: SessionState) -> Result<Option<String>, SessionError> {
         if self.current_state == to {
             return Err(SessionError::AlreadyInState(to));
         }

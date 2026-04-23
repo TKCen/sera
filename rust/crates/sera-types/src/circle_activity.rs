@@ -27,7 +27,11 @@ pub struct CircleActivityEntry {
 
 impl CircleActivityEntry {
     /// Create a new entry using the current wall-clock time.
-    pub fn new(agent_id: impl Into<String>, circle_id: impl Into<String>, summary: impl Into<String>) -> Self {
+    pub fn new(
+        agent_id: impl Into<String>,
+        circle_id: impl Into<String>,
+        summary: impl Into<String>,
+    ) -> Self {
         let timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -58,7 +62,10 @@ impl CircleActivityEntry {
     /// Format the entry as a prompt bullet:
     /// `- [agent-id @ ISO-like-timestamp] summary`
     pub fn format_for_prompt(&self) -> String {
-        format!("- [{} @ {}] {}", self.agent_id, self.timestamp, self.summary)
+        format!(
+            "- [{} @ {}] {}",
+            self.agent_id, self.timestamp, self.summary
+        )
     }
 }
 
@@ -81,8 +88,14 @@ impl InMemoryCircleActivityLog {
     }
 
     /// Record a new entry.
-    pub fn record(&mut self, agent_id: impl Into<String>, circle_id: impl Into<String>, summary: impl Into<String>) {
-        self.entries.push(CircleActivityEntry::new(agent_id, circle_id, summary));
+    pub fn record(
+        &mut self,
+        agent_id: impl Into<String>,
+        circle_id: impl Into<String>,
+        summary: impl Into<String>,
+    ) {
+        self.entries
+            .push(CircleActivityEntry::new(agent_id, circle_id, summary));
     }
 
     /// Record an entry with an explicit timestamp (useful for deterministic tests).
@@ -93,7 +106,9 @@ impl InMemoryCircleActivityLog {
         summary: impl Into<String>,
         timestamp: u64,
     ) {
-        self.entries.push(CircleActivityEntry::with_timestamp(agent_id, circle_id, summary, timestamp));
+        self.entries.push(CircleActivityEntry::with_timestamp(
+            agent_id, circle_id, summary, timestamp,
+        ));
     }
 
     /// Return up to `limit` most-recent entries for `circle_id`, excluding `exclude_agent`.

@@ -188,7 +188,11 @@ pub struct PermissionOverrides {
     /// Optional expiry for the granted permissions. When `Some`, the executor
     /// will prune grants older than `ttl` before invoking the next hook.
     /// Revokes are *not* subject to TTL — they are immediate and durable.
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "duration_millis_opt")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "duration_millis_opt"
+    )]
     pub ttl: Option<Duration>,
 }
 
@@ -236,19 +240,14 @@ mod duration_millis_opt {
     use serde::{Deserialize, Deserializer, Serializer};
     use std::time::Duration;
 
-    pub fn serialize<S: Serializer>(
-        value: &Option<Duration>,
-        ser: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(value: &Option<Duration>, ser: S) -> Result<S::Ok, S::Error> {
         match value {
             Some(d) => ser.serialize_some(&(d.as_millis() as u64)),
             None => ser.serialize_none(),
         }
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        de: D,
-    ) -> Result<Option<Duration>, D::Error> {
+    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<Option<Duration>, D::Error> {
         let opt = Option::<u64>::deserialize(de)?;
         Ok(opt.map(Duration::from_millis))
     }
@@ -453,9 +452,7 @@ impl HookContext {
     /// True iff `perm` is present in the active permission set.
     pub fn has_permission(&self, perm: &str) -> bool {
         match self.metadata.get(HOOK_CTX_PERMISSIONS_KEY) {
-            Some(serde_json::Value::Array(arr)) => {
-                arr.iter().any(|v| v.as_str() == Some(perm))
-            }
+            Some(serde_json::Value::Array(arr)) => arr.iter().any(|v| v.as_str() == Some(perm)),
             _ => false,
         }
     }
@@ -698,7 +695,10 @@ mod tests {
         updates.insert("filtered".to_string(), serde_json::json!(true));
         let result = HookResult::pass_with(updates);
         assert!(result.is_continue());
-        if let HookResult::Continue { context_updates, .. } = &result {
+        if let HookResult::Continue {
+            context_updates, ..
+        } = &result
+        {
             assert!(context_updates.contains_key("filtered"));
         }
     }

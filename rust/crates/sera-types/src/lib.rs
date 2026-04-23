@@ -1,34 +1,33 @@
 //! SERA Domain Types — shared types matching the BYOH contract schemas
 //! and the full sera-core domain model.
 
-pub mod agent_tool;
-pub mod circle;
-pub mod circle_activity;
-pub mod envelope;
-pub mod llm;
-pub mod harness;
-pub mod evolution;
-pub mod versioning;
-pub mod content_block;
-pub mod embedding;
 pub mod agent;
-pub mod connector;
-pub mod runtime;
+pub mod agent_tool;
 pub mod audit;
 pub mod capability;
 pub mod chat;
+pub mod circle;
+pub mod circle_activity;
 pub mod config_manifest;
+pub mod connector;
+pub mod content_block;
+pub mod embedding;
+pub mod envelope;
 pub mod event;
+pub mod evolution;
+pub mod harness;
 pub mod hook;
 pub mod hook_aliases;
 pub mod intercom;
+pub mod llm;
 pub mod manifest;
 pub mod memory;
-pub mod model;
 pub mod metering;
+pub mod model;
 pub mod observability;
 pub mod policy;
 pub mod principal;
+pub mod runtime;
 pub mod sandbox;
 pub mod secrets;
 pub mod session;
@@ -36,12 +35,14 @@ pub mod signal;
 pub mod skill;
 pub mod tool;
 pub mod training_export;
+pub mod versioning;
 
+pub use capability::AgentCapability;
+pub use content_block::{ContentBlock, ConversationMessage, ConversationRole};
+pub use embedding::{EmbeddingError, EmbeddingHealth, EmbeddingService};
 pub use evolution::*;
 pub use llm::ThinkingLevel;
 pub use versioning::BuildIdentity;
-pub use content_block::{ContentBlock, ConversationMessage, ConversationRole};
-pub use embedding::{EmbeddingError, EmbeddingHealth, EmbeddingService};
 
 use serde::{Deserialize, Serialize};
 

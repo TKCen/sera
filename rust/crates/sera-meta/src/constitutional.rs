@@ -14,7 +14,7 @@ use sera_types::evolution::ConstitutionalRule as ConstitutionalRuleBase;
 /// A constitutional rule with full applicability metadata (scopes, blast radii,
 /// required scopes) — stored in the registry.
 #[derive(Debug, Clone)]
-pub struct ConstitutionalRule {
+pub struct ConstitutionalRuleEntry {
     /// The base rule from sera-types.
     pub base: ConstitutionalRuleBase,
     /// Scopes this rule applies to.
@@ -26,8 +26,8 @@ pub struct ConstitutionalRule {
     pub required_scopes: Vec<BlastRadius>,
 }
 
-impl ConstitutionalRule {
-    /// Create a new `ConstitutionalRule` with full metadata.
+impl ConstitutionalRuleEntry {
+    /// Create a new `ConstitutionalRuleEntry` with full metadata.
     pub fn new(
         base: ConstitutionalRuleBase,
         scopes: Vec<ChangeArtifactScope>,
@@ -59,7 +59,7 @@ impl ConstitutionalRule {
 /// Thread-safe registry of constitutional rules.
 #[derive(Debug, Clone)]
 pub struct ConstitutionalRegistry {
-    inner: Arc<RwLock<HashMap<String, ConstitutionalRule>>>,
+    inner: Arc<RwLock<HashMap<String, ConstitutionalRuleEntry>>>,
 }
 
 impl ConstitutionalRegistry {
@@ -71,22 +71,22 @@ impl ConstitutionalRegistry {
     }
 
     /// Register a new rule. Overwrites any existing rule with the same ID.
-    pub async fn register(&self, rule: ConstitutionalRule) {
+    pub async fn register(&self, rule: ConstitutionalRuleEntry) {
         self.inner.write().await.insert(rule.base.id.clone(), rule);
     }
 
     /// Remove a rule by ID. Returns the rule if it existed.
-    pub async fn unregister(&self, rule_id: &str) -> Option<ConstitutionalRule> {
+    pub async fn unregister(&self, rule_id: &str) -> Option<ConstitutionalRuleEntry> {
         self.inner.write().await.remove(rule_id)
     }
 
     /// Get a rule by ID.
-    pub async fn get(&self, rule_id: &str) -> Option<ConstitutionalRule> {
+    pub async fn get(&self, rule_id: &str) -> Option<ConstitutionalRuleEntry> {
         self.inner.read().await.get(rule_id).cloned()
     }
 
     /// Return all rules applicable at a given enforcement point.
-    pub async fn rules_at(&self, ep: ConstitutionalEnforcementPoint) -> Vec<ConstitutionalRule> {
+    pub async fn rules_at(&self, ep: ConstitutionalEnforcementPoint) -> Vec<ConstitutionalRuleEntry> {
         self.inner
             .read()
             .await
@@ -97,7 +97,7 @@ impl ConstitutionalRegistry {
     }
 
     /// Return all registered rules.
-    pub async fn all_rules(&self) -> Vec<ConstitutionalRule> {
+    pub async fn all_rules(&self) -> Vec<ConstitutionalRuleEntry> {
         self.inner.read().await.values().cloned().collect()
     }
 
@@ -111,7 +111,7 @@ impl ConstitutionalRegistry {
         blast_radius: &BlastRadius,
         proposer: &ChangeProposer,
     ) -> Result<(), ConstitutionalViolation> {
-        let applicable: Vec<ConstitutionalRule> = self
+        let applicable: Vec<ConstitutionalRuleEntry> = self
             .inner
             .read()
             .await
@@ -189,7 +189,7 @@ mod tests {
         }
     }
 
-    fn make_rule(id: &str, ep: ConstitutionalEnforcementPoint) -> ConstitutionalRule {
+    fn make_rule(id: &str, ep: ConstitutionalEnforcementPoint) -> ConstitutionalRuleEntry {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(b"rule content");
@@ -197,7 +197,7 @@ mod tests {
         let mut content_hash = [0u8; 32];
         content_hash.copy_from_slice(&hash[..32]);
 
-        ConstitutionalRule {
+        ConstitutionalRuleEntry {
             base: sera_types::evolution::ConstitutionalRule {
                 id: id.to_string(),
                 description: format!("rule {id}"),

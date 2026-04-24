@@ -24,6 +24,7 @@ use futures_util::StreamExt;
 use futures_util::stream;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock, mpsc};
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -599,11 +600,75 @@ struct AppState {
     /// Unix admin socket; causes all HTTP submissions to be rejected with 503
     /// until disarmed with `DISARM`.
     kill_switch: Arc<KillSwitch>,
+    /// In-flight turn/steer cancellation registry (sera-bsem). Keyed by
+    /// `session_key`. Each call to `execute_turn` / `execute_steer` registers
+    /// a fresh `CancellationToken` on entry and removes it on exit. On
+    /// `ROLLBACK` the admin socket handler cancels every token and clears the
+    /// map, so in-flight turns abort within their `tokio::select!` cancel arm
+    /// instead of pinning a lane slot indefinitely.
+    ///
+    /// Uses `std::sync::Mutex` intentionally: the critical section is a pure
+    /// `HashMap` insert/remove/drain with no awaits, and the admin socket's
+    /// `on_rollback` callback is a synchronous `Fn()` that would panic if it
+    /// called `tokio::sync::Mutex::blocking_lock` from inside the runtime.
+    active_cancellation_tokens: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
     /// Submission envelope store — every agent-facing route appends a
     /// Submission here before calling the underlying service (sera-r1g8).
     /// Production boot uses SqliteGitSessionStore (sera-4i4i); tests keep
     /// InMemorySessionStore to avoid writing shadow-git dirs to disk.
     session_store: Arc<dyn SessionStore>,
+}
+
+impl AppState {
+    /// Register a fresh cancellation token for `session_key` (sera-bsem).
+    ///
+    /// Returns the new token so the caller can race it inside its
+    /// `tokio::select!`. If a token is already registered for this session
+    /// key it is replaced — the prior token is dropped without being
+    /// cancelled, mirroring the lane queue's per-session serialisation
+    /// contract.
+    fn register_cancellation_token(&self, session_key: &str) -> CancellationToken {
+        let token = CancellationToken::new();
+        let mut map = self
+            .active_cancellation_tokens
+            .lock()
+            .expect("active_cancellation_tokens mutex poisoned");
+        map.insert(session_key.to_string(), token.clone());
+        token
+    }
+
+    /// Remove the cancellation token for `session_key` (sera-bsem).
+    ///
+    /// Called on every exit path of `execute_turn` / `execute_steer` — success,
+    /// timeout, harness error, and cancellation — so the map does not leak
+    /// entries. Missing keys are silently ignored (e.g. when the ROLLBACK path
+    /// has already cleared the map).
+    fn deregister_cancellation_token(&self, session_key: &str) {
+        let mut map = self
+            .active_cancellation_tokens
+            .lock()
+            .expect("active_cancellation_tokens mutex poisoned");
+        map.remove(session_key);
+    }
+
+    /// Cancel every in-flight turn/steer and clear the registry (sera-bsem).
+    ///
+    /// Called from the admin socket's `on_rollback` callback when a
+    /// `ROLLBACK` command arms the kill switch: each waiting
+    /// `execute_turn` / `execute_steer` wakes via its cancellation arm,
+    /// returns a cancelled-error result, and the usual error-path cleanup
+    /// releases the lane slot.
+    fn cancel_all_in_flight(&self) -> usize {
+        let mut map = self
+            .active_cancellation_tokens
+            .lock()
+            .expect("active_cancellation_tokens mutex poisoned");
+        let count = map.len();
+        for (_key, token) in map.drain() {
+            token.cancel();
+        }
+        count
+    }
 }
 
 // ── Phase-3 trait impls ──────────────────────────────────────────────────────
@@ -1151,6 +1216,7 @@ async fn chat_handler(
                         message_id,
                         agent_name,
                     } => {
+                        let cancel = state.register_cancellation_token(&session_key);
                         let result = execute_turn(
                             &agent_spec,
                             &transcript,
@@ -1160,8 +1226,10 @@ async fn chat_handler(
                             &state.skill_engine,
                             &state.semantic_store,
                             &agent_name,
+                            &cancel,
                         )
                         .await;
+                        state.deregister_cancellation_token(&session_key);
 
                         // Release the lane slot — the turn is complete even
                         // though we still need to stream the reply back out.
@@ -1265,6 +1333,7 @@ async fn chat_handler(
             .into_response())
     } else {
         // Synchronous JSON mode (existing behavior).
+        let cancel = state.register_cancellation_token(&session_key);
         let result = execute_turn(
             &agent_spec,
             &transcript,
@@ -1274,8 +1343,10 @@ async fn chat_handler(
             &state.skill_engine,
             &state.semantic_store,
             &agent_name,
+            &cancel,
         )
         .await;
+        state.deregister_cancellation_token(&session_key);
 
         // Release the lane slot now that the turn has completed. Mirrors the
         // `complete_run` call in the Discord message loop after `execute_turn`.
@@ -1547,6 +1618,7 @@ async fn execute_turn(
     skill_engine: &SkillDispatchEngine,
     semantic_store: &Arc<dyn SemanticMemoryStore>,
     agent_name: &str,
+    cancel: &CancellationToken,
 ) -> MvsTurnResult {
     let mut messages: Vec<serde_json::Value> = Vec::new();
 
@@ -1646,16 +1718,19 @@ async fn execute_turn(
     }
 
     let timeout = turn_timeout();
-    match tokio::time::timeout(timeout, harness.send_turn(messages, session_key)).await {
-        Ok(Ok(events)) => MvsTurnResult {
-            reply: events.response,
-            tool_events: events.tool_events,
-            usage: events.usage,
-        },
-        Ok(Err(e)) => {
-            tracing::error!(error = %e, "Runtime harness turn failed");
+    // sera-bsem: race the harness turn against both the existing timeout and
+    // the KillSwitch-driven cancellation token. Dropping the `send_turn`
+    // future via `select!` returns control to the caller so the lane slot is
+    // released even if the harness subprocess is unresponsive.
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            tracing::warn!(
+                session_key = %session_key,
+                "Runtime harness turn cancelled (KillSwitch ROLLBACK); releasing lane"
+            );
             MvsTurnResult {
-                reply: format!("[sera] Runtime error: {e}"),
+                reply: "[sera] Runtime turn aborted by KillSwitch ROLLBACK".to_string(),
                 tool_events: vec![],
                 usage: UsageInfo {
                     prompt_tokens: 0,
@@ -1664,20 +1739,39 @@ async fn execute_turn(
                 },
             }
         }
-        Err(_elapsed) => {
-            tracing::error!(
-                session_key = %session_key,
-                timeout_secs = timeout.as_secs(),
-                "Runtime harness turn timed out; releasing lane"
-            );
-            MvsTurnResult {
-                reply: format!("[sera] Runtime timed out after {}s", timeout.as_secs()),
-                tool_events: vec![],
-                usage: UsageInfo {
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                    total_tokens: 0,
-                },
+        res = tokio::time::timeout(timeout, harness.send_turn(messages, session_key)) => match res {
+            Ok(Ok(events)) => MvsTurnResult {
+                reply: events.response,
+                tool_events: events.tool_events,
+                usage: events.usage,
+            },
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, "Runtime harness turn failed");
+                MvsTurnResult {
+                    reply: format!("[sera] Runtime error: {e}"),
+                    tool_events: vec![],
+                    usage: UsageInfo {
+                        prompt_tokens: 0,
+                        completion_tokens: 0,
+                        total_tokens: 0,
+                    },
+                }
+            }
+            Err(_elapsed) => {
+                tracing::error!(
+                    session_key = %session_key,
+                    timeout_secs = timeout.as_secs(),
+                    "Runtime harness turn timed out; releasing lane"
+                );
+                MvsTurnResult {
+                    reply: format!("[sera] Runtime timed out after {}s", timeout.as_secs()),
+                    tool_events: vec![],
+                    usage: UsageInfo {
+                        prompt_tokens: 0,
+                        completion_tokens: 0,
+                        total_tokens: 0,
+                    },
+                }
             }
         }
     }
@@ -1691,6 +1785,7 @@ async fn execute_steer(
     harness: &StdioHarness,
     steer_messages: &[serde_json::Value],
     session_key: &str,
+    cancel: &CancellationToken,
 ) -> MvsTurnResult {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
@@ -1737,49 +1832,67 @@ async fn execute_steer(
     }
 
     let timeout = turn_timeout();
-    match tokio::time::timeout(timeout, async {
-        // Read TurnCompleted event.
-        let mut line = String::new();
-        loop {
-            match stdout.read_line(&mut line).await {
-                Ok(0) => break,
-                Ok(_) => {
-                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line)
-                        && event.get("type").and_then(|v| v.as_str()) == Some("turn_completed")
-                    {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-            line.clear();
-        }
-    })
-    .await
-    {
-        Ok(()) => MvsTurnResult {
-            reply: "[steer injected]".to_string(),
-            tool_events: vec![],
-            usage: UsageInfo {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                total_tokens: 0,
-            },
-        },
-        Err(_elapsed) => {
-            tracing::error!(
+    // sera-bsem: add a cancellation arm so a KillSwitch ROLLBACK can abort a
+    // steer injection that is otherwise blocked on `turn_completed`.
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            tracing::warn!(
                 session_key = %session_key,
-                timeout_secs = timeout.as_secs(),
-                "Runtime harness steer timed out; releasing lane"
+                "Runtime harness steer cancelled (KillSwitch ROLLBACK); releasing lane"
             );
             MvsTurnResult {
-                reply: "[sera] Steer injection timed out".to_string(),
+                reply: "[sera] Steer injection aborted by KillSwitch ROLLBACK".to_string(),
                 tool_events: vec![],
                 usage: UsageInfo {
                     prompt_tokens: 0,
                     completion_tokens: 0,
                     total_tokens: 0,
                 },
+            }
+        }
+        res = tokio::time::timeout(timeout, async {
+            // Read TurnCompleted event.
+            let mut line = String::new();
+            loop {
+                match stdout.read_line(&mut line).await {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line)
+                            && event.get("type").and_then(|v| v.as_str()) == Some("turn_completed")
+                        {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+                line.clear();
+            }
+        }) => match res {
+            Ok(()) => MvsTurnResult {
+                reply: "[steer injected]".to_string(),
+                tool_events: vec![],
+                usage: UsageInfo {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    total_tokens: 0,
+                },
+            },
+            Err(_elapsed) => {
+                tracing::error!(
+                    session_key = %session_key,
+                    timeout_secs = timeout.as_secs(),
+                    "Runtime harness steer timed out; releasing lane"
+                );
+                MvsTurnResult {
+                    reply: "[sera] Steer injection timed out".to_string(),
+                    tool_events: vec![],
+                    usage: UsageInfo {
+                        prompt_tokens: 0,
+                        completion_tokens: 0,
+                        total_tokens: 0,
+                    },
+                }
             }
         }
     }
@@ -2131,6 +2244,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
     }
 
     // Execute the agent turn via the pre-connected harness.
+    let cancel = state.register_cancellation_token(&session_key);
     let result = execute_turn(
         &agent_spec,
         &transcript,
@@ -2140,8 +2254,10 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         &state.skill_engine,
         &state.semantic_store,
         &agent_name,
+        &cancel,
     )
     .await;
+    state.deregister_cancellation_token(&session_key);
 
     // Persist tool call events to transcript before the final response.
     {
@@ -2236,7 +2352,9 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         // Handle steer injection: send as Op::Steer if we have steer events.
         if has_steer && !steer_content.is_empty() {
             tracing::info!(session_key = %session_key, "Injecting steer event at tool boundary");
-            let follow_up = execute_steer(&harness, &steer_content, &session_key).await;
+            let cancel = state.register_cancellation_token(&session_key);
+            let follow_up = execute_steer(&harness, &steer_content, &session_key, &cancel).await;
+            state.deregister_cancellation_token(&session_key);
             // Persist the steer as a user message in transcript.
             {
                 let db = state.db.lock().await;
@@ -2276,6 +2394,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
                 .unwrap_or_default()
         };
 
+        let cancel = state.register_cancellation_token(&session_key);
         let follow_up = execute_turn(
             &agent_spec,
             &transcript,
@@ -2285,8 +2404,10 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             &state.skill_engine,
             &state.semantic_store,
             &agent_name,
+            &cancel,
         )
         .await;
+        state.deregister_cancellation_token(&session_key);
 
         {
             let db = state.db.lock().await;
@@ -2945,6 +3066,9 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         skill_engine,
         semantic_store,
         kill_switch: Arc::new(KillSwitch::new()),
+        active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
         // sera-4i4i: use SqliteGitSessionStore so envelopes survive restarts.
         // db_path = <data_root>/parts.sqlite; sessions_root = <data_root>/sessions/.
         session_store: {
@@ -2967,9 +3091,14 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     {
         let ks = Arc::clone(&state.kill_switch);
         let sock_path = admin_sock_path();
-        spawn_admin_socket(ks, sock_path, || {
+        // sera-bsem: the rollback callback also cancels every in-flight
+        // turn/steer so wedged runtimes release their lane slots promptly.
+        let rollback_state = Arc::clone(&state);
+        spawn_admin_socket(ks, sock_path, move || {
+            let cancelled = rollback_state.cancel_all_in_flight();
             tracing::warn!(
                 event = "KILL_SWITCH_ACTIVATED",
+                cancelled_turns = cancelled,
                 "ROLLBACK received on admin socket — gateway halted"
             );
         });
@@ -3393,6 +3522,9 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
@@ -3429,6 +3561,9 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
@@ -3465,6 +3600,9 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
@@ -3501,6 +3639,9 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
@@ -4334,6 +4475,9 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
@@ -4373,6 +4517,9 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
@@ -4413,6 +4560,9 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
@@ -4456,6 +4606,9 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
@@ -4916,6 +5069,87 @@ mod tests {
         );
     }
 
+    /// sera-bsem regression guard: a hung harness must abort when its
+    /// cancellation token fires, not wait out `SERA_TURN_TIMEOUT_SECS`. Before
+    /// the fix a ROLLBACK could leave a turn stuck for minutes on a wedged
+    /// runtime even though the kill switch was armed.
+    #[tokio::test]
+    async fn execute_turn_aborts_when_cancellation_token_fires() {
+        let harness = StdioHarness::spawn_mock_hang().await.unwrap();
+        let agent_spec = AgentSpec {
+            provider: "stub".to_string(),
+            model: None,
+            persona: None,
+            tools: None,
+            workspace: None,
+        };
+        let skill_engine = SkillDispatchEngine::new();
+        let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
+            SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+        );
+        let cancel = CancellationToken::new();
+
+        // Fire the cancellation a short time into the turn.
+        let cancel_firing = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            cancel_firing.cancel();
+        });
+
+        let start = std::time::Instant::now();
+        let result = execute_turn(
+            &agent_spec,
+            &[],
+            "hello",
+            &harness,
+            "bsem-test-session",
+            &skill_engine,
+            &semantic_store,
+            "sera",
+            &cancel,
+        )
+        .await;
+
+        // Must return the cancelled-by-rollback sentinel well before the
+        // 600 s default turn timeout.
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(1),
+            "execute_turn must abort within 1s of cancellation, elapsed={:?}",
+            start.elapsed()
+        );
+        assert!(
+            result.reply.contains("KillSwitch") || result.reply.contains("aborted"),
+            "expected KillSwitch/aborted reply, got: {}",
+            result.reply
+        );
+    }
+
+    /// sera-bsem: `AppState::cancel_all_in_flight` must cancel every
+    /// registered token, drain the map, and return the pre-drain count so the
+    /// on_rollback log line can report how many turns were aborted.
+    #[tokio::test]
+    async fn cancel_all_in_flight_cancels_every_registered_token() {
+        let state = test_state_async().await;
+        let t1 = state.register_cancellation_token("s1");
+        let t2 = state.register_cancellation_token("s2");
+        let t3 = state.register_cancellation_token("s3");
+
+        let n = state.cancel_all_in_flight();
+
+        assert_eq!(n, 3, "cancel_all_in_flight must report pre-drain count");
+        assert!(t1.is_cancelled());
+        assert!(t2.is_cancelled());
+        assert!(t3.is_cancelled());
+        assert!(
+            state
+                .active_cancellation_tokens
+                .lock()
+                .unwrap()
+                .is_empty(),
+            "registry must be drained"
+        );
+    }
+
     /// sera-un35 regression guard: when the child exits before the gateway
     /// writes the submission, `send_turn` must surface the child's exit status
     /// instead of a bare "Broken pipe (os error 32)". Future occurrences of the
@@ -5058,6 +5292,9 @@ mod tests {
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
             kill_switch: Arc::new(KillSwitch::new()),
+            active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
@@ -5136,6 +5373,9 @@ mod tests {
                     SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
                 ),
                 kill_switch: Arc::new(KillSwitch::new()),
+                active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
+                    std::collections::HashMap::new(),
+                )),
                 // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
                 // writing shadow-git dirs to the filesystem during tests.
                 session_store: Arc::new(InMemorySessionStore::new()),

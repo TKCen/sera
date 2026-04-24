@@ -4,6 +4,7 @@
 //!
 //! Usage:
 //!   sera start [-c sera.yaml] [-p 3001]
+//!   sera start --local                # unified local bootstrap (K.0)
 //!   sera init
 //!   sera agent list
 //!   sera agent create <name>
@@ -130,9 +131,19 @@ enum Commands {
         /// Path to sera.yaml config file
         #[arg(short, long, default_value = "sera.yaml")]
         config: PathBuf,
-        /// HTTP port
-        #[arg(short, long, default_value = "3001")]
+        /// HTTP port (defaults to 42540 when --local is set, 3001 otherwise)
+        #[arg(
+            short,
+            long,
+            default_value = "3001",
+            default_value_if("local", "true", "42540")
+        )]
         port: u16,
+        /// Unified local bootstrap (K.0): auto-detect LM Studio at
+        /// http://localhost:1234/v1, write data to ./sera-local/, permit
+        /// missing ConstitutionalGate, and print a ready banner.
+        #[arg(long)]
+        local: bool,
     },
     /// Initialize a new sera.yaml config
     Init,
@@ -2920,7 +2931,18 @@ async fn main() -> anyhow::Result<()> {
             run_secrets(config.as_path(), command)
         }
 
-        Commands::Start { config, port } => run_start(config, port).await,
+        Commands::Start {
+            config,
+            port,
+            local,
+        } => {
+            let config = if local {
+                apply_local_defaults(config, port).await?
+            } else {
+                config
+            };
+            run_start(config, port).await
+        }
 
         Commands::Doctor { config, json } => {
             let checks = doctor::build_checks(&config);
@@ -2936,6 +2958,135 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+// ── K.0 unified local bootstrap ─────────────────────────────────────────────
+//
+// `sera start --local` is the zero-config entry point for hacking on SERA
+// against a host-local LM Studio. It replaces the `scripts/sera-local` bash
+// wrapper. Behaviour:
+//   * Probe http://localhost:1234/v1/models (1s timeout). Fail with a clear
+//     remediation message if unreachable.
+//   * Default SERA_DATA_ROOT to ./sera-local/ (created on demand).
+//   * Default SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=1 (opt-out only).
+//   * If the config path does not exist, drop a minimal local sera.yaml into
+//     the data dir and use that.
+//   * Print a grep-friendly banner ending with "ready." on its own line.
+
+const LOCAL_LM_STUDIO_URL: &str = "http://localhost:1234/v1";
+const LOCAL_LLM_API_KEY: &str = "not-needed-for-local";
+const LOCAL_DATA_DIR: &str = "sera-local";
+const LOCAL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+const LOCAL_TEMPLATE_YAML: &str = r#"---
+apiVersion: sera.dev/v1
+kind: Instance
+metadata:
+  name: sera-local
+spec: {}
+---
+apiVersion: sera.dev/v1
+kind: Provider
+metadata:
+  name: lm-studio
+spec:
+  kind: openai-compatible
+  base_url: "http://localhost:1234/v1"
+  default_model: local-model
+---
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: sera
+spec:
+  provider: lm-studio
+  model: local-model
+  persona:
+    immutable_anchor: |
+      You are SERA running in local mode. Reply briefly.
+"#;
+
+/// Set env var only if not already present. Returns true if we set it.
+fn set_env_if_unset(key: &str, value: &str) -> bool {
+    if std::env::var_os(key).is_none() {
+        // SAFETY: called from a single-threaded prelude before any tokio tasks
+        // that read these vars have been spawned.
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+/// Probe an OpenAI-compatible endpoint. Returns Ok(()) on any 2xx/4xx
+/// response (a 404 on /models still means the server is up); Err on
+/// connection/timeout failure.
+async fn probe_llm_endpoint(base_url: &str) -> anyhow::Result<()> {
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(LOCAL_PROBE_TIMEOUT)
+        .build()?;
+    let resp = client.get(&url).send().await.map_err(|e| {
+        anyhow::anyhow!(
+            "LM Studio probe failed at {url}: {e}.\n\n\
+             Start LM Studio and load a model at http://localhost:1234,\n\
+             or pass --config <your.yaml> with a different provider."
+        )
+    })?;
+    tracing::info!(status = %resp.status(), url = %url, "LM Studio probe");
+    Ok(())
+}
+
+/// Prepare defaults for `sera start --local`. Returns the config path to use
+/// (either the caller's explicit path or a generated one in the data dir).
+async fn apply_local_defaults(config: PathBuf, port: u16) -> anyhow::Result<PathBuf> {
+    // 1. Probe LM Studio. Fail early with a clear message.
+    probe_llm_endpoint(LOCAL_LM_STUDIO_URL).await?;
+
+    // 2. Data dir: default to ./sera-local/ unless SERA_DATA_ROOT is set.
+    let data_root = std::env::var_os("SERA_DATA_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(LOCAL_DATA_DIR));
+    std::fs::create_dir_all(&data_root)?;
+    set_env_if_unset("SERA_DATA_ROOT", &data_root.to_string_lossy());
+
+    // 3. Default to permissive ConstitutionalGate for local dev.
+    set_env_if_unset("SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE", "1");
+
+    // 4. Surface the LLM defaults so curious operators can see them via
+    //    `env | grep LLM`. Consumers (StdioHarness env) still derive the URL
+    //    from the Provider manifest.
+    set_env_if_unset("LLM_BASE_URL", LOCAL_LM_STUDIO_URL);
+    set_env_if_unset("LLM_API_KEY", LOCAL_LLM_API_KEY);
+
+    // 5. Config: if the caller's path does not exist, drop a minimal local
+    //    manifest into the data dir and use that. This keeps `sera start
+    //    --local` zero-config from a fresh clone.
+    let resolved_config = if config.exists() {
+        config
+    } else {
+        let local_config = data_root.join("sera.yaml");
+        if !local_config.exists() {
+            std::fs::write(&local_config, LOCAL_TEMPLATE_YAML)?;
+        }
+        local_config
+    };
+
+    // 6. Banner — grep-friendly "ready." on its own line.
+    println!("SERA local mode");
+    println!("  gateway  http://localhost:{port}");
+    println!("  api      http://localhost:{port}/api");
+    println!("  sse      http://localhost:{port}/api/chat (stream=true)");
+    println!("  llm      {LOCAL_LM_STUDIO_URL}  (LM Studio detected)");
+    println!("  data     {}/", data_root.display());
+    println!("  logs     {}/logs/", data_root.display());
+    println!("  config   {}", resolved_config.display());
+    println!("ready.");
+    println!("Try: sera-tui   (or: cargo run --bin sera-tui)");
+
+    Ok(resolved_config)
 }
 
 async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
@@ -4021,9 +4172,14 @@ mod tests {
     fn parse_start_defaults() {
         let cli = Cli::try_parse_from(["sera", "start"]).unwrap();
         match cli.command {
-            Commands::Start { config, port } => {
+            Commands::Start {
+                config,
+                port,
+                local,
+            } => {
                 assert_eq!(config, PathBuf::from("sera.yaml"));
                 assert_eq!(port, 3001);
+                assert!(!local);
             }
             _ => panic!("expected Start"),
         }
@@ -4034,9 +4190,40 @@ mod tests {
         let cli =
             Cli::try_parse_from(["sera", "start", "-c", "custom.yaml", "-p", "8080"]).unwrap();
         match cli.command {
-            Commands::Start { config, port } => {
+            Commands::Start {
+                config,
+                port,
+                local,
+            } => {
                 assert_eq!(config, PathBuf::from("custom.yaml"));
                 assert_eq!(port, 8080);
+                assert!(!local);
+            }
+            _ => panic!("expected Start"),
+        }
+    }
+
+    #[test]
+    fn parse_start_local_sets_port_42540() {
+        // K.0: `--local` flips the default port to 42540 unless the user
+        // overrides with -p explicitly.
+        let cli = Cli::try_parse_from(["sera", "start", "--local"]).unwrap();
+        match cli.command {
+            Commands::Start { port, local, .. } => {
+                assert_eq!(port, 42540);
+                assert!(local);
+            }
+            _ => panic!("expected Start"),
+        }
+    }
+
+    #[test]
+    fn parse_start_local_respects_explicit_port() {
+        let cli = Cli::try_parse_from(["sera", "start", "--local", "-p", "9999"]).unwrap();
+        match cli.command {
+            Commands::Start { port, local, .. } => {
+                assert_eq!(port, 9999);
+                assert!(local);
             }
             _ => panic!("expected Start"),
         }

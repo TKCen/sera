@@ -519,6 +519,50 @@ lol3: &lol3 [*lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2]
         // either way — the important invariant is the process is still alive here.
     }
 
+    // ---- seed_registry_from_env -------------------------------------------
+
+    #[tokio::test]
+    async fn seed_registry_from_env_seeds_two_rules() {
+        let yaml = b"- id: env-rule-1\n  description: \"First env rule\"\n  enforcement_point: pre_approval\n- id: env-rule-2\n  description: \"Second env rule\"\n  enforcement_point: pre_proposal\n";
+        let mut tmp = NamedTempFile::new().unwrap();
+        tmp.write_all(yaml).unwrap();
+
+        let path_str = tmp.path().to_str().unwrap().to_owned();
+        std::env::set_var("SERA_CONSTITUTIONAL_RULES_PATH", &path_str);
+
+        let registry = ConstitutionalRegistry::new();
+        let count = seed_registry_from_env(&registry)
+            .await
+            .expect("seed_registry_from_env should succeed when env var points to a valid file");
+
+        std::env::remove_var("SERA_CONSTITUTIONAL_RULES_PATH");
+
+        assert_eq!(count, 2, "should seed exactly 2 rules");
+        assert_eq!(registry.all_rules().await.len(), 2);
+        assert!(registry.get("env-rule-1").await.is_some());
+        assert!(registry.get("env-rule-2").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn seed_registry_from_env_no_op_when_default_path_absent() {
+        // When SERA_CONSTITUTIONAL_RULES_PATH is unset the loader falls back to
+        // DEFAULT_RULES_PATH (/etc/sera/constitutional_rules.yaml). That file
+        // almost certainly doesn't exist in CI, so the call must return Ok(0).
+        std::env::remove_var("SERA_CONSTITUTIONAL_RULES_PATH");
+
+        // Skip if the default path exists on this machine (e.g. a developer
+        // environment that has real rules installed) to avoid a false failure.
+        if std::path::Path::new(DEFAULT_RULES_PATH).exists() {
+            return;
+        }
+
+        let registry = ConstitutionalRegistry::new();
+        let result = seed_registry_from_env(&registry).await;
+        assert!(result.is_ok(), "missing default file must be a no-op, not an error");
+        assert_eq!(result.unwrap(), 0);
+        assert!(registry.all_rules().await.is_empty());
+    }
+
     // ---- relative path env var --------------------------------------------
 
     #[tokio::test]

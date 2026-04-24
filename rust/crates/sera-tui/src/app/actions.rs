@@ -53,6 +53,8 @@ impl ViewKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Quit,
+    /// Execute a parsed slash command from the composer.
+    ExecuteSlash(super::slash::SlashCommand),
     Refresh,
     NextView,
     PrevView,

@@ -42,6 +42,24 @@ pub enum HarnessError {
     Failed(String),
     #[error("harness shutting down")]
     ShuttingDown,
+    #[error("harness error: {0}")]
+    Internal(String),
+    #[error("not supported: {0}")]
+    NotSupported(String),
+}
+
+impl From<HarnessError> for sera_errors::SeraError {
+    fn from(err: HarnessError) -> Self {
+        use sera_errors::SeraErrorCode;
+        let code = match &err {
+            HarnessError::AgentNotFound(_) => SeraErrorCode::NotFound,
+            HarnessError::Failed(_) => SeraErrorCode::Internal,
+            HarnessError::ShuttingDown => SeraErrorCode::Unavailable,
+            HarnessError::Internal(_) => SeraErrorCode::Internal,
+            HarnessError::NotSupported(_) => SeraErrorCode::NotImplemented,
+        };
+        sera_errors::SeraError::with_source(code, err.to_string(), err)
+    }
 }
 
 /// Registry of active agent harnesses.

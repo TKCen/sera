@@ -76,14 +76,7 @@ pub struct ResetParams {
     pub session_key: String,
 }
 
-/// Harness errors.
-#[derive(Debug, thiserror::Error)]
-pub enum HarnessError {
-    #[error("harness error: {0}")]
-    Internal(String),
-    #[error("not supported: {0}")]
-    NotSupported(String),
-}
+pub use sera_types::harness::HarnessError;
 
 /// The default harness implementation.
 ///

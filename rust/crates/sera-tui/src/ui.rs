@@ -11,6 +11,7 @@ use ratatui::Frame;
 
 use crate::app::{actions::ViewKind, App, StatusLevel};
 use crate::client::ConnectionState;
+use crate::views::status_bar::StatusBar;
 
 /// Render the whole screen.
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -20,6 +21,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             Constraint::Length(3),
             Constraint::Min(0),
             Constraint::Length(2),
+            Constraint::Length(1),
         ])
         .split(frame.area());
 
@@ -34,6 +36,16 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 
     render_footer(frame, chunks[2], app);
+
+    // Status bar: agent name + session short-id + connection state.
+    let agent = app.active_agent_id.as_deref();
+    let session_id = app.session.session.as_ref().map(|s| s.id.as_str());
+    StatusBar {
+        agent,
+        session_id,
+        conn: app.connection,
+    }
+    .render(frame, chunks[3]);
 }
 
 fn render_title(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {

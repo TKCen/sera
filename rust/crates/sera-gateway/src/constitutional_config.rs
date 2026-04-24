@@ -528,14 +528,14 @@ lol3: &lol3 [*lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2]
         tmp.write_all(yaml).unwrap();
 
         let path_str = tmp.path().to_str().unwrap().to_owned();
-        std::env::set_var("SERA_CONSTITUTIONAL_RULES_PATH", &path_str);
+        unsafe { std::env::set_var("SERA_CONSTITUTIONAL_RULES_PATH", &path_str); }
 
         let registry = ConstitutionalRegistry::new();
         let count = seed_registry_from_env(&registry)
             .await
             .expect("seed_registry_from_env should succeed when env var points to a valid file");
 
-        std::env::remove_var("SERA_CONSTITUTIONAL_RULES_PATH");
+        unsafe { std::env::remove_var("SERA_CONSTITUTIONAL_RULES_PATH"); }
 
         assert_eq!(count, 2, "should seed exactly 2 rules");
         assert_eq!(registry.all_rules().await.len(), 2);
@@ -548,7 +548,7 @@ lol3: &lol3 [*lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2]
         // When SERA_CONSTITUTIONAL_RULES_PATH is unset the loader falls back to
         // DEFAULT_RULES_PATH (/etc/sera/constitutional_rules.yaml). That file
         // almost certainly doesn't exist in CI, so the call must return Ok(0).
-        std::env::remove_var("SERA_CONSTITUTIONAL_RULES_PATH");
+        unsafe { std::env::remove_var("SERA_CONSTITUTIONAL_RULES_PATH"); }
 
         // Skip if the default path exists on this machine (e.g. a developer
         // environment that has real rules installed) to avoid a false failure.

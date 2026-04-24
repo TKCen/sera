@@ -610,6 +610,9 @@ struct AppState {
     /// `SERA_CONSTITUTIONAL_RULES_PATH` (default `/etc/sera/constitutional_rules.yaml`).
     /// Empty when the file is absent — constitutional_gate hooks still run but
     /// find no rules to evaluate (fail-open vs fail-closed is the hook's choice).
+    /// Field is populated but not yet read by any hook handler; the
+    /// ConstitutionalGateHook that consults it is filed as sera-0yh3.
+    #[allow(dead_code)]
     constitutional_registry: Arc<ConstitutionalRegistry>,
 }
 
@@ -4362,6 +4365,7 @@ mod tests {
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
+            constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -4401,6 +4405,7 @@ mod tests {
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
+            constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -4441,6 +4446,7 @@ mod tests {
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
+            constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -4484,6 +4490,7 @@ mod tests {
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
+            constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
         };
         let headers = HeaderMap::new();
         assert_eq!(
@@ -5165,6 +5172,7 @@ mod tests {
                 // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
                 // writing shadow-git dirs to the filesystem during tests.
                 session_store: Arc::new(InMemorySessionStore::new()),
+                constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             })
         };
         let app = build_router(state);

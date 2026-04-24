@@ -20,6 +20,7 @@ sera-db.workspace = true
 sera-hooks.workspace = true
 sera-hitl.workspace = true
 sera-auth.workspace = true
+sera-meta.workspace = true
 sera-models.workspace = true
 sera-skills.workspace = true
 sera-telemetry.workspace = true

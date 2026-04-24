@@ -527,7 +527,7 @@ fn update_memory_index(memory_dir: &Path) -> Result<(), String> {
             format!("{:.1}KB", size as f64 / 1024.0)
         };
 
-        entries.push((fname, title, size, size_str + &format!(" | {modified}")));
+        entries.push((fname, title, size, format!("{size_str} | {modified}")));
     }
 
     entries.sort_by(|a, b| a.0.cmp(&b.0));

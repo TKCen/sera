@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio_stream::StreamExt as _;
 
-use crate::client::{ConnectionState, GatewayClient, SseUpdate};
+use crate::client::{ConnectionState, GatewayClient, HitlRequest, SseUpdate};
 use crate::keybindings::TuiKeybindings;
 use crate::views::agent_list::AgentListView;
 use crate::views::evolve_status::EvolveStatusView;
@@ -78,6 +78,12 @@ pub enum AppCommand {
     LoadSessionsForPicker(String),
     /// Load a specific session by id (from picker selection).
     OpenSession(String),
+    /// Approve the HITL request shown in the inline modal.
+    ApproveModal(String),
+    /// Reject the HITL request shown in the inline modal.
+    RejectModal(String),
+    /// Escalate the HITL request shown in the inline modal.
+    EscalateModal(String),
 }
 
 /// Root application state.
@@ -104,6 +110,10 @@ pub struct App {
     pub session_picker: SessionPickerView,
     /// Whether the session picker modal is currently visible.
     pub show_session_picker: bool,
+    /// When a HITL request fires on the active session, this is populated
+    /// and a centered modal overlay is rendered over the current pane.
+    /// `None` means no modal is open.
+    pub show_hitl_modal: Option<HitlRequest>,
 
     /// Commands emitted by `dispatch` that the runtime must execute.
     /// The field is `pub` so the runtime (in `run`) can drain it each
@@ -130,6 +140,7 @@ impl App {
             active_agent_id: None,
             session_picker: SessionPickerView::new(),
             show_session_picker: false,
+            show_hitl_modal: None,
             pending: Vec::new(),
             show_help: false,
         }
@@ -140,6 +151,37 @@ impl App {
     /// `GatewayClient::new("http://127.0.0.1:1", …)` that never fires
     /// and still exercise the full reducer.
     pub fn dispatch(&mut self, action: Action) {
+        // When the inline HITL modal is open, remap approve/reject/escalate/back
+        // to modal-scoped actions and swallow everything else so the background
+        // pane doesn't receive input while the modal is shown.
+        if self.show_hitl_modal.is_some() {
+            match action {
+                Action::Approve => {
+                    let id = self.show_hitl_modal.as_ref().map(|r| r.id.clone()).unwrap_or_default();
+                    self.show_hitl_modal = None;
+                    self.pending.push(AppCommand::ApproveModal(id));
+                }
+                Action::Reject => {
+                    let id = self.show_hitl_modal.as_ref().map(|r| r.id.clone()).unwrap_or_default();
+                    self.show_hitl_modal = None;
+                    self.pending.push(AppCommand::RejectModal(id));
+                }
+                Action::Escalate => {
+                    let id = self.show_hitl_modal.as_ref().map(|r| r.id.clone()).unwrap_or_default();
+                    self.show_hitl_modal = None;
+                    self.pending.push(AppCommand::EscalateModal(id));
+                }
+                Action::Back | Action::DismissHitlModal => {
+                    self.show_hitl_modal = None;
+                }
+                // Quit still works even with modal open.
+                Action::Quit => self.should_quit = true,
+                // All other keys are swallowed while the modal is open.
+                _ => {}
+            }
+            return;
+        }
+
         match action {
             Action::Quit => self.should_quit = true,
             Action::NextView => {
@@ -308,6 +350,12 @@ impl App {
                     self.pending.push(AppCommand::OpenSession(id));
                 }
             }
+            // These are only dispatched via the modal intercept path above, so
+            // reaching here means the modal was already closed.  Treat as no-op.
+            Action::ApproveHitl(_)
+            | Action::RejectHitl(_)
+            | Action::EscalateHitl(_)
+            | Action::DismissHitlModal => {}
             Action::NoOp => {}
         }
     }
@@ -360,6 +408,15 @@ impl App {
             ViewKind::Evolve => format!("  {}:↑  {}:↓", display_first(&kb.up), display_first(&kb.down)),
         };
         base + &extra
+    }
+}
+
+/// Show the modal for `req` if the active session belongs to its agent and no
+/// modal is already open.  Called after every HITL refresh so the operator
+/// gets an immediate pop-up when a request arrives for their current session.
+pub fn maybe_show_hitl_modal(app: &mut App, req: HitlRequest) {
+    if app.show_hitl_modal.is_none() {
+        app.show_hitl_modal = Some(req);
     }
 }
 
@@ -447,6 +504,36 @@ impl Runtime {
                 AppCommand::OpenSession(session_id) => {
                     self.load_session_by_id(app, session_id).await;
                 }
+                AppCommand::ApproveModal(id) => match app.client.approve_hitl(&id).await {
+                    Ok(()) => {
+                        app.status = Status::info(format!("approved {id}"));
+                        Self::refresh_hitl(app).await;
+                    }
+                    Err(e) => {
+                        app.hitl.set_error(e.to_string());
+                        app.status = Status::error(format!("approve failed: {e}"));
+                    }
+                },
+                AppCommand::RejectModal(id) => match app.client.reject_hitl(&id).await {
+                    Ok(()) => {
+                        app.status = Status::info(format!("rejected {id}"));
+                        Self::refresh_hitl(app).await;
+                    }
+                    Err(e) => {
+                        app.hitl.set_error(e.to_string());
+                        app.status = Status::error(format!("reject failed: {e}"));
+                    }
+                },
+                AppCommand::EscalateModal(id) => match app.client.escalate_hitl(&id).await {
+                    Ok(()) => {
+                        app.status = Status::info(format!("escalated {id}"));
+                        Self::refresh_hitl(app).await;
+                    }
+                    Err(e) => {
+                        app.hitl.set_error(e.to_string());
+                        app.status = Status::error(format!("escalate failed: {e}"));
+                    }
+                },
             }
         }
     }
@@ -483,6 +570,16 @@ impl Runtime {
         match app.client.list_hitl().await {
             Ok(list) => {
                 let n = list.len();
+                // If the active session's agent has a pending request and no
+                // modal is already open, surface it immediately.
+                if let Some(active_agent) = &app.active_agent_id.clone()
+                    && let Some(req) = list
+                        .iter()
+                        .find(|r| r.agent_id == *active_agent && r.status == "pending")
+                        .cloned()
+                {
+                    maybe_show_hitl_modal(app, req);
+                }
                 app.hitl.set_requests(list);
                 app.status = Status::info(format!("{n} HITL request(s)"));
             }

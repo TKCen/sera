@@ -11,6 +11,7 @@ use ratatui::Frame;
 
 use crate::app::{actions::ViewKind, App, StatusLevel};
 use crate::client::ConnectionState;
+use crate::views::hitl_modal::render_hitl_modal;
 use crate::views::status_bar::StatusBar;
 
 /// Render the whole screen.
@@ -55,6 +56,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Session picker modal — rendered last so it overlays everything.
     if app.show_session_picker {
         app.session_picker.render(frame, frame.area());
+    }
+
+    // Inline HITL modal — rendered on top of all panes (including picker).
+    if let Some(req) = &app.show_hitl_modal {
+        render_hitl_modal(frame, req, &app.keybindings);
     }
 }
 

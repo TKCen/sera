@@ -426,6 +426,33 @@ pub enum ToolError {
     InvalidInput(String),
     #[error("policy denied tool execution: {0}")]
     PolicyDenied(String),
+    /// Invalid arguments supplied to a tool call (dispatch-layer validation).
+    #[error("invalid arguments: {0}")]
+    InvalidArguments(String),
+    /// A pre-tool hook aborted the call before execution.
+    #[error("tool call aborted by hook: {reason}")]
+    AbortedByHook { reason: String },
+    /// The caller's permission mode was insufficient and escalation was denied.
+    #[error("permission denied for tool call: {reason}")]
+    PermissionDenied { reason: String },
+}
+
+impl From<ToolError> for sera_errors::SeraError {
+    fn from(err: ToolError) -> Self {
+        use sera_errors::SeraErrorCode;
+        let code = match &err {
+            ToolError::NotFound(_) => SeraErrorCode::NotFound,
+            ToolError::ExecutionFailed(_) => SeraErrorCode::Internal,
+            ToolError::InvalidArguments(_) => SeraErrorCode::InvalidInput,
+            ToolError::InvalidInput(_) => SeraErrorCode::InvalidInput,
+            ToolError::AbortedByHook { .. } => SeraErrorCode::Forbidden,
+            ToolError::PermissionDenied { .. } => SeraErrorCode::Forbidden,
+            ToolError::Unauthorized(_) => SeraErrorCode::Forbidden,
+            ToolError::PolicyDenied(_) => SeraErrorCode::Forbidden,
+            ToolError::Timeout => SeraErrorCode::Internal,
+        };
+        sera_errors::SeraError::with_source(code, err.to_string(), err)
+    }
 }
 
 /// Injected credentials available to a tool at execution time.

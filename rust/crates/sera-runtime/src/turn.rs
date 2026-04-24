@@ -96,22 +96,11 @@ pub trait LlmProvider: Send + Sync {
 // ── ToolDispatcher trait ────────────────────────────────────────────────────
 
 /// Errors from tool dispatch.
-#[derive(Debug, thiserror::Error)]
-pub enum ToolError {
-    #[error("tool not found: {0}")]
-    NotFound(String),
-    #[error("tool execution failed: {0}")]
-    ExecutionFailed(String),
-    #[error("invalid arguments: {0}")]
-    InvalidArguments(String),
-    /// A pre-tool hook aborted the call before execution.
-    #[error("tool call aborted by hook: {reason}")]
-    AbortedByHook { reason: String },
-    /// The caller's permission mode was insufficient and escalation was
-    /// denied by the [`crate::permissions::EscalationAuthority`].
-    #[error("permission denied for tool call: {reason}")]
-    PermissionDenied { reason: String },
-}
+///
+/// Re-exported from [`sera_types::tool::ToolError`] — the canonical definition
+/// lives there. Use `sera_types::tool::ToolError` directly in new code;
+/// `crate::turn::ToolError` is kept as an alias for back-compat.
+pub use sera_types::tool::ToolError;
 
 /// Trait for dispatching tool calls from the act step.
 ///

@@ -226,11 +226,7 @@ impl ToolDispatcher for RegistryDispatcher {
                 "role": "tool",
                 "content": output.content,
             })),
-            Err(sera_types::tool::ToolError::NotFound(n)) => Err(ToolError::NotFound(n)),
-            Err(sera_types::tool::ToolError::PolicyDenied(n)) => {
-                Err(ToolError::ExecutionFailed(format!("policy denied: {n}")))
-            }
-            Err(e) => Err(ToolError::ExecutionFailed(e.to_string())),
+            Err(e) => Err(e),
         }
     }
 }
@@ -361,7 +357,10 @@ mod tests {
             deny_patterns: vec!["*".to_string()],
         };
         let err = dispatcher.dispatch(&tool_call, &ctx).await.unwrap_err();
-        assert!(matches!(err, ToolError::ExecutionFailed(_)));
+        assert!(
+            matches!(err, ToolError::PolicyDenied(_) | ToolError::ExecutionFailed(_)),
+            "expected PolicyDenied or ExecutionFailed, got {err:?}",
+        );
     }
 
     // ── sera-ddz: tool hook + permission escalation integration ─────────

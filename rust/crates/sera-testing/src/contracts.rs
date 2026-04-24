@@ -53,7 +53,7 @@ mod tests {
     fn contract_example_minimal_lifecycle_mode() {
         use sera_types::LifecycleMode;
         let t = parse_template("example-minimal.template.yaml");
-        let mode = t.spec.lifecycle.as_ref().unwrap().mode.clone();
+        let mode = t.spec.lifecycle.as_ref().unwrap().mode;
         assert_eq!(mode, LifecycleMode::Ephemeral);
     }
 
@@ -97,7 +97,7 @@ mod tests {
     fn contract_example_full_lifecycle_persistent() {
         use sera_types::LifecycleMode;
         let t = parse_template("example-full.template.yaml");
-        let mode = t.spec.lifecycle.as_ref().unwrap().mode.clone();
+        let mode = t.spec.lifecycle.as_ref().unwrap().mode;
         assert_eq!(mode, LifecycleMode::Persistent);
     }
 

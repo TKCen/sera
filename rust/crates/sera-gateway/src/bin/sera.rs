@@ -1683,34 +1683,79 @@ async fn execute_steer(
     let mut stdin = harness.stdin.lock().await;
     let mut stdout = harness.stdout.lock().await;
 
-    stdin.write_all(json_line.as_bytes()).await.unwrap();
-    stdin.flush().await.unwrap();
-
-    // Read TurnCompleted event.
-    let mut line = String::new();
-    loop {
-        match stdout.read_line(&mut line).await {
-            Ok(0) => break,
-            Ok(_) => {
-                if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line)
-                    && event.get("type").and_then(|v| v.as_str()) == Some("turn_completed")
-                {
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-        line.clear();
+    if let Err(e) = stdin.write_all(json_line.as_bytes()).await {
+        let ctx_err = harness.child_exit_context(e).await;
+        tracing::error!(error = %ctx_err, session_key = %session_key, "Steer stdin write failed");
+        return MvsTurnResult {
+            reply: format!("[sera] Steer injection failed: {ctx_err}"),
+            tool_events: vec![],
+            usage: UsageInfo {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+            },
+        };
+    }
+    if let Err(e) = stdin.flush().await {
+        let ctx_err = harness.child_exit_context(e).await;
+        tracing::error!(error = %ctx_err, session_key = %session_key, "Steer stdin flush failed");
+        return MvsTurnResult {
+            reply: format!("[sera] Steer injection failed: {ctx_err}"),
+            tool_events: vec![],
+            usage: UsageInfo {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+            },
+        };
     }
 
-    MvsTurnResult {
-        reply: "[steer injected]".to_string(),
-        tool_events: vec![],
-        usage: UsageInfo {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
+    let timeout = turn_timeout();
+    match tokio::time::timeout(timeout, async {
+        // Read TurnCompleted event.
+        let mut line = String::new();
+        loop {
+            match stdout.read_line(&mut line).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line)
+                        && event.get("type").and_then(|v| v.as_str()) == Some("turn_completed")
+                    {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+            line.clear();
+        }
+    })
+    .await
+    {
+        Ok(()) => MvsTurnResult {
+            reply: "[steer injected]".to_string(),
+            tool_events: vec![],
+            usage: UsageInfo {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+            },
         },
+        Err(_elapsed) => {
+            tracing::error!(
+                session_key = %session_key,
+                timeout_secs = timeout.as_secs(),
+                "Runtime harness steer timed out; releasing lane"
+            );
+            MvsTurnResult {
+                reply: "[sera] Steer injection timed out".to_string(),
+                tool_events: vec![],
+                usage: UsageInfo {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    total_tokens: 0,
+                },
+            }
+        }
     }
 }
 

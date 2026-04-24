@@ -124,6 +124,17 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
             } else {
                 translate(&key, &app.keybindings)
             };
+            // When Enter is pressed in the Agents pane, resolve the selected
+            // agent ID here and dispatch SelectAgent so the action carries an
+            // explicit ID (spec G.0.3).
+            let action = if action == crate::app::Action::Select
+                && app.focus == ViewKind::Agents
+                && let Some(id) = app.agents.selected_id()
+            {
+                crate::app::Action::SelectAgent(id)
+            } else {
+                action
+            };
             app.dispatch(action);
         }
 

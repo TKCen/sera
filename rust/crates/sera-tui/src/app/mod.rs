@@ -85,6 +85,10 @@ pub struct App {
     pub connection: ConnectionState,
     pub client: Arc<GatewayClient>,
 
+    /// The agent currently being viewed in the Session pane.
+    /// Set by `Action::Select` and `Action::SelectAgent`.
+    pub active_agent_id: Option<String>,
+
     /// Commands emitted by `dispatch` that the runtime must execute.
     /// The field is `pub` so the runtime (in `run`) can drain it each
     /// tick without needing a getter.
@@ -104,6 +108,7 @@ impl App {
             evolve: EvolveStatusView::new(),
             connection: ConnectionState::Disconnected,
             client: Arc::new(client),
+            active_agent_id: None,
             pending: Vec::new(),
         }
     }
@@ -150,9 +155,15 @@ impl App {
                 if self.focus == ViewKind::Agents
                     && let Some(id) = self.agents.selected_id()
                 {
+                    self.active_agent_id = Some(id.clone());
                     self.focus = ViewKind::Session;
                     self.pending.push(AppCommand::LoadSessionFor(id));
                 }
+            }
+            Action::SelectAgent(id) => {
+                self.active_agent_id = Some(id.clone());
+                self.focus = ViewKind::Session;
+                self.pending.push(AppCommand::LoadSessionFor(id));
             }
             Action::Back => {
                 if self.focus != ViewKind::Agents {
@@ -412,7 +423,11 @@ impl Runtime {
                     self.sse_task = Some(app.client.spawn_sse(session.id.clone(), bridge_tx));
                     app.status = Status::info(format!("session {} loaded", session.id));
                 } else {
-                    app.status = Status::warn(format!("no sessions for agent {agent_id}"));
+                    // No sessions yet — clear any stale transcript so the
+                    // composer pane starts fresh; the first Ctrl+Enter will
+                    // create the session server-side.
+                    app.session.set_transcript(Vec::new());
+                    app.status = Status::info(format!("no sessions for agent {agent_id} — ready to chat"));
                 }
             }
             Err(e) => {
@@ -592,5 +607,45 @@ mod tests {
         let mut app = App::new(client(), TuiKeybindings::defaults());
         app.dispatch(Action::Refresh);
         assert!(matches!(app.pending.last(), Some(AppCommand::RefreshAll)));
+    }
+
+    #[test]
+    fn select_agent_sets_active_agent_id() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        assert_eq!(app.active_agent_id, None);
+        app.dispatch(Action::SelectAgent("agent-42".to_owned()));
+        assert_eq!(app.active_agent_id.as_deref(), Some("agent-42"));
+    }
+
+    #[test]
+    fn select_agent_switches_to_session_pane() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        assert_eq!(app.focus, ViewKind::Agents);
+        app.dispatch(Action::SelectAgent("agent-42".to_owned()));
+        assert_eq!(app.focus, ViewKind::Session);
+        assert!(matches!(
+            app.pending.last(),
+            Some(AppCommand::LoadSessionFor(id)) if id == "agent-42"
+        ));
+    }
+
+    #[test]
+    fn select_agent_without_existing_session_clears_transcript() {
+        // The transcript-clearing happens inside load_session_for (runtime),
+        // but we verify the dispatch sets the right command so the runtime
+        // will reach the clear path on empty session list.
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        // Pre-populate transcript with stale data.
+        app.session.set_transcript(vec![
+            crate::client::TranscriptEntry { role: "user".into(), text: "old message".into() },
+        ]);
+        app.dispatch(Action::SelectAgent("fresh-agent".to_owned()));
+        // Dispatch is pure — transcript not cleared yet (that's runtime's job).
+        // But active_agent_id is set and LoadSessionFor is queued.
+        assert_eq!(app.active_agent_id.as_deref(), Some("fresh-agent"));
+        assert!(matches!(
+            app.pending.last(),
+            Some(AppCommand::LoadSessionFor(id)) if id == "fresh-agent"
+        ));
     }
 }

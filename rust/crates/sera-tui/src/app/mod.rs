@@ -23,7 +23,7 @@ use crate::views::hitl_queue::HitlQueueView;
 use crate::views::session::SessionView;
 use crate::views::session_picker::SessionPickerView;
 
-pub use actions::{Action, ViewKind};
+pub use actions::{Action, Focus, ViewKind};
 pub use slash::SlashCommand;
 
 /// Footer-bar messages the app surfaces to the operator.
@@ -88,7 +88,17 @@ pub enum AppCommand {
 
 /// Root application state.
 pub struct App {
+    /// **J.0.1**: legacy view pointer — kept so the existing
+    /// NextView/PrevView actions and tests still compile.  In the
+    /// chat-dominant layout the main canvas is always Session, so this
+    /// field is no longer used by `ui::render`.
     pub focus: ViewKind,
+    /// **J.0.1**: keyboard focus inside the chat-dominant layout.
+    /// Composer (typing) vs Transcript (scrolling).  Default is Composer.
+    /// Read by J.0.2 (block-based transcript) onwards; currently set but
+    /// not yet consulted by any renderer.
+    #[allow(dead_code)]
+    pub chat_focus: Focus,
     pub should_quit: bool,
     pub keybindings: TuiKeybindings,
     pub status: Status,
@@ -115,6 +125,14 @@ pub struct App {
     /// `None` means no modal is open.
     pub show_hitl_modal: Option<HitlRequest>,
 
+    /// **J.0.1**: whether the agents picker modal (Ctrl+A) is visible.
+    pub show_agents_modal: bool,
+    /// **J.0.1**: whether the HITL queue modal (Ctrl+H) is visible.
+    /// Distinct from `show_hitl_modal` (the inline approval overlay).
+    pub show_hitl_queue_modal: bool,
+    /// **J.0.1**: whether the evolve status modal (Ctrl+E) is visible.
+    pub show_evolve_modal: bool,
+
     /// Commands emitted by `dispatch` that the runtime must execute.
     /// The field is `pub` so the runtime (in `run`) can drain it each
     /// tick without needing a getter.
@@ -128,6 +146,7 @@ impl App {
     pub fn new(client: GatewayClient, keybindings: TuiKeybindings) -> Self {
         Self {
             focus: ViewKind::Agents,
+            chat_focus: Focus::Composer,
             should_quit: false,
             keybindings,
             status: Status::info("ready"),
@@ -141,9 +160,19 @@ impl App {
             session_picker: SessionPickerView::new(),
             show_session_picker: false,
             show_hitl_modal: None,
+            show_agents_modal: false,
+            show_hitl_queue_modal: false,
+            show_evolve_modal: false,
             pending: Vec::new(),
             show_help: false,
         }
+    }
+
+    /// Returns true when any J.0.1 overlay modal (agents / HITL queue /
+    /// evolve status) is currently shown.  Used by `dispatch` to reroute
+    /// input to modal-scoped actions.
+    pub fn any_j01_modal_open(&self) -> bool {
+        self.show_agents_modal || self.show_hitl_queue_modal || self.show_evolve_modal
     }
 
     /// Apply `action` to the state.  Pure apart from pushing commands
@@ -151,6 +180,81 @@ impl App {
     /// `GatewayClient::new("http://127.0.0.1:1", …)` that never fires
     /// and still exercise the full reducer.
     pub fn dispatch(&mut self, action: Action) {
+        // J.0.1 modal precedence — when any chat-dominant modal is open
+        // (agents / HITL queue / evolve), swallow background input and only
+        // honour close/quit + modal-scoped navigation.
+        if self.any_j01_modal_open() {
+            match action {
+                Action::CloseModal | Action::Back => {
+                    // ESC closes the topmost modal — evolve > hitl > agents.
+                    if self.show_evolve_modal {
+                        self.show_evolve_modal = false;
+                    } else if self.show_hitl_queue_modal {
+                        self.show_hitl_queue_modal = false;
+                    } else if self.show_agents_modal {
+                        self.show_agents_modal = false;
+                    }
+                }
+                Action::Quit => self.should_quit = true,
+                Action::Up => {
+                    if self.show_agents_modal {
+                        self.agents.up();
+                    } else if self.show_hitl_queue_modal {
+                        self.hitl.up();
+                    } else if self.show_evolve_modal {
+                        self.evolve.up();
+                    }
+                }
+                Action::Down => {
+                    if self.show_agents_modal {
+                        self.agents.down();
+                    } else if self.show_hitl_queue_modal {
+                        self.hitl.down();
+                    } else if self.show_evolve_modal {
+                        self.evolve.down();
+                    }
+                }
+                Action::Select | Action::SelectAgent(_) => {
+                    if self.show_agents_modal
+                        && let Some(id) = self.agents.selected_id()
+                    {
+                        self.active_agent_id = Some(id.clone());
+                        self.show_agents_modal = false;
+                        self.pending.push(AppCommand::LoadSessionFor(id));
+                    }
+                }
+                Action::Approve => {
+                    if self.show_hitl_queue_modal
+                        && let Some(id) = self.hitl.selected_id()
+                    {
+                        self.hitl.clear_error();
+                        self.pending.push(AppCommand::Approve(id));
+                    }
+                }
+                Action::Reject => {
+                    if self.show_hitl_queue_modal
+                        && let Some(id) = self.hitl.selected_id()
+                    {
+                        self.hitl.clear_error();
+                        self.pending.push(AppCommand::Reject(id));
+                    }
+                }
+                Action::Escalate => {
+                    if self.show_hitl_queue_modal
+                        && let Some(id) = self.hitl.selected_id()
+                    {
+                        self.hitl.clear_error();
+                        self.pending.push(AppCommand::Escalate(id));
+                    }
+                }
+                Action::Refresh => self.pending.push(AppCommand::RefreshAll),
+                // Swallow everything else — composer typing must not leak
+                // behind the modal.
+                _ => {}
+            }
+            return;
+        }
+
         // When the inline HITL modal is open, remap approve/reject/escalate/back
         // to modal-scoped actions and swallow everything else so the background
         // pane doesn't receive input while the modal is shown.
@@ -336,6 +440,25 @@ impl App {
             Action::ClosePicker => {
                 self.show_session_picker = false;
             }
+            Action::OpenAgentsModal => {
+                self.show_agents_modal = true;
+                // Fetch fresh agent list when opening so the operator sees
+                // current state rather than whatever was cached.
+                self.pending.push(AppCommand::RefreshAll);
+            }
+            Action::OpenHitlModal => {
+                self.show_hitl_queue_modal = true;
+                self.pending.push(AppCommand::RefreshAll);
+            }
+            Action::OpenEvolveModal => {
+                self.show_evolve_modal = true;
+                self.pending.push(AppCommand::RefreshAll);
+            }
+            Action::CloseModal => {
+                // No J.0.1 modal is open in this branch (would have been
+                // handled above).  Fall through to a no-op so the dispatch
+                // match stays exhaustive.
+            }
             Action::PickerUp => {
                 if self.show_session_picker {
                     self.session_picker.move_up();
@@ -379,40 +502,70 @@ impl App {
         }
     }
 
-    /// Footer hint row for the currently focused view.  Changes by pane so
-    /// the operator sees the relevant keybindings.
+    /// Footer hint row — context-sensitive for the chat-dominant layout.
+    /// Modal-open states show modal-relevant bindings; otherwise the hint
+    /// reflects the composer/transcript focus.
     pub fn footer_hint(&self) -> String {
         let kb = &self.keybindings;
-        let base = format!(
-            "{}:quit  {}:refresh  {}:tab  {}:S-tab",
-            display_first(&kb.quit),
-            display_first(&kb.refresh),
-            display_first(&kb.next_view),
-            display_first(&kb.prev_view)
-        );
-        let extra = match self.focus {
-            ViewKind::Agents => format!(
-                "  {}:select  {}:↑  {}:↓",
-                display_first(&kb.select),
-                display_first(&kb.up),
-                display_first(&kb.down)
-            ),
-            ViewKind::Session => format!(
-                "  {}:back  {}:↑  {}:↓  {}:end",
-                display_first(&kb.back),
-                display_first(&kb.up),
-                display_first(&kb.down),
-                display_first(&kb.end_of_buffer)
-            ),
-            ViewKind::Hitl => format!(
-                "  {}:approve  {}:reject  {}:escalate",
+
+        // HITL inline approval modal takes priority — its bindings are
+        // already in its own footer but we still swap the global hint so
+        // the operator doesn't see stale composer hints.
+        if self.show_hitl_modal.is_some() {
+            return format!(
+                "{}:approve  {}:reject  {}:escalate  {}:dismiss",
                 display_first(&kb.approve),
                 display_first(&kb.reject),
-                display_first(&kb.escalate)
-            ),
-            ViewKind::Evolve => format!("  {}:↑  {}:↓", display_first(&kb.up), display_first(&kb.down)),
-        };
-        base + &extra
+                display_first(&kb.escalate),
+                display_first(&kb.back),
+            );
+        }
+
+        if self.show_agents_modal {
+            return format!(
+                "{}:select  {}:↑  {}:↓  esc:close",
+                display_first(&kb.select),
+                display_first(&kb.up),
+                display_first(&kb.down),
+            );
+        }
+        if self.show_hitl_queue_modal {
+            return format!(
+                "{}:approve  {}:reject  {}:escalate  {}:↑  {}:↓  esc:close",
+                display_first(&kb.approve),
+                display_first(&kb.reject),
+                display_first(&kb.escalate),
+                display_first(&kb.up),
+                display_first(&kb.down),
+            );
+        }
+        if self.show_evolve_modal {
+            return format!(
+                "{}:↑  {}:↓  esc:close",
+                display_first(&kb.up),
+                display_first(&kb.down),
+            );
+        }
+        if self.show_session_picker {
+            return format!(
+                "{}:select  {}:↑  {}:↓  esc:close",
+                display_first(&kb.select),
+                display_first(&kb.up),
+                display_first(&kb.down),
+            );
+        }
+
+        // No modal — chat-dominant base hints.
+        format!(
+            "{}:send  {}:focus  {}:agents  {}:hitl  {}:evolve  {}:sessions  {}:quit",
+            display_first(&kb.submit_message),
+            display_first(&kb.toggle_composer_focus),
+            display_first(&kb.open_agents_modal),
+            display_first(&kb.open_hitl_modal),
+            display_first(&kb.open_evolve_modal),
+            display_first(&kb.open_session_picker),
+            display_first(&kb.quit),
+        )
     }
 }
 
@@ -886,12 +1039,16 @@ mod tests {
     }
 
     #[test]
-    fn footer_hint_changes_with_focus() {
+    fn footer_hint_changes_with_modal_state() {
+        // J.0.1: footer_hint reflects modal-open state, not the legacy
+        // ViewKind focus.  The base (no-modal) hint mentions "send" for
+        // the composer; opening the HITL queue modal swaps in approve.
         let mut app = App::new(client(), TuiKeybindings::defaults());
-        let agents_hint = app.footer_hint();
-        app.focus = ViewKind::Hitl;
+        let base_hint = app.footer_hint();
+        assert!(base_hint.contains("send"));
+        app.show_hitl_queue_modal = true;
         let hitl_hint = app.footer_hint();
-        assert_ne!(agents_hint, hitl_hint);
+        assert_ne!(base_hint, hitl_hint);
         assert!(hitl_hint.contains("approve"));
     }
 

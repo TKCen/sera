@@ -60,6 +60,15 @@ pub fn translate(event: &KeyEvent, kb: &TuiKeybindings) -> Action {
     if matches_key(event, &kb.open_session_picker) {
         return Action::OpenSessionPicker;
     }
+    if matches_key(event, &kb.open_agents_modal) {
+        return Action::OpenAgentsModal;
+    }
+    if matches_key(event, &kb.open_hitl_modal) {
+        return Action::OpenHitlModal;
+    }
+    if matches_key(event, &kb.open_evolve_modal) {
+        return Action::OpenEvolveModal;
+    }
     Action::NoOp
 }
 
@@ -85,6 +94,21 @@ pub fn translate_session(
     }
     if matches_key(event, &kb.toggle_composer_focus) {
         return Action::ToggleComposerFocus;
+    }
+
+    // J.0.1 modal-open shortcuts — handled even when composer has focus so
+    // Ctrl+A/H/E open their modal instead of reaching the textarea.
+    if matches_key(event, &kb.open_agents_modal) {
+        return Action::OpenAgentsModal;
+    }
+    if matches_key(event, &kb.open_hitl_modal) {
+        return Action::OpenHitlModal;
+    }
+    if matches_key(event, &kb.open_evolve_modal) {
+        return Action::OpenEvolveModal;
+    }
+    if matches_key(event, &kb.open_session_picker) {
+        return Action::OpenSessionPicker;
     }
 
     if composer_focused {

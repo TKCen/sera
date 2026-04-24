@@ -1,7 +1,20 @@
-//! Central render entry point.
+//! Central render entry point — **chat-dominant** layout (J.0.1).
 //!
-//! Owns only the top-level layout (title bar, body, footer) — each pane
-//! delegates to its view module.
+//! The screen is one big transcript canvas with a composer pinned at the
+//! bottom and a single-line status/hint footer.  Agents, HITL queue, and
+//! evolve status are accessed as modal overlays via Ctrl+A/H/E.
+//!
+//! Layout:
+//! ```text
+//! ┌──────────────────────────────────────────────┐
+//! │ main (Min(3))         — Session chat canvas  │
+//! ├──────────────────────────────────────────────┤
+//! │ composer (Length(5))  — multi-line input     │
+//! ├──────────────────────────────────────────────┤
+//! │ status (Length(1))    — agent/session/conn   │
+//! │ hint   (Length(1))    — contextual keys      │
+//! └──────────────────────────────────────────────┘
+//! ```
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -9,8 +22,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{actions::ViewKind, App, StatusLevel};
-use crate::client::ConnectionState;
+use crate::app::{App, StatusLevel};
 use crate::views::hitl_modal::render_hitl_modal;
 use crate::views::status_bar::StatusBar;
 
@@ -19,29 +31,18 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(0),
-            Constraint::Length(2),
-            Constraint::Length(1),
+            Constraint::Min(3),    // main chat canvas
+            Constraint::Length(5), // composer
+            Constraint::Length(1), // status bar
+            Constraint::Length(1), // key hint
         ])
         .split(frame.area());
 
-    render_title(frame, chunks[0], app);
+    // Main canvas: Session chat (metadata + transcript + tool log).
+    app.session.render_chat(frame, chunks[0], true);
 
-    // Body is the focused view rendered full-area.
-    match app.focus {
-        ViewKind::Agents => app.agents.render(frame, chunks[1], true),
-        ViewKind::Session => app.session.render(frame, chunks[1], true),
-        ViewKind::Hitl => app.hitl.render(frame, chunks[1], true),
-        ViewKind::Evolve => app.evolve.render(frame, chunks[1], true),
-    }
-
-    render_footer(frame, chunks[2], app);
-
-    // Help modal — rendered on top of everything when /help is active.
-    if app.show_help {
-        render_help_modal(frame, chunks[1]);
-    }
+    // Composer — always visible, regardless of modal state.
+    app.session.render_composer_only(frame, chunks[1]);
 
     // Status bar: agent name + session short-id + connection state.
     let agent = app.active_agent_id.as_deref();
@@ -51,71 +52,94 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         session_id,
         conn: app.connection,
     }
-    .render(frame, chunks[3]);
+    .render(frame, chunks[2]);
 
-    // Session picker modal — rendered last so it overlays everything.
+    // Key hint footer — context-sensitive.
+    render_hint(frame, chunks[3], app);
+
+    // Modal overlays — rendered on top of everything, topmost last.
+    if app.show_agents_modal {
+        render_agents_modal(frame, app);
+    }
+    if app.show_hitl_queue_modal {
+        render_hitl_queue_modal(frame, app);
+    }
+    if app.show_evolve_modal {
+        render_evolve_modal(frame, app);
+    }
+
+    // Session picker modal (Ctrl+P) — pre-existing modal.
     if app.show_session_picker {
         app.session_picker.render(frame, frame.area());
     }
 
-    // Inline HITL modal — rendered on top of all panes (including picker).
+    // Help modal — rendered when /help is active.
+    if app.show_help {
+        render_help_modal(frame, frame.area());
+    }
+
+    // Inline HITL approval modal — highest priority overlay.
     if let Some(req) = &app.show_hitl_modal {
         render_hitl_modal(frame, req, &app.keybindings);
     }
 }
 
-fn render_title(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    let tabs = [
-        ViewKind::Agents,
-        ViewKind::Session,
-        ViewKind::Hitl,
-        ViewKind::Evolve,
-    ];
-    let mut spans: Vec<Span<'_>> = Vec::with_capacity(tabs.len() * 2 + 4);
-    spans.push(Span::styled(
-        " SERA ",
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    ));
-    spans.push(Span::raw("│ "));
-    for (i, v) in tabs.iter().enumerate() {
-        let focused = *v == app.focus;
-        let style = if focused {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-        spans.push(Span::styled(format!(" {} ", v.label()), style));
-        if i + 1 < tabs.len() {
-            spans.push(Span::raw(" "));
-        }
-    }
-    spans.push(Span::raw("  "));
-    spans.push(conn_badge(app.connection));
-
-    let title = Paragraph::new(Line::from(spans))
-        .block(Block::default().borders(Borders::BOTTOM));
-    frame.render_widget(title, area);
+fn render_hint(frame: &mut Frame, area: Rect, app: &App) {
+    let hint = app.footer_hint();
+    let status_style = match app.status.level {
+        StatusLevel::Info => Style::default().fg(Color::DarkGray),
+        StatusLevel::Warn => Style::default().fg(Color::Yellow),
+        StatusLevel::Error => Style::default().fg(Color::Red),
+    };
+    // When there's an active status message, prefer it; otherwise show the hint.
+    let text = if app.status.text.is_empty() || app.status.text == "ready" {
+        hint
+    } else {
+        format!("{}  ·  {}", hint, app.status.text)
+    };
+    let p = Paragraph::new(text).style(status_style);
+    frame.render_widget(p, area);
 }
 
-fn conn_badge(state: ConnectionState) -> Span<'static> {
-    let (label, color) = match state {
-        ConnectionState::Connected => ("● connected", Color::Green),
-        ConnectionState::Reconnecting => ("● reconnecting", Color::Yellow),
-        ConnectionState::Disconnected => ("● disconnected", Color::Red),
-    };
-    Span::styled(
-        label,
-        Style::default().fg(color).add_modifier(Modifier::BOLD),
-    )
+fn render_agents_modal(frame: &mut Frame, app: &mut App) {
+    let area = centered_modal(70, 60, frame.area());
+    frame.render_widget(Clear, area);
+    // Draw a titled border, then hand the inner area to the existing view.
+    let block = Block::default()
+        .title(" Agents — Enter:select  ↑/↓  esc:close ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    app.agents.render(frame, inner, true);
+}
+
+fn render_hitl_queue_modal(frame: &mut Frame, app: &mut App) {
+    let area = centered_modal(75, 60, frame.area());
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .title(" HITL Queue — a:approve  x:reject  e:escalate  esc:close ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    app.hitl.render(frame, inner, true);
+}
+
+fn render_evolve_modal(frame: &mut Frame, app: &mut App) {
+    let area = centered_modal(75, 60, frame.area());
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .title(" Evolve — ↑/↓  esc:close ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    app.evolve.render(frame, inner, true);
 }
 
 fn render_help_modal(frame: &mut Frame, area: Rect) {
-    let modal_area = centered_rect(50, 10, area);
+    let modal_area = centered_rect(60, 14, area);
     frame.render_widget(Clear, modal_area);
     let text = vec![
         Line::from(""),
@@ -136,18 +160,45 @@ fn render_help_modal(frame: &mut Frame, area: Rect) {
             Span::raw("exit the TUI"),
         ]),
         Line::from(""),
+        Line::from(vec![
+            Span::styled("  Ctrl+A        ", Style::default().fg(Color::Cyan)),
+            Span::raw("agents modal"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+H        ", Style::default().fg(Color::Cyan)),
+            Span::raw("HITL queue modal"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+E        ", Style::default().fg(Color::Cyan)),
+            Span::raw("evolve modal"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+P        ", Style::default().fg(Color::Cyan)),
+            Span::raw("session picker"),
+        ]),
+        Line::from(""),
     ];
-    let modal = Paragraph::new(text).block(
+    let modal = Paragraph::new(text).style(Style::default()).block(
         Block::default()
             .title(" Commands ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan)),
+            .border_style(Style::default().fg(Color::Cyan))
+            .title_style(Style::default().add_modifier(Modifier::BOLD)),
     );
     frame.render_widget(modal, modal_area);
 }
 
-/// Return a [`Rect`] centered in `area` with the given width (columns) and
-/// height (rows).  Both are clamped to the parent dimensions.
+/// Centered rectangle by percentage of the parent area.
+fn centered_modal(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let w = r.width * percent_x / 100;
+    let h = r.height * percent_y / 100;
+    let x = r.x + (r.width.saturating_sub(w)) / 2;
+    let y = r.y + (r.height.saturating_sub(h)) / 2;
+    Rect::new(x, y, w.max(1), h.max(1))
+}
+
+/// Return a [`Rect`] centered in `area` with the given width and height.
+/// Both are clamped to the parent dimensions.
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let w = width.min(area.width);
     let h = height.min(area.height);
@@ -156,31 +207,11 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     Rect::new(x, y, w, h)
 }
 
-fn render_footer(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    let hint = app.footer_hint();
-    let status_style = match app.status.level {
-        StatusLevel::Info => Style::default().fg(Color::Green),
-        StatusLevel::Warn => Style::default().fg(Color::Yellow),
-        StatusLevel::Error => Style::default().fg(Color::Red),
-    };
-
-    // Split footer into hint (top line) and status (bottom line).
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1)])
-        .split(area);
-
-    let hint_p = Paragraph::new(hint).style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(hint_p, chunks[0]);
-    let status_p = Paragraph::new(app.status.text.clone()).style(status_style);
-    frame.render_widget(status_p, chunks[1]);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app::App;
-    use crate::client::{ConnectionState, GatewayClient};
+    use crate::client::GatewayClient;
     use crate::keybindings::TuiKeybindings;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -195,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn render_agents_view_produces_output() {
+    fn render_chat_canvas_produces_output() {
         let mut app = App::new(client(), TuiKeybindings::defaults());
         let backend = TestBackend::new(80, 20);
         let mut term = Terminal::new(backend).unwrap();
@@ -207,22 +238,24 @@ mod tests {
             .map(|c| c.symbol())
             .collect::<Vec<_>>()
             .join("");
-        assert!(rendered.contains("SERA"));
-        assert!(rendered.contains("Agents"));
+        // Chat-dominant canvas shows the Session header text.
+        assert!(rendered.contains("No session selected"));
     }
 
     #[test]
-    fn connection_badge_labels_all_states() {
-        for (state, expect) in [
-            (ConnectionState::Connected, "connected"),
-            (ConnectionState::Reconnecting, "reconnecting"),
-            (ConnectionState::Disconnected, "disconnected"),
-        ] {
-            let span = conn_badge(state);
-            assert!(
-                span.content.contains(expect),
-                "badge for {state:?} did not mention {expect}"
-            );
-        }
+    fn render_with_agents_modal_shows_agents_title() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.show_agents_modal = true;
+        let backend = TestBackend::new(80, 20);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render(f, &mut app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let rendered: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(rendered.contains("Agents"), "agents modal title not rendered");
     }
 }

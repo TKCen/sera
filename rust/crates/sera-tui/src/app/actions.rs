@@ -8,12 +8,33 @@
 //! state.
 
 /// Which top-level pane is currently focused.
+///
+/// **J.0.1 layout pivot**: view rotation (NextView/PrevView) is no longer the
+/// primary navigator — the TUI is chat-dominant and the main canvas is always
+/// the Session view.  `ViewKind` is kept because `Focus` (see below) does not
+/// yet subsume the modal-dispatch branches in tests; it is effectively unused
+/// by the new rendering path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ViewKind {
     Agents,
     Session,
     Hitl,
     Evolve,
+}
+
+/// Which region of the chat-dominant layout currently has keyboard focus.
+///
+/// `Composer` is the default — the user types into the multi-line textarea.
+/// `Transcript` is entered for scroll navigation.  Modals (agents, HITL,
+/// evolve, session picker) are tracked separately on the `App` struct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Focus {
+    Composer,
+    /// Entered for scroll navigation — constructed by J.0.2 (Tab toggle)
+    /// once the block-based transcript lands; reserved here in J.0.1 so
+    /// the rest of the app code can pattern-match exhaustively.
+    #[allow(dead_code)]
+    Transcript,
 }
 
 impl ViewKind {
@@ -37,15 +58,6 @@ impl ViewKind {
         }
     }
 
-    /// Short label for header/footer chrome.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Agents => "Agents",
-            Self::Session => "Session",
-            Self::Hitl => "HITL",
-            Self::Evolve => "Evolve",
-        }
-    }
 }
 
 /// Every input the reducer understands.  Kept flat on purpose — nested
@@ -88,6 +100,14 @@ pub enum Action {
     OpenSessionPicker,
     /// Close the session picker without selecting.
     ClosePicker,
+    /// Open the agents picker modal (chat-dominant layout, default Ctrl+A).
+    OpenAgentsModal,
+    /// Open the HITL queue modal (chat-dominant layout, default Ctrl+H).
+    OpenHitlModal,
+    /// Open the evolve status modal (chat-dominant layout, default Ctrl+E).
+    OpenEvolveModal,
+    /// Close whichever J.0.1 modal (agents, hitl, evolve) is currently open.
+    CloseModal,
     /// Move picker selection up.
     PickerUp,
     /// Move picker selection down.
@@ -133,13 +153,6 @@ mod tests {
         assert_eq!(ViewKind::Session.prev(), ViewKind::Agents);
         assert_eq!(ViewKind::Hitl.prev(), ViewKind::Session);
         assert_eq!(ViewKind::Evolve.prev(), ViewKind::Hitl);
-    }
-
-    #[test]
-    fn view_label_is_non_empty() {
-        for v in [ViewKind::Agents, ViewKind::Session, ViewKind::Hitl, ViewKind::Evolve] {
-            assert!(!v.label().is_empty(), "label empty for {v:?}");
-        }
     }
 
     #[test]

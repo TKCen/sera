@@ -217,21 +217,30 @@ impl SessionView {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
+    /// **J.0.1**: render the chat canvas (metadata + transcript + tool log)
+    /// without the composer.  The chat-dominant layout draws the composer
+    /// in a dedicated strip of the root layout, so the Session view must
+    /// skip it to avoid double rendering.
+    pub fn render_chat(&self, frame: &mut Frame, area: Rect, focused: bool) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3), // metadata header
                 Constraint::Min(3),    // transcript
                 Constraint::Length(7), // tool log
-                Constraint::Length(5), // composer
             ])
             .split(area);
 
         self.render_metadata(frame, chunks[0], focused);
         self.render_transcript(frame, chunks[1], focused);
         self.render_tool_log(frame, chunks[2], focused);
-        self.render_composer(frame, chunks[3]);
+    }
+
+    /// **J.0.1**: render only the composer into `area`.  Paired with
+    /// [`render_chat`] for the chat-dominant layout where composer has
+    /// its own slot in the root layout.
+    pub fn render_composer_only(&self, frame: &mut Frame, area: Rect) {
+        self.render_composer(frame, area);
     }
 
     fn render_metadata(&self, frame: &mut Frame, area: Rect, focused: bool) {

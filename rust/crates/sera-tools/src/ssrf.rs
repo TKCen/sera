@@ -1,4 +1,4 @@
-//! SSRF protection — blocks requests to loopback, link-local, and cloud metadata endpoints.
+//! SSRF protection — blocks requests to loopback, link-local, private, and cloud metadata endpoints.
 
 use std::net::IpAddr;
 
@@ -11,6 +11,8 @@ pub enum SsrfError {
     LinkLocal,
     #[error("address is a cloud metadata endpoint")]
     CloudMetadata,
+    #[error("address is in a private range")]
+    PrivateRange,
     #[error("address is not allowed: {reason}")]
     NotAllowed { reason: String },
     #[error("parse error: {reason}")]
@@ -24,7 +26,8 @@ impl SsrfValidator {
     /// Validate that `addr` is safe to connect to.
     ///
     /// Blocks loopback (127.0.0.0/8, ::1), link-local (169.254.0.0/16, fe80::/10),
-    /// and cloud metadata endpoints (169.254.169.254, 100.100.100.200).
+    /// cloud metadata endpoints (169.254.169.254, 100.100.100.200), RFC-1918 private
+    /// ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16), and IPv6 ULA (fc00::/7).
     pub fn validate(addr: &str) -> Result<(), SsrfError> {
         // Strip port if present (e.g. "127.0.0.1:8080")
         let host = if let Some(stripped) = addr.strip_prefix('[') {
@@ -93,6 +96,18 @@ impl SsrfValidator {
                 if octets[0] == 169 && octets[1] == 254 {
                     return Err(SsrfError::LinkLocal);
                 }
+                // 10.0.0.0/8 — RFC-1918 private
+                if octets[0] == 10 {
+                    return Err(SsrfError::PrivateRange);
+                }
+                // 172.16.0.0/12 — RFC-1918 private (172.16.0.0 – 172.31.255.255)
+                if octets[0] == 172 && (16..=31).contains(&octets[1]) {
+                    return Err(SsrfError::PrivateRange);
+                }
+                // 192.168.0.0/16 — RFC-1918 private
+                if octets[0] == 192 && octets[1] == 168 {
+                    return Err(SsrfError::PrivateRange);
+                }
             }
             IpAddr::V6(v6) => {
                 // ::1 — loopback
@@ -103,6 +118,10 @@ impl SsrfValidator {
                 let segments = v6.segments();
                 if (segments[0] & 0xffc0) == 0xfe80 {
                     return Err(SsrfError::LinkLocal);
+                }
+                // fc00::/7 — IPv6 ULA (fc00:: through fdff::)
+                if (segments[0] & 0xfe00) == 0xfc00 {
+                    return Err(SsrfError::PrivateRange);
                 }
             }
         }
@@ -357,6 +376,101 @@ mod tests {
             matches!(result, Err(SsrfError::NotAllowed { .. })),
             "expected NotAllowed for dotted hostname, got {result:?}"
         );
+    }
+
+    // --- RFC-1918 private ranges ---
+
+    // 10.0.0.0/8
+    #[test]
+    fn blocks_rfc1918_10_0_0_0() {
+        assert_eq!(SsrfValidator::validate("10.0.0.0"), Err(SsrfError::PrivateRange));
+    }
+
+    #[test]
+    fn blocks_rfc1918_10_255_255_255() {
+        assert_eq!(SsrfValidator::validate("10.255.255.255"), Err(SsrfError::PrivateRange));
+    }
+
+    #[test]
+    fn allows_9_255_255_255_not_private() {
+        // Just below 10.0.0.0/8
+        assert!(SsrfValidator::validate("9.255.255.255").is_ok());
+    }
+
+    #[test]
+    fn allows_11_0_0_0_not_private() {
+        // Just above 10.0.0.0/8
+        assert!(SsrfValidator::validate("11.0.0.0").is_ok());
+    }
+
+    // 172.16.0.0/12
+    #[test]
+    fn allows_172_15_255_255_not_private() {
+        // Just below 172.16.0.0/12
+        assert!(SsrfValidator::validate("172.15.255.255").is_ok());
+    }
+
+    #[test]
+    fn blocks_rfc1918_172_16_0_0() {
+        assert_eq!(SsrfValidator::validate("172.16.0.0"), Err(SsrfError::PrivateRange));
+    }
+
+    #[test]
+    fn blocks_rfc1918_172_31_255_255() {
+        assert_eq!(SsrfValidator::validate("172.31.255.255"), Err(SsrfError::PrivateRange));
+    }
+
+    #[test]
+    fn allows_172_32_0_0_not_private() {
+        // Just above 172.16.0.0/12
+        assert!(SsrfValidator::validate("172.32.0.0").is_ok());
+    }
+
+    // 192.168.0.0/16
+    #[test]
+    fn allows_192_167_255_255_not_private() {
+        // Just below 192.168.0.0/16
+        assert!(SsrfValidator::validate("192.167.255.255").is_ok());
+    }
+
+    #[test]
+    fn blocks_rfc1918_192_168_0_0() {
+        assert_eq!(SsrfValidator::validate("192.168.0.0"), Err(SsrfError::PrivateRange));
+    }
+
+    #[test]
+    fn blocks_rfc1918_192_168_255_255() {
+        assert_eq!(SsrfValidator::validate("192.168.255.255"), Err(SsrfError::PrivateRange));
+    }
+
+    #[test]
+    fn allows_192_169_0_0_not_private() {
+        // Just above 192.168.0.0/16
+        assert!(SsrfValidator::validate("192.169.0.0").is_ok());
+    }
+
+    // --- IPv6 ULA (fc00::/7) ---
+
+    #[test]
+    fn blocks_ipv6_ula_fc00() {
+        assert_eq!(SsrfValidator::validate("fc00::1"), Err(SsrfError::PrivateRange));
+    }
+
+    #[test]
+    fn blocks_ipv6_ula_fd00() {
+        assert_eq!(SsrfValidator::validate("fd00::1"), Err(SsrfError::PrivateRange));
+    }
+
+    #[test]
+    fn allows_ipv6_fbff_not_ula() {
+        // fbff:ffff:...:ffff is just below fc00::/7
+        assert!(SsrfValidator::validate("fbff:ffff:ffff:ffff:ffff:ffff:ffff:ffff").is_ok());
+    }
+
+    #[test]
+    fn allows_ipv6_fe00_not_ula() {
+        // fe00:: is above fdff::/7 — not ULA (fe80:: is link-local, but fe00:: is neither)
+        assert!(SsrfValidator::validate("fe00::1").is_ok());
     }
 
     // --- Error trait / display ---

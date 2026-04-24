@@ -7,6 +7,7 @@ pub mod db_backend;
 pub mod envelope;
 pub mod generation;
 pub mod harness_dispatch;
+pub mod hitl_gateway;
 pub mod kill_switch;
 pub mod party;
 pub mod plugin;

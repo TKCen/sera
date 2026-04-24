@@ -49,6 +49,9 @@ use sera_runtime::skill_dispatch::SkillDispatchEngine;
 // sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +
 // SERA-issued nonce fallback). Wired into AppState + `/api/mail/inbound`.
 use sera_gateway::capability_enforcement::{CapabilityRegistry, PolicyDenial};
+use sera_gateway::hitl_gateway::{
+    HitlAppState, InMemoryTicketStore, TicketStore, resolve_approval_routing, resolve_hitl_mode,
+};
 use sera_gateway::kill_switch::{KillSwitch, admin_sock_path, spawn_admin_socket};
 #[cfg(test)]
 use sera_gateway::session_store::InMemorySessionStore;
@@ -78,6 +81,8 @@ mod route_a2a;
 mod route_agui;
 #[path = "../routes/plugins.rs"]
 mod route_plugins;
+#[path = "../routes/hitl.rs"]
+mod route_hitl;
 
 use route_a2a::{A2aAppState, A2aPeerRegistry};
 use route_agui::{AguiAppState, AguiHub};
@@ -510,33 +515,6 @@ struct TurnEvents {
     usage: UsageInfo,
 }
 
-// ── HITL flagged-operation pattern gate ─────────────────────────────────────
-//
-// FIXME: MVS HITL gate — pattern-match only. Full ApprovalRouter wiring
-// (sera-hitl crate) requires deeper audit of the approval-token round-trip
-// and DomainEvent surface; tracked as a follow-up in CHAT_HARNESS.md.
-//
-// These substrings are scanned case-insensitively against inbound chat
-// messages before dispatch. Hits short-circuit with 403
-// `hitl_approval_required`.
-const FLAGGED_OPERATIONS: &[&str] = &[
-    "rm -rf",
-    "sudo ",
-    "drop table",
-    "git push --force",
-    "docker system prune",
-];
-
-/// Scan `msg` for any flagged operation substring (case-insensitive) and
-/// return the matching pattern if found.
-fn detect_flagged_operation(msg: &str) -> Option<&'static str> {
-    let lower = msg.to_ascii_lowercase();
-    FLAGGED_OPERATIONS
-        .iter()
-        .find(|pat| lower.contains(**pat))
-        .copied()
-}
-
 // ── Shared state ────────────────────────────────────────────────────────────
 
 struct AppState {
@@ -635,6 +613,13 @@ struct AppState {
     /// (`StdioHarness::send_turn`) and on any future gateway-side tool
     /// dispatch. Agents with no `policyRef` bypass the check (permissive).
     capability_registry: Arc<CapabilityRegistry>,
+    /// HITL ticket store (sera-z6ql, Wave D Phase 1). Populated by
+    /// `chat_handler` whenever the ApprovalRouter says a turn needs
+    /// approval; read by the `/api/hitl/requests[/…]` routes so humans can
+    /// approve / reject / escalate. Phase 1 uses an in-memory store —
+    /// process restart loses in-flight tickets (no suspended turns to
+    /// resume anyway). SQLite-backed store is a follow-up.
+    ticket_store: Arc<dyn TicketStore>,
 }
 
 impl AppState {
@@ -721,6 +706,15 @@ impl PluginsAppState for AppState {
     }
     fn plugin_registry(&self) -> Arc<InMemoryPluginRegistry> {
         Arc::clone(&self.plugin_registry)
+    }
+}
+
+impl HitlAppState for AppState {
+    fn api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+    fn ticket_store(&self) -> Arc<dyn TicketStore> {
+        Arc::clone(&self.ticket_store)
     }
 }
 
@@ -1158,16 +1152,65 @@ async fn chat_handler(
         }
     }
 
-    // ── HITL pattern gate ────────────────────────────────────────────────
-    // FIXME: MVS HITL gate — pattern-match only. Full ApprovalRouter
-    // wiring (sera-hitl crate) requires deeper audit; tracked as follow-up
-    // in CHAT_HARNESS.md.
-    if let Some(flag) = detect_flagged_operation(&req.message) {
+    // ── HITL gate (sera-z6ql, Wave D Phase 1) ────────────────────────────
+    // Consult the real ApprovalRouter using the agent's manifest-declared
+    // enforcement_mode + approval_policy. Phase 1 blocks-and-tickets on
+    // needs_approval == true — no suspension/resume. The HTTP routes under
+    // /api/hitl/requests expose the resulting ticket for review.
+    let hitl_mode = resolve_hitl_mode(&agent_spec);
+    let hitl_routing = resolve_approval_routing(&agent_spec);
+    // Phase 1 risk proxy: we don't yet know which tool the LLM will call,
+    // so we use Execute as a conservative default. The router treats this
+    // as 0.7 for threshold matching — Standard mode with non-empty static
+    // routing still gates, Strict always gates, Autonomous never gates.
+    let risk_for_gate = sera_types::tool::RiskLevel::Execute;
+    if sera_hitl::ApprovalRouter::needs_approval(hitl_mode, risk_for_gate, &hitl_routing) {
         release_lane(&state, &session_key).await;
+
+        // Mint a Ticket via the resolved chain (Phase 1: single ticket per
+        // blocked turn). Keep the spec deliberately thin — we only know the
+        // message and agent at this gate point.
+        let spec = sera_hitl::ApprovalSpec {
+            scope: sera_hitl::ApprovalScope::ToolCall {
+                tool_name: "*".to_string(),
+                risk_level: risk_for_gate,
+            },
+            description: format!(
+                "Chat turn pending approval for agent '{}'",
+                agent_name
+            ),
+            urgency: sera_hitl::ApprovalUrgency::Medium,
+            routing: hitl_routing,
+            timeout: std::time::Duration::from_secs(300),
+            required_approvals: 1,
+            evidence: sera_hitl::ApprovalEvidence {
+                tool_args: Some(serde_json::json!({ "message": req.message })),
+                risk_score: Some(sera_hitl::ApprovalRouter::risk_level_to_score_public(
+                    risk_for_gate,
+                )),
+                principal: PrincipalRef {
+                    id: PrincipalId::new("http-chat"),
+                    kind: PrincipalKind::Human,
+                },
+                session_context: Some(session_key.clone()),
+                additional: Default::default(),
+            },
+        };
+        let ticket = sera_hitl::ApprovalTicket::new(spec, session_key.clone());
+        let ticket_id = ticket.id.clone();
+        if let Err(e) = state.ticket_store.insert(ticket).await {
+            tracing::error!(error = %e, "ticket_store.insert failed; rejecting turn");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
+        // OCSF Policy Activity audit entry (class_uid=6003) — best-effort.
+        emit_hitl_required_audit(&agent_name, &session_key, &ticket_id, hitl_mode).await;
+
         let body = serde_json::json!({
             "error": "hitl_approval_required",
-            "reason": format!("flagged operation detected: {flag}"),
-            "message": "This request touches a flagged operation and requires human approval. Re-submit with approval or a safer phrasing.",
+            "reason": format!("agent '{}' requires approval ({:?} mode)", agent_name, hitl_mode),
+            "ticket_id": ticket_id,
+            "message": "This request requires approval. Use the /api/hitl/requests routes to review and approve.",
         });
         return Ok((StatusCode::FORBIDDEN, Json(body)).into_response());
     }
@@ -1915,6 +1958,47 @@ async fn emit_policy_denial_audit(denial: &PolicyDenial) {
         // return transient errors. Log and move on — the denial is still
         // enforced in-memory.
         tracing::debug!(error = %e, "audit backend unavailable for policy denial");
+    }
+}
+
+/// Emit an OCSF v1.7.0 Policy Activity (class_uid=6003) audit entry marking
+/// a chat turn as blocked pending HITL approval (sera-z6ql, Wave D Phase 1).
+/// Best-effort — uninitialised backends log a warning and continue.
+async fn emit_hitl_required_audit(
+    agent_name: &str,
+    session_key: &str,
+    ticket_id: &str,
+    mode: sera_hitl::HitlMode,
+) {
+    use sera_telemetry::audit::{AuditEntry, audit_append};
+
+    let payload = serde_json::json!({
+        "activity_id": 1, // "Deny" — the turn was not dispatched
+        "action_id": "blocked",
+        "category_uid": 6, // Application Activity
+        "class_uid": 6003, // Policy Activity
+        "severity_id": 3, // Medium
+        "actor": { "user": { "name": "http-chat" } },
+        "policy": { "name": format!("hitl:{:?}", mode) },
+        "resource": {
+            "name": agent_name,
+            "type": "agent",
+            "uid": session_key,
+        },
+        "status": "Failure",
+        "status_detail": "approval required",
+        "unmapped": { "ticket_id": ticket_id },
+    });
+    let this_hash = AuditEntry::compute_hash(6003, &payload, &[0u8; 32]);
+    let entry = AuditEntry {
+        ocsf_class_uid: 6003,
+        payload,
+        prev_hash: [0u8; 32],
+        this_hash,
+        signature: None,
+    };
+    if let Err(e) = audit_append(entry).await {
+        tracing::debug!(error = %e, "audit backend unavailable for HITL gate");
     }
 }
 
@@ -3272,6 +3356,7 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         },
         constitutional_registry,
         capability_registry: Arc::clone(&capability_registry),
+        ticket_store: Arc::new(InMemoryTicketStore::new()),
     });
 
     // 4. Start event processing loop.
@@ -3618,6 +3703,27 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/api/plugins/hot-reload",
             post(route_plugins::hot_reload::<AppState>),
         )
+        // ── HITL approval requests (sera-z6ql, Wave D Phase 1) ───────────────
+        .route(
+            "/api/hitl/requests",
+            get(route_hitl::list_tickets::<AppState>),
+        )
+        .route(
+            "/api/hitl/requests/{id}",
+            get(route_hitl::get_ticket::<AppState>),
+        )
+        .route(
+            "/api/hitl/requests/{id}/approve",
+            post(route_hitl::approve_ticket::<AppState>),
+        )
+        .route(
+            "/api/hitl/requests/{id}/reject",
+            post(route_hitl::reject_ticket::<AppState>),
+        )
+        .route(
+            "/api/hitl/requests/{id}/escalate",
+            post(route_hitl::escalate_ticket::<AppState>),
+        )
         // ── sera-8d1.2-follow: party mode (circles/{id}/party) ───────────────
         .route(
             "/api/circles/{id}/party",
@@ -3723,6 +3829,7 @@ mod tests {
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
+            ticket_store: Arc::new(InMemoryTicketStore::new()),
         })
     }
 
@@ -3764,6 +3871,7 @@ mod tests {
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
+            ticket_store: Arc::new(InMemoryTicketStore::new()),
         })
     }
 
@@ -3805,6 +3913,7 @@ mod tests {
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
+            ticket_store: Arc::new(InMemoryTicketStore::new()),
         })
     }
 
@@ -3846,6 +3955,7 @@ mod tests {
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
+            ticket_store: Arc::new(InMemoryTicketStore::new()),
         })
     }
 
@@ -4231,31 +4341,86 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
-    // -- HITL pattern gate --
+    // -- HITL ApprovalRouter gate (sera-z6ql, Wave D Phase 1) --
 
-    #[test]
-    fn detect_flagged_operation_hits_rm_rf() {
-        assert_eq!(detect_flagged_operation("please rm -rf /"), Some("rm -rf"));
+    /// YAML manifest for a strict-mode agent — every turn must be approved.
+    /// Used by the HITL integration tests.
+    const STRICT_AGENT_YAML: &str = r#"---
+apiVersion: sera.dev/v1
+kind: Instance
+metadata:
+  name: my-sera
+spec:
+---
+apiVersion: sera.dev/v1
+kind: Provider
+metadata:
+  name: lm-studio
+spec:
+  kind: openai-compatible
+  base_url: "http://localhost:1234/v1"
+  default_model: qwen/qwen3.5-35b-a3b
+---
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: sera
+spec:
+  provider: lm-studio
+  model: qwen/qwen3.5-35b-a3b
+  enforcement_mode: strict
+  persona:
+    immutable_anchor: |
+      You are Sera, an autonomous assistant.
+"#;
+
+    async fn strict_state() -> Arc<AppState> {
+        let hook_registry = Arc::new(HookRegistry::new());
+        let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
+        Arc::new(AppState {
+            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            manifests: parse_manifests(STRICT_AGENT_YAML).unwrap(),
+            discord: None,
+            api_key: None,
+            lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+            hook_registry,
+            chain_executor,
+            harnesses: test_harnesses().await,
+            runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                Arc::new(InMemoryEnvelopeIndex::default()),
+                None,
+            )),
+            mail_lookup: Arc::new(InMemoryMailLookup::new()),
+            a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                Ok(serde_json::json!({"status": "test"}))
+            })),
+            agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+            plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+            skill_engine: Arc::new(SkillDispatchEngine::new()),
+            semantic_store: Arc::new(
+                SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+            ),
+            kill_switch: Arc::new(KillSwitch::new()),
+            active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            session_store: Arc::new(InMemorySessionStore::new()),
+            constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
+            capability_registry: Arc::new(CapabilityRegistry::empty()),
+            ticket_store: Arc::new(InMemoryTicketStore::new()),
+        })
     }
 
-    #[test]
-    fn detect_flagged_operation_is_case_insensitive() {
-        assert_eq!(
-            detect_flagged_operation("Please DROP TABLE users;"),
-            Some("drop table")
-        );
-    }
-
-    #[test]
-    fn detect_flagged_operation_misses_benign_text() {
-        assert!(detect_flagged_operation("remove this line").is_none());
-        assert!(detect_flagged_operation("hello world").is_none());
-    }
-
+    /// Strict-mode agent blocks every turn with 403 `hitl_approval_required`
+    /// and the response body carries a `ticket_id` the caller can look up
+    /// via the `/api/hitl/requests` routes.
     #[tokio::test]
-    async fn hitl_gate_blocks_rm_rf() {
-        let state = test_state_async().await;
-        let app = build_router(state);
+    async fn hitl_strict_mode_blocks_chat_turn_and_mints_ticket() {
+        let state = strict_state().await;
+        let app = build_router(Arc::clone(&state));
 
         let response = app
             .oneshot(
@@ -4264,7 +4429,7 @@ mod tests {
                     .uri("/api/chat")
                     .header("Content-Type", "application/json")
                     .body(Body::from(
-                        serde_json::json!({ "message": "please rm -rf /" }).to_string(),
+                        serde_json::json!({ "message": "hello" }).to_string(),
                     ))
                     .unwrap(),
             )
@@ -4277,12 +4442,77 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"], "hitl_approval_required");
-        assert!(
-            json["reason"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("rm -rf"),
-            "reason should mention the matched pattern"
+        let ticket_id = json["ticket_id"].as_str().unwrap().to_owned();
+        assert!(!ticket_id.is_empty());
+
+        // Ticket is visible via GET /api/hitl/requests.
+        let list_resp = build_router(Arc::clone(&state))
+            .oneshot(
+                Request::builder()
+                    .uri("/api/hitl/requests")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list_resp.status(), StatusCode::OK);
+        let list_body = axum::body::to_bytes(list_resp.into_body(), 16384)
+            .await
+            .unwrap();
+        let list_json: serde_json::Value = serde_json::from_slice(&list_body).unwrap();
+        assert_eq!(list_json["count"], 1);
+        assert_eq!(list_json["tickets"][0]["id"], ticket_id);
+
+        // Approve the ticket.
+        let approve_resp = build_router(Arc::clone(&state))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/hitl/requests/{ticket_id}/approve"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(approve_resp.status(), StatusCode::OK);
+
+        // The ticket now reads back as Approved.
+        let got = state
+            .ticket_store
+            .get(&ticket_id)
+            .await
+            .expect("ticket should still exist after approve");
+        assert_eq!(got.status, sera_hitl::TicketStatus::Approved);
+    }
+
+    /// The default (autonomous) agent in TEMPLATE_YAML must not be gated —
+    /// regression test covering the old pattern-match removal.
+    #[tokio::test]
+    async fn hitl_autonomous_mode_does_not_gate_benign_message() {
+        let state = test_state_async().await;
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "hello" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // The autonomous path must not return 403. It may succeed (200/OK)
+        // or fail downstream with 500/502 (the mock harness is not a real
+        // provider), but it must NOT be blocked by the HITL gate.
+        assert_ne!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "autonomous agent must not be blocked by HITL gate"
         );
     }
 
@@ -4684,6 +4914,7 @@ mod tests {
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
+            ticket_store: Arc::new(InMemoryTicketStore::new()),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -4728,6 +4959,7 @@ mod tests {
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
+            ticket_store: Arc::new(InMemoryTicketStore::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -4773,6 +5005,7 @@ mod tests {
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
+            ticket_store: Arc::new(InMemoryTicketStore::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -4821,6 +5054,7 @@ mod tests {
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
+            ticket_store: Arc::new(InMemoryTicketStore::new()),
         };
         let headers = HeaderMap::new();
         assert_eq!(
@@ -5292,6 +5526,8 @@ mod tests {
             tools: None,
             workspace: None,
             policy_ref: None,
+            enforcement_mode: None,
+            approval_policy: None,
         };
         let skill_engine = SkillDispatchEngine::new();
         let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
@@ -5512,6 +5748,7 @@ mod tests {
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
+            ticket_store: Arc::new(InMemoryTicketStore::new()),
         });
 
         let app = build_router(Arc::clone(&state));
@@ -5595,6 +5832,7 @@ mod tests {
                 session_store: Arc::new(InMemorySessionStore::new()),
                 constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
                 capability_registry: Arc::new(CapabilityRegistry::empty()),
+                ticket_store: Arc::new(InMemoryTicketStore::new()),
             })
         };
         let app = build_router(state);

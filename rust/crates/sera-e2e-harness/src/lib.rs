@@ -113,12 +113,22 @@ impl GatewayRoot {
     /// `model` field.  Use [`resolve_model_env`] to pick `model` when the
     /// caller doesn't have a specific value in mind.
     pub fn new_local(llm_base_url: &str, model: &str) -> Result<Self> {
+        Self::new_with_manifest(&minimal_sera_yaml(llm_base_url, model))
+    }
+
+    /// Create a fresh tempdir containing a caller-supplied `sera.yaml` body.
+    ///
+    /// Use this when a scenario needs a specific manifest shape — e.g. two
+    /// agents for the multi-agent load test, or an agent with a `policyRef`
+    /// for the capability-policy scenarios.  [`minimal_sera_yaml`] and
+    /// [`multi_agent_sera_yaml`] are the convenience renderers.
+    pub fn new_with_manifest(manifest: &str) -> Result<Self> {
         let tempdir = tempfile::Builder::new()
             .prefix("sera-e2e-")
             .tempdir()
             .context("creating tempdir for GatewayRoot")?;
         let config_path = tempdir.path().join("sera.yaml");
-        std::fs::write(&config_path, minimal_sera_yaml(llm_base_url, model))
+        std::fs::write(&config_path, manifest)
             .context("writing sera.yaml into tempdir")?;
         let db_path = tempdir.path().join("sera.db");
         Ok(Self { dir: tempdir, config_path, db_path })
@@ -166,6 +176,22 @@ impl InProcessGateway {
         runtime_bin: &Path,
         llm_base_url: &str,
     ) -> Result<Self> {
+        Self::start_local_with_env(gateway_bin, runtime_bin, llm_base_url, &[]).await
+    }
+
+    /// Boot a gateway with the same defaults as [`Self::start_local`] but
+    /// with extra environment variables applied after the harness defaults.
+    ///
+    /// Use this for scenarios that need to override a default (e.g. set
+    /// `SERA_ADMIN_SOCK` to a tempdir-scoped path for the kill-switch
+    /// scenario, or unset `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE` by
+    /// passing `("SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE", "0")`).
+    pub async fn start_local_with_env(
+        gateway_bin: &Path,
+        runtime_bin: &Path,
+        llm_base_url: &str,
+        extra_env: &[(&str, &str)],
+    ) -> Result<Self> {
         let model = resolve_model_env();
         let root = GatewayRoot::new_local(llm_base_url, &model)?;
         let (child, base_url) = spawn_gateway(
@@ -174,6 +200,7 @@ impl InProcessGateway {
             gateway_bin,
             runtime_bin,
             llm_base_url,
+            extra_env,
         )
         .await?;
         let gateway = Self {
@@ -205,6 +232,7 @@ impl InProcessGateway {
             gateway_bin,
             runtime_bin,
             llm_base_url,
+            &[],
         )
         .await?;
         let gateway = Self {
@@ -288,12 +316,18 @@ impl InProcessGateway {
 /// Spawn `sera-gateway start --config X --port P` rooted in `root_dir`, drain
 /// stdio into tracing, and return the child handle + picked port's base URL.
 /// Does not poll for health — caller is expected to call `wait_for_health`.
+///
+/// `extra_env` entries are applied after the harness defaults, so a scenario
+/// can override any default (e.g. set `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE`
+/// to `"0"` for the constitutional-gate scenario, or set `SERA_ADMIN_SOCK` to
+/// a tempdir path for the kill-switch scenario).
 async fn spawn_gateway(
     root_dir: &Path,
     config_path: &Path,
     gateway_bin: &Path,
     runtime_bin: &Path,
     llm_base_url: &str,
+    extra_env: &[(&str, &str)],
 ) -> Result<(Child, String)> {
     let port = pick_free_port()?;
     let addr = format!("127.0.0.1:{port}");
@@ -329,6 +363,10 @@ async fn spawn_gateway(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
 
     let mut child = cmd
         .spawn()
@@ -396,6 +434,49 @@ spec:
       You are a SERA e2e test persona. Reply briefly.
 "#
     )
+}
+
+/// Multi-agent manifest — one Instance, one Provider, N Agents named by the
+/// caller.  Each agent shares the same provider + model; persona anchors
+/// differ so the manifest-loader's agent-ordering and list endpoint can be
+/// asserted on distinct payloads.
+///
+/// Use this for S2.x manifest scenarios that need more than one agent.
+pub fn multi_agent_sera_yaml(llm_base_url: &str, model: &str, agent_names: &[&str]) -> String {
+    let mut out = format!(
+        r#"apiVersion: sera.dev/v1
+kind: Instance
+metadata:
+  name: sera-e2e
+spec: {{}}
+---
+apiVersion: sera.dev/v1
+kind: Provider
+metadata:
+  name: mock-openai
+spec:
+  kind: openai-compatible
+  base_url: "{llm_base_url}"
+  default_model: {model}
+"#
+    );
+    for name in agent_names {
+        out.push_str(&format!(
+            r#"---
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: {name}
+spec:
+  provider: mock-openai
+  model: {model}
+  persona:
+    immutable_anchor: |
+      You are {name}, a SERA e2e test persona. Reply briefly.
+"#
+        ));
+    }
+    out
 }
 
 #[cfg(test)]

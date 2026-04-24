@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use axum::extract::{FromRequest, Path, Request, State};
 use axum::extract::rejection::JsonRejection;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
@@ -998,7 +998,25 @@ async fn chat_handler(
             sera_db::lane_queue::EnqueueResult::Queued
             | sera_db::lane_queue::EnqueueResult::Steer => {
                 tracing::info!(session_key = %session_key, "Chat message queued behind active turn");
-                return Err(StatusCode::TOO_MANY_REQUESTS);
+                // sera-6zbf: return a structured 429 so clients can back off
+                // correctly. `Retry-After` uses LANE_BUSY_RETRY_AFTER_SECS (15 s)
+                // — conservative enough for thinking-model turns while avoiding
+                // excessive client-side wait on fast turns.
+                let body = serde_json::json!({
+                    "error": "rate_limited",
+                    "reason": "lane_busy",
+                    "retry_after_secs": LANE_BUSY_RETRY_AFTER_SECS,
+                });
+                let response = (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    [(
+                        axum::http::header::RETRY_AFTER,
+                        HeaderValue::from_static("15"),
+                    )],
+                    Json(body),
+                )
+                    .into_response();
+                return Ok(response);
             }
             sera_db::lane_queue::EnqueueResult::Closed => {
                 tracing::warn!(session_key = %session_key, "Chat rejected: lane queue is closed for shutdown");
@@ -1496,6 +1514,14 @@ enum StreamState {
 /// needing longer bounds (e.g. long multi-step tool chains) set
 /// `SERA_TURN_TIMEOUT_SECS`.
 const DEFAULT_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Seconds to advertise in `Retry-After` when the lane queue rejects a chat
+/// request because a turn is already in flight (sera-6zbf). 15 s is
+/// deliberately conservative: most interactive turns resolve in a few seconds,
+/// but thinking-model turns can run for minutes. Clients that poll sooner than
+/// 15 s will just hit another 429, so a short-but-not-instant value reduces
+/// wasted round-trips without forcing long waits on fast turns.
+const LANE_BUSY_RETRY_AFTER_SECS: u64 = 15;
 
 fn turn_timeout() -> std::time::Duration {
     std::env::var("SERA_TURN_TIMEOUT_SECS")
@@ -4749,6 +4775,8 @@ mod tests {
     /// When the same session already has an in-flight turn, a concurrent
     /// `/api/chat` submission must be rejected at the admission boundary with
     /// `429 Too Many Requests` rather than racing through to the harness.
+    /// The response must carry a `Retry-After` header and a structured JSON
+    /// body so clients can back off correctly (sera-6zbf).
     #[tokio::test]
     async fn turn_admission_rejects_when_lane_full() {
         let state = test_state_async().await;
@@ -4774,6 +4802,31 @@ mod tests {
             StatusCode::TOO_MANY_REQUESTS,
             "second concurrent turn for the same session must be rejected by lane admission"
         );
+
+        // sera-6zbf: verify Retry-After header is present and Content-Type is JSON.
+        assert_eq!(
+            response.headers().get("retry-after").map(|v| v.to_str().unwrap()),
+            Some("15"),
+            "429 must carry a Retry-After header so clients can back off"
+        );
+        assert!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .contains("application/json"),
+            "429 must have Content-Type: application/json"
+        );
+
+        // Verify structured body.
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["error"], "rate_limited");
+        assert_eq!(body["reason"], "lane_busy");
+        assert_eq!(body["retry_after_secs"], LANE_BUSY_RETRY_AFTER_SECS);
 
         // The active run count must still reflect the pre-existing occupant —
         // the rejected attempt did not consume an extra slot.

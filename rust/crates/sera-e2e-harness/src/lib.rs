@@ -226,13 +226,29 @@ impl InProcessGateway {
         runtime_bin: &Path,
         llm_base_url: &str,
     ) -> Result<Self> {
+        Self::start_with_root_env(root, gateway_bin, runtime_bin, llm_base_url, &[]).await
+    }
+
+    /// Boot a gateway against a caller-owned [`GatewayRoot`] with extra env
+    /// vars threaded into the child.  Combines the restart-friendly root
+    /// ownership of [`Self::start_with_root`] with the per-test env
+    /// customisation of [`Self::start_local_with_env`].  Scenarios that
+    /// need both a custom manifest (e.g. `policyRef`) and env overrides
+    /// (e.g. `SERA_CAPABILITY_POLICIES_DIR`) reach for this method.
+    pub async fn start_with_root_env(
+        root: &GatewayRoot,
+        gateway_bin: &Path,
+        runtime_bin: &Path,
+        llm_base_url: &str,
+        extra_env: &[(&str, &str)],
+    ) -> Result<Self> {
         let (child, base_url) = spawn_gateway(
             root.dir.path(),
             &root.config_path,
             gateway_bin,
             runtime_bin,
             llm_base_url,
-            &[],
+            extra_env,
         )
         .await?;
         let gateway = Self {

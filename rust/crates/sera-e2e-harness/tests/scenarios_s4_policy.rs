@@ -1,12 +1,13 @@
-//! S4 — Security / policy scenarios (Phase 2 of the TEST-SCENARIOS plan).
+//! S4 — Security / policy scenarios.
 //!
 //! These tests prove the gateway's enforcement surfaces do what the spec
-//! says.  Phase 2 opens with S4.3 KillSwitch: the rest of S4 (CapabilityPolicy
-//! deny, SSRF at integration level, Constitutional gate) is tracked separately
-//! because it requires more fixture setup (policy files, tool-call-emitting
-//! mock LLM).
+//! says.
 //!
 //! Covered in this file:
+//! * S4.1 — a CapabilityPolicy with an empty `allowedTools` list denies
+//!   every tool dispatch; the gateway rewrites the tool event with a
+//!   `[sera-policy] tool '...' denied by capability policy 'deny-all'`
+//!   synthetic result, and the runtime's final reply embeds the denial.
 //! * S4.3 — arming the KillSwitch via `ROLLBACK` on the admin socket makes
 //!   all non-health HTTP requests return 503, while `/api/health` continues
 //!   to respond.  This is the first-line operator panic button — if it
@@ -24,8 +25,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 
 use sera_e2e_harness::binaries::{gateway_bin, runtime_bin};
-use sera_e2e_harness::mock_llm::start_mock_llm;
-use sera_e2e_harness::InProcessGateway;
+use sera_e2e_harness::mock_llm::{start_mock_llm, start_mock_llm_tool_call_then_content};
+use sera_e2e_harness::{resolve_model_env, GatewayRoot, InProcessGateway};
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
@@ -245,6 +246,148 @@ async fn s4_4_constitutional_gate_rejects_turn_when_no_policy_installed() -> Res
     assert!(
         response_text.contains("no ConstitutionalGate policy installed"),
         "turn must be interrupted by the gate; got: {response_text:?}"
+    );
+
+    if let Err(e) = gw.shutdown().await {
+        eprintln!("gateway shutdown returned: {e}");
+    }
+    Ok(())
+}
+
+/// S4.1 — A CapabilityPolicy with `allowedTools: []` denies every tool
+/// dispatch for an agent bound to it via `policyRef`.
+///
+/// The scenario drives the runtime into calling a real tool by having the
+/// mock LLM emit a `tool_calls` chunk for `http_request`.  The gateway's
+/// dispatch filter consults the CapabilityRegistry, finds no allowlist
+/// match, and rewrites the tool event into a synthetic denial (see
+/// `sera-gateway/src/bin/sera.rs` — `"[sera-policy] tool '...' denied by
+/// capability policy 'deny-all'"`).  The runtime continues the conversation
+/// with that synthetic result in the transcript and calls the LLM again;
+/// the mock's second response is a plain content reply so the turn
+/// terminates cleanly.  The final `/api/chat` response body embeds the
+/// denial marker.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn s4_1_capability_policy_deny_blocks_tool_dispatch() -> Result<()> {
+    init_tracing();
+
+    let (gw_bin, rt_bin) = match bins_or_skip() {
+        Some(b) => b,
+        None => {
+            eprintln!("[S4.1] SKIP: gateway/runtime bins not built");
+            return Ok(());
+        }
+    };
+    let (llm, _mock) = match start_mock_llm_tool_call_then_content(
+        "http_request",
+        r#"{"url":"https://example.com","method":"GET"}"#,
+        "I was blocked by policy — noted.",
+    )
+    .await
+    {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("[S4.1] SKIP: wiremock unavailable ({e})");
+            return Ok(());
+        }
+    };
+
+    // Write a policies dir with a single `deny-all` policy that allows no
+    // tool.  `SERA_CAPABILITY_POLICIES_DIR` points the gateway at this dir.
+    let policies_dir = tempfile::tempdir().context("creating policies tempdir")?;
+    std::fs::write(
+        policies_dir.path().join("deny-all.yaml"),
+        r#"apiVersion: sera/v1
+kind: CapabilityPolicy
+metadata:
+  name: deny-all
+  description: Denies every tool dispatch.
+allowedTools: []
+"#,
+    )
+    .context("writing deny-all.yaml")?;
+    let policies_dir_str = policies_dir
+        .path()
+        .to_str()
+        .context("policies tempdir is not UTF-8")?
+        .to_owned();
+
+    // Manifest with the agent bound to `deny-all` via `policyRef`.  The
+    // harness's `multi_agent_sera_yaml` doesn't support policy_ref, so we
+    // construct the YAML inline for this one scenario.
+    let model = resolve_model_env();
+    let manifest = format!(
+        r#"apiVersion: sera.dev/v1
+kind: Instance
+metadata:
+  name: sera-e2e
+spec: {{}}
+---
+apiVersion: sera.dev/v1
+kind: Provider
+metadata:
+  name: mock-openai
+spec:
+  kind: openai-compatible
+  base_url: "{llm}"
+  default_model: {model}
+---
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: sera
+spec:
+  provider: mock-openai
+  model: {model}
+  policyRef: deny-all
+  persona:
+    immutable_anchor: |
+      You are a SERA e2e test persona. Reply briefly.
+"#
+    );
+    let root = GatewayRoot::new_with_manifest(&manifest).context("building policy-bound root")?;
+
+    let gw = InProcessGateway::start_with_root_env(
+        &root,
+        &gw_bin,
+        &rt_bin,
+        &llm,
+        &[("SERA_CAPABILITY_POLICIES_DIR", policies_dir_str.as_str())],
+    )
+    .await
+    .context("booting gateway for S4.1")?;
+
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+
+    let resp: serde_json::Value = http
+        .post(format!("{}/api/chat", gw.base_url))
+        .json(&serde_json::json!({
+            "agent": "sera",
+            "message": "please fetch example.com",
+            "stream": false,
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    let response_text = resp
+        .get("response")
+        .and_then(|v| v.as_str())
+        .context("response missing `response` field")?;
+
+    // The synthetic tool End emitted by the gateway on denial carries the
+    // marker `[sera-policy] tool 'http_request' denied by capability policy
+    // 'deny-all'`.  The runtime rolls that observation into its context and
+    // replies; the final `response` should contain either the literal
+    // marker or the canonical denial reason string.
+    assert!(
+        response_text.contains("denied by capability policy")
+            || response_text.contains("[sera-policy]"),
+        "final response should embed the denial marker; got: {response_text:?}"
     );
 
     if let Err(e) = gw.shutdown().await {

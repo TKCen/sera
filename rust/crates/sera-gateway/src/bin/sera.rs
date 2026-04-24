@@ -61,6 +61,8 @@ use sera_types::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
 use sera_types::event::IncomingEvent as DomainEvent;
 use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
 use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
+use sera_meta::constitutional::ConstitutionalRegistry;
+use sera_gateway::constitutional_config;
 
 // ── Phase-3 SPEC-interop crates ──────────────────────────────────────────────
 use sera_a2a::{A2aClient, A2aRequest, A2aRouter, InProcRouter, LoopbackTransport};
@@ -617,6 +619,14 @@ struct AppState {
     /// Production boot uses SqliteGitSessionStore (sera-4i4i); tests keep
     /// InMemorySessionStore to avoid writing shadow-git dirs to disk.
     session_store: Arc<dyn SessionStore>,
+    /// Constitutional rule registry. Seeded at startup from
+    /// `SERA_CONSTITUTIONAL_RULES_PATH` (default `/etc/sera/constitutional_rules.yaml`).
+    /// Empty when the file is absent — constitutional_gate hooks still run but
+    /// find no rules to evaluate (fail-open vs fail-closed is the hook's choice).
+    /// Field is populated but not yet read by any hook handler; the
+    /// ConstitutionalGateHook that consults it is filed as sera-0yh3.
+    #[allow(dead_code)]
+    constitutional_registry: Arc<ConstitutionalRegistry>,
 }
 
 impl AppState {
@@ -3040,6 +3050,19 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         Some(mail_lookup.clone()),
     ));
 
+    // Seed constitutional rules from SERA_CONSTITUTIONAL_RULES_PATH (or the
+    // default /etc/sera/constitutional_rules.yaml). Missing file → no-op (Ok(0)).
+    // Parse error → fail-fast (propagate Err so the process exits with context).
+    let constitutional_registry = Arc::new(ConstitutionalRegistry::new());
+    match constitutional_config::seed_registry_from_env(&constitutional_registry).await {
+        Ok(count) => {
+            tracing::info!(count, "Constitutional rules seeded from env path");
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!("Failed to load constitutional rules: {e}"));
+        }
+    }
+
     let state = Arc::new(AppState {
         db: Mutex::new(db),
         manifests,
@@ -3079,6 +3102,7 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
                     .expect("failed to initialize SqliteGitSessionStore"),
             )
         },
+        constitutional_registry,
     });
 
     // 4. Start event processing loop.
@@ -3528,6 +3552,7 @@ mod tests {
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
+            constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
         })
     }
 
@@ -3567,6 +3592,7 @@ mod tests {
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
+            constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
         })
     }
 
@@ -3606,6 +3632,7 @@ mod tests {
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
+            constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
         })
     }
 
@@ -3645,6 +3672,7 @@ mod tests {
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
+            constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
         })
     }
 
@@ -4481,6 +4509,7 @@ mod tests {
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
+            constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -4523,6 +4552,7 @@ mod tests {
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
+            constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -4566,6 +4596,7 @@ mod tests {
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
+            constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -4612,6 +4643,7 @@ mod tests {
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
+            constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
         };
         let headers = HeaderMap::new();
         assert_eq!(
@@ -5298,6 +5330,7 @@ mod tests {
             // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
+            constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
         });
 
         let app = build_router(Arc::clone(&state));
@@ -5379,6 +5412,7 @@ mod tests {
                 // sera-4i4i: intentional test-fixture — InMemorySessionStore avoids
                 // writing shadow-git dirs to the filesystem during tests.
                 session_store: Arc::new(InMemorySessionStore::new()),
+                constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             })
         };
         let app = build_router(state);

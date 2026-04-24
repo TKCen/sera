@@ -11,6 +11,9 @@
 //!   all non-health HTTP requests return 503, while `/api/health` continues
 //!   to respond.  This is the first-line operator panic button — if it
 //!   regresses, no amount of in-flight cancellation machinery matters.
+//! * S4.4 — the ConstitutionalGate hook rejects turns when no policy is
+//!   installed AND the permissive `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE`
+//!   flag is disabled.  Mirrors the fail-closed production posture.
 
 #![cfg(all(unix, feature = "integration"))]
 
@@ -162,6 +165,86 @@ async fn s4_3_killswitch_rollback_blocks_new_requests() -> Result<()> {
         h.status().is_success(),
         "/api/health must remain 2xx after rollback; got {}",
         h.status()
+    );
+
+    if let Err(e) = gw.shutdown().await {
+        eprintln!("gateway shutdown returned: {e}");
+    }
+    Ok(())
+}
+
+/// S4.4 — The ConstitutionalGate rejects turns when no policy is installed
+/// and the permissive `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE` flag is off.
+///
+/// The production fail-closed posture: an operator who has not provisioned
+/// a constitution cannot run turns.  The harness's other scenarios pass
+/// `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=1` to match `sera start --local`'s
+/// permissive dev mode; this scenario disables that flag to prove the gate
+/// still bites.  The runtime returns an interrupted-turn reply whose text
+/// embeds the gate reason — a 200 status with a specific body, not a 5xx.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn s4_4_constitutional_gate_rejects_turn_when_no_policy_installed() -> Result<()> {
+    init_tracing();
+
+    let (gw_bin, rt_bin) = match bins_or_skip() {
+        Some(b) => b,
+        None => {
+            eprintln!("[S4.4] SKIP: gateway/runtime bins not built");
+            return Ok(());
+        }
+    };
+    let (llm, _mock) = match start_mock_llm().await {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("[S4.4] SKIP: wiremock unavailable ({e})");
+            return Ok(());
+        }
+    };
+
+    // Override the harness default of "1" with "0".  `spawn_gateway` applies
+    // `extra_env` *after* the default, and `Command::env` is last-writer-wins
+    // per key, so this flips the flag off for just this scenario.
+    let gw = InProcessGateway::start_local_with_env(
+        &gw_bin,
+        &rt_bin,
+        &llm,
+        &[("SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE", "0")],
+    )
+    .await
+    .context("booting gateway for S4.4")?;
+
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()?;
+
+    // POST a chat turn — the LLM mock will return a normal reply, but the
+    // gate should intercept before the runtime ever forwards content back.
+    let resp: serde_json::Value = http
+        .post(format!("{}/api/chat", gw.base_url))
+        .json(&serde_json::json!({
+            "agent": "sera",
+            "message": "S4.4 should be rejected",
+            "stream": false,
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    let response_text = resp
+        .get("response")
+        .and_then(|v| v.as_str())
+        .context("response missing `response` field")?;
+
+    // The runtime wraps the gate reason as `[interrupted: <reason>]`.  We
+    // assert on the reason substring rather than the literal bracketed
+    // form so a future reply-formatting change doesn't silently break the
+    // test — the reason string itself is the stable contract (published
+    // as `sera_runtime::turn::MISSING_GATE_REASON`).
+    assert!(
+        response_text.contains("no ConstitutionalGate policy installed"),
+        "turn must be interrupted by the gate; got: {response_text:?}"
     );
 
     if let Err(e) = gw.shutdown().await {

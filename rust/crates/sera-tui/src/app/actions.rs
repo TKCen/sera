@@ -68,6 +68,13 @@ pub enum Action {
     /// End-of-buffer; only the Session view listens for it, where it
     /// re-enables auto-scroll after the user paused it by scrolling up.
     EndOfBuffer,
+    /// Toggle focus between the composer and transcript inside SessionView.
+    ToggleComposerFocus,
+    /// Submit the composer buffer (Session view only).  Drains the textarea
+    /// into `pending_sends`; G.0.2 will wire the send to the gateway.
+    SubmitComposer,
+    /// Forward a raw key event to the focused composer textarea.
+    ComposerInput(crossterm::event::KeyEvent),
     /// No-op — used when a key doesn't match any binding.  Reducing to
     /// this instead of returning `Option<Action>` lets the dispatch table
     /// stay a plain `match`.

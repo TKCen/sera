@@ -60,6 +60,39 @@ pub fn translate(event: &KeyEvent, kb: &TuiKeybindings) -> Action {
     Action::NoOp
 }
 
+/// Session-view translator.  When `composer_focused` is true the composer
+/// textarea intercepts most keys; only global exits (quit) and the two
+/// session-specific bindings are checked first.
+///
+/// When `composer_focused` is false the transcript pane is active and we
+/// fall back to the standard `translate` so scroll keys work normally.
+pub fn translate_session(
+    event: &KeyEvent,
+    kb: &TuiKeybindings,
+    composer_focused: bool,
+) -> Action {
+    // Global exits always win regardless of composer state.
+    if matches_key(event, &kb.quit) {
+        return Action::Quit;
+    }
+
+    // Session-specific bindings checked before the global table.
+    if matches_key(event, &kb.submit_message) {
+        return Action::SubmitComposer;
+    }
+    if matches_key(event, &kb.toggle_composer_focus) {
+        return Action::ToggleComposerFocus;
+    }
+
+    if composer_focused {
+        // All other keys go straight to the textarea widget.
+        Action::ComposerInput(*event)
+    } else {
+        // Transcript is focused — standard navigation.
+        translate(event, kb)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +139,60 @@ mod tests {
         let kb = TuiKeybindings::defaults();
         let ev = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(translate(&ev, &kb), Action::Quit);
+    }
+
+    #[test]
+    fn session_tab_toggles_composer_focus() {
+        let kb = TuiKeybindings::defaults();
+        assert_eq!(
+            translate_session(&ev(KeyCode::Tab), &kb, true),
+            Action::ToggleComposerFocus,
+        );
+        assert_eq!(
+            translate_session(&ev(KeyCode::Tab), &kb, false),
+            Action::ToggleComposerFocus,
+        );
+    }
+
+    #[test]
+    fn session_ctrl_enter_submits() {
+        let kb = TuiKeybindings::defaults();
+        let ctrl_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL);
+        assert_eq!(
+            translate_session(&ctrl_enter, &kb, true),
+            Action::SubmitComposer,
+        );
+        assert_eq!(
+            translate_session(&ctrl_enter, &kb, false),
+            Action::SubmitComposer,
+        );
+    }
+
+    #[test]
+    fn session_plain_key_goes_to_composer_when_focused() {
+        let kb = TuiKeybindings::defaults();
+        let key_h = ev(KeyCode::Char('h'));
+        assert_eq!(
+            translate_session(&key_h, &kb, true),
+            Action::ComposerInput(key_h),
+        );
+    }
+
+    #[test]
+    fn session_plain_key_scrolls_when_transcript_focused() {
+        let kb = TuiKeybindings::defaults();
+        assert_eq!(
+            translate_session(&ev(KeyCode::Up), &kb, false),
+            Action::Up,
+        );
+    }
+
+    #[test]
+    fn session_quit_always_wins() {
+        let kb = TuiKeybindings::defaults();
+        assert_eq!(
+            translate_session(&ev(KeyCode::Char('q')), &kb, true),
+            Action::Quit,
+        );
     }
 }

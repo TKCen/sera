@@ -189,6 +189,21 @@ impl App {
                     self.session.jump_to_end();
                 }
             }
+            Action::ToggleComposerFocus => {
+                if let ViewKind::Session = self.focus {
+                    self.session.toggle_focus();
+                }
+            }
+            Action::SubmitComposer => {
+                if let ViewKind::Session = self.focus {
+                    self.session.submit_composer();
+                }
+            }
+            Action::ComposerInput(key) => {
+                if let ViewKind::Session = self.focus {
+                    self.session.input_to_composer(key);
+                }
+            }
             Action::NoOp => {}
         }
     }

@@ -42,3 +42,8 @@ sera-testing  = { workspace = true }
 # + in-process CLI driver) is already covered by the main `[dependencies]`
 # section, so the dev-only surface stays minimal.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Required for `StreamExt::next()` when consuming the sera-cli SSE parser in
+# the S3.2 streaming scenario.  Already a workspace dep (used by sera-cli),
+# pulled in as a dev-dep rather than a regular one because no library code
+# in this crate streams — only tests do.
+futures-util = { workspace = true }

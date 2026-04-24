@@ -187,27 +187,39 @@ impl TokenStore for MockTokenStore {
 
 /// Build the best available `TokenStore` for the current platform.
 ///
-/// Tries `KeyringTokenStore` first; falls back to `FileTokenStore` when the
-/// keychain is unavailable (e.g. headless CI, WSL without a secret-service
-/// daemon).
+/// Tries `KeyringTokenStore` first.  On Linux/WSL2 the `keyring` crate falls
+/// back to an in-memory `MockCredential` when no secret-service features are
+/// compiled in.  `MockCredential` advertises `CredentialPersistence::EntryOnly`
+/// — data lives only in the `Entry` object and is lost when the process exits.
+///
+/// We detect this by querying the default credential builder's persistence
+/// level.  Any value other than `UntilDelete` (or `UntilReboot`) is treated as
+/// ephemeral and triggers a fallback to [`FileTokenStore`]
+/// (`~/.sera/token`, mode `0600`).
 pub fn best_available_store() -> Box<dyn TokenStore> {
-    match KeyringTokenStore::new() {
-        Ok(ks) => {
-            // Probe with a harmless load — if the keyring daemon isn't running
-            // on Linux this will fail with `PlatformFailure`.
-            match ks.load() {
-                Ok(_) => {
-                    tracing::debug!("using OS keyring for token storage");
-                    return Box::new(ks);
-                }
-                Err(e) => {
-                    tracing::debug!("keyring probe failed ({e}), falling back to file store");
-                }
-            }
+    if let Ok(ks) = KeyringTokenStore::new() {
+        if keyring_is_persistent() {
+            tracing::debug!("using OS keyring for token storage");
+            return Box::new(ks);
         }
-        Err(e) => {
-            tracing::debug!("keyring unavailable ({e}), falling back to file store");
-        }
+        tracing::debug!("keyring backend is ephemeral (MockCredential), falling back to file store");
+    } else {
+        tracing::debug!("keyring unavailable, falling back to file store");
     }
     Box::new(FileTokenStore::new(FileTokenStore::default_path()))
+}
+
+/// Returns `true` when the active keyring backend will persist credentials
+/// beyond the lifetime of this process.
+///
+/// The `keyring` crate's `default::default_credential_builder().persistence()`
+/// returns `CredentialPersistence::EntryOnly` when the platform has no
+/// suitable secret-service daemon and falls back to `MockCredential`.  We
+/// treat only `UntilDelete` and `UntilReboot` as acceptable for token storage.
+fn keyring_is_persistent() -> bool {
+    use keyring::credential::CredentialPersistence;
+    matches!(
+        keyring::default::default_credential_builder().persistence(),
+        CredentialPersistence::UntilDelete | CredentialPersistence::UntilReboot
+    )
 }

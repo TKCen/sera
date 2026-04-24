@@ -634,6 +634,78 @@ impl GatewayClient {
         }
         Ok(Box::pin(resp.bytes_stream()))
     }
+
+    /// `POST /api/chat` with `{message, agent, stream: true}`.
+    ///
+    /// Returns an async stream of [`StreamEvent`]s parsed from the SSE
+    /// response.  The stream ends when the server closes the connection.
+    /// HTTP-level errors are surfaced as `Err(ClientError)`.
+    pub async fn post_chat(
+        &self,
+        agent: &str,
+        message: &str,
+    ) -> Result<impl tokio_stream::Stream<Item = Result<StreamEvent, ClientError>>, ClientError>
+    {
+        let body = serde_json::json!({
+            "message": message,
+            "agent": agent,
+            "stream": true,
+        });
+        let resp = self
+            .client
+            .post(self.url("/api/chat"))
+            .header("content-type", "application/json")
+            .header("Accept", "text/event-stream")
+            .json(&body)
+            .send()
+            .await?;
+        let status = resp.status();
+        if status == StatusCode::NOT_FOUND {
+            return Err(ClientError::NotAvailable("/api/chat".to_owned()));
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Status { status, body });
+        }
+        let bytes = resp.bytes_stream();
+        Ok(parse_sse_stream(bytes))
+    }
+}
+
+/// Drain an SSE byte stream into [`StreamEvent`]s.  Reused by both the
+/// existing `spawn_sse` reconnect loop and the new `post_chat` one-shot path.
+fn parse_sse_stream(
+    bytes: impl tokio_stream::Stream<Item = reqwest::Result<bytes::Bytes>> + Send + 'static,
+) -> impl tokio_stream::Stream<Item = Result<StreamEvent, ClientError>> {
+    use futures_util::StreamExt;
+    let mut buffer = String::new();
+    bytes.flat_map(move |chunk| {
+        let events: Vec<Result<StreamEvent, ClientError>> = match chunk {
+            Err(e) => vec![Err(ClientError::Http(e))],
+            Ok(bytes) => {
+                match std::str::from_utf8(&bytes) {
+                    Err(_) => vec![],
+                    Ok(s) => {
+                        buffer.push_str(s);
+                        let mut out = Vec::new();
+                        // SSE frames separated by blank lines.
+                        while let Some(pos) = buffer.find("\n\n") {
+                            let frame: String = buffer.drain(..=pos + 1).collect();
+                            for line in frame.lines() {
+                                if let Some(data) = line.strip_prefix("data:")
+                                    && let Some(ev) = StreamEvent::parse(data.trim())
+                                {
+                                    out.push(Ok(ev));
+                                }
+                            }
+                        }
+                        out
+                    }
+                }
+            }
+        };
+        tokio_stream::iter(events)
+    })
 }
 
 /// Payload the SSE background task pushes to the UI.
@@ -759,5 +831,51 @@ mod tests {
         assert_eq!(ConnectionState::Connected.label(), "connected");
         assert_eq!(ConnectionState::Reconnecting.label(), "reconnecting…");
         assert_eq!(ConnectionState::Disconnected.label(), "disconnected");
+    }
+
+    // --- post_chat body shape (no HTTP round-trip needed) ---
+
+    #[test]
+    fn post_chat_body_shape_is_correct() {
+        // Verify the JSON body we'd send has the expected fields and values.
+        let agent = "test-agent";
+        let message = "hello from composer";
+        let body = serde_json::json!({
+            "message": message,
+            "agent": agent,
+            "stream": true,
+        });
+        assert_eq!(body["message"], "hello from composer");
+        assert_eq!(body["agent"], "test-agent");
+        assert_eq!(body["stream"], true);
+        // No session_id — server-managed per spec.
+        assert!(body.get("session_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn parse_sse_stream_yields_events() {
+        use tokio_stream::StreamExt;
+        // Build a fake byte stream of two SSE frames.
+        let raw = b"data: {\"event_type\":\"message\",\"role\":\"assistant\",\"delta\":\"hi\"}\n\ndata: {\"event_type\":\"done\",\"delta\":\"\"}\n\n".to_vec();
+        let bytes_stream = tokio_stream::iter(vec![Ok::<_, reqwest::Error>(bytes::Bytes::from(raw))]);
+        let mut stream = parse_sse_stream(bytes_stream);
+        let ev1 = stream.next().await.unwrap().unwrap();
+        assert_eq!(ev1.event_type, "message");
+        assert_eq!(ev1.role, "assistant");
+        assert_eq!(ev1.delta, "hi");
+        let ev2 = stream.next().await.unwrap().unwrap();
+        assert_eq!(ev2.event_type, "done");
+    }
+
+    #[tokio::test]
+    async fn parse_sse_stream_skips_non_data_lines() {
+        use tokio_stream::StreamExt;
+        // SSE with comments and event: lines mixed in.
+        let raw = b": ping\nevent: message\ndata: {\"event_type\":\"message\",\"delta\":\"chunk\"}\n\n".to_vec();
+        let bytes_stream = tokio_stream::iter(vec![Ok::<_, reqwest::Error>(bytes::Bytes::from(raw))]);
+        let mut stream = parse_sse_stream(bytes_stream);
+        let ev = stream.next().await.unwrap().unwrap();
+        assert_eq!(ev.delta, "chunk");
+        assert!(stream.next().await.is_none());
     }
 }

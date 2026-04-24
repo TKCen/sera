@@ -12,6 +12,7 @@ pub mod actions;
 use std::sync::Arc;
 
 use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio_stream::StreamExt as _;
 
 use crate::client::{ConnectionState, GatewayClient, SseUpdate};
 use crate::keybindings::TuiKeybindings;
@@ -68,6 +69,8 @@ pub enum AppCommand {
     Approve(String),
     Reject(String),
     Escalate(String),
+    /// POST a message to /api/chat and pipe the SSE stream into SessionView.
+    SendChat { agent: String, message: String },
 }
 
 /// Root application state.
@@ -89,6 +92,10 @@ pub struct App {
     /// The field is `pub` so the runtime (in `run`) can drain it each
     /// tick without needing a getter.
     pub pending: Vec<AppCommand>,
+
+    /// Agent targeted by composer sends.  Set by G.0.3 (sera-0fp7) when the
+    /// operator selects an agent.  None = drop with warn (no agent chosen yet).
+    pub active_agent_id: Option<String>,
 }
 
 impl App {
@@ -105,6 +112,7 @@ impl App {
             connection: ConnectionState::Disconnected,
             client: Arc::new(client),
             pending: Vec::new(),
+            active_agent_id: None,
         }
     }
 
@@ -197,6 +205,25 @@ impl App {
             Action::SubmitComposer => {
                 if let ViewKind::Session = self.focus {
                     self.session.submit_composer();
+                    // Drain pending_sends into SendChat commands.
+                    let messages: Vec<String> = self.session.pending_sends.drain(..).collect();
+                    for message in messages {
+                        match &self.active_agent_id {
+                            Some(agent) => {
+                                self.pending.push(AppCommand::SendChat {
+                                    agent: agent.clone(),
+                                    message,
+                                });
+                            }
+                            None => {
+                                tracing::warn!(
+                                    message = %message,
+                                    "composer send dropped: no active_agent_id (G.0.3 will set it)"
+                                );
+                                self.status = Status::warn("no agent selected — choose an agent first");
+                            }
+                        }
+                    }
                 }
             }
             Action::ComposerInput(key) => {
@@ -324,6 +351,9 @@ impl Runtime {
                         app.status = Status::error(format!("escalate failed: {e}"));
                     }
                 },
+                AppCommand::SendChat { agent, message } => {
+                    self.send_chat(app, agent, message).await;
+                }
             }
         }
     }
@@ -380,6 +410,49 @@ impl Runtime {
                 app.status = Status::warn(format!("evolve list unavailable: {e}"));
             }
         }
+    }
+
+    /// Spawn a task that POSTs to `/api/chat` and pipes SSE events into the
+    /// session view via the existing `sse_tx` channel.
+    async fn send_chat(&mut self, app: &mut App, agent: String, message: String) {
+        let client = Arc::clone(&app.client);
+        let forward_to = self.sse_tx.clone();
+
+        // Transition to Reconnecting to give visual feedback while connecting.
+        app.apply_sse(SseUpdate::State(ConnectionState::Reconnecting));
+        app.status = Status::info(format!("sending to {agent}…"));
+
+        tokio::spawn(async move {
+            // Signal: connecting.
+            let _ = forward_to.send(SseUpdate::State(ConnectionState::Reconnecting));
+
+            match client.post_chat(&agent, &message).await {
+                Err(e) => {
+                    tracing::warn!(error = %e, "post_chat HTTP error");
+                    let _ = forward_to.send(SseUpdate::State(ConnectionState::Disconnected));
+                }
+                Ok(mut stream) => {
+                    let _ = forward_to.send(SseUpdate::State(ConnectionState::Connected));
+                    while let Some(item) = stream.next().await {
+                        match item {
+                            Ok(ev) => {
+                                if forward_to.send(SseUpdate::Event(ev)).is_err() {
+                                    return;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "post_chat stream error");
+                                let _ = forward_to
+                                    .send(SseUpdate::State(ConnectionState::Disconnected));
+                                return;
+                            }
+                        }
+                    }
+                    // Stream ended cleanly — back to Connected/idle.
+                    let _ = forward_to.send(SseUpdate::State(ConnectionState::Connected));
+                }
+            }
+        });
     }
 
     async fn load_session_for(&mut self, app: &mut App, agent_id: String) {

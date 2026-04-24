@@ -1,10 +1,13 @@
 //! SERA TUI — operator terminal UI built with ratatui + crossterm.
 //!
-//! Four panes rotate under Tab / Shift-Tab:
-//! * **Agents** — list of agent instances (GET /api/agents)
-//! * **Session** — metadata + streaming transcript (SSE where available)
-//! * **HITL** — pending permission requests, approve/reject/escalate
-//! * **Evolve** — read-only view over evolve proposals
+//! **J.0.1 chat-dominant layout**: the main canvas is a full-screen Session
+//! view (metadata + transcript + tool log), with a composer pinned at the
+//! bottom and a one-line status/hint footer.  Agents, HITL queue, and
+//! evolve status are accessed as modal overlays:
+//! * **Ctrl+A** — agents modal (select / switch agent)
+//! * **Ctrl+H** — HITL queue modal (approve/reject/escalate)
+//! * **Ctrl+E** — evolve status modal (read-only)
+//! * **Ctrl+P** — session picker modal (resume existing session)
 //!
 //! All keybindings are configurable via [`keybindings::TuiKeybindings`].
 //! No hardcoded key-code checks in dispatch code (project CLAUDE.md rule).
@@ -37,9 +40,8 @@ mod views;
 use app::{App, Runtime};
 use client::GatewayClient;
 use config::Config;
-use app::actions::ViewKind;
-use input::{translate, translate_session};
-use keybindings::TuiKeybindings;
+use input::translate_session;
+use keybindings::{matches_key, TuiKeybindings};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -126,15 +128,20 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
         // have a chance to run each tick.
         if event::poll(tick)? {
             match event::read()? {
-                Event::Paste(content) if app.focus == ViewKind::Session => {
+                // Pastes go to the composer — the composer is always the
+                // input sink in the chat-dominant layout, as long as no
+                // modal is on top.
+                Event::Paste(content)
+                    if !app.show_session_picker
+                        && !app.any_j01_modal_open()
+                        && app.show_hitl_modal.is_none() =>
+                {
                     app.dispatch(crate::app::Action::PasteToComposer(content));
                 }
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    // When the session picker modal is open it intercepts all keys;
-                    // only Up/Down/Enter/Esc are forwarded — everything else is dropped.
+                    use crossterm::event::KeyCode;
                     let action = if app.show_session_picker {
-                        use crossterm::event::KeyCode;
-                        use keybindings::matches_key;
+                        // Session picker intercept: only navigation/select/esc.
                         if matches_key(&key, &app.keybindings.up) {
                             crate::app::Action::PickerUp
                         } else if matches_key(&key, &app.keybindings.down) {
@@ -148,23 +155,42 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
                         } else {
                             crate::app::Action::NoOp
                         }
-                    } else {
-                        let a = if app.focus == ViewKind::Session {
-                            translate_session(&key, &app.keybindings, app.session.composer_focused())
-                        } else {
-                            translate(&key, &app.keybindings)
-                        };
-                        // When Enter is pressed in the Agents pane, resolve the selected
-                        // agent ID here and dispatch SelectAgent so the action carries an
-                        // explicit ID (spec G.0.3).
-                        if a == crate::app::Action::Select
-                            && app.focus == ViewKind::Agents
-                            && let Some(id) = app.agents.selected_id()
+                    } else if app.any_j01_modal_open() {
+                        // J.0.1 modal intercept: translate plain key bindings
+                        // (up/down/select/approve/reject/escalate/quit/esc).
+                        // The composer does NOT receive keystrokes while a
+                        // modal is open.
+                        if matches_key(&key, &app.keybindings.quit) {
+                            crate::app::Action::Quit
+                        } else if matches_key(&key, &app.keybindings.back)
+                            || key.code == KeyCode::Esc
                         {
-                            crate::app::Action::SelectAgent(id)
+                            crate::app::Action::CloseModal
+                        } else if matches_key(&key, &app.keybindings.up) {
+                            crate::app::Action::Up
+                        } else if matches_key(&key, &app.keybindings.down) {
+                            crate::app::Action::Down
+                        } else if matches_key(&key, &app.keybindings.select) {
+                            crate::app::Action::Select
+                        } else if matches_key(&key, &app.keybindings.approve) {
+                            crate::app::Action::Approve
+                        } else if matches_key(&key, &app.keybindings.reject) {
+                            crate::app::Action::Reject
+                        } else if matches_key(&key, &app.keybindings.escalate) {
+                            crate::app::Action::Escalate
+                        } else if matches_key(&key, &app.keybindings.refresh) {
+                            crate::app::Action::Refresh
                         } else {
-                            a
+                            crate::app::Action::NoOp
                         }
+                    } else {
+                        // Chat-dominant default — Session canvas is always
+                        // the background, composer may or may not have focus.
+                        translate_session(
+                            &key,
+                            &app.keybindings,
+                            app.session.composer_focused(),
+                        )
                     };
                     app.dispatch(action);
                 }

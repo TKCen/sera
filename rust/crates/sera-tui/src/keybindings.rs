@@ -86,6 +86,14 @@ pub struct TuiKeybindings {
     pub submit_message: Vec<KeyBinding>,
     /// Open the session picker modal (default: Ctrl+P).
     pub open_session_picker: Vec<KeyBinding>,
+    /// Open the agents picker modal (default: Ctrl+A) — chat-dominant layout.
+    pub open_agents_modal: Vec<KeyBinding>,
+    /// Open the HITL queue modal (default: Ctrl+H) — chat-dominant layout.
+    /// Distinct from the inline HITL approval modal triggered by a pending
+    /// request on the active session.
+    pub open_hitl_modal: Vec<KeyBinding>,
+    /// Open the evolve status modal (default: Ctrl+E) — chat-dominant layout.
+    pub open_evolve_modal: Vec<KeyBinding>,
 }
 
 impl TuiKeybindings {
@@ -126,6 +134,18 @@ impl TuiKeybindings {
             // Ctrl+P — no conflict with existing bindings.
             open_session_picker: vec![KeyBinding::with_mods(
                 KeyCode::Char('p'),
+                KeyModifiers::CONTROL,
+            )],
+            open_agents_modal: vec![KeyBinding::with_mods(
+                KeyCode::Char('a'),
+                KeyModifiers::CONTROL,
+            )],
+            open_hitl_modal: vec![KeyBinding::with_mods(
+                KeyCode::Char('h'),
+                KeyModifiers::CONTROL,
+            )],
+            open_evolve_modal: vec![KeyBinding::with_mods(
+                KeyCode::Char('e'),
                 KeyModifiers::CONTROL,
             )],
         }
@@ -191,6 +211,9 @@ mod tests {
         assert!(!kb.toggle_composer_focus.is_empty());
         assert!(!kb.submit_message.is_empty());
         assert!(!kb.open_session_picker.is_empty());
+        assert!(!kb.open_agents_modal.is_empty());
+        assert!(!kb.open_hitl_modal.is_empty());
+        assert!(!kb.open_evolve_modal.is_empty());
     }
 
     #[test]

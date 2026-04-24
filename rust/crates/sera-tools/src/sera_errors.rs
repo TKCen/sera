@@ -18,6 +18,7 @@ impl From<SsrfError> for SeraError {
             SsrfError::LinkLocal => SeraErrorCode::Forbidden,
             SsrfError::CloudMetadata => SeraErrorCode::Forbidden,
             SsrfError::NotAllowed { .. } => SeraErrorCode::Forbidden,
+            SsrfError::PrivateRange => SeraErrorCode::Forbidden,
             SsrfError::ParseError { .. } => SeraErrorCode::InvalidInput,
         };
         SeraError::with_source(code, err.to_string(), err)
@@ -75,6 +76,12 @@ mod tests {
         let e: SeraError = SsrfError::NotAllowed { reason: "hostname".into() }.into();
         assert_eq!(e.code, SeraErrorCode::Forbidden);
         assert!(e.message.contains("hostname"));
+    }
+
+    #[test]
+    fn ssrf_private_range_maps_to_forbidden() {
+        let e: SeraError = SsrfError::PrivateRange.into();
+        assert_eq!(e.code, SeraErrorCode::Forbidden);
     }
 
     #[test]

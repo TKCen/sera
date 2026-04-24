@@ -450,10 +450,10 @@ impl LlmClient {
             .message
             .content
             .as_deref()
-            .map_or(true, |s| s.is_empty());
+            .is_none_or(|s| s.is_empty());
         let tool_calls_empty = tool_calls
             .as_deref()
-            .map_or(true, |tc| tc.is_empty());
+            .is_none_or(|tc| tc.is_empty());
         if content_empty && tool_calls_empty {
             return Err(LlmError::RequestError(
                 "provider returned assistant message with neither content nor tool_calls"
@@ -714,6 +714,16 @@ impl LlmClient {
                         )
                     };
 
+                    // Guard: reject assistant messages that carry neither content
+                    // nor tool calls — they would produce silent empty
+                    // StreamingDelta / TurnCompleted events (sera-8h23).
+                    if content.is_empty() && tool_calls.is_none() {
+                        return Err(LlmError::RequestError(
+                            "provider returned assistant message with neither content nor tool_calls"
+                                .to_string(),
+                        ));
+                    }
+
                     return Ok(LlmChatResult {
                         message: ChatMessage {
                             role: "assistant".to_string(),
@@ -804,6 +814,16 @@ impl LlmClient {
                     .collect(),
             )
         };
+
+        // Guard: reject assistant messages that carry neither content nor tool
+        // calls — they would produce silent empty StreamingDelta /
+        // TurnCompleted events (sera-8h23).
+        if content.is_empty() && tool_calls.is_none() {
+            return Err(LlmError::RequestError(
+                "provider returned assistant message with neither content nor tool_calls"
+                    .to_string(),
+            ));
+        }
 
         Ok(LlmChatResult {
             message: ChatMessage {
@@ -1587,7 +1607,7 @@ mod tests {
         let result = client.chat(&[], &[]).await;
         assert!(
             matches!(result, Err(LlmError::RequestError(ref msg)) if msg.contains("neither content nor tool_calls")),
-            "expected RequestError, got: {result:?}"
+            "expected RequestError for null content + no tool_calls"
         );
     }
 
@@ -1611,7 +1631,7 @@ mod tests {
         let result = client.chat(&[], &[]).await;
         assert!(
             matches!(result, Err(LlmError::RequestError(ref msg)) if msg.contains("neither content nor tool_calls")),
-            "expected RequestError, got: {result:?}"
+            "expected RequestError for empty string content + no tool_calls"
         );
     }
 

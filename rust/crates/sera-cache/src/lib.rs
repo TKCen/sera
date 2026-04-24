@@ -203,7 +203,7 @@ mod tests {
     #[tokio::test]
     async fn store_and_retrieve_number_value() {
         let cache = MokaBackend::new(100);
-        let val = serde_json::json!(3.14159);
+        let val = serde_json::json!(std::f64::consts::PI);
         cache.set("num_key", val.clone(), None).await.unwrap();
         let got = cache.get("num_key").await.unwrap();
         assert_eq!(got, Some(val));
@@ -284,7 +284,7 @@ mod tests {
                     _ => {
                         // Delete
                         let key = format!("mixed_{}", i.saturating_sub(2));
-                        let _ = cache_clone.delete(&key).await.unwrap();
+                        cache_clone.delete(&key).await.unwrap();
                     }
                 }
             });

@@ -57,6 +57,9 @@ pub fn translate(event: &KeyEvent, kb: &TuiKeybindings) -> Action {
     if matches_key(event, &kb.end_of_buffer) {
         return Action::EndOfBuffer;
     }
+    if matches_key(event, &kb.open_session_picker) {
+        return Action::OpenSessionPicker;
+    }
     Action::NoOp
 }
 

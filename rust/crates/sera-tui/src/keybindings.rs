@@ -84,6 +84,8 @@ pub struct TuiKeybindings {
     pub toggle_composer_focus: Vec<KeyBinding>,
     /// Submit the composer buffer as a pending message (Session view only).
     pub submit_message: Vec<KeyBinding>,
+    /// Open the session picker modal (default: Ctrl+P).
+    pub open_session_picker: Vec<KeyBinding>,
 }
 
 impl TuiKeybindings {
@@ -121,6 +123,11 @@ impl TuiKeybindings {
                 KeyBinding::with_mods(KeyCode::Enter, KeyModifiers::CONTROL),
                 KeyBinding::with_mods(KeyCode::Enter, KeyModifiers::ALT),
             ],
+            // Ctrl+P — no conflict with existing bindings.
+            open_session_picker: vec![KeyBinding::with_mods(
+                KeyCode::Char('p'),
+                KeyModifiers::CONTROL,
+            )],
         }
     }
 }
@@ -174,6 +181,7 @@ mod tests {
         assert!(!kb.back.is_empty());
         assert!(!kb.toggle_composer_focus.is_empty());
         assert!(!kb.submit_message.is_empty());
+        assert!(!kb.open_session_picker.is_empty());
     }
 
     #[test]

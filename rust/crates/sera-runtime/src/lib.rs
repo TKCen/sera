@@ -57,7 +57,6 @@ pub mod config;
 pub mod memory_budget;
 pub mod context;
 pub mod default_runtime;
-pub mod error;
 pub mod health;
 pub mod llm_client;
 pub mod manifest;

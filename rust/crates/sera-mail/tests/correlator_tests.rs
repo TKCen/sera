@@ -569,16 +569,14 @@ async fn spoofed_sender_with_valid_message_id_still_resolves_by_headers() {
 
     // Reply claims to be from a different sender but references the correct
     // Message-ID.
-    let raw = format!(
-        "From: attacker@evil.com\r\n\
+    let raw = "From: attacker@evil.com\r\n\
          To: sera@example.com\r\n\
          Subject: Re: Approval needed\r\n\
          Message-ID: <r-123@attacker>\r\n\
          In-Reply-To: <sera-spoof@sera.local>\r\n\
          Content-Type: text/plain\r\n\
          \r\n\
-         \"Approved\"\r\n"
-    );
+         \"Approved\"\r\n".to_string();
     let msg = parse_raw_message(raw.as_bytes()).unwrap();
     let outcome = correlator.correlate(&msg).await.unwrap();
     assert!(matches!(

@@ -80,6 +80,10 @@ pub struct TuiKeybindings {
     pub end_of_buffer: Vec<KeyBinding>,
     pub page_up: Vec<KeyBinding>,
     pub page_down: Vec<KeyBinding>,
+    /// Toggle focus between the composer and transcript inside the Session view.
+    pub toggle_composer_focus: Vec<KeyBinding>,
+    /// Submit the composer buffer as a pending message (Session view only).
+    pub submit_message: Vec<KeyBinding>,
 }
 
 impl TuiKeybindings {
@@ -112,6 +116,11 @@ impl TuiKeybindings {
             end_of_buffer: vec![KeyBinding::plain(KeyCode::End)],
             page_up: vec![KeyBinding::plain(KeyCode::PageUp)],
             page_down: vec![KeyBinding::plain(KeyCode::PageDown)],
+            toggle_composer_focus: vec![KeyBinding::plain(KeyCode::Tab)],
+            submit_message: vec![
+                KeyBinding::with_mods(KeyCode::Enter, KeyModifiers::CONTROL),
+                KeyBinding::with_mods(KeyCode::Enter, KeyModifiers::ALT),
+            ],
         }
     }
 }
@@ -163,6 +172,8 @@ mod tests {
         assert!(!kb.down.is_empty());
         assert!(!kb.select.is_empty());
         assert!(!kb.back.is_empty());
+        assert!(!kb.toggle_composer_focus.is_empty());
+        assert!(!kb.submit_message.is_empty());
     }
 
     #[test]

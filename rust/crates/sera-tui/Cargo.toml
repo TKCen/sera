@@ -30,6 +30,7 @@ clap.workspace = true
 futures-util.workspace = true
 once_cell.workspace = true
 bytes = "1"
+tui-textarea = "0.7"
 
 # Optional integration-test support.  Cargo does not permit dev-dependencies
 # to be optional, so the harness/mock stack lives up here with a feature flag.

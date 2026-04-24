@@ -34,7 +34,8 @@ mod views;
 use app::{App, Runtime};
 use client::GatewayClient;
 use config::Config;
-use input::translate;
+use app::actions::ViewKind;
+use input::{translate, translate_session};
 use keybindings::TuiKeybindings;
 
 #[tokio::main]
@@ -118,7 +119,11 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
-            let action = translate(&key, &app.keybindings);
+            let action = if app.focus == ViewKind::Session {
+                translate_session(&key, &app.keybindings, app.session.composer_focused())
+            } else {
+                translate(&key, &app.keybindings)
+            };
             app.dispatch(action);
         }
 

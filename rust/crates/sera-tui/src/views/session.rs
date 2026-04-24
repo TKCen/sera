@@ -1,19 +1,29 @@
-//! Session view — metadata header, streaming transcript, tool log.
+//! Session view — metadata header, streaming transcript, tool log, composer.
 
+use crossterm::event::KeyEvent;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
+use tui_textarea::TextArea;
 
 use super::agent_list::make_block;
 use crate::client::{ConnectionState, SessionSummary, StreamEvent, TranscriptEntry};
+
+/// Which pane inside the Session view holds keyboard focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposerFocus {
+    Composer,
+    Transcript,
+}
 
 /// Viewer state for a single session.  Owns:
 /// * metadata (agent id, session id, state)
 /// * transcript lines (seeded by GET, appended by SSE)
 /// * tool events (SSE only, non-message events)
 /// * scroll bookkeeping — auto-scrolls to tail unless the user has paused
+/// * a multi-line composer for drafting outgoing messages
 pub struct SessionView {
     pub session: Option<SessionSummary>,
     pub transcript: Vec<TranscriptEntry>,
@@ -21,10 +31,17 @@ pub struct SessionView {
     pub scroll_offset: u16,
     pub auto_scroll: bool,
     pub conn: ConnectionState,
+    pub composer: TextArea<'static>,
+    pub focus: ComposerFocus,
+    /// Messages drained from the composer via `submit_composer`.
+    /// G.0.2 (sera-5d4k) will wire these to POST /api/chat.
+    pub pending_sends: Vec<String>,
 }
 
 impl SessionView {
     pub fn new() -> Self {
+        let mut composer = TextArea::default();
+        composer.set_placeholder_text("Type a message…");
         Self {
             session: None,
             transcript: Vec::new(),
@@ -32,6 +49,9 @@ impl SessionView {
             scroll_offset: 0,
             auto_scroll: true,
             conn: ConnectionState::Disconnected,
+            composer,
+            focus: ComposerFocus::Composer,
+            pending_sends: Vec::new(),
         }
     }
 
@@ -111,19 +131,60 @@ impl SessionView {
         self.scroll_offset = 0;
     }
 
+    /// Toggle keyboard focus between the composer and the transcript.
+    pub fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            ComposerFocus::Composer => ComposerFocus::Transcript,
+            ComposerFocus::Transcript => ComposerFocus::Composer,
+        };
+    }
+
+    /// Returns true when the composer currently holds focus.
+    pub fn composer_focused(&self) -> bool {
+        self.focus == ComposerFocus::Composer
+    }
+
+    /// Forward a raw key event to the composer textarea.
+    pub fn input_to_composer(&mut self, event: KeyEvent) {
+        self.composer.input(event);
+    }
+
+    /// Drain the composer buffer and return the accumulated text.
+    /// Resets the textarea to empty.
+    pub fn take_composer_text(&mut self) -> String {
+        let text = self.composer.lines().join("\n");
+        let mut fresh = TextArea::default();
+        fresh.set_placeholder_text("Type a message…");
+        self.composer = fresh;
+        text
+    }
+
+    /// Submit the current composer buffer: drain text → push to
+    /// `pending_sends` → log.  No-op when the buffer is blank.
+    pub fn submit_composer(&mut self) {
+        let text = self.take_composer_text();
+        if text.trim().is_empty() {
+            return;
+        }
+        tracing::info!(message = %text, "composer submit queued (pending G.0.2 wiring)");
+        self.pending_sends.push(text);
+    }
+
     pub fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
-                Constraint::Min(0),
-                Constraint::Length(7),
+                Constraint::Length(3), // metadata header
+                Constraint::Min(3),    // transcript
+                Constraint::Length(7), // tool log
+                Constraint::Length(5), // composer
             ])
             .split(area);
 
         self.render_metadata(frame, chunks[0], focused);
         self.render_transcript(frame, chunks[1], focused);
         self.render_tool_log(frame, chunks[2], focused);
+        self.render_composer(frame, chunks[3]);
     }
 
     fn render_metadata(&self, frame: &mut Frame, area: Rect, focused: bool) {
@@ -144,6 +205,7 @@ impl SessionView {
     }
 
     fn render_transcript(&self, frame: &mut Frame, area: Rect, focused: bool) {
+        let transcript_focused = focused && self.focus == ComposerFocus::Transcript;
         let items: Vec<ListItem<'_>> = if self.transcript.is_empty() {
             vec![ListItem::new(Line::from(Span::styled(
                 "(no transcript yet — waiting for first event)",
@@ -160,19 +222,15 @@ impl SessionView {
                         "tool" => Color::Yellow,
                         _ => Color::White,
                     };
-                    let header = Line::from(vec![
-                        Span::styled(
-                            format!("[{}]", entry.role),
-                            Style::default()
-                                .fg(role_color)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ]);
+                    let header = Line::from(vec![Span::styled(
+                        format!("[{}]", entry.role),
+                        Style::default()
+                            .fg(role_color)
+                            .add_modifier(Modifier::BOLD),
+                    )]);
                     let mut lines = vec![ListItem::new(header)];
                     for body_line in entry.text.lines() {
-                        lines.push(ListItem::new(Line::from(Span::raw(
-                            body_line.to_owned(),
-                        ))));
+                        lines.push(ListItem::new(Line::from(Span::raw(body_line.to_owned()))));
                     }
                     lines.push(ListItem::new(Line::from("")));
                     lines
@@ -193,7 +251,7 @@ impl SessionView {
             items
         };
 
-        let list = List::new(shown).block(make_block("Transcript", focused));
+        let list = List::new(shown).block(make_block("Transcript", transcript_focused));
         frame.render_widget(list, area);
     }
 
@@ -212,11 +270,30 @@ impl SessionView {
                 .rev()
                 .take(5)
                 .rev()
-                .map(|l| ListItem::new(Span::styled(l.clone(), Style::default().fg(Color::Yellow))))
+                .map(|l| {
+                    ListItem::new(Span::styled(l.clone(), Style::default().fg(Color::Yellow)))
+                })
                 .collect()
         };
         let list = List::new(items).block(make_block("Tool events", focused));
         frame.render_widget(list, area);
+    }
+
+    fn render_composer(&self, frame: &mut Frame, area: Rect) {
+        let composer_focused = self.focus == ComposerFocus::Composer;
+        let border_style = if composer_focused {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        // Render the textarea widget into the inner area (inside the border).
+        let block = Block::default()
+            .title("Composer — Ctrl+Enter to send")
+            .borders(Borders::ALL)
+            .border_style(border_style);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        frame.render_widget(&self.composer, inner);
     }
 }
 
@@ -346,5 +423,51 @@ mod tests {
         assert_eq!(truncate_or_dash("", 5), "—");
         assert_eq!(truncate_or_dash("abc", 5), "abc");
         assert_eq!(truncate_or_dash("abcdefgh", 5), "abcd…");
+    }
+
+    // --- Composer-specific tests (G.0.1) ---
+
+    #[test]
+    fn composer_starts_focused_and_empty() {
+        let v = SessionView::new();
+        assert_eq!(v.focus, ComposerFocus::Composer);
+        assert!(v.composer.lines().iter().all(|l| l.is_empty()));
+        assert!(v.pending_sends.is_empty());
+    }
+
+    #[test]
+    fn composer_toggle_focus_switches_active_pane() {
+        let mut v = SessionView::new();
+        assert_eq!(v.focus, ComposerFocus::Composer);
+        v.toggle_focus();
+        assert_eq!(v.focus, ComposerFocus::Transcript);
+        v.toggle_focus();
+        assert_eq!(v.focus, ComposerFocus::Composer);
+    }
+
+    #[test]
+    fn submit_drains_composer_into_pending_sends() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut v = SessionView::new();
+        // Type "hello" into the composer.
+        for ch in "hello".chars() {
+            v.input_to_composer(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        assert!(!v.composer.lines().join("").is_empty());
+
+        v.submit_composer();
+
+        assert_eq!(v.pending_sends.len(), 1);
+        assert_eq!(v.pending_sends[0], "hello");
+        // Composer should be empty after drain.
+        assert!(v.composer.lines().iter().all(|l| l.is_empty()));
+    }
+
+    #[test]
+    fn submit_with_empty_buffer_is_noop() {
+        let mut v = SessionView::new();
+        v.submit_composer();
+        assert!(v.pending_sends.is_empty());
     }
 }

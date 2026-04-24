@@ -39,6 +39,10 @@ pub struct SessionView {
     /// Slash-command strings drained from the composer via `submit_composer`.
     /// The app dispatcher parses and executes these each tick.
     pub pending_slash: Vec<String>,
+    /// Full text of a long paste that was collapsed to a placeholder token
+    /// in the textarea.  When `Some`, `take_composer_text` returns this
+    /// instead of the textarea buffer so the full content is sent verbatim.
+    pub composer_full_text: Option<String>,
 }
 
 impl SessionView {
@@ -56,6 +60,7 @@ impl SessionView {
             focus: ComposerFocus::Composer,
             pending_sends: Vec::new(),
             pending_slash: Vec::new(),
+            composer_full_text: None,
         }
     }
 
@@ -154,13 +159,46 @@ impl SessionView {
     }
 
     /// Drain the composer buffer and return the accumulated text.
-    /// Resets the textarea to empty.
+    /// If a long paste was stashed in `composer_full_text`, that is returned
+    /// verbatim (the textarea may only show the collapsed placeholder).
+    /// Resets both the textarea and the stash to empty.
     pub fn take_composer_text(&mut self) -> String {
-        let text = self.composer.lines().join("\n");
+        let text = if let Some(full) = self.composer_full_text.take() {
+            full
+        } else {
+            self.composer.lines().join("\n")
+        };
         let mut fresh = TextArea::default();
         fresh.set_placeholder_text("Type a message…");
         self.composer = fresh;
         text
+    }
+
+    /// Handle a bracketed-paste event.  Pastes of ≤ 5 lines are inserted
+    /// verbatim; longer pastes insert a `[N-line paste]` placeholder while
+    /// the full content is preserved in `composer_full_text`.
+    pub fn handle_paste(&mut self, content: String) {
+        const COLLAPSE_THRESHOLD: usize = 5;
+        let line_count = content.lines().count();
+        if line_count <= COLLAPSE_THRESHOLD {
+            // Insert each line; newlines become actual newline inputs.
+            for line in content.lines() {
+                for ch in line.chars() {
+                    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+                    self.composer
+                        .input(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+                }
+            }
+        } else {
+            // Replace any prior stash and insert a visible placeholder.
+            self.composer_full_text = Some(content);
+            let placeholder = format!("[{line_count}-line paste]");
+            for ch in placeholder.chars() {
+                use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+                self.composer
+                    .input(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            }
+        }
     }
 
     /// Submit the current composer buffer: drain text → route to either
@@ -509,5 +547,45 @@ mod tests {
 
         assert_eq!(v.pending_sends.len(), 1);
         assert!(v.pending_slash.is_empty());
+    }
+
+    // --- Bracketed-paste tests (G.2.1) ---
+
+    #[test]
+    fn paste_short_content_renders_inline_unchanged() {
+        let mut v = SessionView::new();
+        // 3-line paste — below collapse threshold of 5.
+        v.handle_paste("line one\nline two\nline three".to_owned());
+        // No stash set; textarea contains the typed characters.
+        assert!(v.composer_full_text.is_none());
+        let displayed = v.composer.lines().join("\n");
+        assert!(displayed.contains("line one"), "expected textarea to contain pasted text");
+    }
+
+    #[test]
+    fn paste_long_content_renders_collapsed_token() {
+        let mut v = SessionView::new();
+        // 6-line paste — above collapse threshold of 5.
+        let content = "a\nb\nc\nd\ne\nf".to_owned();
+        v.handle_paste(content.clone());
+        // Full content stashed.
+        assert_eq!(v.composer_full_text.as_deref(), Some(content.as_str()));
+        // Textarea shows placeholder, not the raw lines.
+        let displayed = v.composer.lines().join("\n");
+        assert!(
+            displayed.contains("[6-line paste]"),
+            "expected collapsed token in textarea, got: {displayed:?}"
+        );
+    }
+
+    #[test]
+    fn submit_returns_full_paste_not_collapsed() {
+        let mut v = SessionView::new();
+        let long_paste = (0..6).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        v.handle_paste(long_paste.clone());
+        v.submit_composer();
+        // The sent text must be the full content, not the placeholder.
+        assert_eq!(v.pending_sends.len(), 1);
+        assert_eq!(v.pending_sends[0], long_paste);
     }
 }

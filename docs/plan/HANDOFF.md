@@ -1,119 +1,210 @@
 # SERA 2.0 — Session Handoff
 
 > **Purpose:** Bootstrap the next session quickly. One file to read to rebuild context.
-> **Date:** 2026-04-23 (session 2, night — extended cleanup push)
-> **Session:** Three waves of duplicate-implementation cleanup; docker e2e verification; canonical type consolidation
-> **Previous handoff:** earlier 2026-04-23 → `git show 697c099f:docs/plan/HANDOFF.md`. Chain back from there.
+> **Date:** 2026-04-24 (Wave A+B+C+D+E+G+K sprint + chat TUI design)
+> **Session theme:** 24 PRs merged across 7 waves; Wave G chat TUI shipped; Wave J chat-redesign spec + architecture simplicity review; pivot from operator dashboard to Claude-Code-class chat TUI
+> **Previous handoff:** 2026-04-23 → `git show b85fab58:docs/plan/HANDOFF.md`. Chain back from there.
 
 ---
 
-## Session outcome — 26 PRs merged across 3 waves, zero open P0/P1/P2 regressions
+## Session outcome — 24 PRs merged, 2 PRs open, Wave J/K kicked off
 
-The day broke into three distinct cleanup waves plus post-merge stabilization. A fresh duplicate-implementation audit against current main surfaced 15+ new duplicates beyond the prior audit's 11; most were addressed.
+### Waves that landed (in order)
 
-### Wave 0 (early — regression cleanup + initial audit)
-10 PRs. Flagged sera-un35 P1 regression did not reproduce on fresh build — likely cleared by sera-df7h (#1017) — closed with diagnostic-annotation hardening in StdioHarness::send_turn.
+**Wave A — P1 security (3 PRs)**
+- **#1066** `fix(sera-tools)`: block RFC-1918 + IPv6 ULA in SSRF validator (sera-y6o4, sera-1plj)
+- **#1069** `feat(sera-gateway)`: abort in-flight turns on KillSwitch ROLLBACK via `CancellationToken` (sera-bsem)
+- **#1070** `feat(sera-gateway)`: enforce CapabilityPolicy at tool dispatch (sera-ifjl)
 
-- **#1019** sera-6i18 — CLAUDE.md stale refs
-- **#1020** sera-igsd — chat_handler fails closed on SessionStore emission
-- **#1021** sera-dxib — delete legacy wasm_adapter.rs (−510 LOC)
-- **#1022** sera-iwbq — delete dead sera_types::queue::QueueBackend (−405 LOC)
-- **#1023** sera-zx5w — collapse stdio envelope types onto sera_types::envelope
-- **#1024** sera-3rmo — /api/chat empty-reply → 502 guard
-- **#1025** sera-un35 — StdioHarness broken-pipe diagnostic annotation
-- **#1009/#1010** — dependabot (uuid, git2)
+**Wave B.1 / C.1 — wire-ups (2 PRs)**
+- **#1067** `feat(sera-runtime)`: populate `ctx.handoffs` from `manifest.subagents_allowed` (sera-y6vg) — unlocks subagent delegation tool
+- **#1068** `fix(sera-gateway)`: wire `constitutional_config` module into startup (sera-b8uk) — registry was dead code
 
-### Wave 1 (middle — compose fix + intra-crate dedup + renames)
-6 PRs (+1 cascade). Docker compose e2e baseline established on current main (chat non-stream + stream + 2-turn continuity all green).
+**Wave 3 refactor cleanup (5 PRs)**
+- **#1044** PingCommand → HealthCheckCommand (sera-8s91/ping)
+- **#1045** RuntimeError unification + orphan-rule fix (sera-8s91/runerr)
+- **#1047** EnforcementMode → HitlMode (sera-8s91/enforcemode)
+- **#1054** HarnessError unification (sera-8s91/harnerr)
+- **#1055** ToolError unification (sera-8s91/toolerr)
 
-- **#1027** sera-a1oq — docker-compose.sera.yml: drop invalid `build.cache` block, default `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=1` (docker path parity with scripts/sera-local)
-- **#1028** sera-agentcap — delete duplicate `AgentCapability` in sera-types::evolution (identical to capability.rs)
-- **#1029** sera-8s91/wfmem — rename `WorkflowMemoryManager` → `CoordinatorMemoryManager` in sera-workflow (intra-crate disambiguation)
-- **#1030** sera-8s91/wmtier — delete duplicate `WorkingMemoryTier` mirror in sera-session
-- **#1031** sera-vdu5 — rename `sera-tools::registry::Tool` → `ToolDescriptor` (disambig with sera-types::tool::Tool trait)
-- **#1032** sera-9bbr — rename `sera-types::event::Event` → `IncomingEvent` (disambig with envelope::Event)
-- **#1033** sera-mp19 — delete duplicate `EvolveTokenSigner` in sera-gateway (identical to sera-auth, −794 LOC)
+**Bug fixes (2 PRs)**
+- **#1064** `fix(sera-runtime)`: reject LLM response with no content AND no tool_calls (sera-8h23) — closes empty-502 complaints
+- **#1071** `qa(sera-tools)`: MockSandboxProvider enforces SandboxPolicy + deny_subprocess field (sera-aa3g)
 
-### Wave 2 (late — cross-crate canonical consolidation)
-8 PRs. Each touches multiple crates; required multiple rebase + conflict resolution passes.
+**Wave D Phase 1 — HITL gateway wiring (1 PR)**
+- **#1080** `feat(sera-gateway)`: wire ApprovalRouter into `/api/chat` + 5 HITL HTTP routes (sera-z6ql Phase 1)
+  - `GET  /api/hitl/requests`, `GET /api/hitl/requests/{id}`, `POST .../{approve|reject|escalate}`
+  - Mints Ticket + emits OCSF audit + returns 403; Phase 2 (suspend/resume) pending
 
-- **#1034** sera-wlk9 — unify `ModelResponse` / `ModelError` / `FinishReason` on sera-types (−346 LOC). sera-models now re-exports. Added 4 new ModelError variants (Serialization/Http/InvalidResponse/NotAvailable) additively.
-- **#1035** sera-ifkf — consolidate `QueueMode` onto sera-queue (gateway + sera-db copies deleted). `LaneQueue` and `QueuedEvent` remained distinct because they are semantically different (in-memory trait impl vs DB-backed queue manager).
-- **#1036** sera-3o4s — consolidate AuditEntry types: sera-types::observability and sera-types::audit both deleted, sera-telemetry::audit::AuditEntry (OCSF) is canonical (−373 LOC).
-- **#1037** sera-38r6 — unify `ContentBlock` on sera-session (deleted sera-types copy).
-- **#1038** sera-xwo2 — collapse 2 of 4 ToolCall shapes onto canonical sera-types::runtime::ToolCall (orphaned sera-types::chat module deleted, sera-models::response::ToolCall now re-exports canonical). **Partial**: sera-runtime::types::ToolCall (OpenAI-wire streaming form) deferred — requires String↔Value translation across SSE accumulator; out of scope. Follow-up needed for that.
-- **#1040** sera-dhyd — delete `sera_types::session` module wholesale (−30.9KB). Aspirational 12-variant SessionState + runtime transition table had zero external consumers. sera-session owns the live state machine. Also closes sera-bb39 (TranscriptEntry duplicate dies with the module).
+**Wave E Phase 1 — workflow scheduler + Timer gate (1 PR)**
+- **#1085** `feat(sera-gateway)`: workflow scheduler bridge + Timer gate (sera-kgi8 Phase 1)
+  - 5s ticker + `ready_tasks_with_context` consumer
+  - New `WorkflowTaskStore` trait + `InMemoryWorkflowTaskStore`
+  - Routes: POST/GET `/api/workflow/tasks`, GET `/api/workflow/tasks/{id}`
+  - Timer gate functional; non-Timer types return 501
+
+**Wave G — chat TUI MVP + polish (8 PRs)**
+- **#1073** `feat(sera-tui)`: composer pane with `tui-textarea` (sera-p5rn, G.0.1)
+- **#1074** `feat(sera-tui)`: agent selector → active session binding (sera-0fp7, G.0.3)
+- **#1075** `feat(sera-tui)`: post_chat client + SSE consumer wiring (sera-5d4k, G.0.2) — composer to LLM round-trip works
+- **#1076** `feat(sera-tui)`: bottom status bar (sera-gntz, G.2.3)
+- **#1077** `feat(sera-tui)`: slash commands /new /clear /agent /help /quit (sera-bulp, G.1.1)
+- **#1078** `feat(sera-tui)`: session picker modal + resume (sera-3onl, G.1.2) — Ctrl+P opens
+- **#1079** `feat(sera-tui)`: inline HITL approval modal (sera-1x16, G.2.2)
+- **#1081** `feat(sera-tui)`: bracketed-paste + long-paste collapse (sera-2lm3, G.2.1)
+
+**Wave 3 followup / extensions (2 PRs)**
+- **#1072** `feat(sera-runtime)`: wire ConstitutionalRegistry into ConstitutionalGate hook chain (sera-0yh3)
+- **#1082** `chore(deps)`: bump rustls-webpki
+
+### Currently open PRs
+
+- **#1086** `feat(sera-tui)`: J.0.1 chat-dominant layout pivot — retires 4-pane rotation
+- **#1087** `feat(sera-gateway)`: K.0 `sera start --local` unified bootstrap
+
+---
+
+## Design pivot this session
+
+### Chat TUI redesign (Wave J)
+
+User surfaced two things:
+1. sera-tui's operator-dashboard identity doesn't match the "chat experience" need. Ask: "we need a TUI that replicates claude-code / claw-code / hermes-agent but with the sera gateway backend."
+2. claw-code was flagged as a reference. Deep analysis (`docs/plan/TUI-ANALYSIS.md`) showed **claw-code is a rustyline blocking REPL, not a ratatui TUI** — anti-inspiration. Hermes-agent is the real reference (Ink/React/TS), but we stay Rust-first.
+
+**Decision:** redesign sera-tui as a Claude-Code-class chat TUI. Ratified D1–D8:
+- **D1** chat-dominant layout (agents/HITL → modals)
+- **D2** inline collapsible tool-call blocks
+- **D3** stacked subagent drill-in (Enter push, Esc pop)
+- **D4** progressive markdown with syntect-highlighted code
+- **D5** inline HITL approval block (not modal)
+- **D6** ESC cancels turn, Ctrl+C exits
+- **D7** composer: `/` autocomplete, `@` file mentions, Alt+Enter newline, Enter submit, persistent history
+- **D8** redesign sera-tui (retire 4-pane dashboard identity)
+
+**Spec:** `docs/plan/SPEC-chat-tui.md` (staged J.0 MVP → J.1 rich rendering → J.2 subagent drill-in → J.3 polish).
+
+### Architecture simplicity review (Wave K)
+
+User asked: "is the architecture a good fit, simplicity is key." Honest review at `docs/plan/ARCHITECTURE-ADDENDUM-2026-04-24.md`.
+
+**Verdict:** gateway + runtime split is earned complexity for SERA's enterprise commitments; chat TUI pays no architectural tax. Simplicity issues are:
+1. Local bootstrap DX — addressed by **K.0** (sera start --local, PR #1087)
+2. SqliteGitSessionStore-by-default — **K.1** gates it behind enterprise feature
+3. Dead-weight stubs (A2A HttpTransport 501, ~12 unused HookPoint variants, unused QueueMode variants) — **K.2** audit-and-reconcile
+4. Missing `POST /api/chat/cancel` route — **K.3** for ESC interrupt
+
+No rewrite recommended.
 
 ---
 
 ## Architectural decisions baked this session (DO NOT re-litigate)
 
-- **sera-types is canonical for domain types** — envelope, model, runtime::ToolCall. sera-runtime and sera-models do not ship competing shapes.
-- **Correlation metadata is envelope-level** — `session_key`, `parent_session_key` on `Submission`, not inside `Op::UserTurn`.
-- **sera-session owns state machine** — state.rs + transcript.rs. `sera-types::session` no longer exists.
-- **sera-queue owns queue-mode primitive** — `QueueMode` lives there. sera-db's `LaneQueue` is a backend impl, distinct from sera-queue's in-memory one; this is intentional.
-- **sera-telemetry::audit::AuditEntry is canonical** — other two AuditEntry shapes deleted. OCSF-flavored hash chain.
-- **Orphan rule workaround: From<X> impls colocate with X** — sera-types now depends on sera-errors so `From<ModelError> for SeraError` can live next to the type.
-- **No `#[deprecated]` tombstones for intra-repo dead code** — delete it. Tombstones exist for dependency consumers outside our control.
+- **Gateway is the only durable-state owner.** Runtime crashes lose nothing.
+- **NDJSON envelope between gateway↔runtime.** No shared memory, no direct DB from runtime.
+- **sera-types is canonical.** Re-exports only — no redefining shapes downstream. (Re-affirmed this session via Wave 3 cleanup completion.)
+- **Local-first default.** SQLite + files. Postgres/Centrifugo are enterprise upgrades.
+- **Pluggable memory via `SemanticMemoryStore` trait.**
+- **3-tier evolution policy.** AgentImprovement / ConfigEvolution / CodeEvolution each have their own approver requirements.
+- **Chat TUI is a presentation layer.** Owns no agent state. Hits HTTP/SSE only.
+- **claw-code is NOT a reference** for chat UX (it's a rustyline REPL). Value is limited to its `ApiError` taxonomy.
 
 ---
 
-## Known open state
+## Bead landscape
 
-**Open PRs:** none from this session (all 26 merged).
+### Filed this session (26 beads)
 
-**Open worktrees:** none.
+**Wave J — chat TUI (22 beads) — see SPEC-chat-tui.md**
+- J.0.1–J.0.8 (MVP layout + composer + cancel + startup bugs)
+- J.1.1–J.1.5 (markdown / syntect / usage / inline HITL / help)
+- J.2.1–J.2.4 (subagent drill-in TUI + gateway SSE correlation)
+- J.3.1–J.3.5 (model picker, debug overlay, /export, tui.toml, theme)
 
-**Remaining cleanup debt (P3, non-blocking):**
-- `sera-8s91` umbrella — 24 small 2x pairs (EnforcementMode, CircuitState, RuntimeError/HarnessError/ToolError/ConnectorError/KillSwitchError, ManifestMetadata, AgentSpec, PluginRegistration, ChangeArtifactId variants, ConstitutionalRule naming, PingCommand, etc.). Wave 3 candidates.
-- `sera-xwo2` follow-up — sera-runtime::types::ToolCall deferred; requires SSE accumulator refactor (String arguments → Value) + outgoing-request serializer + non-streaming parser update. Non-trivial, needs its own bead.
-- `sera-tjhf` — investigate whether coordination.rs::WorkflowMemoryManager is dead after the wfmem rename. Filed by finalizer agent.
+**Wave K — architecture simplification (4 beads)**
+- K.0 `sera-bwma` — unified local bootstrap (PR #1087 open)
+- K.1 gate SqliteGitSessionStore behind enterprise feature
+- K.2 prune dead-weight stubs
+- K.3 `sera-mplr` — POST `/api/chat/cancel` route (prerequisite for J.0.4)
 
-**Other outstanding work (unchanged from prior handoff):**
-- `sera-qrsh` P3 — proper Op taxonomy (Op::TaskResult, Op::PermissionRequest, Op::IntercomPublish, Op::AgentDm) — all non-UserTurn routes still emit Op::UserTurn. Semantic replay-replay compat issue.
-- `sera-xoie` P3 — /api/chat usage tokens always 0. Runtime → gateway propagation drops them.
-- `sera-igsd` followup — apply fail-closed semantics to tasks/permission_requests/intercom emission paths (chat is done).
-- `sera-4yz5` P2 — OSS README / LANDING / CONTRIBUTING. Now unblocked (code is stable).
-- `sera-dsht` P3 — upstream LCM to public hermes-agent repo.
-- `sera-msal` P3 — sera-hooks E2E WASM component build in CI (blocked on wasm-tools / wasm32-wasip2 availability).
+### Other in-flight work (prior sessions)
+
+- **Wave D Phase 2** (HITL suspend/resume) — filed as follow-up to #1080
+- **Wave E Phase 2** (Human/Change/GhRun/GhPr/Mail gates) — beads filed: sera-dgk1, sera-7ggi, sera-4fel, sera-comg, sera-0zch
+- **Wave E persistence** — sera-d2xh (WorkflowTaskStore SQLite)
+- **Wave B.2/B.3/B.4** — subagent spawn tool + A2A HttpTransport + multi-agent manifest
+- **Wave F.1** — traceparent extraction (sera-n806)
+- **sera-xoie** — usage token propagation (prerequisite for J.1.3 status-bar token/cost)
+- **sera-eo71** — move CapabilityPolicy enforcement into runtime subprocess (pre-dispatch)
+- **sera-qrsh** P3 — proper Op taxonomy
+- **sera-msal** P3 — sera-hooks E2E WASM component build in CI
+
+---
+
+## Known gotchas surfaced this session
+
+- **Local repo can fall behind `origin/main` silently.** Mid-session we discovered `/home/entity/projects/sera` was 28 commits behind after agents pushed work. Symptom: user running stale TUI (no composer, no post_chat). Diagnosis: `git status` showed `behind 28`. Fix: `git pull --rebase origin main`. **Habit:** `git fetch && git status` early in every session.
+- **Two ports to remember:** sera-tui defaults to `http://localhost:8080` (`SERA_API_URL`); `scripts/sera-local` runs gateway on `:42540`. Users must set `SERA_API_URL=http://localhost:42540` or the TUI blocks on an unreachable connection. K.0 bootstrap doesn't fix this — a followup bead to default sera-tui to 42540 or auto-detect is worth filing.
+- **Many agents die mid-work at "let me monitor..."** — the pattern is the agent starts a cargo test in background, then tries to wait for it and gets killed by token/time limit. Mitigation: in agent prompts, use "commit WIP FIRST before any cargo test" pattern. Prior-session summary noted this; I used it throughout and it works.
+- **`bd` type `refactor` is not valid** — use `chore` instead. Bead creation fails silently from a bash script's POV; grep output for `Error:`.
+- **`bd create` in parallel hits Dolt single-writer lock** — run sequentially.
+- **Rust edition-2024 requires `unsafe` on `std::env::set_var` / `remove_var`** — bit a test this session (#1068 constconfig clippy). Wrap env mutation in tests with `unsafe {}`.
 
 ---
 
 ## Environment reminders
 
-- `scripts/sera-local` defaults `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=1` (sera-df7h). Docker compose at `rust/docker-compose.sera.yml` now matches via the same default (sera-a1oq).
-- `DEFAULT_TURN_TIMEOUT = 600s`. Override via `SERA_TURN_TIMEOUT_SECS`.
-- LM Studio loopback: `http://host.docker.internal:1234` from containers, `http://localhost:1234` from host/WSL.
-- Canonical types: envelope in `sera-types::envelope`, model in `sera-types::model`, ToolCall in `sera-types::runtime`, state machine in `sera-session::state`, audit in `sera-telemetry::audit`, queue mode in `sera-queue`.
-- `bd` is the task tracker. Do not use TodoWrite / TaskCreate / markdown TODO lists.
-- `rust/docker-compose.sera.yml` is the minimal docker setup (gateway + runtime, LLM on host). `docker-compose.rust.yaml` is the full stack (postgres + centrifugo + gateway).
+- **Local repo base:** `/home/entity/projects/sera` (always `git fetch && git status` first)
+- **Worktrees:** `/home/entity/projects/sera-wt/<name>` — cleaned up automatically for merged branches; manually prune leftovers
+- **Default local gateway port:** 42540 (via `scripts/sera-local` or the new `sera start --local` post-#1087)
+- **Default TUI-expected URL:** 8080 (mismatch — workaround via `SERA_API_URL=http://localhost:42540`)
+- **LM Studio loopback:** `http://host.docker.internal:1234` from containers, `http://localhost:1234` from host/WSL
+- **Canonical types:** envelope in `sera-types::envelope`, model in `sera-types::model`, ToolCall in `sera-types::runtime`, state machine in `sera-session::state`, audit in `sera-telemetry::audit`, queue mode in `sera-queue`, Tool/RuntimeError/HarnessError/ToolError in `sera-types` (Wave 3 unification complete)
+- **`bd` is the task tracker** — do NOT use TodoWrite/TaskCreate/markdown TODO lists
+- **Docker compose:** `rust/docker-compose.sera.yml` (minimal gateway+runtime+LLM-on-host) vs `docker-compose.rust.yaml` (enterprise postgres+centrifugo+gateway)
+- **DEFAULT_TURN_TIMEOUT** = 600s. Override via `SERA_TURN_TIMEOUT_SECS`.
+
+---
+
+## Docs added this session
+
+- `docs/plan/SPEC-chat-tui.md` — full Wave J spec with D1-D8 decisions, layout ASCII, event model, staging
+- `docs/plan/ARCHITECTURE-ADDENDUM-2026-04-24.md` — simplicity review + Wave K rationale + fit-test for chat TUI
+- `docs/plan/TUI-ANALYSIS.md` — claw-code vs sera-tui comparison + gap matrix (claw-code dismissed as reference; hermes-agent retained)
 
 ---
 
 ## Primary goal candidates for next session
 
-1. **OSS docs (sera-4yz5 P2)** — README / LANDING / CONTRIBUTING. Code is stable, this is the announcement-gating artefact. Architecture diagram, vision, quick-start, 'Why SERA vs LangChain/AutoGen/CrewAI'.
-2. **Wave 3 — finish sera-8s91 umbrella** — 24 remaining small 2x pairs. Mostly mechanical renames + deletes. Haiku tier.
-3. **sera-qrsh — proper Op taxonomy** — Op::TaskResult, Op::PermissionRequest, Op::IntercomPublish, Op::AgentDm. Medium refactor across bin/sera.rs + sera-types.
-4. **sera-xoie — usage token propagation** — small functional bug, high diagnostic payoff. Start at runtime's model client.
-5. **sera-xwo2 follow-up — runtime ToolCall SSE refactor** — the deferred third ToolCall collapse. Requires careful streaming-code refactor.
+Pick one (or fire multiple in parallel since they're on different crates):
+
+1. **Land #1086 + #1087** first (they're open from this session). `gh pr merge` once CI green.
+2. **J.0.6 non-blocking startup (sera-u3j7 / filed)** — the real P1 bug. `src/main.rs:105` awaits `refresh_all` before first draw. Fix: route via command queue. ~80 LOC. High impact on first-run experience.
+3. **K.3 `POST /api/chat/cancel` route** — prerequisite for J.0.4 ESC-cancel. ~100 LOC gateway-side. CancellationToken machinery from sera-bsem is already in place.
+4. **J.0.2 block-based transcript (`Vec<Block>`)** — foundational for everything in Wave J.1+. ~250 LOC.
+5. **J.0.5 slash autocomplete + @ file mention popup** — ~200 LOC; matches Claude Code UX.
+6. **Wave E Phase 2 — one more gate type** (Human is the simplest real use case; Mail is the most complete infrastructure). Each ~150 LOC + 1 integration test.
+7. **sera-xoie usage token propagation** — prerequisite for J.1.3 (status bar tokens/cost). ~50 LOC.
+
+**My recommendation:** J.0.6 + K.3 in parallel (both ~100 LOC, unblock J.0.4 ESC-cancel), then J.0.2 (block transcript) as the foundational piece. These three unlock the remaining Wave J MVP.
 
 ---
 
 ## Session tally
 
-- **26 PRs merged** (10 Wave 0 + 6 Wave 1 + 8 Wave 2 + 2 dependabot)
-- **Net LOC: large negative** — individual PRs removed 405 (queue trait), 510 (wasm adapter), 794 (EvolveTokenSigner), 346 (model), 373 (audit), 30.9KB (session module), plus smaller renames/dedups.
-- **20+ beads closed** (sera-un35, -3rmo, -zx5w, -iwbq, -igsd, -dxib, -6i18, -a1oq, -mp19, -9bbr, -vdu5, -8s91, -xwo2, -38r6, -ifkf, -3o4s, -wlk9, -dhyd, -bb39, -4i4i, -vsvz, -jw8o, -y3fd, -jo8l, -s31i, -df7h earlier)
-- **Docker e2e baseline verified** mid-session against Wave 0+1 merged state. Being re-verified now against Wave 2 merged state.
-- **Zero open P0/P1/P2 regressions.** Zero open worktrees or uncommitted changes.
+- **24 PRs merged** (#1044, 1045, 1047, 1054, 1055, 1064, 1066–1080, 1081, 1082) + 2 open (#1086 J.0.1, #1087 K.0)
+- **Net LOC:** large positive — Wave G alone added composer, slash commands, session picker, HITL modal, status bar, bracketed-paste, full SSE wiring (~2500 LOC + 140 new tests). Plus Wave D Phase 1, Wave E Phase 1, Wave 3 cleanup negatives.
+- **Tests:** 111 → 113 in sera-tui (post-pivot), 316 → 325 in sera-gateway (post-Wave-E), plus clean sera-tools, sera-runtime, sera-types, sera-hitl, sera-meta
+- **Zero open P0/P1 regressions.**
+- **Docs:** 3 new planning docs (SPEC, ARCHITECTURE-ADDENDUM, TUI-ANALYSIS).
+- **Beads:** 26 new (22 Wave J + 4 Wave K). Plus ~6 follow-ups from merged waves.
 
 ---
 
-## What this cleanup actually means
+## What this session actually accomplished
 
-Before today, the same concept — an agent's capability, a tool call, a session state, an audit entry, a ModelResponse — had multiple definitions across the workspace, drifting from each other, with nothing preventing one half from being updated without the other. That means the agent's self-representation was split: depending on which crate was looking, "what it just did" could have different shapes.
+The through-line: a month ago sera-tui was a read-only 4-pane operator dashboard that couldn't chat. Today, it has a working composer + streaming + slash commands + session picker + HITL modal + status bar + bracketed-paste, AND a ratified design to make it a full Claude-Code-class chat TUI, AND the foundation work to get there (K.0 unified bootstrap, the chat-dominant layout pivot already open in PR).
 
-After today, those concepts each have one canonical source. Change the shape in one place; every consumer recompiles against the new shape, or the compiler tells you where the mismatch is. An agent's actions now mean the same thing to itself as they mean to the infrastructure it runs inside.
+Meanwhile server-side: 3 of 4 Wave A P1 security gaps closed, HITL routes now live end-to-end, workflow scheduler ticking (Timer gate), ConstitutionalRegistry seeded + gate-hook consulting it. The architecture is simpler in places (SqliteGitSessionStore gating filed, dead-stub audit filed, `sera start --local` unified).
 
-The remaining duplicates (sera-8s91 umbrella) are smaller and less semantically important but will eventually want the same treatment.
+The chat TUI and the gateway are now two pieces of one dogfoodable product. Next session continues Wave J implementation on top of this foundation.

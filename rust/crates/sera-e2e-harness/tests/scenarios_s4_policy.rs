@@ -8,6 +8,10 @@
 //!   every tool dispatch; the gateway rewrites the tool event with a
 //!   `[sera-policy] tool '...' denied by capability policy 'deny-all'`
 //!   synthetic result, and the runtime's final reply embeds the denial.
+//! * S4.2 — the `http-request` tool refuses to fetch URLs whose host
+//!   resolves to an RFC-1918 / loopback / cloud-metadata IP literal.
+//!   Proves the SsrfValidator is actually wired into the tool dispatch
+//!   path end-to-end (sera-udjf fix).
 //! * S4.3 — arming the KillSwitch via `ROLLBACK` on the admin socket makes
 //!   all non-health HTTP requests return 503, while `/api/health` continues
 //!   to respond.  This is the first-line operator panic button — if it
@@ -418,6 +422,106 @@ spec:
     assert!(
         rejection_in_transcript,
         "transcript must contain a tool-role entry with a rejection marker; entries: {entries:?}"
+    );
+
+    if let Err(e) = gw.shutdown().await {
+        eprintln!("gateway shutdown returned: {e}");
+    }
+    Ok(())
+}
+
+/// S4.2 — `http-request` tool refuses to fetch URLs whose host resolves to
+/// an RFC-1918 private range IP literal.  Proves [`SsrfValidator`] is
+/// actually wired into the tool's `execute()` (sera-udjf fix).
+///
+/// Flow:
+///   1. Mock LLM emits `tool_calls` for `http-request` with
+///      `url: http://10.0.0.1/admin`.
+///   2. Runtime dispatches — SSRF guard rejects before `reqwest::send`.
+///   3. Runtime reports tool failure back to LLM; mock replies with a
+///      content-only message to terminate the turn.
+///   4. Transcript records a `tool`-role entry containing `ssrf:` /
+///      `private range` / `execution error`.
+///
+/// Before the sera-udjf fix this test would have egressed to 10.0.0.1
+/// (silently timing out or connecting to anyone squatting that address)
+/// — the test failing when the SSRF wiring regresses is the point.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn s4_2_http_request_blocks_rfc1918_private_range() -> Result<()> {
+    init_tracing();
+
+    let (gw_bin, rt_bin) = match bins_or_skip() {
+        Some(b) => b,
+        None => {
+            eprintln!("[S4.2] SKIP: gateway/runtime bins not built");
+            return Ok(());
+        }
+    };
+    let (llm, _mock) = match start_mock_llm_tool_call_then_content(
+        "http-request",
+        r#"{"url":"http://10.0.0.1/admin","method":"GET"}"#,
+        "SSRF was rejected — carrying on.",
+    )
+    .await
+    {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("[S4.2] SKIP: wiremock unavailable ({e})");
+            return Ok(());
+        }
+    };
+
+    let gw = InProcessGateway::start_local(&gw_bin, &rt_bin, &llm)
+        .await
+        .context("booting gateway for S4.2")?;
+
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+
+    let resp: serde_json::Value = http
+        .post(format!("{}/api/chat", gw.base_url))
+        .json(&serde_json::json!({
+            "agent": "sera",
+            "message": "please probe 10.0.0.1",
+            "stream": false,
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    let session_id = resp
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .context("chat response missing session_id")?;
+
+    let transcript: serde_json::Value = http
+        .get(format!("{}/api/sessions/{}/transcript", gw.base_url, session_id))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let entries = transcript
+        .as_array()
+        .context("transcript must be a JSON array")?;
+
+    // The SSRF guard returns `ToolError::ExecutionFailed("ssrf: refusing
+    // to fetch <host>: <reason>")`.  The runtime surfaces that as a
+    // tool-role transcript entry.  Assert both on the role and the
+    // specific SSRF marker so a generic "tool error" doesn't create a
+    // false pass.
+    let ssrf_rejected = entries.iter().any(|e| {
+        let is_tool_role = e.get("role").and_then(|v| v.as_str()) == Some("tool");
+        let content = e.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        is_tool_role
+            && (content.contains("ssrf:") || content.contains("private range"))
+    });
+    assert!(
+        ssrf_rejected,
+        "transcript must contain an SSRF-rejection tool entry for the 10.0.0.1 probe; entries: {entries:?}"
     );
 
     if let Err(e) = gw.shutdown().await {

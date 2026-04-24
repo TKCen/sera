@@ -3,10 +3,18 @@
 //! Native `Tool` trait implementation (bead sera-ttrm-5) with
 //! [`RiskLevel::Execute`] — HTTP requests can mutate remote state via
 //! POST/PUT/DELETE/PATCH, so treat the generic tool as Execute-class.
+//!
+//! SSRF protection (sera-udjf): IP-literal hosts are validated against
+//! [`SsrfValidator`] before the request is sent.  Blocks LLM-instructed
+//! requests to loopback, RFC-1918 private ranges, link-local addresses,
+//! IPv6 ULA, and cloud metadata endpoints.  Hostname hosts (`example.com`)
+//! bypass validation — full DNS-resolved SSRF protection is tracked as a
+//! follow-up.
 
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use sera_tools::ssrf::SsrfValidator;
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
     ToolInput, ToolMetadata, ToolOutput, ToolSchema,
@@ -87,6 +95,28 @@ impl Tool for HttpRequest {
             .ok_or_else(|| ToolError::InvalidInput("Missing 'url'".to_string()))?;
         let method = args["method"].as_str().unwrap_or("GET").to_uppercase();
 
+        // SSRF guard (sera-udjf) — parse the URL, extract the host, and
+        // validate IP literals against the blocklist.  `SsrfValidator`
+        // returns `NotAllowed` for hostnames; we swallow that variant and
+        // let the request proceed (full DNS-resolved SSRF protection is a
+        // follow-up).  Every other variant (Loopback, LinkLocal, PrivateRange,
+        // CloudMetadata, ParseError) is fatal.
+        let parsed = reqwest::Url::parse(url)
+            .map_err(|e| ToolError::InvalidInput(format!("invalid URL: {e}")))?;
+        if let Some(host) = parsed.host_str() {
+            match SsrfValidator::validate(host) {
+                Ok(()) => {}
+                Err(sera_tools::ssrf::SsrfError::NotAllowed { .. }) => {
+                    // Hostname — allowed for now; DNS-time re-validation is pending.
+                }
+                Err(e) => {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "ssrf: refusing to fetch {host}: {e}"
+                    )));
+                }
+            }
+        }
+
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -126,10 +156,53 @@ impl Tool for HttpRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn metadata_risk_level_is_execute() {
         assert_eq!(HttpRequest.metadata().risk_level, RiskLevel::Execute);
         assert_eq!(HttpRequest.metadata().name, "http-request");
+    }
+
+    /// sera-udjf — IP-literal hosts in the SSRF blocklist must be rejected
+    /// before the request is sent.  Covers RFC-1918 (10.x, 192.168.x),
+    /// loopback (127.x), link-local (169.254.x), and cloud metadata
+    /// (169.254.169.254).  Hostname hosts are allowed-through for now.
+    #[tokio::test]
+    async fn execute_rejects_ssrf_private_range() {
+        let tool = HttpRequest;
+        let cases = [
+            "http://10.0.0.1/",
+            "http://192.168.1.1/",
+            "http://127.0.0.1/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::1]/",
+        ];
+        for url in cases {
+            let input = ToolInput {
+                name: "http-request".to_string(),
+                call_id: "test".to_string(),
+                arguments: json!({ "url": url }),
+            };
+            let result = tool.execute(input, ToolContext::default()).await;
+            assert!(
+                matches!(result, Err(ToolError::ExecutionFailed(ref msg)) if msg.starts_with("ssrf:")),
+                "{url} should be SSRF-rejected, got {result:?}"
+            );
+        }
+    }
+
+    /// Malformed URLs surface as `InvalidInput` rather than a network error
+    /// so the caller can distinguish "you typo-ed" from "the host blew up".
+    #[tokio::test]
+    async fn execute_rejects_malformed_url() {
+        let tool = HttpRequest;
+        let input = ToolInput {
+            name: "http-request".to_string(),
+            call_id: "test".to_string(),
+            arguments: json!({ "url": "not a url" }),
+        };
+        let result = tool.execute(input, ToolContext::default()).await;
+        assert!(matches!(result, Err(ToolError::InvalidInput(_))), "got {result:?}");
     }
 }

@@ -6,6 +6,7 @@
 
 pub mod agent_list;
 pub mod evolve_status;
+pub mod hitl_modal;
 pub mod hitl_queue;
 pub mod session;
 pub mod session_picker;

@@ -92,6 +92,21 @@ pub enum Action {
     PickerDown,
     /// Confirm the currently highlighted session.
     PickerSelect,
+    /// Approve the HITL request currently shown in the inline modal.
+    /// Constructed by external callers; the modal intercept in `App::dispatch`
+    /// maps `Action::Approve` directly to `AppCommand::ApproveModal`.
+    #[allow(dead_code)]
+    ApproveHitl(String),
+    /// Reject the HITL request currently shown in the inline modal.
+    #[allow(dead_code)]
+    RejectHitl(String),
+    /// Escalate the HITL request currently shown in the inline modal.
+    #[allow(dead_code)]
+    EscalateHitl(String),
+    /// Dismiss the inline HITL modal without taking action (leaves request
+    /// in the HITL queue pane).
+    #[allow(dead_code)]
+    DismissHitlModal,
     /// No-op — used when a key doesn't match any binding.  Reducing to
     /// this instead of returning `Option<Action>` lets the dispatch table
     /// stay a plain `match`.

@@ -157,6 +157,15 @@ pub fn matches_key(event: &KeyEvent, bindings: &[KeyBinding]) -> bool {
         .any(|b| b.code == event.code && b.modifiers == event.modifiers)
 }
 
+/// Return the display string for the first binding in `bindings`, or `"?"`
+/// when the slice is empty.  Shared by view modules that render hint lines.
+pub fn display_first(bindings: &[KeyBinding]) -> String {
+    bindings
+        .first()
+        .map(|b| b.display())
+        .unwrap_or_else(|| "?".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

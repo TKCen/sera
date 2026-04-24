@@ -21,6 +21,10 @@ pub enum SandboxPolicy {
 pub struct DockerSandboxPolicy {
     pub filesystem: FileSystemSandboxPolicy,
     pub network: NetworkSandboxPolicy,
+    /// When `true`, commands that spawn a shell or interpreter (bash, sh, python, etc.)
+    /// are denied by the mock sandbox provider.
+    #[serde(default)]
+    pub deny_subprocess: bool,
 }
 
 /// Filesystem access policy.
@@ -165,6 +169,7 @@ mod tests {
                 include_workdir: true,
             },
             network: make_network_policy(true, vec![allow_cidr("10.0.0.0/8")]),
+            deny_subprocess: false,
         });
         let json = serde_json::to_string(&policy).unwrap();
         let back: SandboxPolicy = serde_json::from_str(&json).unwrap();

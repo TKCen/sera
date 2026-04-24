@@ -39,6 +39,7 @@ fn policy_layering_coarse_plus_fs_plus_network() {
             }],
             default_deny: true,
         },
+        deny_subprocess: false,
     });
 
     let json = serde_json::to_string(&policy).expect("serialize");

@@ -4,13 +4,45 @@ use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use async_trait::async_trait;
 use sera_tools::sandbox::{
-    ExecResult, SandboxConfig, SandboxError, SandboxHandle, SandboxProvider,
+    DockerSandboxPolicy, ExecResult, SandboxConfig, SandboxError, SandboxHandle, SandboxPolicy,
+    SandboxProvider,
 };
 
 struct MockSandbox {
-    _config: SandboxConfig,
+    policy: Option<SandboxPolicy>,
     files: HashMap<String, Vec<u8>>,
     status: String,
+}
+
+/// Returns `true` if the first token of `command` looks like an egress tool
+/// (curl, wget, or anything containing "http").
+fn is_egress_command(command: &str) -> bool {
+    let first = command.split_whitespace().next().unwrap_or("");
+    matches!(first, "curl" | "wget") || command.contains("http")
+}
+
+/// Returns `true` if the first token of `command` is a common subprocess spawner.
+fn is_subprocess_command(command: &str) -> bool {
+    let first = command.split_whitespace().next().unwrap_or("");
+    matches!(first, "bash" | "sh" | "python" | "python3")
+}
+
+/// Check a Docker policy against a command, returning a `PolicyViolation` if denied.
+fn check_docker_policy(
+    policy: &DockerSandboxPolicy,
+    command: &str,
+) -> Result<(), SandboxError> {
+    if policy.network.default_deny && is_egress_command(command) {
+        return Err(SandboxError::PolicyViolation {
+            reason: "egress-denied".to_string(),
+        });
+    }
+    if policy.deny_subprocess && is_subprocess_command(command) {
+        return Err(SandboxError::PolicyViolation {
+            reason: "subprocess-denied".to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// In-memory mock sandbox provider for testing.
@@ -47,7 +79,7 @@ impl SandboxProvider for MockSandboxProvider {
         sandboxes.insert(
             handle_str.clone(),
             MockSandbox {
-                _config: config.clone(),
+                policy: config.sandbox_policy.clone(),
                 files: HashMap::new(),
                 status: "running".to_string(),
             },
@@ -62,8 +94,9 @@ impl SandboxProvider for MockSandboxProvider {
         _env: &HashMap<String, String>,
     ) -> Result<ExecResult, SandboxError> {
         let sandboxes = self.sandboxes.lock().await;
-        if !sandboxes.contains_key(&handle.0) {
-            return Err(SandboxError::NotFound);
+        let sandbox = sandboxes.get(&handle.0).ok_or(SandboxError::NotFound)?;
+        if let Some(SandboxPolicy::Docker(ref docker_policy)) = sandbox.policy {
+            check_docker_policy(docker_policy, command)?;
         }
         Ok(ExecResult {
             exit_code: 0,
@@ -288,5 +321,121 @@ mod tests {
         // Second destroy returns NotFound — caller must handle this
         let err = provider.destroy(&handle).await.unwrap_err();
         assert!(matches!(err, SandboxError::NotFound));
+    }
+
+    // --- SandboxPolicy enforcement tests ---
+
+    fn tier1_policy() -> SandboxPolicy {
+        use sera_tools::sandbox::{
+            DockerSandboxPolicy, FileSystemSandboxPolicy, NetworkSandboxPolicy,
+        };
+        SandboxPolicy::Docker(DockerSandboxPolicy {
+            filesystem: FileSystemSandboxPolicy {
+                read_paths: vec![],
+                write_paths: vec![],
+                include_workdir: false,
+            },
+            network: NetworkSandboxPolicy {
+                rules: vec![],
+                default_deny: true,
+            },
+            deny_subprocess: false,
+        })
+    }
+
+    fn tier3_policy() -> SandboxPolicy {
+        use sera_tools::sandbox::{
+            DockerSandboxPolicy, FileSystemSandboxPolicy, NetworkSandboxPolicy,
+        };
+        SandboxPolicy::Docker(DockerSandboxPolicy {
+            filesystem: FileSystemSandboxPolicy {
+                read_paths: vec![],
+                write_paths: vec![],
+                include_workdir: false,
+            },
+            network: NetworkSandboxPolicy {
+                rules: vec![],
+                default_deny: false,
+            },
+            deny_subprocess: false,
+        })
+    }
+
+    #[tokio::test]
+    async fn mock_tier_1_denies_egress() {
+        let provider = MockSandboxProvider::new();
+        let config = SandboxConfig {
+            sandbox_policy: Some(tier1_policy()),
+            ..Default::default()
+        };
+        let handle = provider.create(&config).await.unwrap();
+        let err = provider
+            .execute(&handle, "curl https://example.com", &HashMap::new())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, SandboxError::PolicyViolation { ref reason } if reason == "egress-denied")
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_tier_1_allows_non_egress() {
+        let provider = MockSandboxProvider::new();
+        let config = SandboxConfig {
+            sandbox_policy: Some(tier1_policy()),
+            ..Default::default()
+        };
+        let handle = provider.create(&config).await.unwrap();
+        let result = provider
+            .execute(&handle, "echo hello", &HashMap::new())
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn mock_tier_3_allows_egress() {
+        let provider = MockSandboxProvider::new();
+        let config = SandboxConfig {
+            sandbox_policy: Some(tier3_policy()),
+            ..Default::default()
+        };
+        let handle = provider.create(&config).await.unwrap();
+        let result = provider
+            .execute(&handle, "curl https://example.com", &HashMap::new())
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn mock_tier_1_denies_subprocess() {
+        use sera_tools::sandbox::{
+            DockerSandboxPolicy, FileSystemSandboxPolicy, NetworkSandboxPolicy,
+        };
+        let provider = MockSandboxProvider::new();
+        let config = SandboxConfig {
+            sandbox_policy: Some(SandboxPolicy::Docker(DockerSandboxPolicy {
+                filesystem: FileSystemSandboxPolicy {
+                    read_paths: vec![],
+                    write_paths: vec![],
+                    include_workdir: false,
+                },
+                network: NetworkSandboxPolicy {
+                    rules: vec![],
+                    default_deny: true,
+                },
+                deny_subprocess: true,
+            })),
+            ..Default::default()
+        };
+        let handle = provider.create(&config).await.unwrap();
+        let err = provider
+            .execute(&handle, "bash -c ls", &HashMap::new())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, SandboxError::PolicyViolation { ref reason } if reason == "subprocess-denied")
+        );
     }
 }

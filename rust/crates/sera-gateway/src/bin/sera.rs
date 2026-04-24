@@ -12,7 +12,8 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{FromRequest, Path, Request, State};
+use axum::extract::rejection::JsonRejection;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -693,6 +694,73 @@ struct ChatRequest {
     stream: bool,
 }
 
+/// Custom JSON extractor that maps axum's `JsonRejection` (which produces 422
+/// with a raw serde error string) to a structured 400 response.
+struct ValidatedJson<T>(T);
+
+/// Rejection type for [`ValidatedJson`] — always a 400 with a JSON body.
+struct ValidatedJsonRejection(axum::response::Response);
+
+impl IntoResponse for ValidatedJsonRejection {
+    fn into_response(self) -> axum::response::Response {
+        self.0
+    }
+}
+
+impl<T, S> FromRequest<S> for ValidatedJson<T>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ValidatedJsonRejection;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        Json::<T>::from_request(req, state)
+            .await
+            .map(|Json(v)| ValidatedJson(v))
+            .map_err(|rejection| {
+                let body = match &rejection {
+                    JsonRejection::MissingJsonContentType(_) => serde_json::json!({
+                        "error": "invalid_content_type",
+                        "message": "Content-Type must be application/json"
+                    }),
+                    JsonRejection::JsonDataError(e) => {
+                        let msg = e.to_string();
+                        if let Some(field) = extract_missing_field(&msg) {
+                            serde_json::json!({
+                                "error": "missing_field",
+                                "field": field,
+                                "message": format!("field '{}' is required", field)
+                            })
+                        } else {
+                            serde_json::json!({
+                                "error": "invalid_body",
+                                "message": "Request body is invalid"
+                            })
+                        }
+                    }
+                    _ => serde_json::json!({
+                        "error": "invalid_body",
+                        "message": "Request body is invalid"
+                    }),
+                };
+                ValidatedJsonRejection(
+                    (StatusCode::BAD_REQUEST, Json(body)).into_response(),
+                )
+            })
+    }
+}
+
+/// Extract the field name from a serde "missing field `foo`" error message.
+fn extract_missing_field(msg: &str) -> Option<&str> {
+    // serde_json formats missing-field errors as:
+    // "missing field `<name>` at line N column M"
+    let start = msg.find("missing field `")?.checked_add("missing field `".len())?;
+    let rest = &msg[start..];
+    let end = rest.find('`')?;
+    Some(&rest[..end])
+}
+
 #[derive(Serialize, Debug, Clone, Copy, Default)]
 struct UsageInfo {
     prompt_tokens: u64,
@@ -864,7 +932,7 @@ async fn readiness_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
 async fn chat_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(req): Json<ChatRequest>,
+    ValidatedJson(req): ValidatedJson<ChatRequest>,
 ) -> Result<axum::response::Response, StatusCode> {
     // Authenticate.
     validate_api_key(&state, &headers)?;
@@ -3899,6 +3967,39 @@ mod tests {
         assert!(json["usage"]["prompt_tokens"].is_number());
         assert!(json["usage"]["completion_tokens"].is_number());
         assert!(json["usage"]["total_tokens"].is_number());
+    }
+
+    /// sera-ygwe regression guard: POST /api/chat with a missing `message` field
+    /// must return 400 with a structured JSON error, not 422 with a raw serde
+    /// error string leaked from axum's default `Json` extractor.
+    #[tokio::test]
+    async fn chat_endpoint_missing_message_returns_400_structured_error() {
+        let state = test_state_async().await;
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "missing_field");
+        assert_eq!(json["field"], "message");
+        assert!(
+            json["message"].as_str().unwrap_or_default().contains("message"),
+            "error message should mention the missing field"
+        );
     }
 
     // -- Router structure --

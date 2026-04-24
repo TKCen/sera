@@ -40,10 +40,11 @@ case "$FILTER" in
     s2)          CARGO_ARGS+=(--test scenarios_s2_config) ;;
     s3)          CARGO_ARGS+=(--test scenarios_s3_single_agent) ;;
     s4)          CARGO_ARGS+=(--test scenarios_s4_policy) ;;
+    s7)          CARGO_ARGS+=(--test scenarios_s7_workflow) ;;
     original)    CARGO_ARGS+=(--test local_profile_turn) ;;
     *)
         echo "unknown filter: $FILTER" >&2
-        echo "known: s1 | s2 | s3 | s4 | original | <empty for all>" >&2
+        echo "known: s1 | s2 | s3 | s4 | s7 | original | <empty for all>" >&2
         exit 2
         ;;
 esac

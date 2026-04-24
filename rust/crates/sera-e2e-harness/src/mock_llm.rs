@@ -14,7 +14,9 @@
 use anyhow::Result;
 use serde_json::json;
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, ResponseTemplate};
+
+pub use wiremock::MockServer;
 
 /// Default reply text the mock returns when a test doesn't supply its own.
 pub const DEFAULT_REPLY: &str = "hello from mock LLM";
@@ -22,7 +24,10 @@ pub const DEFAULT_REPLY: &str = "hello from mock LLM";
 /// Start a minimal mock LLM returning [`DEFAULT_REPLY`].  Convenience wrapper
 /// around [`start_mock_llm_with_reply`] — most tests only need deterministic
 /// output, not specific content.
-pub async fn start_mock_llm() -> Result<String> {
+///
+/// Returns `(url, server)` — the caller must hold `server` on its stack for
+/// the duration of the test; dropping it tears down the listener.
+pub async fn start_mock_llm() -> Result<(String, MockServer)> {
     start_mock_llm_with_reply(DEFAULT_REPLY).await
 }
 
@@ -36,10 +41,9 @@ pub async fn start_mock_llm() -> Result<String> {
 /// terminator — the runtime's accumulator handles both single-chunk and
 /// multi-chunk streams identically.
 ///
-/// The `MockServer` is leaked into a static so it outlives this function's
-/// stack frame — otherwise its Drop would tear down the listener the moment
-/// this returns and the gateway's first turn would get an `ECONNREFUSED`.
-pub async fn start_mock_llm_with_reply(reply: &str) -> Result<String> {
+/// Returns `(url, server)` — the caller must hold `server` on its stack for
+/// the duration of the test; dropping it tears down the listener.
+pub async fn start_mock_llm_with_reply(reply: &str) -> Result<(String, MockServer)> {
     let server = MockServer::start().await;
     let sse_body = build_sse_stream(reply);
 
@@ -57,8 +61,7 @@ pub async fn start_mock_llm_with_reply(reply: &str) -> Result<String> {
     }
 
     let url = server.uri();
-    let _leaked: &'static MockServer = Box::leak(Box::new(server));
-    Ok(url)
+    Ok((url, server))
 }
 
 /// Render a minimal well-formed OpenAI-compat streaming completion that

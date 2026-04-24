@@ -63,7 +63,7 @@ async fn s1_1_bootstrap_binds_and_health_responds() -> Result<()> {
             return Ok(());
         }
     };
-    let llm = match start_mock_llm().await {
+    let (llm, _mock) = match start_mock_llm().await {
         Ok(u) => u,
         Err(e) => {
             eprintln!("[S1.1] SKIP: wiremock unavailable ({e})");
@@ -110,7 +110,9 @@ async fn s1_1_bootstrap_binds_and_health_responds() -> Result<()> {
         "auth/me must include `sub`, got {me:?}"
     );
 
-    gateway.shutdown().await.ok();
+    if let Err(e) = gateway.shutdown().await {
+        eprintln!("gateway shutdown returned: {e}");
+    }
     Ok(())
 }
 
@@ -134,7 +136,7 @@ async fn s1_2_restart_preserves_session_state() -> Result<()> {
             return Ok(());
         }
     };
-    let llm = match start_mock_llm().await {
+    let (llm, _mock) = match start_mock_llm().await {
         Ok(u) => u,
         Err(e) => {
             eprintln!("[S1.2] SKIP: wiremock unavailable ({e})");
@@ -171,7 +173,9 @@ async fn s1_2_restart_preserves_session_state() -> Result<()> {
             .and_then(|v| v.as_str())
             .context("first turn must return session_id")?
             .to_owned();
-        gw.shutdown().await.ok();
+        if let Err(e) = gw.shutdown().await {
+            eprintln!("gateway shutdown returned: {e}");
+        }
         id
     };
 
@@ -205,6 +209,8 @@ async fn s1_2_restart_preserves_session_state() -> Result<()> {
     let sql_user = count_transcript_rows(&root.db_path, &session_id_before, "user")?;
     assert!(sql_user >= 1, "sqlite transcript must retain user row after restart");
 
-    gw2.shutdown().await.ok();
+    if let Err(e) = gw2.shutdown().await {
+        eprintln!("gateway shutdown returned: {e}");
+    }
     Ok(())
 }

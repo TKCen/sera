@@ -497,7 +497,8 @@ unsafe fn libc_kill(_pid: i32, _sig: i32) -> i32 {
 
 /// Count rows in the audit_log whose event_type matches `event`.  Returns 0
 /// if the database does not exist yet — a common state during the narrow
-/// window between gateway boot and first turn.
+/// window between gateway boot and first turn.  Returns an error for any
+/// other DB failure so callers see the real cause rather than a silent zero.
 pub fn count_audit_rows(db_path: &Path, event: &str) -> Result<i64> {
     if !db_path.exists() {
         return Ok(0);
@@ -511,14 +512,15 @@ pub fn count_audit_rows(db_path: &Path, event: &str) -> Result<i64> {
             rusqlite::params![event],
             |row| row.get(0),
         )
-        .unwrap_or(0);
+        .map_err(|e| anyhow::anyhow!("querying audit_log in {db_path:?}: {e}"))?;
     Ok(count)
 }
 
 /// Count transcript rows for a given session id, filtered by role.  In the
 /// autonomous gateway's SQLite schema, the assistant's reply to a user turn
 /// is persisted here — it is the closest analogue to a "MemoryBlock segment
-/// landed" assertion the Sprint 2 spec calls for.
+/// landed" assertion the Sprint 2 spec calls for.  Returns an error for any
+/// DB failure so callers see the real cause rather than a silent zero.
 pub fn count_transcript_rows(db_path: &Path, session_id: &str, role: &str) -> Result<i64> {
     if !db_path.exists() {
         return Ok(0);
@@ -532,7 +534,7 @@ pub fn count_transcript_rows(db_path: &Path, session_id: &str, role: &str) -> Re
             rusqlite::params![session_id, role],
             |row| row.get(0),
         )
-        .unwrap_or(0);
+        .map_err(|e| anyhow::anyhow!("querying transcript in {db_path:?}: {e}"))?;
     Ok(count)
 }
 

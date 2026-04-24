@@ -62,7 +62,7 @@ async fn s3_1_chat_non_stream_returns_response_with_session_id() -> Result<()> {
             return Ok(());
         }
     };
-    let llm = match start_mock_llm_with_reply("reply from S3.1").await {
+    let (llm, _mock) = match start_mock_llm_with_reply("reply from S3.1").await {
         Ok(u) => u,
         Err(e) => {
             eprintln!("[S3.1] SKIP: wiremock unavailable ({e})");
@@ -96,20 +96,14 @@ async fn s3_1_chat_non_stream_returns_response_with_session_id() -> Result<()> {
         .get("response")
         .and_then(|v| v.as_str())
         .context("response missing `response` field")?;
-    // Soft-check on reply: the mock produced a specific string, but the
-    // runtime can short-circuit before streaming (authz, token budget, etc.)
-    // and still successfully complete the turn.  The hard contract is that
-    // `response` is a string; the WARN path surfaces the unusual case.
-    if response_text.is_empty() {
-        eprintln!("[S3.1] WARN: runtime returned empty response field (turn still completed)");
-    } else {
-        assert!(
-            response_text.contains("reply from S3.1"),
-            "mock reply missing from response text: {response_text:?}"
-        );
-    }
+    assert!(
+        response_text.contains("reply from S3.1"),
+        "mock reply missing from response text: {response_text:?}"
+    );
 
-    gw.shutdown().await.ok();
+    if let Err(e) = gw.shutdown().await {
+        eprintln!("gateway shutdown returned: {e}");
+    }
     Ok(())
 }
 
@@ -133,7 +127,7 @@ async fn s3_2_chat_stream_emits_message_then_done() -> Result<()> {
             return Ok(());
         }
     };
-    let llm = match start_mock_llm_with_reply(DEFAULT_REPLY).await {
+    let (llm, _mock) = match start_mock_llm_with_reply(DEFAULT_REPLY).await {
         Ok(u) => u,
         Err(e) => {
             eprintln!("[S3.2] SKIP: wiremock unavailable ({e})");
@@ -161,9 +155,19 @@ async fn s3_2_chat_stream_emits_message_then_done() -> Result<()> {
     let mut saw_done = false;
     let mut saw_error: Option<String> = None;
     // Bound the loop — a stuck runtime must not hang the test forever.
+    let start = std::time::Instant::now();
     let budget = tokio::time::Instant::now() + Duration::from_secs(20);
-    while let Ok(Some(ev)) = tokio::time::timeout_at(budget.into(), stream.next()).await {
-        let ev = ev?;
+    loop {
+        let tick = tokio::time::timeout_at(budget, stream.next()).await;
+        let ev = match tick {
+            Err(_) => panic!(
+                "SSE stream timed out after {:?} — saw_message={saw_message}, saw_done={saw_done}, saw_error={saw_error:?}",
+                start.elapsed()
+            ),
+            Ok(None) => break, // stream closed cleanly without Done — caller assertion will catch it
+            Ok(Some(Err(e))) => panic!("SSE frame parse error: {e}"),
+            Ok(Some(Ok(ev))) => ev,
+        };
         match ev {
             StreamEvent::Token { .. } => saw_message = true,
             StreamEvent::Done { .. } => {
@@ -174,19 +178,20 @@ async fn s3_2_chat_stream_emits_message_then_done() -> Result<()> {
                 saw_error = Some(message);
                 break;
             }
-            _ => {}
+            _ => {} // keep permissive for new event kinds we don't know about
         }
     }
 
+    assert!(saw_error.is_none(), "SSE stream surfaced an error event: {saw_error:?}");
+    assert!(saw_message, "SSE stream must emit at least one token delta before done");
     assert!(
         saw_done,
         "SSE stream must close with a `done` frame (saw_message={saw_message}, error={saw_error:?})"
     );
-    // Soft on saw_message: the runtime can complete a turn with zero deltas
-    // if the LLM returns an empty content body; we've already warned on
-    // that path in S3.1.  For streaming the strong contract is `done`.
 
-    gw.shutdown().await.ok();
+    if let Err(e) = gw.shutdown().await {
+        eprintln!("gateway shutdown returned: {e}");
+    }
     Ok(())
 }
 
@@ -212,7 +217,7 @@ async fn s3_3_cli_agent_run_prints_reply() -> Result<()> {
             return Ok(());
         }
     };
-    let llm = match start_mock_llm_with_reply("reply from CLI test").await {
+    let (llm, _mock) = match start_mock_llm_with_reply("reply from CLI test").await {
         Ok(u) => u,
         Err(e) => {
             eprintln!("[S3.3] SKIP: wiremock unavailable ({e})");
@@ -258,11 +263,13 @@ async fn s3_3_cli_agent_run_prints_reply() -> Result<()> {
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("reply from CLI test") || !stdout.trim().is_empty(),
-        "CLI stdout should contain the reply or some body — got empty. stderr={}",
+        stdout.contains("reply from CLI test"),
+        "CLI stdout must contain mock reply; got: {stdout:?}; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
-    gw.shutdown().await.ok();
+    if let Err(e) = gw.shutdown().await {
+        eprintln!("gateway shutdown returned: {e}");
+    }
     Ok(())
 }

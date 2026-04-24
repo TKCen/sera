@@ -166,6 +166,22 @@ impl InProcessGateway {
         runtime_bin: &Path,
         llm_base_url: &str,
     ) -> Result<Self> {
+        Self::start_local_with_env(gateway_bin, runtime_bin, llm_base_url, &[]).await
+    }
+
+    /// Boot a gateway with the same defaults as [`Self::start_local`] but
+    /// with extra environment variables applied after the harness defaults.
+    ///
+    /// Use this for scenarios that need to override a default (e.g. set
+    /// `SERA_ADMIN_SOCK` to a tempdir-scoped path for the kill-switch
+    /// scenario, or unset `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE` by
+    /// passing `("SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE", "0")`).
+    pub async fn start_local_with_env(
+        gateway_bin: &Path,
+        runtime_bin: &Path,
+        llm_base_url: &str,
+        extra_env: &[(&str, &str)],
+    ) -> Result<Self> {
         let model = resolve_model_env();
         let root = GatewayRoot::new_local(llm_base_url, &model)?;
         let (child, base_url) = spawn_gateway(
@@ -174,6 +190,7 @@ impl InProcessGateway {
             gateway_bin,
             runtime_bin,
             llm_base_url,
+            extra_env,
         )
         .await?;
         let gateway = Self {
@@ -205,6 +222,7 @@ impl InProcessGateway {
             gateway_bin,
             runtime_bin,
             llm_base_url,
+            &[],
         )
         .await?;
         let gateway = Self {
@@ -288,12 +306,18 @@ impl InProcessGateway {
 /// Spawn `sera-gateway start --config X --port P` rooted in `root_dir`, drain
 /// stdio into tracing, and return the child handle + picked port's base URL.
 /// Does not poll for health — caller is expected to call `wait_for_health`.
+///
+/// `extra_env` entries are applied after the harness defaults, so a scenario
+/// can override any default (e.g. set `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE`
+/// to `"0"` for the constitutional-gate scenario, or set `SERA_ADMIN_SOCK` to
+/// a tempdir path for the kill-switch scenario).
 async fn spawn_gateway(
     root_dir: &Path,
     config_path: &Path,
     gateway_bin: &Path,
     runtime_bin: &Path,
     llm_base_url: &str,
+    extra_env: &[(&str, &str)],
 ) -> Result<(Child, String)> {
     let port = pick_free_port()?;
     let addr = format!("127.0.0.1:{port}");
@@ -329,6 +353,10 @@ async fn spawn_gateway(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
 
     let mut child = cmd
         .spawn()

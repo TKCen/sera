@@ -280,6 +280,11 @@ impl App {
                     self.session.input_to_composer(key);
                 }
             }
+            Action::PasteToComposer(content) => {
+                if let ViewKind::Session = self.focus {
+                    self.session.handle_paste(content);
+                }
+            }
             Action::OpenSessionPicker => {
                 if let Some(agent_id) = self.active_agent_id.clone() {
                     self.pending

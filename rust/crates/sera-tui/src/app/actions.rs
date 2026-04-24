@@ -77,6 +77,8 @@ pub enum Action {
     SubmitComposer,
     /// Forward a raw key event to the focused composer textarea.
     ComposerInput(crossterm::event::KeyEvent),
+    /// Route a bracketed-paste payload to the composer (Session view only).
+    PasteToComposer(String),
     /// Select a specific agent by ID and switch to the Session pane.
     /// Dispatched when the AgentList confirms a selection (Enter on a row).
     /// Sets `App.active_agent_id` and triggers session load via

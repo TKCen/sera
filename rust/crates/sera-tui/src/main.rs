@@ -15,7 +15,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -61,7 +64,7 @@ async fn main() -> Result<()> {
 fn init_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     let mut out = io::stdout();
-    execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(out, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(out);
     Ok(Terminal::new(backend)?)
 }
@@ -71,7 +74,12 @@ fn restore_terminal<B: ratatui::backend::Backend + io::Write>(
     terminal: &mut Terminal<B>,
 ) -> Result<()> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        DisableBracketedPaste
+    )?;
     terminal.show_cursor()?;
     Ok(())
 }
@@ -86,7 +94,8 @@ fn install_panic_hook() {
         let _ = execute!(
             io::stdout(),
             LeaveAlternateScreen,
-            DisableMouseCapture
+            DisableMouseCapture,
+            DisableBracketedPaste
         );
         original(info);
     }));
@@ -115,47 +124,54 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
 
         // Poll crossterm for input with a short budget so SSE + timer
         // have a chance to run each tick.
-        if event::poll(tick)?
-            && let Event::Key(key) = event::read()?
-            && key.kind == KeyEventKind::Press
-        {
-            // When the session picker modal is open it intercepts all keys;
-            // only Up/Down/Enter/Esc are forwarded — everything else is dropped.
-            let action = if app.show_session_picker {
-                use crossterm::event::KeyCode;
-                use keybindings::matches_key;
-                if matches_key(&key, &app.keybindings.up) {
-                    crate::app::Action::PickerUp
-                } else if matches_key(&key, &app.keybindings.down) {
-                    crate::app::Action::PickerDown
-                } else if matches_key(&key, &app.keybindings.select) {
-                    crate::app::Action::PickerSelect
-                } else if matches_key(&key, &app.keybindings.back)
-                    || key.code == KeyCode::Esc
-                {
-                    crate::app::Action::ClosePicker
-                } else {
-                    crate::app::Action::NoOp
+        if event::poll(tick)? {
+            match event::read()? {
+                Event::Paste(content) => {
+                    if app.focus == ViewKind::Session {
+                        app.dispatch(crate::app::Action::PasteToComposer(content));
+                    }
                 }
-            } else {
-                let a = if app.focus == ViewKind::Session {
-                    translate_session(&key, &app.keybindings, app.session.composer_focused())
-                } else {
-                    translate(&key, &app.keybindings)
-                };
-                // When Enter is pressed in the Agents pane, resolve the selected
-                // agent ID here and dispatch SelectAgent so the action carries an
-                // explicit ID (spec G.0.3).
-                if a == crate::app::Action::Select
-                    && app.focus == ViewKind::Agents
-                    && let Some(id) = app.agents.selected_id()
-                {
-                    crate::app::Action::SelectAgent(id)
-                } else {
-                    a
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    // When the session picker modal is open it intercepts all keys;
+                    // only Up/Down/Enter/Esc are forwarded — everything else is dropped.
+                    let action = if app.show_session_picker {
+                        use crossterm::event::KeyCode;
+                        use keybindings::matches_key;
+                        if matches_key(&key, &app.keybindings.up) {
+                            crate::app::Action::PickerUp
+                        } else if matches_key(&key, &app.keybindings.down) {
+                            crate::app::Action::PickerDown
+                        } else if matches_key(&key, &app.keybindings.select) {
+                            crate::app::Action::PickerSelect
+                        } else if matches_key(&key, &app.keybindings.back)
+                            || key.code == KeyCode::Esc
+                        {
+                            crate::app::Action::ClosePicker
+                        } else {
+                            crate::app::Action::NoOp
+                        }
+                    } else {
+                        let a = if app.focus == ViewKind::Session {
+                            translate_session(&key, &app.keybindings, app.session.composer_focused())
+                        } else {
+                            translate(&key, &app.keybindings)
+                        };
+                        // When Enter is pressed in the Agents pane, resolve the selected
+                        // agent ID here and dispatch SelectAgent so the action carries an
+                        // explicit ID (spec G.0.3).
+                        if a == crate::app::Action::Select
+                            && app.focus == ViewKind::Agents
+                            && let Some(id) = app.agents.selected_id()
+                        {
+                            crate::app::Action::SelectAgent(id)
+                        } else {
+                            a
+                        }
+                    };
+                    app.dispatch(action);
                 }
-            };
-            app.dispatch(action);
+                _ => {}
+            }
         }
 
         // Execute any commands the dispatcher queued.

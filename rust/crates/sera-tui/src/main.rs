@@ -126,10 +126,8 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
         // have a chance to run each tick.
         if event::poll(tick)? {
             match event::read()? {
-                Event::Paste(content) => {
-                    if app.focus == ViewKind::Session {
-                        app.dispatch(crate::app::Action::PasteToComposer(content));
-                    }
+                Event::Paste(content) if app.focus == ViewKind::Session => {
+                    app.dispatch(crate::app::Action::PasteToComposer(content));
                 }
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     // When the session picker modal is open it intercepts all keys;

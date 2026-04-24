@@ -324,7 +324,7 @@ impl AgentRuntime for DefaultRuntime {
             change_artifact: ctx.change_artifact.map(|id| id.to_string()),
             react_mode: initial_react_mode,
             doom_loop_count: 0,
-            enforcement_mode: sera_hitl::EnforcementMode::Autonomous,
+            enforcement_mode: sera_hitl::HitlMode::Autonomous,
             approval_routing: sera_hitl::ApprovalRouting::Autonomous,
             pending_steer: None,
             tool_use_behavior: ctx.tool_use_behavior,

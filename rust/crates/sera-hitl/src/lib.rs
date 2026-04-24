@@ -18,7 +18,7 @@ pub mod types;
 pub use ask_for_approval::{AskForApproval, CategoryRouting, ExecAllowRule, GranularApprovalConfig};
 pub use assessment::{GuardianAssessment, GuardianRecommendation, GuardianRiskLevel};
 pub use error::HitlError;
-pub use mode::EnforcementMode;
+pub use mode::HitlMode;
 pub use router::ApprovalRouter;
 pub use security_analyzer::{
     ActionSecurityRisk, AnalyzerError, ProposedAction, SecurityAnalyzer,
@@ -227,12 +227,12 @@ mod tests {
         }
     }
 
-    // ── EnforcementMode ───────────────────────────────────────────────────────
+    // ── HitlMode ───────────────────────────────────────────────────────
 
     #[test]
     fn enforcement_autonomous_never_needs_approval() {
         assert!(!ApprovalRouter::needs_approval(
-            EnforcementMode::Autonomous,
+            HitlMode::Autonomous,
             RiskLevel::Admin,
             &static_routing(),
         ));
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn enforcement_strict_always_needs_approval() {
         assert!(ApprovalRouter::needs_approval(
-            EnforcementMode::Strict,
+            HitlMode::Strict,
             RiskLevel::Read,
             &ApprovalRouting::Autonomous,
         ));
@@ -251,14 +251,14 @@ mod tests {
     fn enforcement_standard_respects_policy() {
         // Static routing with targets → needs approval.
         assert!(ApprovalRouter::needs_approval(
-            EnforcementMode::Standard,
+            HitlMode::Standard,
             RiskLevel::Execute,
             &static_routing(),
         ));
 
         // Autonomous routing → no approval needed.
         assert!(!ApprovalRouter::needs_approval(
-            EnforcementMode::Standard,
+            HitlMode::Standard,
             RiskLevel::Execute,
             &ApprovalRouting::Autonomous,
         ));
@@ -683,13 +683,13 @@ mod tests {
         };
         // Execute → score 0.7 → matches 0.6 threshold → needs approval.
         assert!(ApprovalRouter::needs_approval(
-            EnforcementMode::Standard,
+            HitlMode::Standard,
             RiskLevel::Execute,
             &ApprovalRouting::Dynamic(policy.clone()),
         ));
         // Read → score 0.1 → no threshold matches, empty fallback → no approval.
         assert!(!ApprovalRouter::needs_approval(
-            EnforcementMode::Standard,
+            HitlMode::Standard,
             RiskLevel::Read,
             &ApprovalRouting::Dynamic(policy),
         ));
@@ -703,25 +703,25 @@ mod tests {
         };
         // No thresholds, but fallback is non-empty → needs approval.
         assert!(ApprovalRouter::needs_approval(
-            EnforcementMode::Standard,
+            HitlMode::Standard,
             RiskLevel::Read,
             &ApprovalRouting::Dynamic(policy),
         ));
     }
 
-    // ── EnforcementMode serde ─────────────────────────────────────────────────
+    // ── HitlMode serde ─────────────────────────────────────────────────
 
     #[test]
     fn enforcement_mode_serde_roundtrip() {
         let variants = [
-            (EnforcementMode::Autonomous, "\"autonomous\""),
-            (EnforcementMode::Standard, "\"standard\""),
-            (EnforcementMode::Strict, "\"strict\""),
+            (HitlMode::Autonomous, "\"autonomous\""),
+            (HitlMode::Standard, "\"standard\""),
+            (HitlMode::Strict, "\"strict\""),
         ];
         for (mode, expected_json) in variants {
             let json = serde_json::to_string(&mode).unwrap();
             assert_eq!(json, expected_json);
-            let parsed: EnforcementMode = serde_json::from_str(&json).unwrap();
+            let parsed: HitlMode = serde_json::from_str(&json).unwrap();
             assert_eq!(parsed, mode);
         }
     }

@@ -2,7 +2,7 @@
 
 use sera_types::tool::RiskLevel;
 
-use crate::mode::EnforcementMode;
+use crate::mode::HitlMode;
 use crate::types::{ApprovalPolicy, ApprovalRouting, ApprovalTarget};
 
 /// Stateless routing logic for the HITL approval system.
@@ -36,14 +36,14 @@ impl ApprovalRouter {
     /// - `Strict` → always needs approval.
     /// - `Standard` → needs approval when the resolved chain is non-empty.
     pub fn needs_approval(
-        mode: EnforcementMode,
+        mode: HitlMode,
         risk_level: RiskLevel,
         routing: &ApprovalRouting,
     ) -> bool {
         match mode {
-            EnforcementMode::Autonomous => false,
-            EnforcementMode::Strict => true,
-            EnforcementMode::Standard => {
+            HitlMode::Autonomous => false,
+            HitlMode::Strict => true,
+            HitlMode::Standard => {
                 // Use the risk level to synthesise a coarse score for threshold matching.
                 let score = Self::risk_level_to_score(risk_level);
                 !Self::resolve_chain(routing, Some(score)).is_empty()

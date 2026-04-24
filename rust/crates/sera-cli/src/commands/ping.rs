@@ -14,10 +14,10 @@ use sera_commands::{
 use crate::http::build_client;
 
 /// CLI `ping` subcommand — calls `GET /api/health` and prints "OK" + latency.
-pub struct PingCommand;
+pub struct HealthCheckCommand;
 
 #[async_trait]
-impl Command for PingCommand {
+impl Command for HealthCheckCommand {
     fn name(&self) -> &str {
         "ping"
     }

@@ -75,6 +75,11 @@ pub enum Action {
     SubmitComposer,
     /// Forward a raw key event to the focused composer textarea.
     ComposerInput(crossterm::event::KeyEvent),
+    /// Select a specific agent by ID and switch to the Session pane.
+    /// Dispatched when the AgentList confirms a selection (Enter on a row).
+    /// Sets `App.active_agent_id` and triggers session load via
+    /// `AppCommand::LoadSessionFor`.
+    SelectAgent(String),
     /// No-op — used when a key doesn't match any binding.  Reducing to
     /// this instead of returning `Option<Action>` lets the dispatch table
     /// stay a plain `match`.

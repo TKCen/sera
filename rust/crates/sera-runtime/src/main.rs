@@ -439,6 +439,35 @@ fn resolve_allow_missing_gate() -> bool {
     val
 }
 
+/// Send periodic heartbeats to sera-core.
+#[allow(dead_code)]
+async fn run_heartbeat(config: &RuntimeConfig) {
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/agents/{}/heartbeat", config.core_url, config.agent_id);
+
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+
+        match client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", config.api_key))
+            .json(&serde_json::json!({"status": "running"}))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                tracing::debug!("Heartbeat sent");
+            }
+            Ok(resp) => {
+                tracing::warn!("Heartbeat returned HTTP {}", resp.status());
+            }
+            Err(e) => {
+                tracing::warn!("Heartbeat failed: {e}");
+            }
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -501,35 +530,6 @@ mod tests {
                     Some(v) => std::env::set_var(self.key, v),
                     None => std::env::remove_var(self.key),
                 }
-            }
-        }
-    }
-}
-
-/// Send periodic heartbeats to sera-core.
-#[allow(dead_code)]
-async fn run_heartbeat(config: &RuntimeConfig) {
-    let client = reqwest::Client::new();
-    let url = format!("{}/api/agents/{}/heartbeat", config.core_url, config.agent_id);
-
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-
-        match client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", config.api_key))
-            .json(&serde_json::json!({"status": "running"}))
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                tracing::debug!("Heartbeat sent");
-            }
-            Ok(resp) => {
-                tracing::warn!("Heartbeat returned HTTP {}", resp.status());
-            }
-            Err(e) => {
-                tracing::warn!("Heartbeat failed: {e}");
             }
         }
     }

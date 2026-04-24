@@ -443,6 +443,24 @@ impl LlmClient {
                     .collect::<Vec<_>>()
             });
 
+        // Guard: reject assistant messages that carry neither content nor tool
+        // calls — they would otherwise produce silent empty StreamingDelta /
+        // TurnCompleted events and a gateway 502 (sera-8h23).
+        let content_empty = choice
+            .message
+            .content
+            .as_deref()
+            .map_or(true, |s| s.is_empty());
+        let tool_calls_empty = tool_calls
+            .as_deref()
+            .map_or(true, |tc| tc.is_empty());
+        if content_empty && tool_calls_empty {
+            return Err(LlmError::RequestError(
+                "provider returned assistant message with neither content nor tool_calls"
+                    .to_string(),
+            ));
+        }
+
         let usage = parsed.usage.unwrap_or_default();
 
         Ok(LlmChatResult {
@@ -1549,18 +1567,52 @@ mod tests {
         assert_eq!(usage.completion_tokens, 0);
     }
 
-    #[test]
-    fn non_streaming_null_content_and_tool_calls_both_absent() {
-        let json = r#"{
-            "choices": [{
-                "message": { "content": null },
-                "finish_reason": "stop"
-            }],
-            "usage": { "prompt_tokens": 5, "completion_tokens": 0 }
-        }"#;
-        let parsed: NonStreamingResponse = serde_json::from_str(json).unwrap();
-        assert!(parsed.choices[0].message.content.is_none());
-        assert!(parsed.choices[0].message.tool_calls.is_none());
+    // sera-8h23: both content=null and tool_calls absent → LlmError::RequestError
+    #[tokio::test]
+    async fn non_streaming_null_content_and_tool_calls_both_absent_is_error() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": null}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 0}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = LlmClient::with_params(&server.uri(), "test-model", None, 512);
+        let result = client.chat(&[], &[]).await;
+        assert!(
+            matches!(result, Err(LlmError::RequestError(ref msg)) if msg.contains("neither content nor tool_calls")),
+            "expected RequestError, got: {result:?}"
+        );
+    }
+
+    // sera-8h23: content="" (empty string) with no tool_calls → also rejected
+    #[tokio::test]
+    async fn non_streaming_empty_string_content_and_no_tool_calls_is_error() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": ""}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 0}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = LlmClient::with_params(&server.uri(), "test-model", None, 512);
+        let result = client.chat(&[], &[]).await;
+        assert!(
+            matches!(result, Err(LlmError::RequestError(ref msg)) if msg.contains("neither content nor tool_calls")),
+            "expected RequestError, got: {result:?}"
+        );
     }
 
     #[test]

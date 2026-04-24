@@ -214,6 +214,21 @@ pub struct AgentSpec {
     /// policy is enforced — the agent is permissive by default.
     #[serde(default, alias = "policyRef", skip_serializing_if = "Option::is_none")]
     pub policy_ref: Option<String>,
+    /// HITL enforcement mode — `autonomous` (no approvals), `standard`
+    /// (policy-driven), or `strict` (every tool call needs approval).
+    /// Stored as an opaque lowercase string so this crate stays free of a
+    /// cyclic dep on `sera-hitl`. The gateway parses it into
+    /// `sera_hitl::HitlMode` via serde when consulted. Defaults to
+    /// `autonomous` when absent. Wave D (sera-z6ql).
+    #[serde(default, alias = "enforcementMode", skip_serializing_if = "Option::is_none")]
+    pub enforcement_mode: Option<String>,
+    /// HITL approval routing — serialised `sera_hitl::ApprovalRouting`. Kept
+    /// as a generic JSON value for the same crate-layering reason as
+    /// `enforcement_mode`. The gateway deserialises it into the concrete
+    /// type before calling `ApprovalRouter::needs_approval`. Absent =
+    /// `{ "mode": "autonomous" }`. Wave D (sera-z6ql).
+    #[serde(default, alias = "approvalPolicy", skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<serde_json::Value>,
 }
 
 /// Persona configuration within an agent spec.

@@ -48,6 +48,7 @@ use sera_memory::{DEFAULT_SQLITE_VEC_DIMENSIONS, SqliteMemoryStore};
 use sera_runtime::skill_dispatch::SkillDispatchEngine;
 // sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +
 // SERA-issued nonce fallback). Wired into AppState + `/api/mail/inbound`.
+use sera_gateway::capability_enforcement::{CapabilityRegistry, PolicyDenial};
 use sera_gateway::kill_switch::{KillSwitch, admin_sock_path, spawn_admin_socket};
 #[cfg(test)]
 use sera_gateway::session_store::InMemorySessionStore;
@@ -627,6 +628,13 @@ struct AppState {
     /// ConstitutionalGateHook that consults it is filed as sera-0yh3.
     #[allow(dead_code)]
     constitutional_registry: Arc<ConstitutionalRegistry>,
+    /// Capability-policy registry (sera-ifjl). Loaded at boot from
+    /// `$SERA_CAPABILITY_POLICIES_DIR` (default `./capability-policies/`);
+    /// bound to each agent via the manifest's `policyRef`. Consulted on
+    /// every observed `tool_call_begin` event in the runtime NDJSON stream
+    /// (`StdioHarness::send_turn`) and on any future gateway-side tool
+    /// dispatch. Agents with no `policyRef` bypass the check (permissive).
+    capability_registry: Arc<CapabilityRegistry>,
 }
 
 impl AppState {
@@ -1237,6 +1245,7 @@ async fn chat_handler(
                             &state.semantic_store,
                             &agent_name,
                             &cancel,
+                            &state.capability_registry,
                         )
                         .await;
                         state.deregister_cancellation_token(&session_key);
@@ -1354,6 +1363,7 @@ async fn chat_handler(
             &state.semantic_store,
             &agent_name,
             &cancel,
+            &state.capability_registry,
         )
         .await;
         state.deregister_cancellation_token(&session_key);
@@ -1629,6 +1639,7 @@ async fn execute_turn(
     semantic_store: &Arc<dyn SemanticMemoryStore>,
     agent_name: &str,
     cancel: &CancellationToken,
+    capability_registry: &CapabilityRegistry,
 ) -> MvsTurnResult {
     let mut messages: Vec<serde_json::Value> = Vec::new();
 
@@ -1732,6 +1743,9 @@ async fn execute_turn(
     // the KillSwitch-driven cancellation token. Dropping the `send_turn`
     // future via `select!` returns control to the caller so the lane slot is
     // released even if the harness subprocess is unresponsive.
+    // sera-ifjl: on a successful turn, tool events are filtered through
+    // enforce_tool_events before returning — denied tools are rewritten into
+    // explicit denials and an OCSF audit entry is emitted.
     tokio::select! {
         biased;
         _ = cancel.cancelled() => {
@@ -1750,11 +1764,19 @@ async fn execute_turn(
             }
         }
         res = tokio::time::timeout(timeout, harness.send_turn(messages, session_key)) => match res {
-            Ok(Ok(events)) => MvsTurnResult {
-                reply: events.response,
-                tool_events: events.tool_events,
-                usage: events.usage,
-            },
+            Ok(Ok(events)) => {
+                let filtered_events = enforce_tool_events(
+                    agent_name,
+                    events.tool_events,
+                    capability_registry,
+                )
+                .await;
+                MvsTurnResult {
+                    reply: events.response,
+                    tool_events: filtered_events,
+                    usage: events.usage,
+                }
+            }
             Ok(Err(e)) => {
                 tracing::error!(error = %e, "Runtime harness turn failed");
                 MvsTurnResult {
@@ -1784,6 +1806,115 @@ async fn execute_turn(
                 }
             }
         }
+    }
+}
+
+/// sera-ifjl: rewrite denied `tool_call_begin` / `tool_call_end` pairs into
+/// explicit denials and emit an OCSF Policy Activity audit entry per denial.
+///
+/// The sera-runtime child has already invoked the tool by the time these
+/// events reach us — see the module comment on [`capability_enforcement`]
+/// and the PR for the follow-up plan to move enforcement into the child. At
+/// this layer we can still (a) surface the denial in transcript, (b) leave
+/// an audit trail, and (c) expose a synchronous `check(agent, tool)` API
+/// (on `CapabilityRegistry`) for any future gateway-side dispatch path that
+/// needs to block before execution.
+async fn enforce_tool_events(
+    agent_name: &str,
+    events: Vec<ToolEvent>,
+    registry: &CapabilityRegistry,
+) -> Vec<ToolEvent> {
+    use std::collections::HashSet;
+    let mut denied_call_ids: HashSet<String> = HashSet::new();
+    let mut out: Vec<ToolEvent> = Vec::with_capacity(events.len());
+
+    for event in events {
+        match event {
+            ToolEvent::Begin {
+                call_id,
+                tool,
+                arguments,
+            } => match registry.check(agent_name, &tool) {
+                Ok(()) => out.push(ToolEvent::Begin {
+                    call_id,
+                    tool,
+                    arguments,
+                }),
+                Err(denial) => {
+                    emit_policy_denial_audit(&denial).await;
+                    tracing::warn!(
+                        agent = %denial.agent_id,
+                        tool = %denial.tool_name,
+                        policy = %denial.policy_name,
+                        reason = %denial.reason,
+                        "Tool dispatch denied by capability policy (sera-ifjl)"
+                    );
+                    let reason = denial.reason.clone();
+                    denied_call_ids.insert(call_id.clone());
+                    out.push(ToolEvent::Begin {
+                        call_id: call_id.clone(),
+                        tool: tool.clone(),
+                        arguments: serde_json::json!({
+                            "__sera_policy_denied": true,
+                            "reason": reason,
+                            "policy": denial.policy_name,
+                        }),
+                    });
+                    out.push(ToolEvent::End {
+                        call_id,
+                        content: format!(
+                            "[sera-policy] tool '{tool}' denied by capability policy '{}': {}",
+                            denial.policy_name, denial.reason
+                        ),
+                    });
+                }
+            },
+            ToolEvent::End { call_id, content } => {
+                if denied_call_ids.contains(&call_id) {
+                    // We already synthesised the denial End above; drop the
+                    // runtime-reported End so the denial is authoritative.
+                    continue;
+                }
+                out.push(ToolEvent::End { call_id, content });
+            }
+        }
+    }
+
+    out
+}
+
+/// Emit an OCSF v1.7.0 Policy Activity (class_uid=6003, action_id=blocked)
+/// audit entry for a tool denial. Best-effort — an uninitialised audit
+/// backend logs a warning and continues; the denial still takes effect in
+/// the gateway's in-process state.
+async fn emit_policy_denial_audit(denial: &PolicyDenial) {
+    use sera_telemetry::audit::{AuditEntry, audit_append};
+
+    let payload = serde_json::json!({
+        "activity_id": 1, // "Deny" in OCSF Policy Activity
+        "action_id": "blocked",
+        "category_uid": 6, // Application Activity
+        "class_uid": 6003, // Policy Activity
+        "severity_id": 3, // Medium
+        "actor": { "user": { "name": denial.agent_id } },
+        "policy": { "name": denial.policy_name },
+        "resource": { "name": denial.tool_name, "type": "tool" },
+        "status": "Failure",
+        "status_detail": denial.reason,
+    });
+    let this_hash = AuditEntry::compute_hash(6003, &payload, &[0u8; 32]);
+    let entry = AuditEntry {
+        ocsf_class_uid: 6003,
+        payload,
+        prev_hash: [0u8; 32],
+        this_hash,
+        signature: None,
+    };
+    if let Err(e) = audit_append(entry).await {
+        // NotInitialised is expected in test boots; other backends may
+        // return transient errors. Log and move on — the denial is still
+        // enforced in-memory.
+        tracing::debug!(error = %e, "audit backend unavailable for policy denial");
     }
 }
 
@@ -2265,6 +2396,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         &state.semantic_store,
         &agent_name,
         &cancel,
+        &state.capability_registry,
     )
     .await;
     state.deregister_cancellation_token(&session_key);
@@ -2415,6 +2547,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             &state.semantic_store,
             &agent_name,
             &cancel,
+            &state.capability_registry,
         )
         .await;
         state.deregister_cancellation_token(&session_key);
@@ -2725,6 +2858,31 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     // 1. Load config.
     tracing::info!(config = %config.display(), "Loading SERA configuration");
     let manifests = load_manifest_file(&config)?;
+
+    // 1a. Load capability policies (sera-ifjl). Fail-closed: an agent whose
+    // manifest declares a `policyRef` that isn't on disk aborts startup
+    // instead of silently running unconstrained.
+    let capability_registry = {
+        let policies_dir = CapabilityRegistry::resolve_policies_dir();
+        tracing::info!(
+            policies_dir = %policies_dir.display(),
+            "Loading capability policies"
+        );
+        let bindings = manifests.agents.iter().map(|m| {
+            let policy_ref: Option<String> = serde_json::from_value::<AgentSpec>(m.spec.clone())
+                .ok()
+                .and_then(|s| s.policy_ref);
+            (m.metadata.name.clone(), policy_ref)
+        });
+        let reg = CapabilityRegistry::load_and_bind(&policies_dir, bindings).map_err(|e| {
+            anyhow::anyhow!("failed to initialise capability registry (sera-ifjl): {e}")
+        })?;
+        tracing::info!(
+            loaded_policies = reg.policy_count(),
+            "Capability registry ready"
+        );
+        Arc::new(reg)
+    };
 
     // Set up file-based secret resolver (secrets/ dir next to sera.yaml).
     let secrets_dir = config
@@ -3103,6 +3261,7 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
             )
         },
         constitutional_registry,
+        capability_registry: Arc::clone(&capability_registry),
     });
 
     // 4. Start event processing loop.
@@ -3553,6 +3712,7 @@ mod tests {
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
+            capability_registry: Arc::new(CapabilityRegistry::empty()),
         })
     }
 
@@ -3593,6 +3753,7 @@ mod tests {
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
+            capability_registry: Arc::new(CapabilityRegistry::empty()),
         })
     }
 
@@ -3633,6 +3794,7 @@ mod tests {
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
+            capability_registry: Arc::new(CapabilityRegistry::empty()),
         })
     }
 
@@ -3673,6 +3835,7 @@ mod tests {
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
+            capability_registry: Arc::new(CapabilityRegistry::empty()),
         })
     }
 
@@ -4510,6 +4673,7 @@ mod tests {
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
+            capability_registry: Arc::new(CapabilityRegistry::empty()),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -4553,6 +4717,7 @@ mod tests {
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
+            capability_registry: Arc::new(CapabilityRegistry::empty()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -4597,6 +4762,7 @@ mod tests {
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
+            capability_registry: Arc::new(CapabilityRegistry::empty()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -4644,6 +4810,7 @@ mod tests {
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
+            capability_registry: Arc::new(CapabilityRegistry::empty()),
         };
         let headers = HeaderMap::new();
         assert_eq!(
@@ -5114,12 +5281,14 @@ mod tests {
             persona: None,
             tools: None,
             workspace: None,
+            policy_ref: None,
         };
         let skill_engine = SkillDispatchEngine::new();
         let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
             SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
         );
         let cancel = CancellationToken::new();
+        let capability_registry = CapabilityRegistry::empty();
 
         // Fire the cancellation a short time into the turn.
         let cancel_firing = cancel.clone();
@@ -5139,6 +5308,7 @@ mod tests {
             &semantic_store,
             "sera",
             &cancel,
+            &capability_registry,
         )
         .await;
 
@@ -5331,6 +5501,7 @@ mod tests {
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
+            capability_registry: Arc::new(CapabilityRegistry::empty()),
         });
 
         let app = build_router(Arc::clone(&state));
@@ -5413,6 +5584,7 @@ mod tests {
                 // writing shadow-git dirs to the filesystem during tests.
                 session_store: Arc::new(InMemorySessionStore::new()),
                 constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
+                capability_registry: Arc::new(CapabilityRegistry::empty()),
             })
         };
         let app = build_router(state);

@@ -117,7 +117,27 @@ impl Tool for HttpRequest {
             }
         }
 
+        // Re-validate every redirect hop — the default reqwest policy
+        // follows up to 10 hops, and a public-hostname URL that 302s to
+        // `http://169.254.169.254/…` would otherwise slip the initial
+        // SSRF check entirely.
         let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                // Copy the host into an owned String so the borrow of
+                // `attempt` ends before we move it into follow()/error().
+                let host = attempt.url().host_str().map(str::to_owned);
+                match host {
+                    Some(h) => match SsrfValidator::validate(&h) {
+                        Ok(()) | Err(sera_tools::ssrf::SsrfError::NotAllowed { .. }) => {
+                            attempt.follow()
+                        }
+                        Err(e) => attempt.error(std::io::Error::other(format!(
+                            "ssrf: redirect blocked to {h}: {e}"
+                        ))),
+                    },
+                    None => attempt.follow(),
+                }
+            }))
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| ToolError::ExecutionFailed(format!("client build: {e}")))?;

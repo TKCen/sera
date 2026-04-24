@@ -91,7 +91,24 @@ impl Tool for WebFetch {
             }
         }
 
+        // Re-validate every redirect hop — same policy as the sibling
+        // http-request tool.  Public-hostname URLs that 302 to a private
+        // IP must be blocked at the hop, not just at the initial URL.
         let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                let host = attempt.url().host_str().map(str::to_owned);
+                match host {
+                    Some(h) => match SsrfValidator::validate(&h) {
+                        Ok(()) | Err(sera_tools::ssrf::SsrfError::NotAllowed { .. }) => {
+                            attempt.follow()
+                        }
+                        Err(e) => attempt.error(std::io::Error::other(format!(
+                            "ssrf: redirect blocked to {h}: {e}"
+                        ))),
+                    },
+                    None => attempt.follow(),
+                }
+            }))
             .timeout(std::time::Duration::from_secs(30))
             .user_agent("SERA-Agent/1.0")
             .build()

@@ -19,6 +19,7 @@ impl From<SsrfError> for SeraError {
             SsrfError::CloudMetadata => SeraErrorCode::Forbidden,
             SsrfError::NotAllowed { .. } => SeraErrorCode::Forbidden,
             SsrfError::PrivateRange => SeraErrorCode::Forbidden,
+            SsrfError::Unspecified => SeraErrorCode::Forbidden,
             SsrfError::ParseError { .. } => SeraErrorCode::InvalidInput,
         };
         SeraError::with_source(code, err.to_string(), err)

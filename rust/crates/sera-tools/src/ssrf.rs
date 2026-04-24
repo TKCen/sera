@@ -13,6 +13,11 @@ pub enum SsrfError {
     CloudMetadata,
     #[error("address is in a private range")]
     PrivateRange,
+    /// `0.0.0.0` / `::` — unspecified addresses.  Linux `connect(2)` rewrites
+    /// these to loopback, so they are as dangerous as `127.0.0.1` in
+    /// practice.  Also covers `255.255.255.255` (limited broadcast).
+    #[error("address is unspecified or broadcast")]
+    Unspecified,
     #[error("address is not allowed: {reason}")]
     NotAllowed { reason: String },
     #[error("parse error: {reason}")]
@@ -36,8 +41,11 @@ impl SsrfValidator {
                 .split(']')
                 .next()
                 .unwrap_or(addr)
-        } else if addr.contains(':') && !addr.contains('.') {
-            // bare IPv6 without brackets
+        } else if addr.matches(':').count() > 1 {
+            // Bare IPv6 without brackets.  We use colon-count instead of
+            // "contains ':' and no '.'" because IPv4-mapped syntax
+            // (`::ffff:10.0.0.1`) contains both — the old heuristic
+            // classified it as hostname-with-port and masked the bypass.
             addr
         } else {
             // IPv4 or hostname — strip port
@@ -76,46 +84,25 @@ impl SsrfValidator {
             }
         })?;
 
-        // Cloud metadata endpoints (check before link-local since they overlap)
         match ip {
-            IpAddr::V4(v4) => {
-                let octets = v4.octets();
-                // 169.254.169.254 — AWS/GCP/Azure metadata
-                if octets == [169, 254, 169, 254] {
-                    return Err(SsrfError::CloudMetadata);
-                }
-                // 100.100.100.200 — Alibaba Cloud metadata
-                if octets == [100, 100, 100, 200] {
-                    return Err(SsrfError::CloudMetadata);
-                }
-                // 127.0.0.0/8 — loopback
-                if octets[0] == 127 {
-                    return Err(SsrfError::Loopback);
-                }
-                // 169.254.0.0/16 — link-local
-                if octets[0] == 169 && octets[1] == 254 {
-                    return Err(SsrfError::LinkLocal);
-                }
-                // 10.0.0.0/8 — RFC-1918 private
-                if octets[0] == 10 {
-                    return Err(SsrfError::PrivateRange);
-                }
-                // 172.16.0.0/12 — RFC-1918 private (172.16.0.0 – 172.31.255.255)
-                if octets[0] == 172 && (16..=31).contains(&octets[1]) {
-                    return Err(SsrfError::PrivateRange);
-                }
-                // 192.168.0.0/16 — RFC-1918 private
-                if octets[0] == 192 && octets[1] == 168 {
-                    return Err(SsrfError::PrivateRange);
-                }
-            }
+            IpAddr::V4(v4) => Self::validate_v4(v4),
             IpAddr::V6(v6) => {
+                // IPv4-mapped IPv6 (`::ffff:a.b.c.d`) connects on the v4
+                // stack on Linux — run it through the v4 rules so
+                // `[::ffff:10.0.0.1]` is blocked just like `10.0.0.1`.
+                if let Some(v4) = v6.to_ipv4_mapped() {
+                    return Self::validate_v4(v4);
+                }
+                // `::` — unspecified; kernel `connect(2)` rewrites to loopback.
+                if v6.is_unspecified() {
+                    return Err(SsrfError::Unspecified);
+                }
                 // ::1 — loopback
                 if v6.is_loopback() {
                     return Err(SsrfError::Loopback);
                 }
-                // fe80::/10 — link-local
                 let segments = v6.segments();
+                // fe80::/10 — link-local
                 if (segments[0] & 0xffc0) == 0xfe80 {
                     return Err(SsrfError::LinkLocal);
                 }
@@ -123,9 +110,53 @@ impl SsrfValidator {
                 if (segments[0] & 0xfe00) == 0xfc00 {
                     return Err(SsrfError::PrivateRange);
                 }
+                Ok(())
             }
         }
+    }
 
+    /// IPv4-specific rules.  Split out so [`Ipv6Addr::to_ipv4_mapped`] can
+    /// rerun the v4 blocklist on `::ffff:a.b.c.d` addresses (which Linux
+    /// routes to the v4 stack on connect).
+    fn validate_v4(v4: std::net::Ipv4Addr) -> Result<(), SsrfError> {
+        let octets = v4.octets();
+        // Cloud metadata endpoints (check before link-local since they overlap)
+        // 169.254.169.254 — AWS/GCP/Azure metadata
+        if octets == [169, 254, 169, 254] {
+            return Err(SsrfError::CloudMetadata);
+        }
+        // 100.100.100.200 — Alibaba Cloud metadata
+        if octets == [100, 100, 100, 200] {
+            return Err(SsrfError::CloudMetadata);
+        }
+        // 0.0.0.0 — unspecified (kernel rewrites to loopback on connect)
+        if octets == [0, 0, 0, 0] {
+            return Err(SsrfError::Unspecified);
+        }
+        // 255.255.255.255 — limited broadcast
+        if octets == [255, 255, 255, 255] {
+            return Err(SsrfError::Unspecified);
+        }
+        // 127.0.0.0/8 — loopback
+        if octets[0] == 127 {
+            return Err(SsrfError::Loopback);
+        }
+        // 169.254.0.0/16 — link-local
+        if octets[0] == 169 && octets[1] == 254 {
+            return Err(SsrfError::LinkLocal);
+        }
+        // 10.0.0.0/8 — RFC-1918 private
+        if octets[0] == 10 {
+            return Err(SsrfError::PrivateRange);
+        }
+        // 172.16.0.0/12 — RFC-1918 private (172.16.0.0 – 172.31.255.255)
+        if octets[0] == 172 && (16..=31).contains(&octets[1]) {
+            return Err(SsrfError::PrivateRange);
+        }
+        // 192.168.0.0/16 — RFC-1918 private
+        if octets[0] == 192 && octets[1] == 168 {
+            return Err(SsrfError::PrivateRange);
+        }
         Ok(())
     }
 }
@@ -491,5 +522,70 @@ mod tests {
             reason: "invalid octets".to_string(),
         };
         assert!(err.to_string().contains("invalid octets"));
+    }
+
+    // --- Unspecified / broadcast ---
+
+    /// `0.0.0.0` must be blocked — Linux `connect(2)` rewrites it to
+    /// loopback, so passing it through the validator would let an attacker
+    /// reach the local host anyway.
+    #[test]
+    fn blocks_ipv4_unspecified() {
+        assert_eq!(SsrfValidator::validate("0.0.0.0"), Err(SsrfError::Unspecified));
+    }
+
+    /// `255.255.255.255` limited broadcast — also rejected to prevent
+    /// directed-broadcast amplification / local-network reach.
+    #[test]
+    fn blocks_ipv4_limited_broadcast() {
+        assert_eq!(
+            SsrfValidator::validate("255.255.255.255"),
+            Err(SsrfError::Unspecified)
+        );
+    }
+
+    /// `::` must be blocked for the same reason as `0.0.0.0` — kernel maps
+    /// the unspecified IPv6 address to loopback on connect.
+    #[test]
+    fn blocks_ipv6_unspecified() {
+        assert_eq!(SsrfValidator::validate("::"), Err(SsrfError::Unspecified));
+    }
+
+    // --- IPv4-mapped IPv6 (the Linux dual-stack bypass) ---
+
+    /// `[::ffff:10.0.0.1]` → kernel connects via the v4 stack to 10.0.0.1.
+    /// Pre-fix, the IPv6 branch saw no matching rule and the address passed
+    /// through.  Post-fix, `Ipv6Addr::to_ipv4_mapped()` projects it back to
+    /// v4 and reruns the v4 rules, which reject RFC-1918.
+    #[test]
+    fn blocks_ipv4_mapped_private_range() {
+        assert_eq!(
+            SsrfValidator::validate("::ffff:10.0.0.1"),
+            Err(SsrfError::PrivateRange)
+        );
+        assert_eq!(
+            SsrfValidator::validate("[::ffff:192.168.1.1]:8080"),
+            Err(SsrfError::PrivateRange)
+        );
+    }
+
+    /// IPv4-mapped loopback (`::ffff:127.0.0.1`) must also be rejected.
+    #[test]
+    fn blocks_ipv4_mapped_loopback() {
+        assert_eq!(
+            SsrfValidator::validate("::ffff:127.0.0.1"),
+            Err(SsrfError::Loopback)
+        );
+    }
+
+    /// IPv4-mapped cloud metadata (`::ffff:169.254.169.254`) must be
+    /// rejected — this is the concrete EC2 IMDS exfil bypass the security
+    /// review flagged.
+    #[test]
+    fn blocks_ipv4_mapped_cloud_metadata() {
+        assert_eq!(
+            SsrfValidator::validate("::ffff:169.254.169.254"),
+            Err(SsrfError::CloudMetadata)
+        );
     }
 }

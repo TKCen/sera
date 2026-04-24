@@ -88,7 +88,7 @@ pub struct App {
     pub connection: ConnectionState,
     pub client: Arc<GatewayClient>,
 
-    /// The agent currently being viewed in the Session pane.
+    /// The agent currently being viewed / targeted by composer sends.
     /// Set by `Action::Select` and `Action::SelectAgent`.
     pub active_agent_id: Option<String>,
 
@@ -96,10 +96,6 @@ pub struct App {
     /// The field is `pub` so the runtime (in `run`) can drain it each
     /// tick without needing a getter.
     pub pending: Vec<AppCommand>,
-
-    /// Agent targeted by composer sends.  Set by G.0.3 (sera-0fp7) when the
-    /// operator selects an agent.  None = drop with warn (no agent chosen yet).
-    pub active_agent_id: Option<String>,
 }
 
 impl App {
@@ -117,7 +113,6 @@ impl App {
             client: Arc::new(client),
             active_agent_id: None,
             pending: Vec::new(),
-            active_agent_id: None,
         }
     }
 

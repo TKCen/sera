@@ -36,6 +36,9 @@ pub struct SessionView {
     /// Messages drained from the composer via `submit_composer`.
     /// G.0.2 (sera-5d4k) will wire these to POST /api/chat.
     pub pending_sends: Vec<String>,
+    /// Slash-command strings drained from the composer via `submit_composer`.
+    /// The app dispatcher parses and executes these each tick.
+    pub pending_slash: Vec<String>,
 }
 
 impl SessionView {
@@ -52,6 +55,7 @@ impl SessionView {
             composer,
             focus: ComposerFocus::Composer,
             pending_sends: Vec::new(),
+            pending_slash: Vec::new(),
         }
     }
 
@@ -159,15 +163,20 @@ impl SessionView {
         text
     }
 
-    /// Submit the current composer buffer: drain text → push to
-    /// `pending_sends` → log.  No-op when the buffer is blank.
+    /// Submit the current composer buffer: drain text → route to either
+    /// `pending_slash` (if the text starts with `/`) or `pending_sends`.
+    /// No-op when the buffer is blank.
     pub fn submit_composer(&mut self) {
         let text = self.take_composer_text();
         if text.trim().is_empty() {
             return;
         }
-        tracing::info!(message = %text, "composer submit queued (pending G.0.2 wiring)");
-        self.pending_sends.push(text);
+        if text.trim_start().starts_with('/') {
+            self.pending_slash.push(text);
+        } else {
+            tracing::info!(message = %text, "composer submit queued (pending G.0.2 wiring)");
+            self.pending_sends.push(text);
+        }
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
@@ -469,5 +478,36 @@ mod tests {
         let mut v = SessionView::new();
         v.submit_composer();
         assert!(v.pending_sends.is_empty());
+    }
+
+    // --- Slash command routing tests (G.1.1) ---
+
+    #[test]
+    fn slash_text_routes_to_pending_slash_not_sends() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut v = SessionView::new();
+        for ch in "/new".chars() {
+            v.input_to_composer(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        v.submit_composer();
+
+        assert_eq!(v.pending_slash.len(), 1);
+        assert_eq!(v.pending_slash[0], "/new");
+        assert!(v.pending_sends.is_empty());
+    }
+
+    #[test]
+    fn plain_text_routes_to_pending_sends_not_slash() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut v = SessionView::new();
+        for ch in "hello".chars() {
+            v.input_to_composer(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        v.submit_composer();
+
+        assert_eq!(v.pending_sends.len(), 1);
+        assert!(v.pending_slash.is_empty());
     }
 }

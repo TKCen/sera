@@ -3,10 +3,10 @@
 //! Owns only the top-level layout (title bar, body, footer) — each pane
 //! delegates to its view module.
 
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{actions::ViewKind, App, StatusLevel};
@@ -36,6 +36,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 
     render_footer(frame, chunks[2], app);
+
+    // Help modal — rendered on top of everything when /help is active.
+    if app.show_help {
+        render_help_modal(frame, chunks[1]);
+    }
 
     // Status bar: agent name + session short-id + connection state.
     let agent = app.active_agent_id.as_deref();
@@ -96,6 +101,48 @@ fn conn_badge(state: ConnectionState) -> Span<'static> {
         label,
         Style::default().fg(color).add_modifier(Modifier::BOLD),
     )
+}
+
+fn render_help_modal(frame: &mut Frame, area: Rect) {
+    let modal_area = centered_rect(50, 10, area);
+    frame.render_widget(Clear, modal_area);
+    let text = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  /new, /clear  ", Style::default().fg(Color::Cyan)),
+            Span::raw("clear transcript and tool log"),
+        ]),
+        Line::from(vec![
+            Span::styled("  /agent <name> ", Style::default().fg(Color::Cyan)),
+            Span::raw("switch active agent"),
+        ]),
+        Line::from(vec![
+            Span::styled("  /help         ", Style::default().fg(Color::Cyan)),
+            Span::raw("toggle this help modal"),
+        ]),
+        Line::from(vec![
+            Span::styled("  /quit         ", Style::default().fg(Color::Cyan)),
+            Span::raw("exit the TUI"),
+        ]),
+        Line::from(""),
+    ];
+    let modal = Paragraph::new(text).block(
+        Block::default()
+            .title(" Commands ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+    frame.render_widget(modal, modal_area);
+}
+
+/// Return a [`Rect`] centered in `area` with the given width (columns) and
+/// height (rows).  Both are clamped to the parent dimensions.
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let w = width.min(area.width);
+    let h = height.min(area.height);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    Rect::new(x, y, w, h)
 }
 
 fn render_footer(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {

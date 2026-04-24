@@ -8,6 +8,7 @@
 //! * async refresh helpers that load data from the gateway
 
 pub mod actions;
+pub mod slash;
 
 use std::sync::Arc;
 
@@ -22,6 +23,7 @@ use crate::views::hitl_queue::HitlQueueView;
 use crate::views::session::SessionView;
 
 pub use actions::{Action, ViewKind};
+pub use slash::SlashCommand;
 
 /// Footer-bar messages the app surfaces to the operator.
 #[derive(Debug, Clone)]
@@ -96,6 +98,9 @@ pub struct App {
     /// The field is `pub` so the runtime (in `run`) can drain it each
     /// tick without needing a getter.
     pub pending: Vec<AppCommand>,
+
+    /// When true, the help modal is rendered over the session pane.
+    pub show_help: bool,
 }
 
 impl App {
@@ -113,6 +118,7 @@ impl App {
             client: Arc::new(client),
             active_agent_id: None,
             pending: Vec::new(),
+            show_help: false,
         }
     }
 
@@ -211,6 +217,14 @@ impl App {
             Action::SubmitComposer => {
                 if let ViewKind::Session = self.focus {
                     self.session.submit_composer();
+                    // Drain slash commands first — parse and dispatch each.
+                    let slashes: Vec<String> = self.session.pending_slash.drain(..).collect();
+                    for raw in slashes {
+                        match slash::parse(&raw) {
+                            Ok(cmd) => self.dispatch(Action::ExecuteSlash(cmd)),
+                            Err(msg) => self.status = Status::warn(msg),
+                        }
+                    }
                     // Drain pending_sends into SendChat commands.
                     let messages: Vec<String> = self.session.pending_sends.drain(..).collect();
                     for message in messages {
@@ -232,6 +246,22 @@ impl App {
                     }
                 }
             }
+            Action::ExecuteSlash(cmd) => match cmd {
+                SlashCommand::New => {
+                    self.session.transcript.clear();
+                    self.session.tool_log.clear();
+                    self.status = Status::info("new turn");
+                }
+                SlashCommand::Agent(name) => {
+                    self.dispatch(Action::SelectAgent(name));
+                }
+                SlashCommand::Help => {
+                    self.show_help = !self.show_help;
+                }
+                SlashCommand::Quit => {
+                    self.should_quit = true;
+                }
+            },
             Action::ComposerInput(key) => {
                 if let ViewKind::Session = self.focus {
                     self.session.input_to_composer(key);
@@ -695,6 +725,51 @@ mod tests {
             app.pending.last(),
             Some(AppCommand::LoadSessionFor(id)) if id == "agent-42"
         ));
+    }
+
+    // --- ExecuteSlash dispatch tests (G.1.1) ---
+
+    #[test]
+    fn execute_slash_new_clears_transcript_and_tool_log() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.session.transcript.push(crate::client::TranscriptEntry {
+            role: "user".into(),
+            text: "old".into(),
+        });
+        app.session.tool_log.push("old tool event".into());
+        app.dispatch(Action::ExecuteSlash(SlashCommand::New));
+        assert!(app.session.transcript.is_empty());
+        assert!(app.session.tool_log.is_empty());
+        assert_eq!(app.status.text, "new turn");
+    }
+
+    #[test]
+    fn execute_slash_quit_sets_should_quit() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.dispatch(Action::ExecuteSlash(SlashCommand::Quit));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn execute_slash_agent_delegates_to_select_agent() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.dispatch(Action::ExecuteSlash(SlashCommand::Agent("bot-7".to_owned())));
+        assert_eq!(app.active_agent_id.as_deref(), Some("bot-7"));
+        assert_eq!(app.focus, ViewKind::Session);
+        assert!(matches!(
+            app.pending.last(),
+            Some(AppCommand::LoadSessionFor(id)) if id == "bot-7"
+        ));
+    }
+
+    #[test]
+    fn execute_slash_help_toggles_show_help() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        assert!(!app.show_help);
+        app.dispatch(Action::ExecuteSlash(SlashCommand::Help));
+        assert!(app.show_help);
+        app.dispatch(Action::ExecuteSlash(SlashCommand::Help));
+        assert!(!app.show_help);
     }
 
     #[test]

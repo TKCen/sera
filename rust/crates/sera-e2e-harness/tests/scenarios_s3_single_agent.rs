@@ -226,6 +226,17 @@ async fn s3_3_cli_agent_run_prints_reply() -> Result<()> {
     // interfere with the test run.  The CLI reads from HOME by default.
     let home = tempfile::tempdir()?;
 
+    // Pre-seed `$HOME/.sera/token` with a placeholder bearer.  `sera agent run`
+    // aborts with exit code 2 when no token is found, even when pointed at an
+    // autonomous gateway that accepts unauthenticated requests (tracked as an
+    // auth-asymmetry issue; filed separately).  The gateway's autonomous-mode
+    // auth middleware accepts any bearer string, so a hard-coded placeholder
+    // is enough here.
+    let token_dir = home.path().join(".sera");
+    std::fs::create_dir_all(&token_dir).context("creating ~/.sera for token")?;
+    std::fs::write(token_dir.join("token"), "dev-token-s3-3")
+        .context("seeding ~/.sera/token")?;
+
     let output = Command::new(&cli)
         .arg("agent")
         .arg("run")

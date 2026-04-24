@@ -320,6 +320,12 @@ async fn spawn_gateway(
         .env_remove("DATABASE_URL")
         .env_remove("CENTRIFUGO_URL")
         .env_remove("SERA_API_KEY")
+        // Mirror the permissive-dev flag that `sera start --local` sets:
+        // without it the ConstitutionalGate hook intercepts every turn with
+        // "[interrupted: no ConstitutionalGate policy installed]" because
+        // the harness manifest does not declare a policy file.  Integration
+        // tests explicitly opt into the permissive mode.
+        .env("SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE", "1")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);

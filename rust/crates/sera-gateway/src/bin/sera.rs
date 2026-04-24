@@ -2807,7 +2807,17 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         tracing::info!("API key authentication disabled (autonomous mode)");
     }
 
-    let hook_registry = Arc::new(HookRegistry::new());
+    // Build the HookRegistry and wire in the ConstitutionalGate hook
+    // (bead sera-0yh3). The hook consults a shared ConstitutionalRegistry
+    // which is left empty here; seeding it from YAML is the job of the
+    // companion constitutional_config wiring (bead sera-b8uk / PR #1068).
+    let constitutional_registry = Arc::new(sera_meta::constitutional::ConstitutionalRegistry::new());
+    let mut hook_registry_inner = HookRegistry::new();
+    sera_runtime::hooks::constitutional::ConstitutionalGateHook::register_into(
+        &mut hook_registry_inner,
+        Arc::clone(&constitutional_registry),
+    );
+    let hook_registry = Arc::new(hook_registry_inner);
     let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
 
     // 3a. Wire the lane-pending counter backend.

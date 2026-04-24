@@ -5423,6 +5423,7 @@ dependencies = [
  "sera-hitl",
  "sera-hooks",
  "sera-memory",
+ "sera-meta",
  "sera-models",
  "sera-skills",
  "sera-telemetry",

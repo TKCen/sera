@@ -53,9 +53,11 @@ use sera_gateway::hitl_gateway::{
     HitlAppState, InMemoryTicketStore, TicketStore, resolve_approval_routing, resolve_hitl_mode,
 };
 use sera_gateway::kill_switch::{KillSwitch, admin_sock_path, spawn_admin_socket};
+use sera_gateway::scheduler::spawn_scheduler;
 #[cfg(test)]
 use sera_gateway::session_store::InMemorySessionStore;
 use sera_gateway::session_store::{SessionStore, SqliteGitSessionStore};
+use sera_gateway::workflow_store::{InMemoryWorkflowTaskStore, WorkflowTaskStore};
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_mail::{
     CorrelationOutcome, HeaderMailCorrelator, InMemoryEnvelopeIndex, InMemoryMailLookup,
@@ -83,10 +85,13 @@ mod route_agui;
 mod route_plugins;
 #[path = "../routes/hitl.rs"]
 mod route_hitl;
+#[path = "../routes/workflow.rs"]
+mod route_workflow;
 
 use route_a2a::{A2aAppState, A2aPeerRegistry};
 use route_agui::{AguiAppState, AguiHub};
 use route_plugins::PluginsAppState;
+use route_workflow::WorkflowAppState;
 
 // Party-mode handler (sera-8d1.2 / GH#145) — generic over PartyAppState trait
 // so the handler lives in the library without depending on the binary's AppState.
@@ -620,6 +625,11 @@ struct AppState {
     /// process restart loses in-flight tickets (no suspended turns to
     /// resume anyway). SQLite-backed store is a follow-up.
     ticket_store: Arc<dyn TicketStore>,
+    /// Workflow task store (sera-kgi8, Wave E Phase 1). Populated by the
+    /// `/api/workflow/tasks` POST route; drained every `TICK_INTERVAL` by
+    /// the scheduler spawned in `run_start`. Phase 1 uses an in-memory
+    /// store — SQLite-backed store is a follow-up bead.
+    workflow_store: Arc<dyn WorkflowTaskStore>,
 }
 
 impl AppState {
@@ -715,6 +725,15 @@ impl HitlAppState for AppState {
     }
     fn ticket_store(&self) -> Arc<dyn TicketStore> {
         Arc::clone(&self.ticket_store)
+    }
+}
+
+impl WorkflowAppState for AppState {
+    fn api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+    fn workflow_store(&self) -> Arc<dyn WorkflowTaskStore> {
+        Arc::clone(&self.workflow_store)
     }
 }
 
@@ -3357,6 +3376,7 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         constitutional_registry,
         capability_registry: Arc::clone(&capability_registry),
         ticket_store: Arc::new(InMemoryTicketStore::new()),
+        workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
     });
 
     // 4. Start event processing loop.
@@ -3364,6 +3384,16 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
     tokio::spawn(async move {
         event_loop(event_state, discord_rx).await;
     });
+
+    // 4a. Spawn workflow scheduler (sera-kgi8, Wave E Phase 1). Ticks every
+    // TICK_INTERVAL, asks sera-workflow which pending tasks are ready, and
+    // marks them resolved on the store. Only Timer gates are wired
+    // end-to-end in Phase 1 — other AwaitType variants stay pending until
+    // their dedicated beads add real lookups.
+    spawn_scheduler(
+        Arc::clone(&state.workflow_store),
+        Arc::clone(&shutting_down),
+    );
 
     // 4a. Spawn admin kill-switch Unix socket (SPEC-gateway §7a.4).
     {
@@ -3724,6 +3754,16 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/api/hitl/requests/{id}/escalate",
             post(route_hitl::escalate_ticket::<AppState>),
         )
+        // ── sera-kgi8: workflow task scheduler (Wave E Phase 1) ──────────────
+        .route(
+            "/api/workflow/tasks",
+            post(route_workflow::create_task::<AppState>)
+                .get(route_workflow::list_tasks::<AppState>),
+        )
+        .route(
+            "/api/workflow/tasks/{id}",
+            get(route_workflow::get_task::<AppState>),
+        )
         // ── sera-8d1.2-follow: party mode (circles/{id}/party) ───────────────
         .route(
             "/api/circles/{id}/party",
@@ -3830,6 +3870,7 @@ mod tests {
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
         })
     }
 
@@ -3872,6 +3913,7 @@ mod tests {
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
         })
     }
 
@@ -3914,6 +3956,7 @@ mod tests {
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
         })
     }
 
@@ -3956,6 +3999,7 @@ mod tests {
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
         })
     }
 
@@ -4411,6 +4455,7 @@ spec:
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
         })
     }
 
@@ -4915,6 +4960,7 @@ spec:
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -4960,6 +5006,7 @@ spec:
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -5006,6 +5053,7 @@ spec:
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -5055,6 +5103,7 @@ spec:
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
         };
         let headers = HeaderMap::new();
         assert_eq!(
@@ -5749,6 +5798,7 @@ spec:
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(CapabilityRegistry::empty()),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
         });
 
         let app = build_router(Arc::clone(&state));
@@ -5833,6 +5883,7 @@ spec:
                 constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
                 capability_registry: Arc::new(CapabilityRegistry::empty()),
                 ticket_store: Arc::new(InMemoryTicketStore::new()),
+                workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             })
         };
         let app = build_router(state);

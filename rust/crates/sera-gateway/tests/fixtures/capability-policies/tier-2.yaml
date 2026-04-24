@@ -1,0 +1,13 @@
+# tier-2 — Sandboxed coder policy (sera-ifjl test fixture)
+#
+# Allows memory reads/writes plus `shell`. Used in capability_enforcement
+# integration tests to verify that an agent bound to this policy can call
+# shell while a tier-1-bound agent cannot.
+apiVersion: sera/v1
+kind: CapabilityPolicy
+metadata:
+  name: tier-2
+allowedTools:
+  - memory_read
+  - memory_write
+  - shell

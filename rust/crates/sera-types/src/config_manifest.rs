@@ -207,6 +207,13 @@ pub struct AgentSpec {
     /// Defaults to `./data/agents/{agent_name}` if not set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    /// Name of a CapabilityPolicy (by `metadata.name`) loaded from the
+    /// configured `SERA_CAPABILITY_POLICIES_DIR`. When set, every tool call
+    /// made by this agent is checked against the policy's allowed-tool list
+    /// by the gateway's `CapabilityRegistry` (sera-ifjl). When absent, no
+    /// policy is enforced — the agent is permissive by default.
+    #[serde(default, alias = "policyRef", skip_serializing_if = "Option::is_none")]
+    pub policy_ref: Option<String>,
 }
 
 /// Persona configuration within an agent spec.

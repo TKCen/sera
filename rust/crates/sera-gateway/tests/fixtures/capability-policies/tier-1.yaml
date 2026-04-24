@@ -1,0 +1,11 @@
+# tier-1 — Minimal read-only tool policy (sera-ifjl test fixture)
+#
+# Allows memory reads only. Used in capability_enforcement integration
+# tests to verify that an agent bound to this policy cannot call
+# tier-2-only tools like `shell`.
+apiVersion: sera/v1
+kind: CapabilityPolicy
+metadata:
+  name: tier-1
+allowedTools:
+  - memory_read

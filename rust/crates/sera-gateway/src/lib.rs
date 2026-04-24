@@ -1,5 +1,6 @@
 //! SERA Gateway — reusable library for gateway types, transport, and harness dispatch.
 
+pub mod capability_enforcement;
 pub mod connector;
 pub mod constitutional_config;
 pub mod db_backend;

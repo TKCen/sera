@@ -46,6 +46,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         conn: app.connection,
     }
     .render(frame, chunks[3]);
+
+    // Session picker modal — rendered last so it overlays everything.
+    if app.show_session_picker {
+        app.session_picker.render(frame, frame.area());
+    }
 }
 
 fn render_title(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {

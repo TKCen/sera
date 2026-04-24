@@ -80,6 +80,16 @@ pub enum Action {
     /// Sets `App.active_agent_id` and triggers session load via
     /// `AppCommand::LoadSessionFor`.
     SelectAgent(String),
+    /// Open the session picker modal for the current agent.
+    OpenSessionPicker,
+    /// Close the session picker without selecting.
+    ClosePicker,
+    /// Move picker selection up.
+    PickerUp,
+    /// Move picker selection down.
+    PickerDown,
+    /// Confirm the currently highlighted session.
+    PickerSelect,
     /// No-op — used when a key doesn't match any binding.  Reducing to
     /// this instead of returning `Option<Action>` lets the dispatch table
     /// stay a plain `match`.

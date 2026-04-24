@@ -20,6 +20,7 @@ use crate::views::agent_list::AgentListView;
 use crate::views::evolve_status::EvolveStatusView;
 use crate::views::hitl_queue::HitlQueueView;
 use crate::views::session::SessionView;
+use crate::views::session_picker::SessionPickerView;
 
 pub use actions::{Action, ViewKind};
 
@@ -71,6 +72,10 @@ pub enum AppCommand {
     Escalate(String),
     /// POST a message to /api/chat and pipe the SSE stream into SessionView.
     SendChat { agent: String, message: String },
+    /// Fetch sessions for the picker modal (agent_id filter).
+    LoadSessionsForPicker(String),
+    /// Load a specific session by id (from picker selection).
+    OpenSession(String),
 }
 
 /// Root application state.
@@ -92,6 +97,12 @@ pub struct App {
     /// Set by `Action::Select` and `Action::SelectAgent`.
     pub active_agent_id: Option<String>,
 
+    /// Session picker modal state.  Rendered on top of the current view
+    /// when `show_session_picker` is true.
+    pub session_picker: SessionPickerView,
+    /// Whether the session picker modal is currently visible.
+    pub show_session_picker: bool,
+
     /// Commands emitted by `dispatch` that the runtime must execute.
     /// The field is `pub` so the runtime (in `run`) can drain it each
     /// tick without needing a getter.
@@ -112,6 +123,8 @@ impl App {
             connection: ConnectionState::Disconnected,
             client: Arc::new(client),
             active_agent_id: None,
+            session_picker: SessionPickerView::new(),
+            show_session_picker: false,
             pending: Vec::new(),
         }
     }
@@ -237,6 +250,34 @@ impl App {
                     self.session.input_to_composer(key);
                 }
             }
+            Action::OpenSessionPicker => {
+                if let Some(agent_id) = self.active_agent_id.clone() {
+                    self.pending
+                        .push(AppCommand::LoadSessionsForPicker(agent_id));
+                }
+            }
+            Action::ClosePicker => {
+                self.show_session_picker = false;
+            }
+            Action::PickerUp => {
+                if self.show_session_picker {
+                    self.session_picker.move_up();
+                }
+            }
+            Action::PickerDown => {
+                if self.show_session_picker {
+                    self.session_picker.move_down();
+                }
+            }
+            Action::PickerSelect => {
+                if self.show_session_picker
+                    && let Some(session) = self.session_picker.selected()
+                {
+                    let id = session.id.clone();
+                    self.show_session_picker = false;
+                    self.pending.push(AppCommand::OpenSession(id));
+                }
+            }
             Action::NoOp => {}
         }
     }
@@ -360,6 +401,22 @@ impl Runtime {
                 AppCommand::SendChat { agent, message } => {
                     self.send_chat(app, agent, message).await;
                 }
+                AppCommand::LoadSessionsForPicker(agent_id) => {
+                    match app.client.list_sessions(Some(&agent_id)).await {
+                        Ok(sessions) => {
+                            let n = sessions.len();
+                            app.session_picker.set_sessions(sessions);
+                            app.show_session_picker = true;
+                            app.status = Status::info(format!("{n} session(s) — use ↑/↓ Enter to resume, Esc to close"));
+                        }
+                        Err(e) => {
+                            app.status = Status::error(format!("session list failed: {e}"));
+                        }
+                    }
+                }
+                AppCommand::OpenSession(session_id) => {
+                    self.load_session_by_id(app, session_id).await;
+                }
             }
         }
     }
@@ -459,6 +516,42 @@ impl Runtime {
                 }
             }
         });
+    }
+
+    /// Load a specific session by id (called from picker selection).
+    async fn load_session_by_id(&mut self, app: &mut App, session_id: String) {
+        // Fetch transcript and re-subscribe SSE for the chosen session.
+        let transcript = app
+            .client
+            .session_transcript(&session_id)
+            .await
+            .unwrap_or_default();
+
+        // Build a minimal SessionSummary for the view header.
+        let summary = crate::client::SessionSummary {
+            id: session_id.clone(),
+            agent_id: app.active_agent_id.clone().unwrap_or_default(),
+            created_at: String::new(),
+            state: "active".to_owned(),
+        };
+        app.session.set_session(summary);
+        app.session.set_transcript(transcript);
+        app.focus = ViewKind::Session;
+
+        if let Some(handle) = self.sse_task.take() {
+            handle.abort();
+        }
+        let (bridge_tx, mut bridge_rx) = mpsc::channel::<SseUpdate>(64);
+        let forward_to = self.sse_tx.clone();
+        tokio::spawn(async move {
+            while let Some(u) = bridge_rx.recv().await {
+                if forward_to.send(u).is_err() {
+                    break;
+                }
+            }
+        });
+        self.sse_task = Some(app.client.spawn_sse(session_id.clone(), bridge_tx));
+        app.status = Status::info(format!("resumed session {session_id}"));
     }
 
     async fn load_session_for(&mut self, app: &mut App, agent_id: String) {

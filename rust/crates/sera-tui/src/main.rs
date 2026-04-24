@@ -119,21 +119,41 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
-            let action = if app.focus == ViewKind::Session {
-                translate_session(&key, &app.keybindings, app.session.composer_focused())
+            // When the session picker modal is open it intercepts all keys;
+            // only Up/Down/Enter/Esc are forwarded — everything else is dropped.
+            let action = if app.show_session_picker {
+                use crossterm::event::KeyCode;
+                use keybindings::matches_key;
+                if matches_key(&key, &app.keybindings.up) {
+                    crate::app::Action::PickerUp
+                } else if matches_key(&key, &app.keybindings.down) {
+                    crate::app::Action::PickerDown
+                } else if matches_key(&key, &app.keybindings.select) {
+                    crate::app::Action::PickerSelect
+                } else if matches_key(&key, &app.keybindings.back)
+                    || key.code == KeyCode::Esc
+                {
+                    crate::app::Action::ClosePicker
+                } else {
+                    crate::app::Action::NoOp
+                }
             } else {
-                translate(&key, &app.keybindings)
-            };
-            // When Enter is pressed in the Agents pane, resolve the selected
-            // agent ID here and dispatch SelectAgent so the action carries an
-            // explicit ID (spec G.0.3).
-            let action = if action == crate::app::Action::Select
-                && app.focus == ViewKind::Agents
-                && let Some(id) = app.agents.selected_id()
-            {
-                crate::app::Action::SelectAgent(id)
-            } else {
-                action
+                let a = if app.focus == ViewKind::Session {
+                    translate_session(&key, &app.keybindings, app.session.composer_focused())
+                } else {
+                    translate(&key, &app.keybindings)
+                };
+                // When Enter is pressed in the Agents pane, resolve the selected
+                // agent ID here and dispatch SelectAgent so the action carries an
+                // explicit ID (spec G.0.3).
+                if a == crate::app::Action::Select
+                    && app.focus == ViewKind::Agents
+                    && let Some(id) = app.agents.selected_id()
+                {
+                    crate::app::Action::SelectAgent(id)
+                } else {
+                    a
+                }
             };
             app.dispatch(action);
         }

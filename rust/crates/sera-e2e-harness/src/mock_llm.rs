@@ -64,20 +64,104 @@ pub async fn start_mock_llm_with_reply(reply: &str) -> Result<(String, MockServe
     Ok((url, server))
 }
 
+/// Start a two-phase mock LLM: the first request returns a `tool_calls`
+/// chunk for `tool_name` with the supplied `args_json`; every subsequent
+/// request returns `final_reply` as a content delta.
+///
+/// This is the fixture S4.1 (CapabilityPolicy deny) needs: the runtime
+/// hardcodes `stream: true`, so the mock has to speak SSE; the gateway
+/// denies the tool dispatch and surfaces the denial back into the turn as
+/// a synthetic tool result; the runtime then continues the conversation by
+/// calling the LLM again, at which point we want a terminating content
+/// reply rather than another tool_call (which would loop).
+///
+/// wiremock's `up_to_n_times(1)` on the first matcher plus a fallback
+/// matcher with no limit gives us the desired sequence without a custom
+/// stateful responder.
+pub async fn start_mock_llm_tool_call_then_content(
+    tool_name: &str,
+    args_json: &str,
+    final_reply: &str,
+) -> Result<(String, MockServer)> {
+    let server = MockServer::start().await;
+    let tool_call_body = build_tool_call_stream(tool_name, args_json);
+    let content_body = build_sse_stream(final_reply);
+
+    for p in ["/v1/chat/completions", "/chat/completions"] {
+        // First call: tool_call.
+        Mock::given(method("POST"))
+            .and(path(p))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .insert_header("cache-control", "no-cache")
+                    .set_body_string(tool_call_body.clone()),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        // Subsequent calls: content reply.
+        Mock::given(method("POST"))
+            .and(path(p))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .insert_header("cache-control", "no-cache")
+                    .set_body_string(content_body.clone()),
+            )
+            .mount(&server)
+            .await;
+    }
+
+    let url = server.uri();
+    Ok((url, server))
+}
+
+/// Render an OpenAI-compat streaming completion that carries a single
+/// `tool_calls` delta followed by a `finish_reason: tool_calls` terminator.
+/// The runtime's SSE accumulator collects the tool_call across chunks, so
+/// emitting id+name+arguments in one chunk is the shortest valid form.
+fn build_tool_call_stream(tool_name: &str, args_json: &str) -> String {
+    let first = json!({
+        "id": "chatcmpl-sera-e2e-tc",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "e2e-mock",
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "index": 0,
+                    "id": "call_sera_e2e_1",
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": args_json,
+                    }
+                }]
+            },
+            "finish_reason": null
+        }]
+    });
+    let finish = json!({
+        "id": "chatcmpl-sera-e2e-tc",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "e2e-mock",
+        "choices": [{
+            "index": 0,
+            "delta": {},
+            "finish_reason": "tool_calls"
+        }]
+    });
+    format!("data: {first}\n\ndata: {finish}\n\ndata: [DONE]\n\n")
+}
+
 /// Render a minimal well-formed OpenAI-compat streaming completion that
-/// carries `reply` in a single delta.  Format:
-///
-/// ```text
-/// data: {"id":"...","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"<REPLY>"},"finish_reason":null}]}
-///
-/// data: {"id":"...","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
-///
-/// data: [DONE]
-///
-/// ```
-///
-/// The runtime's `parse_sse_stream` accumulates `delta.content` across all
-/// chunks and expects a terminal `finish_reason` + `[DONE]` marker.
+/// carries `reply` in a single delta.  The runtime's `parse_sse_stream`
+/// accumulates `delta.content` across all chunks and expects a terminal
+/// `finish_reason` + `[DONE]` marker.
 fn build_sse_stream(reply: &str) -> String {
     let first = json!({
         "id": "chatcmpl-sera-e2e",

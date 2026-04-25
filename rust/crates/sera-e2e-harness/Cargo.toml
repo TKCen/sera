@@ -47,3 +47,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # pulled in as a dev-dep rather than a regular one because no library code
 # in this crate streams — only tests do.
 futures-util = { workspace = true }
+# Required for constructing RFC-3339 deadlines in the S7 workflow scenarios.
+# Already a workspace dep — pulled in as a dev-dep only because the harness
+# library itself doesn't handle dates.
+chrono = { workspace = true }

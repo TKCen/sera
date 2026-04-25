@@ -3,10 +3,15 @@
 //! Native `Tool` trait implementation (bead sera-ttrm-5) with
 //! [`RiskLevel::Read`] — this tool is fixed to HTTP GET only, so from the
 //! agent's perspective it is a read-only observation of a remote resource.
+//!
+//! SSRF protection (sera-udjf): IP-literal hosts are validated against
+//! [`SsrfValidator`] before the request is sent.  Same behaviour as the
+//! sibling `http-request` tool — the two share the same exposure surface.
 
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use sera_tools::ssrf::SsrfValidator;
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
     ToolInput, ToolMetadata, ToolOutput, ToolSchema,
@@ -70,7 +75,40 @@ impl Tool for WebFetch {
             .ok_or_else(|| ToolError::InvalidInput("Missing 'url'".to_string()))?;
         let max_length = args["max_length"].as_u64().unwrap_or(50_000) as usize;
 
+        // SSRF guard (sera-udjf) — same policy as http-request: reject IP
+        // literals in blocked ranges; hostname hosts flow through for now.
+        let parsed = reqwest::Url::parse(url)
+            .map_err(|e| ToolError::InvalidInput(format!("invalid URL: {e}")))?;
+        if let Some(host) = parsed.host_str() {
+            match SsrfValidator::validate(host) {
+                Ok(()) => {}
+                Err(sera_tools::ssrf::SsrfError::NotAllowed { .. }) => {}
+                Err(e) => {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "ssrf: refusing to fetch {host}: {e}"
+                    )));
+                }
+            }
+        }
+
+        // Re-validate every redirect hop — same policy as the sibling
+        // http-request tool.  Public-hostname URLs that 302 to a private
+        // IP must be blocked at the hop, not just at the initial URL.
         let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                let host = attempt.url().host_str().map(str::to_owned);
+                match host {
+                    Some(h) => match SsrfValidator::validate(&h) {
+                        Ok(()) | Err(sera_tools::ssrf::SsrfError::NotAllowed { .. }) => {
+                            attempt.follow()
+                        }
+                        Err(e) => attempt.error(std::io::Error::other(format!(
+                            "ssrf: redirect blocked to {h}: {e}"
+                        ))),
+                    },
+                    None => attempt.follow(),
+                }
+            }))
             .timeout(std::time::Duration::from_secs(30))
             .user_agent("SERA-Agent/1.0")
             .build()
@@ -103,10 +141,33 @@ impl Tool for WebFetch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn metadata_risk_level_is_read() {
         assert_eq!(WebFetch.metadata().risk_level, RiskLevel::Read);
         assert_eq!(WebFetch.metadata().name, "web-fetch");
+    }
+
+    /// sera-udjf — web-fetch must honour the same SSRF blocklist as the
+    /// http-request tool.  These are the same cases used there; duplicated
+    /// inline so a future regression in one tool can't silently pass
+    /// because the tests only live in the other.
+    #[tokio::test]
+    async fn execute_rejects_ssrf_private_range() {
+        let tool = WebFetch;
+        let cases = ["http://10.0.0.1/", "http://127.0.0.1/", "http://169.254.169.254/"];
+        for url in cases {
+            let input = ToolInput {
+                name: "web-fetch".to_string(),
+                call_id: "test".to_string(),
+                arguments: json!({ "url": url }),
+            };
+            let result = tool.execute(input, ToolContext::default()).await;
+            assert!(
+                matches!(result, Err(ToolError::ExecutionFailed(ref msg)) if msg.starts_with("ssrf:")),
+                "{url} should be SSRF-rejected, got {result:?}"
+            );
+        }
     }
 }

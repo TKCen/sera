@@ -1,6 +1,6 @@
 //! SSRF protection — blocks requests to loopback, link-local, private, and cloud metadata endpoints.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 /// Errors from SSRF validation.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -113,6 +113,44 @@ impl SsrfValidator {
                 Ok(())
             }
         }
+    }
+
+    /// Resolve a hostname (or accept an IP literal) and validate every
+    /// resolved address against the SSRF blocklist.  Returns the list of
+    /// safe `SocketAddr`s the caller should pin via
+    /// `reqwest::ClientBuilder::resolve_to_addrs` to mitigate DNS rebinding.
+    ///
+    /// `host` can be a hostname (`example.com`) or an IP literal
+    /// (`10.0.0.1`); both go through `tokio::net::lookup_host`, which
+    /// returns the IP literal verbatim and resolves the hostname via the
+    /// system resolver.  Every returned address is checked — a hostname
+    /// that resolves to a mix of public and private IPs is rejected
+    /// outright, because using the public IP would leave the connect
+    /// path open to reroute on the next resolution.
+    pub async fn resolve_and_validate(
+        host: &str,
+        port: u16,
+    ) -> Result<Vec<SocketAddr>, SsrfError> {
+        let target = format!("{host}:{port}");
+        let addrs: Vec<SocketAddr> = match tokio::net::lookup_host(&target).await {
+            Ok(iter) => iter.collect(),
+            Err(e) => {
+                return Err(SsrfError::ParseError {
+                    reason: format!("DNS lookup for {host} failed: {e}"),
+                });
+            }
+        };
+        if addrs.is_empty() {
+            return Err(SsrfError::ParseError {
+                reason: format!("DNS lookup for {host} returned no addresses"),
+            });
+        }
+        // Validate every resolved IP — a single blocked answer rejects the
+        // whole hostname (don't allow partial-trust resolution).
+        for addr in &addrs {
+            Self::validate(&addr.ip().to_string())?;
+        }
+        Ok(addrs)
     }
 
     /// IPv4-specific rules.  Split out so [`Ipv6Addr::to_ipv4_mapped`] can

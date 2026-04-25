@@ -95,46 +95,49 @@ impl Tool for HttpRequest {
             .ok_or_else(|| ToolError::InvalidInput("Missing 'url'".to_string()))?;
         let method = args["method"].as_str().unwrap_or("GET").to_uppercase();
 
-        // SSRF guard (sera-udjf) — parse the URL, extract the host, and
-        // validate IP literals against the blocklist.  `SsrfValidator`
-        // returns `NotAllowed` for hostnames; we swallow that variant and
-        // let the request proceed (full DNS-resolved SSRF protection is a
-        // follow-up).  Every other variant (Loopback, LinkLocal, PrivateRange,
-        // CloudMetadata, ParseError) is fatal.
+        // SSRF guard (sera-udjf) — parse the URL, resolve the host via
+        // `tokio::net::lookup_host` (returns IP literals verbatim, system
+        // resolver for hostnames), validate every resolved IP, and pin the
+        // DNS answer in reqwest to mitigate DNS rebinding.
         let parsed = reqwest::Url::parse(url)
             .map_err(|e| ToolError::InvalidInput(format!("invalid URL: {e}")))?;
-        if let Some(host) = parsed.host_str() {
-            match SsrfValidator::validate(host) {
-                Ok(()) => {}
-                Err(sera_tools::ssrf::SsrfError::NotAllowed { .. }) => {
-                    // Hostname — allowed for now; DNS-time re-validation is pending.
-                }
-                Err(e) => {
-                    return Err(ToolError::ExecutionFailed(format!(
-                        "ssrf: refusing to fetch {host}: {e}"
-                    )));
-                }
-            }
-        }
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| ToolError::InvalidInput(format!("URL has no host: {url}")))?
+            .to_owned();
+        let port = parsed.port_or_known_default().unwrap_or(80);
+        let pinned_addrs = SsrfValidator::resolve_and_validate(&host, port)
+            .await
+            .map_err(|e| {
+                ToolError::ExecutionFailed(format!("ssrf: refusing to fetch {host}: {e}"))
+            })?;
 
-        // Re-validate every redirect hop — the default reqwest policy
-        // follows up to 10 hops, and a public-hostname URL that 302s to
-        // `http://169.254.169.254/…` would otherwise slip the initial
-        // SSRF check entirely.
+        // Same-host redirects are safe (DNS pinned via resolve_to_addrs).
+        // Cross-host redirects are stricter: IP literals get validated; a
+        // different hostname is blocked outright because we cannot do an
+        // async resolve inside the sync redirect policy closure (and a
+        // fresh DNS lookup would skip the pin).
+        let redirect_host = host.clone();
         let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                // Copy the host into an owned String so the borrow of
-                // `attempt` ends before we move it into follow()/error().
-                let host = attempt.url().host_str().map(str::to_owned);
-                match host {
-                    Some(h) => match SsrfValidator::validate(&h) {
-                        Ok(()) | Err(sera_tools::ssrf::SsrfError::NotAllowed { .. }) => {
-                            attempt.follow()
+            .resolve_to_addrs(&host, &pinned_addrs)
+            .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                let target = attempt.url().host_str().map(str::to_owned);
+                match target.as_deref() {
+                    Some(t) if t == redirect_host => attempt.follow(),
+                    Some(t) => {
+                        if t.parse::<std::net::IpAddr>().is_ok() {
+                            match SsrfValidator::validate(t) {
+                                Ok(()) => attempt.follow(),
+                                Err(e) => attempt.error(std::io::Error::other(format!(
+                                    "ssrf: redirect blocked to {t}: {e}"
+                                ))),
+                            }
+                        } else {
+                            attempt.error(std::io::Error::other(format!(
+                                "ssrf: cross-host hostname redirect blocked: {t}"
+                            )))
                         }
-                        Err(e) => attempt.error(std::io::Error::other(format!(
-                            "ssrf: redirect blocked to {h}: {e}"
-                        ))),
-                    },
+                    }
                     None => attempt.follow(),
                 }
             }))
@@ -210,6 +213,31 @@ mod tests {
                 "{url} should be SSRF-rejected, got {result:?}"
             );
         }
+    }
+
+    /// sera-udjf hostname-bypass closure — `http://localhost/` resolves
+    /// (on every Linux distro the test runs on) to 127.0.0.1 / ::1, both
+    /// loopback.  Pre-fix the validator only saw the hostname `localhost`
+    /// and returned `NotAllowed`, which the integration swallowed and let
+    /// through.  Post-fix the DNS resolution runs first, the loopback IP
+    /// is rejected, and the request never leaves the process.
+    ///
+    /// The test does not require any specific resolver configuration —
+    /// `localhost` is reserved by RFC 6761 and every system resolver maps
+    /// it to loopback.
+    #[tokio::test]
+    async fn execute_rejects_hostname_resolving_to_loopback() {
+        let tool = HttpRequest;
+        let input = ToolInput {
+            name: "http-request".to_string(),
+            call_id: "test".to_string(),
+            arguments: json!({ "url": "http://localhost/" }),
+        };
+        let result = tool.execute(input, ToolContext::default()).await;
+        assert!(
+            matches!(result, Err(ToolError::ExecutionFailed(ref msg)) if msg.contains("ssrf:")),
+            "localhost must be rejected via DNS-resolved SSRF guard, got {result:?}"
+        );
     }
 
     /// Malformed URLs surface as `InvalidInput` rather than a network error

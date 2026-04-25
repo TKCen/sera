@@ -75,37 +75,43 @@ impl Tool for WebFetch {
             .ok_or_else(|| ToolError::InvalidInput("Missing 'url'".to_string()))?;
         let max_length = args["max_length"].as_u64().unwrap_or(50_000) as usize;
 
-        // SSRF guard (sera-udjf) — same policy as http-request: reject IP
-        // literals in blocked ranges; hostname hosts flow through for now.
+        // SSRF guard (sera-udjf) — same policy as http-request: resolve
+        // the host (DNS for hostnames, identity for IP literals), validate
+        // every resolved IP, pin the answer in reqwest.
         let parsed = reqwest::Url::parse(url)
             .map_err(|e| ToolError::InvalidInput(format!("invalid URL: {e}")))?;
-        if let Some(host) = parsed.host_str() {
-            match SsrfValidator::validate(host) {
-                Ok(()) => {}
-                Err(sera_tools::ssrf::SsrfError::NotAllowed { .. }) => {}
-                Err(e) => {
-                    return Err(ToolError::ExecutionFailed(format!(
-                        "ssrf: refusing to fetch {host}: {e}"
-                    )));
-                }
-            }
-        }
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| ToolError::InvalidInput(format!("URL has no host: {url}")))?
+            .to_owned();
+        let port = parsed.port_or_known_default().unwrap_or(80);
+        let pinned_addrs = SsrfValidator::resolve_and_validate(&host, port)
+            .await
+            .map_err(|e| {
+                ToolError::ExecutionFailed(format!("ssrf: refusing to fetch {host}: {e}"))
+            })?;
 
-        // Re-validate every redirect hop — same policy as the sibling
-        // http-request tool.  Public-hostname URLs that 302 to a private
-        // IP must be blocked at the hop, not just at the initial URL.
+        let redirect_host = host.clone();
         let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                let host = attempt.url().host_str().map(str::to_owned);
-                match host {
-                    Some(h) => match SsrfValidator::validate(&h) {
-                        Ok(()) | Err(sera_tools::ssrf::SsrfError::NotAllowed { .. }) => {
-                            attempt.follow()
+            .resolve_to_addrs(&host, &pinned_addrs)
+            .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                let target = attempt.url().host_str().map(str::to_owned);
+                match target.as_deref() {
+                    Some(t) if t == redirect_host => attempt.follow(),
+                    Some(t) => {
+                        if t.parse::<std::net::IpAddr>().is_ok() {
+                            match SsrfValidator::validate(t) {
+                                Ok(()) => attempt.follow(),
+                                Err(e) => attempt.error(std::io::Error::other(format!(
+                                    "ssrf: redirect blocked to {t}: {e}"
+                                ))),
+                            }
+                        } else {
+                            attempt.error(std::io::Error::other(format!(
+                                "ssrf: cross-host hostname redirect blocked: {t}"
+                            )))
                         }
-                        Err(e) => attempt.error(std::io::Error::other(format!(
-                            "ssrf: redirect blocked to {h}: {e}"
-                        ))),
-                    },
+                    }
                     None => attempt.follow(),
                 }
             }))

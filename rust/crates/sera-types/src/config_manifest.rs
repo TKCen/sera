@@ -32,8 +32,6 @@ impl ApiVersion {
 }
 
 /// Resource kinds supported by the SERA config system.
-/// MVS supports: Instance, Provider, Agent, Connector.
-/// Post-MVS adds: HookChain, ToolProfile, WorkflowDef, ApprovalPolicy, SecretProvider, InteropConfig.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ResourceKind {
@@ -41,7 +39,6 @@ pub enum ResourceKind {
     Provider,
     Agent,
     Connector,
-    // POST-MVS kinds (defined for forward compatibility in parsing):
     HookChain,
     ToolProfile,
     WorkflowDef,
@@ -51,6 +48,7 @@ pub enum ResourceKind {
     SandboxPolicy,
     Circle,
     ChangeArtifact,
+    CapabilityPolicy,
 }
 
 impl std::str::FromStr for ResourceKind {
@@ -71,6 +69,7 @@ impl std::str::FromStr for ResourceKind {
             "SandboxPolicy" => Ok(Self::SandboxPolicy),
             "Circle" => Ok(Self::Circle),
             "ChangeArtifact" => Ok(Self::ChangeArtifact),
+            "CapabilityPolicy" => Ok(Self::CapabilityPolicy),
             _ => Err(format!("unknown resource kind: {}", s)),
         }
     }
@@ -92,6 +91,7 @@ impl std::fmt::Display for ResourceKind {
             Self::SandboxPolicy => write!(f, "SandboxPolicy"),
             Self::Circle => write!(f, "Circle"),
             Self::ChangeArtifact => write!(f, "ChangeArtifact"),
+            Self::CapabilityPolicy => write!(f, "CapabilityPolicy"),
         }
     }
 }
@@ -111,6 +111,15 @@ pub struct ResourceMetadata {
     pub shadow: bool,
 }
 
+/// Current schema version for new manifests. Persisted in the `_configVersion`
+/// (camelCase) field of every manifest so future schema migrations can detect
+/// older shapes. Older files without the field are interpreted as v1.
+pub const CONFIG_VERSION: u32 = 1;
+
+fn default_config_version() -> u32 {
+    CONFIG_VERSION
+}
+
 /// A raw config manifest as parsed from YAML before kind-specific validation.
 /// The `spec` field is a generic JSON value that gets validated against
 /// the schema for the specific `kind`.
@@ -120,6 +129,10 @@ pub struct RawManifest {
     pub api_version: String,
     pub kind: String,
     pub metadata: ResourceMetadata,
+    /// Schema version for this manifest. Defaults to [`CONFIG_VERSION`] when
+    /// absent; future migrations bump this and gate parsing on the value.
+    #[serde(default = "default_config_version", rename = "_configVersion")]
+    pub config_version: u32,
     #[serde(default)]
     pub spec: serde_json::Value,
 }
@@ -130,6 +143,7 @@ pub struct ConfigManifest {
     pub api_version: ApiVersion,
     pub kind: ResourceKind,
     pub metadata: ResourceMetadata,
+    pub config_version: u32,
     pub spec: serde_json::Value,
 }
 
@@ -148,6 +162,7 @@ impl ConfigManifest {
             api_version,
             kind,
             metadata: raw.metadata,
+            config_version: raw.config_version,
             spec: raw.spec,
         })
     }
@@ -411,6 +426,7 @@ spec:
                 change_artifact: None,
                 shadow: false,
             },
+            config_version: CONFIG_VERSION,
             spec: serde_json::Value::Null,
         };
         let err = ConfigManifest::from_raw(raw).unwrap_err();
@@ -429,10 +445,58 @@ spec:
                 change_artifact: None,
                 shadow: false,
             },
+            config_version: CONFIG_VERSION,
             spec: serde_json::Value::Null,
         };
         let err = ConfigManifest::from_raw(raw).unwrap_err();
         assert!(err.to_string().contains("invalid apiVersion"));
+    }
+
+    #[test]
+    fn raw_manifest_parse_capability_policy() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: CapabilityPolicy
+metadata:
+  name: full-dev
+spec:
+  allowedTools:
+    - memory_read
+    - memory_write
+"#;
+        let raw: RawManifest = serde_yaml::from_str(yaml).unwrap();
+        let manifest = ConfigManifest::from_raw(raw).unwrap();
+        assert_eq!(manifest.kind, ResourceKind::CapabilityPolicy);
+        assert_eq!(manifest.metadata.name, "full-dev");
+    }
+
+    #[test]
+    fn config_version_defaults_to_one_when_absent() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Instance
+metadata:
+  name: test
+spec: {}
+"#;
+        let raw: RawManifest = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(raw.config_version, CONFIG_VERSION);
+    }
+
+    #[test]
+    fn config_version_explicit_value_round_trips() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Instance
+metadata:
+  name: test
+_configVersion: 2
+spec: {}
+"#;
+        let raw: RawManifest = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(raw.config_version, 2);
+        let manifest = ConfigManifest::from_raw(raw).unwrap();
+        assert_eq!(manifest.config_version, 2);
     }
 
     #[test]

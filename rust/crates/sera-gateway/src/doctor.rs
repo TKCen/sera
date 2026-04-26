@@ -534,11 +534,12 @@ pub fn build_checks(config_path: &Path) -> Vec<Box<dyn Check>> {
         })
         .unwrap_or_default();
 
-    // Determine capability policies directory: relative to config file or project root.
-    let policies_dir = config_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("capability-policies");
+    // Capability policies are resolved via `CapabilityRegistry::resolve_policies_dir`,
+    // which respects `SERA_CAPABILITY_POLICIES_DIR` and otherwise falls back to
+    // `ConfigRoot::policies_dir()` ($XDG_CONFIG_HOME/sera/policies on Linux).
+    // doctor.rs is `#[path = "../doctor.rs"] mod doctor;` inside the bin, so
+    // `crate::` is the bin and we reach the lib via its package name.
+    let policies_dir = sera_gateway::capability_enforcement::CapabilityRegistry::resolve_policies_dir();
 
     let checks: Vec<Box<dyn Check>> = vec![
         Box::new(ConfigLoadCheck {

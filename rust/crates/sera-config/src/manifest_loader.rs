@@ -23,6 +23,22 @@ pub struct ManifestSet {
     pub agents: Vec<ConfigManifest>,
     pub connectors: Vec<ConfigManifest>,
     pub hook_chains: Vec<ConfigManifest>,
+    pub capability_policies: Vec<ConfigManifest>,
+    pub workflow_defs: Vec<ConfigManifest>,
+}
+
+impl ManifestSet {
+    /// Append all manifests from `other` into this set, kind-by-kind.
+    /// Used by [`load_manifest_dir`] to fold multiple files into one set.
+    pub fn merge_in(&mut self, other: ManifestSet) {
+        self.instances.extend(other.instances);
+        self.providers.extend(other.providers);
+        self.agents.extend(other.agents);
+        self.connectors.extend(other.connectors);
+        self.hook_chains.extend(other.hook_chains);
+        self.capability_policies.extend(other.capability_policies);
+        self.workflow_defs.extend(other.workflow_defs);
+    }
 }
 
 impl ManifestSet {
@@ -105,6 +121,32 @@ impl ManifestSet {
     pub fn hook_chain_names(&self) -> Vec<&str> {
         self.hook_chains.iter().map(|m| m.metadata.name.as_str()).collect()
     }
+
+    /// Find a capability policy by name.
+    pub fn capability_policy(&self, name: &str) -> Option<&ConfigManifest> {
+        self.capability_policies.iter().find(|m| m.metadata.name == name)
+    }
+
+    /// List all capability-policy names.
+    pub fn capability_policy_names(&self) -> Vec<&str> {
+        self.capability_policies
+            .iter()
+            .map(|m| m.metadata.name.as_str())
+            .collect()
+    }
+
+    /// Find a workflow definition by name.
+    pub fn workflow_def(&self, name: &str) -> Option<&ConfigManifest> {
+        self.workflow_defs.iter().find(|m| m.metadata.name == name)
+    }
+
+    /// List all workflow-def names.
+    pub fn workflow_def_names(&self) -> Vec<&str> {
+        self.workflow_defs
+            .iter()
+            .map(|m| m.metadata.name.as_str())
+            .collect()
+    }
 }
 
 /// Parse a YAML string containing one or more `---`-separated manifests.
@@ -141,6 +183,8 @@ pub fn parse_manifests(yaml_content: &str) -> Result<ManifestSet, ManifestLoadEr
             ResourceKind::Agent => set.agents.push(manifest),
             ResourceKind::Connector => set.connectors.push(manifest),
             ResourceKind::HookChain => set.hook_chains.push(manifest),
+            ResourceKind::CapabilityPolicy => set.capability_policies.push(manifest),
+            ResourceKind::WorkflowDef => set.workflow_defs.push(manifest),
             other => {
                 return Err(ManifestLoadError::UnsupportedKind {
                     kind: other.to_string(),
@@ -160,6 +204,85 @@ pub fn load_manifest_file(path: &Path) -> Result<ManifestSet, ManifestLoadError>
         source: e,
     })?;
     parse_manifests(&content)
+}
+
+/// Recursively load every `*.yaml` and `*.yml` file under `dir` and merge
+/// them into a single [`ManifestSet`]. Files are processed in sorted order
+/// for deterministic output. Hidden files (leading `.`) are skipped.
+///
+/// A missing `dir` returns an empty [`ManifestSet`] (not an error) — this
+/// matches the convention used by [`crate::config_root::ConfigRoot`]
+/// subdirectories, which only exist after a user has populated them.
+pub fn load_manifest_dir(dir: &Path) -> Result<ManifestSet, ManifestLoadError> {
+    if !dir.exists() {
+        return Ok(ManifestSet::default());
+    }
+    if !dir.is_dir() {
+        return Err(ManifestLoadError::NotADirectory {
+            path: dir.display().to_string(),
+        });
+    }
+
+    let mut set = ManifestSet::default();
+    let mut files = collect_yaml_files(dir)?;
+    files.sort();
+
+    for file in files {
+        let parsed = load_manifest_file(&file)?;
+        set.merge_in(parsed);
+    }
+
+    Ok(set)
+}
+
+/// Walk `dir` recursively and collect every `*.yaml` / `*.yml` regular file.
+/// Skips entries whose file name begins with `.` (dotfiles, editor swap files).
+fn collect_yaml_files(dir: &Path) -> Result<Vec<std::path::PathBuf>, ManifestLoadError> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+
+    while let Some(current) = stack.pop() {
+        let entries = std::fs::read_dir(&current).map_err(|e| ManifestLoadError::IoError {
+            path: current.display().to_string(),
+            source: e,
+        })?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| ManifestLoadError::IoError {
+                path: current.display().to_string(),
+                source: e,
+            })?;
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if name.starts_with('.') {
+                continue;
+            }
+
+            let file_type = entry.file_type().map_err(|e| ManifestLoadError::IoError {
+                path: path.display().to_string(),
+                source: e,
+            })?;
+
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext == "yaml" || ext == "yml" {
+                out.push(path);
+            }
+        }
+    }
+
+    Ok(out)
 }
 
 /// Resolve a secret reference path. Checks env vars only (legacy API).
@@ -252,11 +375,13 @@ pub enum ManifestLoadError {
         document_index: usize,
         source: ConfigManifestError,
     },
-    #[error("unsupported resource kind '{kind}' in document {document_index} (MVS supports Instance, Provider, Agent, Connector)")]
+    #[error("unsupported resource kind '{kind}' in document {document_index} (supported: Instance, Provider, Agent, Connector, HookChain, CapabilityPolicy, WorkflowDef)")]
     UnsupportedKind {
         kind: String,
         document_index: usize,
     },
+    #[error("expected directory at '{path}', found a file")]
+    NotADirectory { path: String },
 }
 
 #[cfg(test)]
@@ -507,6 +632,84 @@ spec: {}
         let set = load_manifest_file(&path).unwrap();
         assert_eq!(set.instances.len(), 1);
         assert_eq!(set.agents.len(), 1);
+    }
+
+    #[test]
+    fn parse_capability_policy_manifest() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: CapabilityPolicy
+metadata:
+  name: read-only
+spec:
+  allowedTools:
+    - memory_read
+    - file_read
+"#;
+        let set = parse_manifests(yaml).unwrap();
+        assert_eq!(set.capability_policies.len(), 1);
+        assert_eq!(set.capability_policy("read-only").unwrap().metadata.name, "read-only");
+        assert_eq!(set.capability_policy_names(), vec!["read-only"]);
+    }
+
+    #[test]
+    fn parse_workflow_def_manifest() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: WorkflowDef
+metadata:
+  name: nightly-recap
+spec:
+  trigger: cron
+  schedule: "0 2 * * *"
+"#;
+        let set = parse_manifests(yaml).unwrap();
+        assert_eq!(set.workflow_defs.len(), 1);
+        assert_eq!(set.workflow_def("nightly-recap").unwrap().metadata.name, "nightly-recap");
+        assert_eq!(set.workflow_def_names(), vec!["nightly-recap"]);
+    }
+
+    #[test]
+    fn load_manifest_dir_missing_returns_empty() {
+        let set = load_manifest_dir(Path::new("/nonexistent/sera-config")).unwrap();
+        assert_eq!(set.instances.len(), 0);
+        assert_eq!(set.capability_policies.len(), 0);
+    }
+
+    #[test]
+    fn load_manifest_dir_walks_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let policies = dir.path().join("policies");
+        let providers = dir.path().join("providers");
+        std::fs::create_dir_all(&policies).unwrap();
+        std::fs::create_dir_all(&providers).unwrap();
+
+        std::fs::write(
+            policies.join("read-only.yaml"),
+            "apiVersion: sera.dev/v1\nkind: CapabilityPolicy\nmetadata:\n  name: read-only\nspec:\n  allowedTools: [memory_read]\n",
+        ).unwrap();
+        std::fs::write(
+            providers.join("lm-studio.yml"),
+            "apiVersion: sera.dev/v1\nkind: Provider\nmetadata:\n  name: lm-studio\nspec:\n  kind: openai-compatible\n  base_url: \"http://localhost:1234/v1\"\n",
+        ).unwrap();
+        // Ignored — wrong extension
+        std::fs::write(policies.join("notes.txt"), "ignored").unwrap();
+        // Ignored — dotfile
+        std::fs::write(policies.join(".hidden.yaml"), "ignored").unwrap();
+
+        let set = load_manifest_dir(dir.path()).unwrap();
+        assert_eq!(set.capability_policies.len(), 1);
+        assert_eq!(set.providers.len(), 1);
+        assert_eq!(set.capability_policy_names(), vec!["read-only"]);
+    }
+
+    #[test]
+    fn load_manifest_dir_rejects_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not-a-dir.yaml");
+        std::fs::write(&path, "apiVersion: sera.dev/v1\nkind: Instance\nmetadata: { name: x }\nspec: {}\n").unwrap();
+        let err = load_manifest_dir(&path).unwrap_err();
+        assert!(matches!(err, ManifestLoadError::NotADirectory { .. }));
     }
 
     #[test]

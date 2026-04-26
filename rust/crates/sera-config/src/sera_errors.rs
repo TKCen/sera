@@ -24,6 +24,7 @@ impl From<ManifestLoadError> for SeraError {
             ManifestLoadError::ParseError { .. } => SeraErrorCode::Serialization,
             ManifestLoadError::ValidationError { .. } => SeraErrorCode::InvalidInput,
             ManifestLoadError::UnsupportedKind { .. } => SeraErrorCode::InvalidInput,
+            ManifestLoadError::NotADirectory { .. } => SeraErrorCode::InvalidInput,
         };
         SeraError::with_source(code, err.to_string(), err)
     }

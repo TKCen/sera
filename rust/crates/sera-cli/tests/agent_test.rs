@@ -542,6 +542,6 @@ fn registry_contains_agent_commands() {
     assert!(registry.get("agent:show").is_some(), "agent:show not in registry");
     assert!(registry.get("agent:run").is_some(), "agent:run not in registry");
     assert!(registry.get("chat").is_some(), "chat not in registry");
-    // Total: 4 original + 3 agent + 1 chat + 5 provider + 1 init = 14
-    assert_eq!(registry.len(), 14);
+    // Total: 14 from L.0–L.2 + 19 L.4 admin verbs (workflow×4, policy×4, session×4, killswitch×3, config×4)
+    assert_eq!(registry.len(), 33);
 }

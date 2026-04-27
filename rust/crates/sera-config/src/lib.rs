@@ -4,6 +4,7 @@
 //! - `SeraConfig`: BYOH agent container config (env vars per BYOH contract)
 //! - `CoreConfig`: sera-core server config (env vars + providers.json)
 
+pub mod capability_registry;
 pub mod config_root;
 pub mod core_config;
 pub mod data_root;
@@ -14,6 +15,9 @@ pub mod providers;
 pub mod secrets;
 pub mod watchers;
 
+pub use capability_registry::{
+    CapabilityPolicy, CapabilityRegistry, CapabilityRegistryError, PolicyDenial, POLICIES_DIR_ENV,
+};
 pub use config_root::{ConfigRoot, CONFIG_ROOT_ENV};
 pub use data_root::{DataRoot, DATA_ROOT_ENV};
 

@@ -1991,78 +1991,36 @@ async fn execute_turn(
     }
 }
 
-/// sera-ifjl: rewrite denied `tool_call_begin` / `tool_call_end` pairs into
-/// explicit denials and emit an OCSF Policy Activity audit entry per denial.
+/// sera-eo71: defence-in-depth audit emitter for capability-policy denials.
 ///
-/// The sera-runtime child has already invoked the tool by the time these
-/// events reach us — see the module comment on [`capability_enforcement`]
-/// and the PR for the follow-up plan to move enforcement into the child. At
-/// this layer we can still (a) surface the denial in transcript, (b) leave
-/// an audit trail, and (c) expose a synchronous `check(agent, tool)` API
-/// (on `CapabilityRegistry`) for any future gateway-side dispatch path that
-/// needs to block before execution.
+/// Pre-dispatch enforcement now lives in `sera-runtime`, so by the time
+/// `tool_call_begin` / `tool_call_end` events reach the gateway the runtime
+/// has already (a) blocked the tool and (b) shaped the `End` content as
+/// `[sera-policy] tool '…' denied …`. This pass therefore does **not**
+/// rewrite events — it just observes each `Begin`, consults the gateway's
+/// own `CapabilityRegistry` (which is loaded from the same files as the
+/// runtime's), and emits an OCSF Policy Activity audit entry when the
+/// gateway-side check would also have denied. Events are returned unchanged.
 async fn enforce_tool_events(
     agent_name: &str,
     events: Vec<ToolEvent>,
     registry: &CapabilityRegistry,
 ) -> Vec<ToolEvent> {
-    use std::collections::HashSet;
-    let mut denied_call_ids: HashSet<String> = HashSet::new();
-    let mut out: Vec<ToolEvent> = Vec::with_capacity(events.len());
-
-    for event in events {
-        match event {
-            ToolEvent::Begin {
-                call_id,
-                tool,
-                arguments,
-            } => match registry.check(agent_name, &tool) {
-                Ok(()) => out.push(ToolEvent::Begin {
-                    call_id,
-                    tool,
-                    arguments,
-                }),
-                Err(denial) => {
-                    emit_policy_denial_audit(&denial).await;
-                    tracing::warn!(
-                        agent = %denial.agent_id,
-                        tool = %denial.tool_name,
-                        policy = %denial.policy_name,
-                        reason = %denial.reason,
-                        "Tool dispatch denied by capability policy (sera-ifjl)"
-                    );
-                    let reason = denial.reason.clone();
-                    denied_call_ids.insert(call_id.clone());
-                    out.push(ToolEvent::Begin {
-                        call_id: call_id.clone(),
-                        tool: tool.clone(),
-                        arguments: serde_json::json!({
-                            "__sera_policy_denied": true,
-                            "reason": reason,
-                            "policy": denial.policy_name,
-                        }),
-                    });
-                    out.push(ToolEvent::End {
-                        call_id,
-                        content: format!(
-                            "[sera-policy] tool '{tool}' denied by capability policy '{}': {}",
-                            denial.policy_name, denial.reason
-                        ),
-                    });
-                }
-            },
-            ToolEvent::End { call_id, content } => {
-                if denied_call_ids.contains(&call_id) {
-                    // We already synthesised the denial End above; drop the
-                    // runtime-reported End so the denial is authoritative.
-                    continue;
-                }
-                out.push(ToolEvent::End { call_id, content });
-            }
+    for event in &events {
+        if let ToolEvent::Begin { tool, .. } = event
+            && let Err(denial) = registry.check(agent_name, tool)
+        {
+            emit_policy_denial_audit(&denial).await;
+            tracing::warn!(
+                agent = %denial.agent_id,
+                tool = %denial.tool_name,
+                policy = %denial.policy_name,
+                reason = %denial.reason,
+                "Tool dispatch denied by capability policy (sera-eo71 — runtime-blocked)"
+            );
         }
     }
-
-    out
+    events
 }
 
 /// Emit an OCSF v1.7.0 Policy Activity (class_uid=6003, action_id=blocked)
@@ -3559,6 +3517,19 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
                 "SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE".to_string(),
                 "true".to_string(),
             );
+        }
+        // sera-eo71: forward this agent's `policyRef` (if any) so the runtime
+        // can bind itself to the policy and enforce pre-dispatch. Also forward
+        // SERA_CAPABILITY_POLICIES_DIR when set — otherwise the runtime falls
+        // back to ConfigRoot::policies_dir() exactly like the gateway does.
+        if let Some(policy_ref) = agent_spec.policy_ref.as_deref() {
+            env.insert(
+                "SERA_AGENT_POLICY_REF".to_string(),
+                policy_ref.to_string(),
+            );
+        }
+        if let Ok(dir) = std::env::var("SERA_CAPABILITY_POLICIES_DIR") {
+            env.insert("SERA_CAPABILITY_POLICIES_DIR".to_string(), dir);
         }
 
         match StdioHarness::spawn(&runtime_bin, env).await {

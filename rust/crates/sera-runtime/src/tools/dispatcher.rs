@@ -10,6 +10,13 @@
 //! enforcement via `ToolContext` + `ToolPolicy`). The `ToolContext` passed to
 //! `dispatch` is forwarded directly to `TraitToolRegistry::execute`.
 //!
+//! # Capability policy (sera-eo71)
+//!
+//! When a `CapabilityRegistry` is attached via [`RegistryDispatcher::with_capability_registry`],
+//! every call is checked against the registry **before** the tool runs. A
+//! denial returns [`ToolError::PolicyDenied`]; the underlying tool handler is
+//! never invoked, so a denied tool truly does not start.
+//!
 //! # Tool hooks and permission escalation (sera-ddz / GH#544, GH#545)
 //!
 //! `RegistryDispatcher` holds **additive** optional layers:
@@ -28,6 +35,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use sera_config::CapabilityRegistry;
 use sera_types::tool::{ToolContext, ToolInput, ToolOutput};
 
 use crate::permissions::{
@@ -54,6 +62,11 @@ pub struct RegistryDispatcher {
     /// (i.e. no gating). Production wiring should derive this per-tool from
     /// [`sera_types::tool::RiskLevel`]; see `required_mode_for_risk` below.
     default_tool_mode: PermissionMode,
+    /// Optional capability-policy registry + bound agent id (sera-eo71).
+    /// When `Some`, every call is checked against the registry before the
+    /// tool runs; a denial returns [`ToolError::PolicyDenied`] so the tool
+    /// handler is never invoked.
+    capability: Option<(Arc<CapabilityRegistry>, String)>,
 }
 
 impl RegistryDispatcher {
@@ -65,6 +78,7 @@ impl RegistryDispatcher {
             escalation_authority: None,
             caller_mode: PermissionMode::Standard,
             default_tool_mode: PermissionMode::Standard,
+            capability: None,
         }
     }
 
@@ -73,6 +87,20 @@ impl RegistryDispatcher {
     /// execution. See `crate::tool_hooks` for the hook contract.
     pub fn with_hooks(mut self, hooks: Arc<ToolHookRegistry>) -> Self {
         self.hooks = Some(hooks);
+        self
+    }
+
+    /// Attach a [`CapabilityRegistry`] and the agent id this dispatcher runs
+    /// on behalf of (sera-eo71). When set, every `dispatch` call calls
+    /// [`CapabilityRegistry::check`] before invoking the tool. A denial
+    /// returns [`ToolError::PolicyDenied`] without ever entering the
+    /// `TraitToolRegistry::execute` path — i.e. denied tools never start.
+    pub fn with_capability_registry(
+        mut self,
+        registry: Arc<CapabilityRegistry>,
+        agent_id: impl Into<String>,
+    ) -> Self {
+        self.capability = Some((registry, agent_id.into()));
         self
     }
 
@@ -154,6 +182,21 @@ impl ToolDispatcher for RegistryDispatcher {
             arguments,
             call_id: tool_call_id.to_string(),
         };
+
+        // ── Capability policy gate (sera-eo71) ───────────────────────────
+        // Pre-dispatch check: a deny here returns before any hook fires and
+        // before TraitToolRegistry::execute runs, so the tool handler is
+        // never invoked. The runtime reports the denial through the normal
+        // tool-result path; the gateway sees an already-denied event and
+        // emits the audit entry.
+        if let Some((cap_registry, agent_id)) = self.capability.as_ref()
+            && let Err(denial) = cap_registry.check(agent_id, &input.name)
+        {
+            return Err(ToolError::PolicyDenied(format!(
+                "[sera-policy] tool '{}' denied by capability policy '{}': {}",
+                denial.tool_name, denial.policy_name, denial.reason
+            )));
+        }
 
         // ── Permission gate (GH#545) ─────────────────────────────────────
         if let Some(authority) = self.escalation_authority.as_ref() {
@@ -587,5 +630,93 @@ mod tests {
             authority.seen.lock().unwrap().is_none(),
             "authority must not be consulted when caller satisfies required mode"
         );
+    }
+
+    // ── sera-eo71: pre-dispatch CapabilityPolicy enforcement ─────────────
+
+    use sera_config::{CapabilityPolicy, CapabilityRegistry};
+    use std::collections::{HashMap, HashSet};
+
+    /// Registry that binds `agent` to a policy permitting only the tools in
+    /// `allow`. Use an empty `allow` set to deny everything.
+    fn capability_registry_with(
+        agent: &str,
+        policy_name: &str,
+        allow: &[&str],
+    ) -> Arc<CapabilityRegistry> {
+        let policy = CapabilityPolicy {
+            name: policy_name.to_string(),
+            allowed_tools: allow.iter().map(|s| s.to_string()).collect::<HashSet<_>>(),
+        };
+        let mut bindings = HashMap::new();
+        bindings.insert(agent.to_string(), policy_name.to_string());
+        Arc::new(CapabilityRegistry::from_parts(vec![policy], bindings))
+    }
+
+    #[tokio::test]
+    async fn dispatcher_capability_deny_blocks_handler_pre_dispatch() {
+        // A tool that doesn't exist in the registry — if we reached
+        // `TraitToolRegistry::execute` we'd get `ToolError::NotFound`.
+        // Capability denial fires first, so we must see `PolicyDenied`.
+        let cap_registry =
+            capability_registry_with("alice", "deny-all", &[]);
+        let dispatcher = RegistryDispatcher::new(Arc::new(TraitToolRegistry::with_builtins()))
+            .with_capability_registry(cap_registry, "alice");
+
+        let call = serde_json::json!({
+            "id": "call-cap-deny-1",
+            "type": "function",
+            "function": {
+                "name": "tool-that-does-not-exist",
+                "arguments": "{}"
+            }
+        });
+        let err = dispatcher
+            .dispatch(&call, &ToolContext::default())
+            .await
+            .unwrap_err();
+        match err {
+            ToolError::PolicyDenied(msg) => {
+                assert!(
+                    msg.starts_with("[sera-policy] tool 'tool-that-does-not-exist' denied"),
+                    "unexpected message: {msg}"
+                );
+                assert!(msg.contains("'deny-all'"), "missing policy name: {msg}");
+            }
+            other => panic!("expected PolicyDenied, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_capability_allow_runs_tool_normally() {
+        // Same setup but with `file-list` in the allow set — the dispatcher
+        // must permit the call and the underlying handler runs.
+        let cap_registry =
+            capability_registry_with("alice", "tier-allow", &["file-list"]);
+        let dispatcher = RegistryDispatcher::new(Arc::new(TraitToolRegistry::with_builtins()))
+            .with_capability_registry(cap_registry, "alice");
+
+        let call = file_list_call("call-cap-allow-1");
+        let result = dispatcher
+            .dispatch(&call, &ToolContext::default())
+            .await
+            .expect("allowed tool dispatches normally");
+        assert_eq!(result["tool_call_id"], "call-cap-allow-1");
+    }
+
+    #[tokio::test]
+    async fn dispatcher_capability_unbound_agent_is_permissive() {
+        // Registry has no binding for "bob" — permissive default applies.
+        let cap_registry =
+            capability_registry_with("alice", "deny-all", &[]);
+        let dispatcher = RegistryDispatcher::new(Arc::new(TraitToolRegistry::with_builtins()))
+            .with_capability_registry(cap_registry, "bob");
+
+        let call = file_list_call("call-cap-unbound-1");
+        let result = dispatcher
+            .dispatch(&call, &ToolContext::default())
+            .await
+            .expect("unbound agent passes the gate");
+        assert_eq!(result["tool_call_id"], "call-cap-unbound-1");
     }
 }

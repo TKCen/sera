@@ -22,6 +22,8 @@ schemars.workspace = true
 jsonschema.workspace = true
 hex.workspace = true
 dirs.workspace = true
+keyring.workspace = true
+dialoguer.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

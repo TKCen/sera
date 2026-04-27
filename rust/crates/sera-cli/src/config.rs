@@ -18,6 +18,10 @@ pub struct CliConfig {
     /// Default agent ID used when `--agent` is omitted.
     pub default_agent: Option<String>,
 
+    /// Default provider instance name used when no provider is specified.
+    /// Set by `sera provider select <name>` (sera-icq5).
+    pub default_provider: Option<String>,
+
     /// Path to the file containing the bearer token.
     /// Populated by `sera auth login` (sera-j1hs).
     pub token_path: Option<PathBuf>,
@@ -28,6 +32,7 @@ impl Default for CliConfig {
         Self {
             endpoint: "http://localhost:8080".into(),
             default_agent: None,
+            default_provider: None,
             token_path: None,
         }
     }
@@ -111,6 +116,7 @@ default_agent = "my-agent"
         let cfg = CliConfig {
             endpoint: "http://saved-endpoint:1234".into(),
             default_agent: Some("saved-agent".into()),
+            default_provider: None,
             token_path: None,
         };
         cfg.save(&path).unwrap();

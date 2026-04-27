@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 sera-commands = { workspace = true }
+sera-config = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }

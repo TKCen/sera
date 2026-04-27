@@ -52,6 +52,40 @@ enum Commands {
     },
     /// Interactive streaming REPL against an agent
     Chat(ChatArgs),
+    /// Manage LLM provider configurations
+    Provider {
+        #[command(subcommand)]
+        command: ProviderCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProviderCommand {
+    /// List built-in providers and configured instances
+    List,
+    /// Add a provider instance interactively
+    Add {
+        /// Registry id (e.g. openrouter, anthropic, lm-studio)
+        id: Option<String>,
+        /// Instance name (default: same as id)
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+    },
+    /// Remove a configured provider instance
+    Remove {
+        /// Instance name to remove
+        name: String,
+    },
+    /// Set a provider instance as the CLI default
+    Select {
+        /// Instance name
+        name: String,
+    },
+    /// Re-run the wizard for an existing provider
+    Configure {
+        /// Instance name
+        name: String,
+    },
 }
 
 #[derive(clap::Args)]
@@ -303,6 +337,49 @@ async fn main() -> Result<()> {
                 }
             }
         },
+
+        Commands::Provider { command } => {
+            let cmd_name = match &command {
+                ProviderCommand::List => "provider:list",
+                ProviderCommand::Add { .. } => "provider:add",
+                ProviderCommand::Remove { .. } => "provider:remove",
+                ProviderCommand::Select { .. } => "provider:select",
+                ProviderCommand::Configure { .. } => "provider:configure",
+            };
+
+            let mut args = CommandArgs::new();
+            match command {
+                ProviderCommand::List => {}
+                ProviderCommand::Add { id, name } => {
+                    if let Some(v) = id {
+                        args.insert("id", v);
+                    }
+                    if let Some(v) = name {
+                        args.insert("name", v);
+                    }
+                }
+                ProviderCommand::Remove { name } => {
+                    args.insert("name", name);
+                }
+                ProviderCommand::Select { name } => {
+                    args.insert("name", name);
+                }
+                ProviderCommand::Configure { name } => {
+                    args.insert("name", name);
+                }
+            }
+
+            let cmd = registry
+                .get(cmd_name)
+                .with_context(|| format!("{cmd_name} command not registered"))?;
+            let result = cmd
+                .execute(args, &ctx)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if result.exit_code != 0 {
+                std::process::exit(result.exit_code);
+            }
+        }
 
         Commands::Chat(chat_args) => {
             let mut args = CommandArgs::new();

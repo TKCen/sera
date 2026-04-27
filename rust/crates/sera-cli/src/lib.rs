@@ -19,5 +19,10 @@ pub fn build_registry() -> CommandRegistry {
     registry.register(commands::AgentShowCommand::new());
     registry.register(commands::AgentRunCommand::new());
     registry.register(commands::ChatCommand::new());
+    registry.register(commands::ProviderListCommand);
+    registry.register(commands::ProviderAddCommand::new());
+    registry.register(commands::ProviderRemoveCommand::new());
+    registry.register(commands::ProviderSelectCommand);
+    registry.register(commands::ProviderConfigureCommand::new());
     registry
 }

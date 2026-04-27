@@ -57,6 +57,11 @@ enum Commands {
         #[command(subcommand)]
         command: ProviderCommand,
     },
+    /// Alias for `provider select <name>` (one-shot dispatch).
+    Model {
+        /// Provider instance name to set as default
+        name: String,
+    },
     /// First-run bootstrap wizard — produces a working SERA config
     Init {
         /// Ingest a YAML manifest set non-interactively
@@ -69,6 +74,106 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Inspect or mutate workflows via the gateway admin port
+    Workflow {
+        #[command(subcommand)]
+        command: WorkflowCommand,
+    },
+    /// Manage capability policies
+    Policy {
+        #[command(subcommand)]
+        command: PolicyCommand,
+    },
+    /// Inspect / cancel active sessions
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
+    /// Arm / disarm / inspect the gateway killswitch
+    Killswitch {
+        #[command(subcommand)]
+        command: KillswitchCommand,
+    },
+    /// Read or modify config.yaml locally (no gateway round-trip)
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkflowCommand {
+    /// List workflows
+    List,
+    /// Show one workflow by id
+    Show {
+        id: String,
+    },
+    /// Create a workflow from a manifest file (deferred to L.5)
+    Create {
+        file: PathBuf,
+    },
+    /// Delete a workflow by id (deferred to L.5)
+    Delete {
+        id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PolicyCommand {
+    /// List capability policies
+    List,
+    /// Show one policy by name
+    Show {
+        name: String,
+    },
+    /// Reload policies from disk
+    Reload,
+    /// Validate every policy YAML
+    Validate,
+}
+
+#[derive(Subcommand)]
+enum SessionCommand {
+    /// List active sessions
+    List,
+    /// Show one session by id
+    Show {
+        id: String,
+    },
+    /// Cancel a session
+    Kill {
+        id: String,
+    },
+    /// Paginated browser (TTY-aware)
+    Browse,
+}
+
+#[derive(Subcommand)]
+enum KillswitchCommand {
+    /// Arm the killswitch
+    Arm,
+    /// Disarm the killswitch
+    Disarm,
+    /// Print killswitch status
+    Status,
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// Read a value by dotted path
+    Get {
+        key: String,
+    },
+    /// Write a string value at a dotted path
+    Set {
+        key: String,
+        value: String,
+    },
+    /// Open config.yaml in $EDITOR
+    Edit,
+    /// Print the resolved config.yaml path
+    Path,
 }
 
 #[derive(Subcommand)]
@@ -411,6 +516,149 @@ async fn main() -> Result<()> {
             let cmd = registry
                 .get("init")
                 .context("init command not registered")?;
+            let result = cmd
+                .execute(args, &ctx)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if result.exit_code != 0 {
+                std::process::exit(result.exit_code);
+            }
+        }
+
+        Commands::Model { name } => {
+            let mut args = CommandArgs::new();
+            args.insert("name", name);
+            let cmd = registry
+                .get("provider:select")
+                .context("provider:select command not registered")?;
+            let result = cmd
+                .execute(args, &ctx)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if result.exit_code != 0 {
+                std::process::exit(result.exit_code);
+            }
+        }
+
+        Commands::Workflow { command } => {
+            let (cmd_name, mut args) = match command {
+                WorkflowCommand::List => ("workflow:list", CommandArgs::new()),
+                WorkflowCommand::Show { id } => {
+                    let mut a = CommandArgs::new();
+                    a.insert("id", id);
+                    ("workflow:show", a)
+                }
+                WorkflowCommand::Create { file } => {
+                    let mut a = CommandArgs::new();
+                    a.insert("file", file.display().to_string());
+                    ("workflow:create", a)
+                }
+                WorkflowCommand::Delete { id } => {
+                    let mut a = CommandArgs::new();
+                    a.insert("id", id);
+                    ("workflow:delete", a)
+                }
+            };
+            let _ = &mut args; // (kept mut for symmetry with other dispatch arms)
+            let cmd = registry
+                .get(cmd_name)
+                .with_context(|| format!("{cmd_name} command not registered"))?;
+            let result = cmd
+                .execute(args, &ctx)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if result.exit_code != 0 {
+                std::process::exit(result.exit_code);
+            }
+        }
+
+        Commands::Policy { command } => {
+            let (cmd_name, args) = match command {
+                PolicyCommand::List => ("policy:list", CommandArgs::new()),
+                PolicyCommand::Show { name } => {
+                    let mut a = CommandArgs::new();
+                    a.insert("name", name);
+                    ("policy:show", a)
+                }
+                PolicyCommand::Reload => ("policy:reload", CommandArgs::new()),
+                PolicyCommand::Validate => ("policy:validate", CommandArgs::new()),
+            };
+            let cmd = registry
+                .get(cmd_name)
+                .with_context(|| format!("{cmd_name} command not registered"))?;
+            let result = cmd
+                .execute(args, &ctx)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if result.exit_code != 0 {
+                std::process::exit(result.exit_code);
+            }
+        }
+
+        Commands::Session { command } => {
+            let (cmd_name, args) = match command {
+                SessionCommand::List => ("session:list", CommandArgs::new()),
+                SessionCommand::Show { id } => {
+                    let mut a = CommandArgs::new();
+                    a.insert("id", id);
+                    ("session:show", a)
+                }
+                SessionCommand::Kill { id } => {
+                    let mut a = CommandArgs::new();
+                    a.insert("id", id);
+                    ("session:kill", a)
+                }
+                SessionCommand::Browse => ("session:browse", CommandArgs::new()),
+            };
+            let cmd = registry
+                .get(cmd_name)
+                .with_context(|| format!("{cmd_name} command not registered"))?;
+            let result = cmd
+                .execute(args, &ctx)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if result.exit_code != 0 {
+                std::process::exit(result.exit_code);
+            }
+        }
+
+        Commands::Killswitch { command } => {
+            let cmd_name = match command {
+                KillswitchCommand::Arm => "killswitch:arm",
+                KillswitchCommand::Disarm => "killswitch:disarm",
+                KillswitchCommand::Status => "killswitch:status",
+            };
+            let cmd = registry
+                .get(cmd_name)
+                .with_context(|| format!("{cmd_name} command not registered"))?;
+            let result = cmd
+                .execute(CommandArgs::new(), &ctx)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if result.exit_code != 0 {
+                std::process::exit(result.exit_code);
+            }
+        }
+
+        Commands::Config { command } => {
+            let (cmd_name, args) = match command {
+                ConfigCommand::Get { key } => {
+                    let mut a = CommandArgs::new();
+                    a.insert("key", key);
+                    ("config:get", a)
+                }
+                ConfigCommand::Set { key, value } => {
+                    let mut a = CommandArgs::new();
+                    a.insert("key", key);
+                    a.insert("value", value);
+                    ("config:set", a)
+                }
+                ConfigCommand::Edit => ("config:edit", CommandArgs::new()),
+                ConfigCommand::Path => ("config:path", CommandArgs::new()),
+            };
+            let cmd = registry
+                .get(cmd_name)
+                .with_context(|| format!("{cmd_name} command not registered"))?;
             let result = cmd
                 .execute(args, &ctx)
                 .await

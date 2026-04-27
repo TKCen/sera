@@ -42,8 +42,8 @@ async fn ping_fails_on_non_success_status() {
 fn registry_contains_ping() {
     let registry = sera_cli::build_registry();
     assert!(registry.get("ping").is_some(), "ping not found in registry");
-    // Registry also contains auth:login, auth:whoami, auth:logout,
-    // agent:list, agent:show, agent:run, chat, the five provider:*
-    // commands (list/add/remove/select/configure), and init.
-    assert_eq!(registry.len(), 14);
+    // Registry contains the L.0–L.2 commands (14) plus the L.4 admin verbs:
+    //   workflow:* (4), policy:* (4), session:* (4), killswitch:* (3), config:* (4) = 19
+    // Total = 33.
+    assert_eq!(registry.len(), 33);
 }

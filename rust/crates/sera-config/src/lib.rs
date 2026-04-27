@@ -8,6 +8,8 @@ pub mod config_root;
 pub mod core_config;
 pub mod data_root;
 pub mod manifest_loader;
+pub mod provider_registry;
+pub mod provider_wizard;
 pub mod providers;
 pub mod secrets;
 pub mod watchers;

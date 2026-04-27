@@ -43,7 +43,7 @@ fn registry_contains_ping() {
     let registry = sera_cli::build_registry();
     assert!(registry.get("ping").is_some(), "ping not found in registry");
     // Registry also contains auth:login, auth:whoami, auth:logout,
-    // agent:list, agent:show, agent:run, chat, and the five provider:*
-    // commands (list/add/remove/select/configure).
-    assert_eq!(registry.len(), 13);
+    // agent:list, agent:show, agent:run, chat, the five provider:*
+    // commands (list/add/remove/select/configure), and init.
+    assert_eq!(registry.len(), 14);
 }

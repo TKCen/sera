@@ -57,6 +57,18 @@ enum Commands {
         #[command(subcommand)]
         command: ProviderCommand,
     },
+    /// First-run bootstrap wizard — produces a working SERA config
+    Init {
+        /// Ingest a YAML manifest set non-interactively
+        #[arg(long, value_name = "PATH")]
+        from_file: Option<PathBuf>,
+        /// Defaults-only local bootstrap (CI mode)
+        #[arg(long)]
+        non_interactive: bool,
+        /// Overwrite existing config.yaml without prompting
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -372,6 +384,33 @@ async fn main() -> Result<()> {
             let cmd = registry
                 .get(cmd_name)
                 .with_context(|| format!("{cmd_name} command not registered"))?;
+            let result = cmd
+                .execute(args, &ctx)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if result.exit_code != 0 {
+                std::process::exit(result.exit_code);
+            }
+        }
+
+        Commands::Init {
+            from_file,
+            non_interactive,
+            force,
+        } => {
+            let mut args = CommandArgs::new();
+            if let Some(p) = from_file {
+                args.insert("from-file", p.display().to_string());
+            }
+            if non_interactive {
+                args.insert("non-interactive", "true".to_string());
+            }
+            if force {
+                args.insert("force", "true".to_string());
+            }
+            let cmd = registry
+                .get("init")
+                .context("init command not registered")?;
             let result = cmd
                 .execute(args, &ctx)
                 .await

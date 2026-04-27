@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use sera_auth::authz::{ActionKind, AuthzProviderAdapter, RoleBasedAuthzProvider};
+use sera_config::CapabilityRegistry;
 use sera_runtime::config::RuntimeConfig;
 use sera_runtime::context_engine::pipeline::ContextPipeline;
 use sera_runtime::default_runtime::DefaultRuntime;
@@ -217,7 +218,16 @@ async fn main() -> anyhow::Result<()> {
     let registry = TraitToolRegistry::with_builtins_and_authz(config.tool_authz_enabled)
         .with_delegation(delegation_bus);
     let registry = Arc::new(registry);
-    let dispatcher = RegistryDispatcher::new(Arc::clone(&registry));
+
+    // sera-eo71: load CapabilityRegistry once at startup (no hot-reload in v1
+    // — operator restarts the runtime to pick up policy changes; the gateway
+    // already has hot-reload via /admin/policies/reload, but the runtime
+    // child does not yet observe those swaps). Bind only this single agent's
+    // policy_ref (forwarded by the gateway as SERA_AGENT_POLICY_REF).
+    let capability_registry = Arc::new(load_capability_registry(&config.agent_id));
+
+    let dispatcher = RegistryDispatcher::new(Arc::clone(&registry))
+        .with_capability_registry(Arc::clone(&capability_registry), config.agent_id.clone());
 
     // Pre-compute tool definitions for the LLM via serde round-trip
     let tool_defs: Vec<sera_types::tool::ToolDefinition> = registry
@@ -423,6 +433,44 @@ fn build_llm_client(config: &RuntimeConfig) -> LlmClient {
 }
 
 // ── Constitutional gate resolution ───────────────────────────────────────────
+
+/// sera-eo71: load the CapabilityRegistry for this runtime process.
+///
+/// The runtime is single-agent — `agent_id` is set via `AGENT_ID` and the
+/// agent's `policyRef` (if any) is forwarded by the gateway as
+/// `SERA_AGENT_POLICY_REF`. The policies directory follows the same
+/// resolution as the gateway: `SERA_CAPABILITY_POLICIES_DIR` overrides,
+/// otherwise `ConfigRoot::policies_dir()`.
+///
+/// Fail-closed: a non-empty `policy_ref` that doesn't resolve to a loaded
+/// policy aborts startup, mirroring the gateway-side semantics.
+fn load_capability_registry(agent_id: &str) -> CapabilityRegistry {
+    let policies_dir = CapabilityRegistry::resolve_policies_dir();
+    let policy_ref = std::env::var("SERA_AGENT_POLICY_REF")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let bindings = vec![(agent_id.to_string(), policy_ref.clone())];
+    match CapabilityRegistry::load_and_bind(&policies_dir, bindings) {
+        Ok(reg) => {
+            tracing::info!(
+                agent_id = %agent_id,
+                policy_ref = ?policy_ref,
+                policies_dir = %policies_dir.display(),
+                loaded_policies = reg.policy_count(),
+                "Capability registry loaded (sera-eo71)"
+            );
+            reg
+        }
+        Err(e) => {
+            // Fail-closed: panic so the runtime exits non-zero and the
+            // gateway notices the dead child instead of silently running
+            // unconstrained.
+            panic!(
+                "failed to initialise capability registry (sera-eo71): {e}"
+            );
+        }
+    }
+}
 
 /// Read `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE` and return `true` when the
 /// operator has explicitly opted in (value `"1"` or `"true"`, case-insensitive).

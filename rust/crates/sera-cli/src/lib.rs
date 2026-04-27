@@ -24,5 +24,6 @@ pub fn build_registry() -> CommandRegistry {
     registry.register(commands::ProviderRemoveCommand::new());
     registry.register(commands::ProviderSelectCommand);
     registry.register(commands::ProviderConfigureCommand::new());
+    registry.register(commands::InitCommand::new());
     registry
 }

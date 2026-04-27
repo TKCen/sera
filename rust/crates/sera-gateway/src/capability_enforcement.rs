@@ -2,10 +2,11 @@
 //! (sera-ifjl).
 //!
 //! Loads `CapabilityPolicy` YAML files from a configured directory (default
-//! `./capability-policies/`, override via `SERA_CAPABILITY_POLICIES_DIR`),
-//! binds each loaded policy to the agents whose manifest declares a matching
-//! `policyRef`, and exposes `CapabilityRegistry::check(agent_id, tool_name)`
-//! for the tool-dispatch path.
+//! `$XDG_CONFIG_HOME/sera/policies/` via [`sera_config::ConfigRoot`], override
+//! via `SERA_CAPABILITY_POLICIES_DIR`), binds each loaded policy to the agents
+//! whose manifest declares a matching `policyRef`, and exposes
+//! `CapabilityRegistry::check(agent_id, tool_name)` for the tool-dispatch
+//! path.
 //!
 //! Semantics:
 //! * Agents whose manifest has no `policy_ref` bypass the registry check
@@ -44,10 +45,13 @@ use serde::Deserialize;
 use thiserror::Error;
 
 /// Environment variable overriding the policies directory.
+///
+/// When unset, the policies directory is derived from
+/// [`sera_config::ConfigRoot`] — i.e. `$XDG_CONFIG_HOME/sera/policies` on
+/// Linux, `%APPDATA%/sera/policies` on Windows. Override with
+/// `SERA_CAPABILITY_POLICIES_DIR` for tests, dev workflows, or alternate
+/// deployments.
 pub const POLICIES_DIR_ENV: &str = "SERA_CAPABILITY_POLICIES_DIR";
-
-/// Default relative directory used when `SERA_CAPABILITY_POLICIES_DIR` is unset.
-pub const DEFAULT_POLICIES_DIR: &str = "./capability-policies";
 
 /// Errors produced when loading policies from disk or binding agents.
 #[derive(Debug, Error)]
@@ -215,11 +219,13 @@ impl CapabilityRegistry {
     }
 
     /// Resolve the policies directory from the environment, falling back to
-    /// `DEFAULT_POLICIES_DIR`.
+    /// `ConfigRoot::from_env().policies_dir()` (i.e. the `policies/`
+    /// subdirectory of the user's SERA config root).
     pub fn resolve_policies_dir() -> PathBuf {
-        std::env::var_os(POLICIES_DIR_ENV)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_POLICIES_DIR))
+        if let Some(p) = std::env::var_os(POLICIES_DIR_ENV) {
+            return PathBuf::from(p);
+        }
+        sera_config::ConfigRoot::from_env().policies_dir()
     }
 
     /// Load all policy YAMLs under `dir` and bind the supplied agent

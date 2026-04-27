@@ -623,11 +623,12 @@ struct AppState {
     #[allow(dead_code)]
     constitutional_registry: Arc<ConstitutionalRegistry>,
     /// Capability-policy registry (sera-ifjl). Loaded at boot from
-    /// `$SERA_CAPABILITY_POLICIES_DIR` (default `./capability-policies/`);
-    /// bound to each agent via the manifest's `policyRef`. Consulted on
-    /// every observed `tool_call_begin` event in the runtime NDJSON stream
-    /// (`StdioHarness::send_turn`) and on any future gateway-side tool
-    /// dispatch. Agents with no `policyRef` bypass the check (permissive).
+    /// `$SERA_CAPABILITY_POLICIES_DIR` (default `$XDG_CONFIG_HOME/sera/policies/`
+    /// via `sera_config::ConfigRoot`); bound to each agent via the manifest's
+    /// `policyRef`. Consulted on every observed `tool_call_begin` event in the
+    /// runtime NDJSON stream (`StdioHarness::send_turn`) and on any future
+    /// gateway-side tool dispatch. Agents with no `policyRef` bypass the check
+    /// (permissive).
     capability_registry: Arc<CapabilityRegistry>,
     /// HITL ticket store (sera-z6ql, Wave D Phase 1). Populated by
     /// `chat_handler` whenever the ApprovalRouter says a turn needs

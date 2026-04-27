@@ -49,6 +49,10 @@ use sera_memory::{DEFAULT_SQLITE_VEC_DIMENSIONS, SqliteMemoryStore};
 use sera_runtime::skill_dispatch::SkillDispatchEngine;
 // sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +
 // SERA-issued nonce fallback). Wired into AppState + `/api/mail/inbound`.
+use sera_gateway::admin::{
+    AdminAppState, AdminAuditLogger, AdminAuth, AdminSessionInfo, resolve_admin_bind,
+    resolve_admin_port, serve_admin,
+};
 use sera_gateway::capability_enforcement::{CapabilityRegistry, PolicyDenial};
 use sera_gateway::hitl_gateway::{
     HitlAppState, InMemoryTicketStore, TicketStore, resolve_approval_routing, resolve_hitl_mode,
@@ -629,7 +633,12 @@ struct AppState {
     /// runtime NDJSON stream (`StdioHarness::send_turn`) and on any future
     /// gateway-side tool dispatch. Agents with no `policyRef` bypass the check
     /// (permissive).
-    capability_registry: Arc<CapabilityRegistry>,
+    ///
+    /// Wrapped in `RwLock<Arc<…>>` so the admin HTTP `POST /admin/policies/reload`
+    /// route (sera-nrn9) can swap the registry without restarting the gateway.
+    /// Readers acquire a shared lock + clone the inner `Arc`, so concurrent
+    /// turns never block the swap.
+    capability_registry: Arc<RwLock<Arc<CapabilityRegistry>>>,
     /// HITL ticket store (sera-z6ql, Wave D Phase 1). Populated by
     /// `chat_handler` whenever the ApprovalRouter says a turn needs
     /// approval; read by the `/api/hitl/requests[/…]` routes so humans can
@@ -642,6 +651,13 @@ struct AppState {
     /// the scheduler spawned in `run_start`. Phase 1 uses an in-memory
     /// store — SQLite-backed store is a follow-up bead.
     workflow_store: Arc<dyn WorkflowTaskStore>,
+    /// Admin HTTP auth (sera-nrn9, L.3). Separate token from the public
+    /// API's `api_key`. `None` when the admin server is not started (e.g. in
+    /// tests that don't exercise admin routes).
+    admin_auth: Option<Arc<AdminAuth>>,
+    /// JSONL audit log handle for admin requests (sera-nrn9). `None` when
+    /// the admin server is not started.
+    admin_audit: Option<Arc<AdminAuditLogger>>,
 }
 
 impl AppState {
@@ -693,6 +709,96 @@ impl AppState {
             token.cancel();
         }
         count
+    }
+}
+
+#[async_trait::async_trait]
+impl AdminAppState for AppState {
+    fn auth(&self) -> Arc<AdminAuth> {
+        Arc::clone(
+            self.admin_auth
+                .as_ref()
+                .expect("admin_auth must be initialised before serving admin HTTP"),
+        )
+    }
+
+    fn audit(&self) -> Arc<AdminAuditLogger> {
+        Arc::clone(
+            self.admin_audit
+                .as_ref()
+                .expect("admin_audit must be initialised before serving admin HTTP"),
+        )
+    }
+
+    fn kill_switch(&self) -> Arc<KillSwitch> {
+        Arc::clone(&self.kill_switch)
+    }
+
+    fn capability_registry(&self) -> Arc<RwLock<Arc<CapabilityRegistry>>> {
+        Arc::clone(&self.capability_registry)
+    }
+
+    fn policies_dir(&self) -> std::path::PathBuf {
+        CapabilityRegistry::resolve_policies_dir()
+    }
+
+    fn workflow_store(&self) -> Option<Arc<dyn WorkflowTaskStore>> {
+        Some(Arc::clone(&self.workflow_store))
+    }
+
+    async fn list_sessions(&self) -> Vec<AdminSessionInfo> {
+        let db = self.db.lock().await;
+        db.list_sessions()
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|r| AdminSessionInfo {
+                        id: r.id,
+                        agent_id: r.agent_id,
+                        session_key: r.session_key,
+                        state: r.state,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    async fn get_session(&self, id: &str) -> Option<AdminSessionInfo> {
+        let db = self.db.lock().await;
+        db.list_sessions()
+            .ok()?
+            .into_iter()
+            .find(|r| r.id == id || r.session_key == id)
+            .map(|r| AdminSessionInfo {
+                id: r.id,
+                agent_id: r.agent_id,
+                session_key: r.session_key,
+                state: r.state,
+            })
+    }
+
+    fn cancel_session(&self, session_key: &str) -> bool {
+        let mut map = self
+            .active_cancellation_tokens
+            .lock()
+            .expect("active_cancellation_tokens mutex poisoned");
+        if let Some(token) = map.remove(session_key) {
+            token.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn agent_metadata(&self, id: &str) -> Option<serde_json::Value> {
+        let agent_names = self.manifests.agent_names();
+        let name = agent_names.iter().copied().find(|n| *n == id)?;
+        let spec = self.manifests.agent_spec(name).ok().flatten();
+        Some(serde_json::json!({
+            "name": name,
+            "provider": spec.as_ref().map(|s| s.provider.as_str()).unwrap_or(""),
+            "model": spec.as_ref().and_then(|s| s.model.as_deref()),
+            "has_tools": spec.as_ref().and_then(|s| s.tools.as_ref()).is_some(),
+        }))
     }
 }
 
@@ -1309,6 +1415,7 @@ async fn chat_handler(
                         agent_name,
                     } => {
                         let cancel = state.register_cancellation_token(&session_key);
+                        let cap_reg = state.capability_registry.read().await.clone();
                         let result = execute_turn(
                             &agent_spec,
                             &transcript,
@@ -1319,7 +1426,7 @@ async fn chat_handler(
                             &state.semantic_store,
                             &agent_name,
                             &cancel,
-                            &state.capability_registry,
+                            &cap_reg,
                         )
                         .await;
                         state.deregister_cancellation_token(&session_key);
@@ -1427,6 +1534,7 @@ async fn chat_handler(
     } else {
         // Synchronous JSON mode (existing behavior).
         let cancel = state.register_cancellation_token(&session_key);
+        let cap_reg = state.capability_registry.read().await.clone();
         let result = execute_turn(
             &agent_spec,
             &transcript,
@@ -1437,7 +1545,7 @@ async fn chat_handler(
             &state.semantic_store,
             &agent_name,
             &cancel,
-            &state.capability_registry,
+            &cap_reg,
         )
         .await;
         state.deregister_cancellation_token(&session_key);
@@ -2501,6 +2609,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
 
     // Execute the agent turn via the pre-connected harness.
     let cancel = state.register_cancellation_token(&session_key);
+    let cap_reg = state.capability_registry.read().await.clone();
     let result = execute_turn(
         &agent_spec,
         &transcript,
@@ -2511,7 +2620,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         &state.semantic_store,
         &agent_name,
         &cancel,
-        &state.capability_registry,
+        &cap_reg,
     )
     .await;
     state.deregister_cancellation_token(&session_key);
@@ -2652,6 +2761,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         };
 
         let cancel = state.register_cancellation_token(&session_key);
+        let cap_reg = state.capability_registry.read().await.clone();
         let follow_up = execute_turn(
             &agent_spec,
             &transcript,
@@ -2662,7 +2772,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             &state.semantic_store,
             &agent_name,
             &cancel,
-            &state.capability_registry,
+            &cap_reg,
         )
         .await;
         state.deregister_cancellation_token(&session_key);
@@ -2961,7 +3071,7 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 config
             };
-            run_start(config, port).await
+            run_start(config, port, local).await
         }
 
         Commands::Doctor { config, json } => {
@@ -3109,7 +3219,7 @@ async fn apply_local_defaults(config: PathBuf, port: u16) -> anyhow::Result<Path
     Ok(resolved_config)
 }
 
-async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
+async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()> {
     // 1. Load config.
     tracing::info!(config = %config.display(), "Loading SERA configuration");
     let manifests = load_manifest_file(&config)?;
@@ -3486,6 +3596,17 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
         }
     }
 
+    // sera-nrn9: admin HTTP server auth + audit log. Token comes from
+    // SERA_ADMIN_TOKEN; in --local mode we mint a random token at boot and
+    // print it once to stderr so dev workflows still work.
+    let admin_auth = Arc::new(AdminAuth::resolve(local).map_err(|e| {
+        anyhow::anyhow!(
+            "{e} (set SERA_ADMIN_TOKEN to enable admin HTTP, or pass --local to auto-generate)"
+        )
+    })?);
+    let admin_audit_path = AdminAuditLogger::default_path(&data_root);
+    let admin_audit = AdminAuditLogger::shared(admin_audit_path);
+
     let state = Arc::new(AppState {
         db: Mutex::new(db),
         manifests,
@@ -3526,9 +3647,11 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
             )
         },
         constitutional_registry,
-        capability_registry: Arc::clone(&capability_registry),
+        capability_registry: Arc::new(RwLock::new(Arc::clone(&capability_registry))),
         ticket_store: Arc::new(InMemoryTicketStore::new()),
         workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+        admin_auth: Some(Arc::clone(&admin_auth)),
+        admin_audit: Some(Arc::clone(&admin_audit)),
     });
 
     // 4. Start event processing loop.
@@ -3562,6 +3685,36 @@ async fn run_start(config: PathBuf, port: u16) -> anyhow::Result<()> {
                 "ROLLBACK received on admin socket — gateway halted"
             );
         });
+    }
+
+    // 4b. Start the admin HTTP server (sera-nrn9, L.3). Binds separately
+    // from the public API on `SERA_ADMIN_BIND:SERA_ADMIN_PORT` (default
+    // 127.0.0.1:3002). Runs in the background; the gateway considers itself
+    // ready once both listeners are bound.
+    let admin_shutdown = Arc::clone(&shutting_down);
+    let admin_state_clone = Arc::clone(&state);
+    let admin_bind = resolve_admin_bind();
+    let admin_port = resolve_admin_port();
+    let admin_addr: SocketAddr = format!("{admin_bind}:{admin_port}")
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid admin bind address {admin_bind}:{admin_port}: {e}"))?;
+    let (admin_bound_tx, admin_bound_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let shutdown = async move {
+            while !admin_shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+        };
+        if let Err(e) =
+            serve_admin(admin_state_clone, admin_addr, admin_bound_tx, shutdown).await
+        {
+            tracing::error!(error = %e, "admin HTTP server exited with error");
+        }
+    });
+    match tokio::time::timeout(std::time::Duration::from_secs(2), admin_bound_rx).await {
+        Ok(Ok(addr)) => tracing::info!(%addr, "admin HTTP server bound"),
+        Ok(Err(_)) => tracing::warn!("admin HTTP server task ended before binding"),
+        Err(_) => tracing::warn!("admin HTTP server bind timed out — continuing anyway"),
     }
 
     // 5. Build and start HTTP server.
@@ -4020,9 +4173,11 @@ mod tests {
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
-            capability_registry: Arc::new(CapabilityRegistry::empty()),
+            capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            admin_auth: None,
+            admin_audit: None,
         })
     }
 
@@ -4063,9 +4218,11 @@ mod tests {
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
-            capability_registry: Arc::new(CapabilityRegistry::empty()),
+            capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            admin_auth: None,
+            admin_audit: None,
         })
     }
 
@@ -4106,9 +4263,11 @@ mod tests {
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
-            capability_registry: Arc::new(CapabilityRegistry::empty()),
+            capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            admin_auth: None,
+            admin_audit: None,
         })
     }
 
@@ -4149,9 +4308,11 @@ mod tests {
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
-            capability_registry: Arc::new(CapabilityRegistry::empty()),
+            capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            admin_auth: None,
+            admin_audit: None,
         })
     }
 
@@ -4641,9 +4802,11 @@ spec:
             )),
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
-            capability_registry: Arc::new(CapabilityRegistry::empty()),
+            capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            admin_auth: None,
+            admin_audit: None,
         })
     }
 
@@ -5146,9 +5309,11 @@ spec:
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
-            capability_registry: Arc::new(CapabilityRegistry::empty()),
+            capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            admin_auth: None,
+            admin_audit: None,
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -5192,9 +5357,11 @@ spec:
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
-            capability_registry: Arc::new(CapabilityRegistry::empty()),
+            capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            admin_auth: None,
+            admin_audit: None,
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -5239,9 +5406,11 @@ spec:
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
-            capability_registry: Arc::new(CapabilityRegistry::empty()),
+            capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            admin_auth: None,
+            admin_audit: None,
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -5289,9 +5458,11 @@ spec:
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
-            capability_registry: Arc::new(CapabilityRegistry::empty()),
+            capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            admin_auth: None,
+            admin_audit: None,
         };
         let headers = HeaderMap::new();
         assert_eq!(
@@ -5984,9 +6155,11 @@ spec:
             // writing shadow-git dirs to the filesystem during tests.
             session_store: Arc::new(InMemorySessionStore::new()),
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
-            capability_registry: Arc::new(CapabilityRegistry::empty()),
+            capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            admin_auth: None,
+            admin_audit: None,
         });
 
         let app = build_router(Arc::clone(&state));
@@ -6069,9 +6242,11 @@ spec:
                 // writing shadow-git dirs to the filesystem during tests.
                 session_store: Arc::new(InMemorySessionStore::new()),
                 constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
-                capability_registry: Arc::new(CapabilityRegistry::empty()),
+                capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
                 ticket_store: Arc::new(InMemoryTicketStore::new()),
                 workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+                admin_auth: None,
+                admin_audit: None,
             })
         };
         let app = build_router(state);

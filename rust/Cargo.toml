@@ -88,6 +88,7 @@ proptest = "1"
 
 # Crypto
 sha2 = "0.10"
+subtle = "2"
 
 # Semver constraints (sera-skills SkillRef versioning)
 semver = "1"

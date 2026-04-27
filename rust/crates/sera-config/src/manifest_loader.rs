@@ -539,6 +539,28 @@ spec: {}
     }
 
     #[test]
+    fn invalid_yaml_error_includes_line_number() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Instance
+metadata:
+  name: test
+spec:
+  bad: [unclosed
+"#;
+        let err = parse_manifests(yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            matches!(err, ManifestLoadError::ParseError { .. }),
+            "expected ParseError, got: {err:?}",
+        );
+        assert!(
+            msg.to_lowercase().contains("line"),
+            "parse error should surface line info to make debugging tractable; got: {msg}",
+        );
+    }
+
+    #[test]
     fn parse_bad_api_version() {
         let yaml = r#"
 apiVersion: noslash

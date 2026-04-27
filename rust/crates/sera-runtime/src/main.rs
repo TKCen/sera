@@ -473,21 +473,27 @@ async fn run_heartbeat(config: &RuntimeConfig) {
 #[cfg(test)]
 mod tests {
     use super::resolve_allow_missing_gate;
+    use std::sync::Mutex;
+
+    // cargo test runs tests in parallel by default, so all four tests below
+    // would otherwise race on SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE — one
+    // setting "1", another setting "false", with assertions interleaving.
+    // Holding this mutex for the whole test (env mutation + assertion)
+    // serialises them.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE` unset → permissive = false.
     #[test]
     fn gate_defaults_to_false_when_env_unset() {
-        // Guard: only run when the env var is not already set by the caller.
-        if std::env::var("SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE").is_ok() {
-            return;
-        }
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = EnvGuard::unset("SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE");
         assert!(!resolve_allow_missing_gate());
     }
 
     /// Value `"1"` → permissive = true (env path).
     #[test]
     fn gate_true_for_value_one() {
-        // Use a scoped env helper to avoid leaking between parallel tests.
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _guard = EnvGuard::set("SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE", "1");
         assert!(resolve_allow_missing_gate());
     }
@@ -495,6 +501,7 @@ mod tests {
     /// Value `"true"` (case-insensitive) → permissive = true.
     #[test]
     fn gate_true_for_value_true_case_insensitive() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _guard = EnvGuard::set("SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE", "TRUE");
         assert!(resolve_allow_missing_gate());
     }
@@ -502,6 +509,7 @@ mod tests {
     /// Value `"false"` → permissive = false (not opted in).
     #[test]
     fn gate_false_for_value_false() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _guard = EnvGuard::set("SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE", "false");
         assert!(!resolve_allow_missing_gate());
     }
@@ -516,15 +524,23 @@ mod tests {
     impl EnvGuard {
         fn set(key: &'static str, value: &str) -> Self {
             let prev = std::env::var(key).ok();
-            // SAFETY: tests run single-threaded (no other threads read this var).
+            // SAFETY: ENV_LOCK serialises every test that reads or writes the
+            // gate env var, so no concurrent reader can observe a torn value.
             unsafe { std::env::set_var(key, value) };
+            Self { key, prev }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let prev = std::env::var(key).ok();
+            // SAFETY: see EnvGuard::set.
+            unsafe { std::env::remove_var(key) };
             Self { key, prev }
         }
     }
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
-            // SAFETY: tests run single-threaded (no other threads read this var).
+            // SAFETY: see EnvGuard::set.
             unsafe {
                 match &self.prev {
                     Some(v) => std::env::set_var(self.key, v),

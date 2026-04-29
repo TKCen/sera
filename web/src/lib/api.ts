@@ -1,3 +1,5 @@
+import { fetchEventSource } from '@microsoft/fetch-event-source';
+
 const API_BASE = '/api';
 const AUTH_KEY = 'sera.auth.token';
 
@@ -183,7 +185,6 @@ export async function chatStream({
   onEvent,
   onError,
 }: ChatStreamOptions): Promise<void> {
-  const { fetchEventSource } = await import('@microsoft/fetch-event-source');
   const token = getToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

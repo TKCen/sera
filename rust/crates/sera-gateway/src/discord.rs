@@ -238,6 +238,20 @@ fn resume_no_signal_should_clear(consecutive: u32) -> bool {
     consecutive >= RESUME_NO_SIGNAL_CLEAR_THRESHOLD
 }
 
+/// Number of consecutive connect-stage errors against `resume_gateway_url` we
+/// tolerate before falling back to the canonical gateway URL. Discord's
+/// canonical gateway accepts RESUME for the same `session_id`, so clearing
+/// only the resume host (not the session) recovers from a stale or
+/// regionally-degraded resume URL without forcing an IDENTIFY.
+const RESUME_URL_FAILURE_THRESHOLD: u32 = 2;
+
+/// Returns `true` if `run()` should clear `resume_gateway_url` and target the
+/// canonical gateway on the next attempt. A single error preserves the
+/// optimization for transient blips; repeated errors release a stuck host.
+fn resume_url_should_clear(consecutive: u32) -> bool {
+    consecutive >= RESUME_URL_FAILURE_THRESHOLD
+}
+
 /// Backoff schedule for INVALID_SESSION re-IDENTIFY attempts.
 ///
 /// Discord's spec says clients should wait a random 1-5 seconds before sending a
@@ -369,6 +383,15 @@ impl DiscordConnector {
         self.last_sequence.store(-1, Ordering::Relaxed);
     }
 
+    /// Drop only the per-session resume host so the next reconnect targets the
+    /// canonical gateway. Keeps `session_id` and `last_sequence` so RESUME on
+    /// canonical gateway can still recover the session.
+    fn clear_resume_gateway_url(&self) {
+        if let Ok(mut g) = self.resume_gateway_url.lock() {
+            *g = None;
+        }
+    }
+
     fn current_session(&self) -> Option<String> {
         self.session_id.lock().ok().and_then(|g| g.clone())
     }
@@ -389,11 +412,30 @@ impl DiscordConnector {
     pub async fn run(&self) -> anyhow::Result<()> {
         let mut consecutive_invalid_sessions: u32 = 0;
         let mut consecutive_resume_no_signal: u32 = 0;
+        let mut consecutive_resume_url_errors: u32 = 0;
         while !self.shutting_down.load(Ordering::Relaxed) {
+            let attempted_resume_url = self.current_resume_url().is_some();
             let outcome = match self.connect_and_run().await {
-                Ok(reason) => Some(reason),
+                Ok(reason) => {
+                    consecutive_resume_url_errors = 0;
+                    Some(reason)
+                }
                 Err(e) => {
                     tracing::error!("Discord gateway error: {e}");
+                    if attempted_resume_url {
+                        consecutive_resume_url_errors =
+                            consecutive_resume_url_errors.saturating_add(1);
+                        if resume_url_should_clear(consecutive_resume_url_errors) {
+                            tracing::warn!(
+                                consecutive = consecutive_resume_url_errors,
+                                "Resume gateway host has failed repeatedly; falling back to canonical gateway URL while preserving session"
+                            );
+                            self.clear_resume_gateway_url();
+                            consecutive_resume_url_errors = 0;
+                        }
+                    } else {
+                        consecutive_resume_url_errors = 0;
+                    }
                     None
                 }
             };
@@ -1157,6 +1199,50 @@ mod tests {
             DisconnectReason::from_signal(None, true, true),
             DisconnectReason::GenericClose
         );
+    }
+
+    #[test]
+    fn resume_url_failure_threshold_falls_back_after_repeats() {
+        // First connect-stage error against `resume_gateway_url` is treated as
+        // a transient blip; we keep the resume host. Repeated errors release
+        // the stuck host so `run()` falls back to the canonical gateway URL
+        // (still attempting RESUME with the cached session_id).
+        assert!(!resume_url_should_clear(0));
+        assert!(!resume_url_should_clear(1));
+        assert!(resume_url_should_clear(2));
+        assert!(resume_url_should_clear(3));
+        assert!(resume_url_should_clear(u32::MAX));
+    }
+
+    #[tokio::test]
+    async fn clear_resume_gateway_url_keeps_session_id_and_sequence() {
+        // The fallback path must clear ONLY the resume host. session_id and
+        // last_sequence persist so the next attempt RESUMEs the same session
+        // on the canonical gateway URL.
+        let (conn, _rx) = test_connector();
+        let ready = serde_json::json!({
+            "op": 0,
+            "t": "READY",
+            "s": 7,
+            "d": {
+                "session_id": "sess-fallback",
+                "resume_gateway_url": "wss://gateway-bad.discord.gg",
+                "user": { "id": "b", "username": "n" }
+            }
+        });
+        conn.handle_payload(&ready).await;
+        assert_eq!(conn.test_session_id().as_deref(), Some("sess-fallback"));
+        assert_eq!(
+            conn.test_resume_gateway_url().as_deref(),
+            Some("wss://gateway-bad.discord.gg")
+        );
+        assert_eq!(conn.test_last_sequence(), 7);
+
+        conn.clear_resume_gateway_url();
+
+        assert_eq!(conn.test_session_id().as_deref(), Some("sess-fallback"));
+        assert!(conn.test_resume_gateway_url().is_none());
+        assert_eq!(conn.test_last_sequence(), 7);
     }
 
     #[test]

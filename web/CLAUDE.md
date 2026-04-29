@@ -25,6 +25,36 @@ bun run lint
 bun run test
 ```
 
+## Run locally (the two paths)
+
+**Dev server (HMR, fastest iteration):**
+
+```bash
+cd web
+bun install        # first time
+bun run dev        # http://localhost:5173 — proxies /api → http://localhost:3001
+```
+
+The gateway must be running separately (e.g. `cargo run -p sera-gateway --bin sera` from `rust/`, or `docker compose -f docker-compose.rust.yaml up sera-gateway`).
+
+**Full stack via docker compose:**
+
+```bash
+docker compose -f docker-compose.rust.yaml up --build
+```
+
+Brings up postgres + centrifugo + sera-gateway + sera-web. Browse to <http://localhost:5173> for the operator console; the gateway listens on `:3001`.
+
+Use the dev-default API key `sera_bootstrap_dev_123` (or whatever `SERA_BOOTSTRAP_API_KEY` is set to in your env) to sign in.
+
+## Docker
+
+- **Multistage build:** `oven/bun:1-alpine` runs `bun install --frozen-lockfile && bun run build`, then nginx serves the static `dist/`.
+- **`bun.lock` is committed** (root `.gitignore` was unstuck during W.1) and must stay in sync with `package.json` so `--frozen-lockfile` doesn't fail in CI.
+- **`.dockerignore` is critical** — without it the build context includes `node_modules/` (~hundreds of MB) and the build is slow.
+- **nginx proxies `/api`** to `sera-gateway:3001` on the compose network. The `/api/chat` location turns `proxy_buffering off` and bumps `proxy_read_timeout` to 1h so SSE frames flow.
+- **SPA routing** — every unknown path falls through to `index.html` so client-side routing works on hard refresh.
+
 ## Auth (v1)
 
 API-key bearer token in `localStorage` under `sera.auth.token`. The gateway dev key is `sera_bootstrap_dev_123`. `apiFetch` (`src/lib/api.ts`) attaches the header on every request. OIDC device-flow is deferred.

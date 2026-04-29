@@ -2174,16 +2174,28 @@ async fn execute_steer(
             }
         }
         res = tokio::time::timeout(timeout, async {
-            // Read TurnCompleted event.
+            // Wait for the runtime to acknowledge the steer injection. The
+            // runtime emits the event type at `msg.type` (mirroring
+            // `StdioHarness::send_turn`); a stale code path read `type` at
+            // the top level and never matched, so the loop wedged the lane
+            // until `SERA_TURN_TIMEOUT_SECS` (sera-y9f8). Breaking on the
+            // first `streaming_delta` releases the lane as soon as the
+            // injected message starts producing output, and `turn_completed`
+            // covers the case where the runtime finishes before any delta.
             let mut line = String::new();
             loop {
                 match stdout.read_line(&mut line).await {
                     Ok(0) => break,
                     Ok(_) => {
-                        if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line)
-                            && event.get("type").and_then(|v| v.as_str()) == Some("turn_completed")
-                        {
-                            break;
+                        if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) {
+                            let msg_type = event
+                                .get("msg")
+                                .and_then(|m| m.get("type"))
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("");
+                            if matches!(msg_type, "streaming_delta" | "turn_completed") {
+                                break;
+                            }
                         }
                     }
                     Err(_) => break,
@@ -5888,6 +5900,51 @@ spec:
         assert!(
             start.elapsed() < std::time::Duration::from_secs(1),
             "timeout must fire near its bound, not after the test harness limit"
+        );
+    }
+
+    /// sera-y9f8 regression guard: `execute_steer` must read the event
+    /// type from `msg.type` (mirroring `StdioHarness::send_turn`), not from
+    /// the top-level `type` field. The mock runtime emits NDJSON frames
+    /// whose type lives under `msg.type`, so the previous code never
+    /// matched and the loop wedged the lane until the
+    /// `SERA_TURN_TIMEOUT_SECS` deadline. We pin the env var to 1 s so a
+    /// regression bounds the test to ~1 s instead of the 600 s default.
+    #[tokio::test]
+    async fn execute_steer_returns_promptly_on_runtime_msg_type() {
+        let prior = std::env::var("SERA_TURN_TIMEOUT_SECS").ok();
+        // SAFETY: test-only env mutation; `turn_timeout()` reads the var
+        // each call, so the value is observed inline. Restored before the
+        // test returns to keep parallel tests hermetic.
+        unsafe { std::env::set_var("SERA_TURN_TIMEOUT_SECS", "1") };
+
+        let harness = StdioHarness::spawn_mock().await.unwrap();
+        let cancel = CancellationToken::new();
+        let steer_messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+
+        let start = std::time::Instant::now();
+        let result =
+            execute_steer(&harness, &steer_messages, "y9f8-test-session", &cancel).await;
+        let elapsed = start.elapsed();
+
+        // SAFETY: restoring the pre-test value; same caveat as above.
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("SERA_TURN_TIMEOUT_SECS", v),
+                None => std::env::remove_var("SERA_TURN_TIMEOUT_SECS"),
+            }
+        }
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(900),
+            "execute_steer must break on the first runtime event well before \
+             the 1 s SERA_TURN_TIMEOUT_SECS deadline (elapsed={:?})",
+            elapsed
+        );
+        assert_eq!(
+            result.reply, "[steer injected]",
+            "expected the success sentinel, got: {}",
+            result.reply
         );
     }
 

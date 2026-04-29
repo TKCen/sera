@@ -10,6 +10,8 @@ import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { Layout } from '@/components/Layout';
 import { LoginView } from '@/views/LoginView';
 import { DashboardView } from '@/views/DashboardView';
+import { AgentsListView } from '@/views/AgentsListView';
+import { AgentDetailView } from '@/views/AgentDetailView';
 
 const el = document.getElementById('root');
 if (!el) throw new Error('Root element not found');
@@ -30,6 +32,8 @@ createRoot(el).render(
               }
             >
               <Route index element={<DashboardView />} />
+              <Route path="agents" element={<AgentsListView />} />
+              <Route path="agents/:id" element={<AgentDetailView />} />
             </Route>
           </Routes>
         </BrowserRouter>

@@ -250,3 +250,21 @@ export const getSessions = () => apiFetch<SessionInfo[]>('/sessions');
 
 export const getSessionTranscript = (id: string) =>
   apiFetch<TranscriptEntry[]>(`/sessions/${encodeURIComponent(id)}/transcript`);
+
+// ── Hooks ──────────────────────────────────────────────────────────────────
+
+export interface HookMetadata {
+  name: string;
+  description: string;
+  version: string;
+  supported_points: string[];
+  author?: string;
+}
+
+export interface HooksList {
+  hooks: HookMetadata[];
+  by_point: Record<string, HookMetadata[]>;
+  count: number;
+}
+
+export const getHooks = () => apiFetch<HooksList>('/hooks');

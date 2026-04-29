@@ -3,6 +3,17 @@ import { Navigate, useLocation } from 'react-router';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/contexts/auth-context';
 
+/**
+ * Restrict the post-login redirect to a single in-app path.
+ * Rejects schemes (`javascript:`), protocol-relative (`//evil.com`),
+ * and anything that doesn't start with `/`.
+ */
+function sanitizeRedirect(value: string | undefined): string {
+  if (!value || typeof value !== 'string') return '/';
+  if (!value.startsWith('/') || value.startsWith('//')) return '/';
+  return value;
+}
+
 export function LoginView() {
   const { status, signIn } = useAuth();
   const location = useLocation();
@@ -11,7 +22,8 @@ export function LoginView() {
   const [error, setError] = useState<string | null>(null);
 
   if (status === 'authenticated') {
-    const from = (location.state as { from?: string } | null)?.from ?? '/';
+    const raw = (location.state as { from?: string } | null)?.from;
+    const from = sanitizeRedirect(raw);
     return <Navigate to={from} replace />;
   }
 

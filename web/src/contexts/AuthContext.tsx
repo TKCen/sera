@@ -32,6 +32,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void validate();
   }, [validate]);
 
+  // Cross-tab sign-out: when another tab clears the auth token via
+  // localStorage, drop our session here too so the views don't keep
+  // making requests under a stale identity.
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== 'sera.auth.token' || event.newValue !== null) return;
+      setIdentity(null);
+      setStatus('unauthenticated');
+      queryClient.clear();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [queryClient]);
+
   const signIn = useCallback(async (token: string) => {
     setToken(token);
     setStatus('loading');

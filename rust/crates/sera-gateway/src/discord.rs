@@ -65,9 +65,12 @@ enum DisconnectReason {
     /// must clear stored session state and IDENTIFY again with a long backoff.
     SessionInvalidated,
     /// We sent RESUME on this connection and the loop ended without an opcode
-    /// signal — typically Discord rejecting RESUME via a close code (4007
-    /// invalid seq, 4009 session timeout, etc.). Clear session state so the
-    /// next attempt is a fresh IDENTIFY; otherwise we'd hot-loop on RESUME.
+    /// signal. This straddles two real cases: Discord rejecting RESUME via a
+    /// close code (4007 invalid seq, 4009 session timeout, etc.) and a flaky
+    /// transport drop before any opcode arrived. `run()` distinguishes them
+    /// by counting consecutive occurrences — a single occurrence retries
+    /// RESUME (preserving a still-valid session through transient drops),
+    /// repeated occurrences clear session state and fall back to IDENTIFY.
     ResumeFailedNoSignal,
     /// IDENTIFY-path connection ended without an opcode signal — generic
     /// transport close, IO error, or server-side close without an opcode.
@@ -201,6 +204,20 @@ pub fn parse_ready_session(payload: &Value) -> Option<(String, Option<String>)> 
         .and_then(Value::as_str)
         .map(String::from);
     Some((session_id, resume_url))
+}
+
+/// Number of consecutive RESUME-without-opcode-signal disconnects we tolerate
+/// before clearing session state and falling back to IDENTIFY. A single
+/// occurrence is treated as a likely transient transport drop and triggers a
+/// RESUME retry; further occurrences are treated as Discord rejecting RESUME
+/// via a close code and force a fresh IDENTIFY.
+const RESUME_NO_SIGNAL_CLEAR_THRESHOLD: u32 = 2;
+
+/// Returns `true` if `run()` should clear session state and IDENTIFY on the
+/// next attempt instead of retrying RESUME. Extracted so the retry policy is
+/// unit-testable without spinning up the full gateway loop.
+fn resume_no_signal_should_clear(consecutive: u32) -> bool {
+    consecutive >= RESUME_NO_SIGNAL_CLEAR_THRESHOLD
 }
 
 /// Backoff schedule for INVALID_SESSION re-IDENTIFY attempts.
@@ -353,6 +370,7 @@ impl DiscordConnector {
     /// Exits immediately when `shutting_down` is set to `true`.
     pub async fn run(&self) -> anyhow::Result<()> {
         let mut consecutive_invalid_sessions: u32 = 0;
+        let mut consecutive_resume_no_signal: u32 = 0;
         while !self.shutting_down.load(Ordering::Relaxed) {
             let outcome = match self.connect_and_run().await {
                 Ok(reason) => Some(reason),
@@ -369,6 +387,7 @@ impl DiscordConnector {
                 Some(DisconnectReason::SessionInvalidated) => {
                     self.clear_session_state();
                     consecutive_invalid_sessions = consecutive_invalid_sessions.saturating_add(1);
+                    consecutive_resume_no_signal = 0;
                     let secs = invalid_session_backoff_secs(consecutive_invalid_sessions);
                     tracing::warn!(
                         consecutive = consecutive_invalid_sessions,
@@ -378,25 +397,41 @@ impl DiscordConnector {
                 }
                 Some(DisconnectReason::ResumeFailedNoSignal) => {
                     // RESUME-attempt connection died without an opcode signal —
-                    // typically Discord rejecting RESUME via a close code (4007
-                    // invalid seq, 4009 session timeout, etc.). Drop session
-                    // state and apply the invalid-session backoff so the next
-                    // attempt does a fresh IDENTIFY instead of hot-looping on a
-                    // RESUME the server keeps refusing.
-                    tracing::warn!(
-                        "RESUME ended without opcode signal; clearing session and falling back to IDENTIFY"
-                    );
-                    self.clear_session_state();
-                    consecutive_invalid_sessions = consecutive_invalid_sessions.saturating_add(1);
-                    let secs = invalid_session_backoff_secs(consecutive_invalid_sessions);
-                    Duration::from_secs(secs)
+                    // ambiguous: could be Discord rejecting RESUME via close
+                    // code (4007 invalid seq, 4009 session timeout) OR a flaky
+                    // transport drop before any opcode arrived. Retry RESUME
+                    // once before giving up so transient network blips don't
+                    // discard a still-valid session, but bail to IDENTIFY on
+                    // repeat failures so we don't hot-loop a RESUME the server
+                    // keeps refusing.
+                    consecutive_resume_no_signal =
+                        consecutive_resume_no_signal.saturating_add(1);
+                    if resume_no_signal_should_clear(consecutive_resume_no_signal) {
+                        tracing::warn!(
+                            consecutive = consecutive_resume_no_signal,
+                            "RESUME ended without opcode signal repeatedly; clearing session and falling back to IDENTIFY"
+                        );
+                        self.clear_session_state();
+                        consecutive_invalid_sessions =
+                            consecutive_invalid_sessions.saturating_add(1);
+                        consecutive_resume_no_signal = 0;
+                        let secs = invalid_session_backoff_secs(consecutive_invalid_sessions);
+                        Duration::from_secs(secs)
+                    } else {
+                        tracing::warn!(
+                            "RESUME ended without opcode signal; retrying RESUME before falling back to IDENTIFY"
+                        );
+                        Duration::from_secs(5)
+                    }
                 }
                 Some(DisconnectReason::OpcodeResumable) => {
                     consecutive_invalid_sessions = 0;
+                    consecutive_resume_no_signal = 0;
                     Duration::from_secs(1)
                 }
                 Some(DisconnectReason::GenericClose) | None => {
                     consecutive_invalid_sessions = 0;
+                    consecutive_resume_no_signal = 0;
                     Duration::from_secs(5)
                 }
             };
@@ -1058,14 +1093,29 @@ mod tests {
     }
 
     #[test]
-    fn classify_no_signal_after_resume_falls_back_to_identify() {
-        // The P1 review case: RESUME closed without opcode (likely close-code
-        // 4007/4009). Must classify as ResumeFailedNoSignal so run() clears
-        // session state and the next attempt is a fresh IDENTIFY.
+    fn classify_no_signal_after_resume_is_resume_failed_no_signal() {
+        // RESUME-attempt close without opcode is ambiguous: could be Discord
+        // rejecting via close-code (4007/4009) or a flaky transport drop.
+        // The classifier just labels it; `run()` decides retry-vs-clear via
+        // `resume_no_signal_should_clear`.
         assert_eq!(
             DisconnectReason::from_signal(None, true),
             DisconnectReason::ResumeFailedNoSignal
         );
+    }
+
+    #[test]
+    fn resume_no_signal_threshold_retries_once_then_clears() {
+        // First RESUME-without-signal disconnect must NOT clear session — a
+        // single transient transport drop should retry RESUME so we don't
+        // discard a still-valid session and lose replayable events.
+        assert!(!resume_no_signal_should_clear(0));
+        assert!(!resume_no_signal_should_clear(1));
+        // Second consecutive occurrence flips to clear-and-IDENTIFY so we
+        // can't hot-loop a RESUME the server keeps refusing.
+        assert!(resume_no_signal_should_clear(2));
+        assert!(resume_no_signal_should_clear(3));
+        assert!(resume_no_signal_should_clear(u32::MAX));
     }
 
     #[test]

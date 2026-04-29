@@ -117,3 +117,103 @@ export type AgentDetail = Record<string, unknown> & { name?: string; provider?: 
 
 export const getAgents = () => apiFetch<AgentInfo[]>('/agents');
 export const getAgent = (id: string) => apiFetch<AgentDetail>(`/agents/${encodeURIComponent(id)}`);
+
+// ── Chat streaming ─────────────────────────────────────────────────────────
+
+export interface ChatStreamDelta {
+  type: 'delta';
+  delta: string;
+  messageId: string;
+  sessionId: string;
+}
+
+export interface ChatStreamDone {
+  type: 'done';
+  usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+}
+
+export type ChatStreamEvent = ChatStreamDelta | ChatStreamDone;
+
+/** Parse a raw SSE message into a ChatStreamEvent. Returns null for unknown event types. */
+export function parseChatSseEvent(
+  eventType: string,
+  dataJson: string,
+): ChatStreamEvent | null {
+  if (eventType === 'message') {
+    const raw = JSON.parse(dataJson) as {
+      delta: string;
+      message_id: string;
+      session_id: string;
+    };
+    return {
+      type: 'delta',
+      delta: raw.delta,
+      messageId: raw.message_id,
+      sessionId: raw.session_id,
+    };
+  }
+  if (eventType === 'done') {
+    const raw = JSON.parse(dataJson) as {
+      status: string;
+      usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    };
+    return {
+      type: 'done',
+      usage: {
+        promptTokens: raw.usage.prompt_tokens,
+        completionTokens: raw.usage.completion_tokens,
+        totalTokens: raw.usage.total_tokens,
+      },
+    };
+  }
+  // Unknown event type — ignore gracefully
+  return null;
+}
+
+export interface ChatStreamOptions {
+  message: string;
+  signal: AbortSignal;
+  onEvent: (event: ChatStreamEvent) => void;
+  onError: (err: unknown) => void;
+}
+
+export async function chatStream({
+  message,
+  signal,
+  onEvent,
+  onError,
+}: ChatStreamOptions): Promise<void> {
+  const { fetchEventSource } = await import('@microsoft/fetch-event-source');
+  const token = getToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  await fetchEventSource(`${API_BASE}/chat`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message, stream: true }),
+    signal,
+    async onopen(response) {
+      if (!response.ok) {
+        const text = await response.text();
+        const body = text ? safeJson(text) : null;
+        const msg =
+          typeof body === 'object' && body && 'error' in body
+            ? String((body as { error: unknown }).error)
+            : response.statusText;
+        throw new ApiError(response.status, body, msg);
+      }
+    },
+    onmessage(ev) {
+      const parsed = parseChatSseEvent(ev.event ?? '', ev.data);
+      if (parsed) onEvent(parsed);
+    },
+    onerror(err) {
+      onError(err);
+      // Returning undefined lets fetchEventSource retry by default — throw to stop
+      throw err;
+    },
+  });
+}

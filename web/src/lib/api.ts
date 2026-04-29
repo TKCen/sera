@@ -28,7 +28,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   const headers = new Headers(init.headers);
   const token = getToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  if (init.body && !headers.has('Content-Type')) {
+  if (shouldAttachJsonContentType(init.body, headers)) {
     headers.set('Content-Type', 'application/json');
   }
 
@@ -45,6 +45,13 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   }
 
   return body as T;
+}
+
+function shouldAttachJsonContentType(body: BodyInit | null | undefined, headers: Headers): boolean {
+  if (!body || headers.has('Content-Type')) return false;
+  // Browser-managed bodies set their own Content-Type (with multipart boundary etc.).
+  // Only auto-set application/json for plain string payloads.
+  return typeof body === 'string';
 }
 
 function safeJson(text: string): unknown {
@@ -71,18 +78,27 @@ export interface AuthMe {
   principal_id: string;
   sub: string;
   roles: string[];
-  mode: 'autonomous' | string;
+  mode: string;
 }
 
 export const getHealth = () => apiFetch<Health>('/health');
 
 export const getReadiness = () =>
   apiFetch<Readiness>('/health/ready').catch((err) => {
-    // 503 is a valid readiness response carrying {status:"not_ready", ...}
-    if (err instanceof ApiError && err.status === 503 && err.body) {
-      return err.body as Readiness;
+    // 503 carries the same {status, runtime_connected} shape on the not-ready path.
+    if (err instanceof ApiError && err.status === 503 && isReadiness(err.body)) {
+      return err.body;
     }
     throw err;
   });
+
+function isReadiness(value: unknown): value is Readiness {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    (v.status === 'ready' || v.status === 'not_ready') &&
+    typeof v.runtime_connected === 'boolean'
+  );
+}
 
 export const getAuthMe = () => apiFetch<AuthMe>('/auth/me');

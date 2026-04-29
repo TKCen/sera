@@ -38,7 +38,7 @@ export function AgentsListView() {
             <li key={agent.name}>
               <button
                 type="button"
-                onClick={() => void navigate(`/agents/${agent.name}`)}
+                onClick={() => void navigate(`/agents/${encodeURIComponent(agent.name)}`)}
                 className="w-full rounded-lg border border-zinc-800 bg-zinc-900 p-4 text-left hover:border-zinc-700 hover:bg-zinc-800"
               >
                 <div className="font-medium text-zinc-100">{agent.name}</div>

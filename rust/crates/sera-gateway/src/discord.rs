@@ -64,13 +64,19 @@ enum DisconnectReason {
     /// Server told us the session is dead (Op 9 with `d=false`). The connector
     /// must clear stored session state and IDENTIFY again with a long backoff.
     SessionInvalidated,
-    /// We sent RESUME on this connection and the loop ended without an opcode
-    /// signal. This straddles two real cases: Discord rejecting RESUME via a
-    /// close code (4007 invalid seq, 4009 session timeout, etc.) and a flaky
-    /// transport drop before any opcode arrived. `run()` distinguishes them
-    /// by counting consecutive occurrences — a single occurrence retries
-    /// RESUME (preserving a still-valid session through transient drops),
-    /// repeated occurrences clear session state and fall back to IDENTIFY.
+    /// We sent RESUME on this connection, the server never sent a `RESUMED`
+    /// dispatch confirming the resume succeeded, and the loop ended without
+    /// an opcode signal. This straddles two real cases: Discord rejecting
+    /// RESUME via a close code (4007 invalid seq, 4009 session timeout, etc.)
+    /// and a flaky transport drop before any opcode arrived. `run()`
+    /// distinguishes them by counting consecutive occurrences — a single
+    /// occurrence retries RESUME (preserving a still-valid session through
+    /// transient drops), repeated occurrences clear session state and fall
+    /// back to IDENTIFY.
+    ///
+    /// A close after `RESUMED` is observed is `GenericClose`, not this
+    /// variant — at that point the resume has already succeeded and the
+    /// disconnect is unrelated to resume status.
     ResumeFailedNoSignal,
     /// IDENTIFY-path connection ended without an opcode signal — generic
     /// transport close, IO error, or server-side close without an opcode.
@@ -81,12 +87,24 @@ enum DisconnectReason {
 
 impl DisconnectReason {
     /// Pure classifier so the mapping is unit-testable without a real socket.
-    fn from_signal(signal: Option<HandlerSignal>, attempted_resume: bool) -> Self {
-        match (signal, attempted_resume) {
-            (Some(HandlerSignal::SessionInvalidated), _) => Self::SessionInvalidated,
-            (Some(HandlerSignal::Reconnect), _) => Self::OpcodeResumable,
-            (None, true) => Self::ResumeFailedNoSignal,
-            (None, false) => Self::GenericClose,
+    ///
+    /// * `signal` — opcode-driven termination from the event loop.
+    /// * `attempted_resume` — `true` if this connection was opened with a RESUME
+    ///   payload (vs IDENTIFY).
+    /// * `resume_succeeded` — `true` once we have observed a `RESUMED` dispatch
+    ///   on this connection, indicating the resume was accepted by the server.
+    ///   After that point a no-signal close is just a transport drop on a
+    ///   confirmed session, not a resume failure.
+    fn from_signal(
+        signal: Option<HandlerSignal>,
+        attempted_resume: bool,
+        resume_succeeded: bool,
+    ) -> Self {
+        match signal {
+            Some(HandlerSignal::SessionInvalidated) => Self::SessionInvalidated,
+            Some(HandlerSignal::Reconnect) => Self::OpcodeResumable,
+            None if attempted_resume && !resume_succeeded => Self::ResumeFailedNoSignal,
+            None => Self::GenericClose,
         }
     }
 }
@@ -554,8 +572,11 @@ impl DiscordConnector {
 
         // Main event loop — merge heartbeat sends with reads. The handler
         // returns Some(signal) when an opcode mandates closing the connection;
-        // we propagate that as the DisconnectReason.
+        // we propagate that as the DisconnectReason. We also track whether a
+        // RESUMED dispatch was observed so that no-signal closes after a
+        // successful resume aren't misclassified as resume failures.
         let mut signal: Option<HandlerSignal> = None;
+        let mut resume_succeeded = false;
         loop {
             tokio::select! {
                 Some(hb_msg) = hb_rx.recv() => {
@@ -569,6 +590,13 @@ impl DiscordConnector {
                         Some(Ok(Message::Text(text))) => {
                             match serde_json::from_str::<Value>(&text) {
                                 Ok(payload) => {
+                                    if attempted_resume
+                                        && !resume_succeeded
+                                        && parse_dispatch_event(&payload).as_deref()
+                                            == Some("RESUMED")
+                                    {
+                                        resume_succeeded = true;
+                                    }
                                     if let Some(sig) = self.handle_payload(&payload).await {
                                         signal = Some(sig);
                                         break;
@@ -593,7 +621,11 @@ impl DiscordConnector {
             }
         }
 
-        Ok(DisconnectReason::from_signal(signal, attempted_resume))
+        Ok(DisconnectReason::from_signal(
+            signal,
+            attempted_resume,
+            resume_succeeded,
+        ))
     }
 
     async fn handle_payload(&self, payload: &Value) -> Option<HandlerSignal> {
@@ -1068,39 +1100,62 @@ mod tests {
 
     #[test]
     fn classify_session_invalidated_signal_overrides_attempted_resume() {
-        // Op 9 (d=false) must invalidate even if we'd just sent IDENTIFY.
-        assert_eq!(
-            DisconnectReason::from_signal(Some(HandlerSignal::SessionInvalidated), false),
-            DisconnectReason::SessionInvalidated
-        );
-        assert_eq!(
-            DisconnectReason::from_signal(Some(HandlerSignal::SessionInvalidated), true),
-            DisconnectReason::SessionInvalidated
-        );
+        // Op 9 (d=false) must invalidate regardless of attempted_resume /
+        // resume_succeeded.
+        for &attempted_resume in &[false, true] {
+            for &resume_succeeded in &[false, true] {
+                assert_eq!(
+                    DisconnectReason::from_signal(
+                        Some(HandlerSignal::SessionInvalidated),
+                        attempted_resume,
+                        resume_succeeded
+                    ),
+                    DisconnectReason::SessionInvalidated
+                );
+            }
+        }
     }
 
     #[test]
     fn classify_opcode_reconnect_signal_overrides_attempted_resume() {
         // Op 7 RECONNECT or Op 9 (d=true) — keep session, short backoff.
-        assert_eq!(
-            DisconnectReason::from_signal(Some(HandlerSignal::Reconnect), false),
-            DisconnectReason::OpcodeResumable
-        );
-        assert_eq!(
-            DisconnectReason::from_signal(Some(HandlerSignal::Reconnect), true),
-            DisconnectReason::OpcodeResumable
-        );
+        for &attempted_resume in &[false, true] {
+            for &resume_succeeded in &[false, true] {
+                assert_eq!(
+                    DisconnectReason::from_signal(
+                        Some(HandlerSignal::Reconnect),
+                        attempted_resume,
+                        resume_succeeded
+                    ),
+                    DisconnectReason::OpcodeResumable
+                );
+            }
+        }
     }
 
     #[test]
     fn classify_no_signal_after_resume_is_resume_failed_no_signal() {
-        // RESUME-attempt close without opcode is ambiguous: could be Discord
-        // rejecting via close-code (4007/4009) or a flaky transport drop.
-        // The classifier just labels it; `run()` decides retry-vs-clear via
+        // RESUME-attempt close without opcode AND without a prior RESUMED
+        // confirmation is ambiguous: could be Discord rejecting via
+        // close-code (4007/4009) or a flaky transport drop. The classifier
+        // just labels it; `run()` decides retry-vs-clear via
         // `resume_no_signal_should_clear`.
         assert_eq!(
-            DisconnectReason::from_signal(None, true),
+            DisconnectReason::from_signal(None, true, false),
             DisconnectReason::ResumeFailedNoSignal
+        );
+    }
+
+    #[test]
+    fn classify_no_signal_after_resumed_is_generic_close() {
+        // The Codex P1 case: once we've seen a RESUMED dispatch, the resume
+        // has already succeeded. A later transport-level close is a normal
+        // disconnect, not a resume failure — must classify as GenericClose so
+        // run() doesn't increment resume-no-signal counter and eventually
+        // clear a still-valid session.
+        assert_eq!(
+            DisconnectReason::from_signal(None, true, true),
+            DisconnectReason::GenericClose
         );
     }
 
@@ -1122,10 +1177,13 @@ mod tests {
     fn classify_no_signal_after_identify_is_generic_close() {
         // The P2 review case: a transport-level close on an IDENTIFY-path
         // connection should not get the 1s "happy path" backoff.
-        assert_eq!(
-            DisconnectReason::from_signal(None, false),
-            DisconnectReason::GenericClose
-        );
+        // resume_succeeded is irrelevant on the IDENTIFY path.
+        for &resume_succeeded in &[false, true] {
+            assert_eq!(
+                DisconnectReason::from_signal(None, false, resume_succeeded),
+                DisconnectReason::GenericClose
+            );
+        }
     }
 
     #[test]

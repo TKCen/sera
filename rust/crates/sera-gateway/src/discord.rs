@@ -57,12 +57,35 @@ pub struct DiscordConnector {
 /// decision in [`DiscordConnector::run`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DisconnectReason {
-    /// Connection ended in a state where the existing session may still be
-    /// resumed: a normal close, an Op 7 RECONNECT, or an Op 9 with `d=true`.
-    Resumable,
+    /// Server explicitly asked us to reconnect (Op 7 RECONNECT) or said the
+    /// session was invalid-but-resumable (Op 9 with `d=true`). Keep session
+    /// state and apply a short 1s backoff before reconnecting + RESUMing.
+    OpcodeResumable,
     /// Server told us the session is dead (Op 9 with `d=false`). The connector
-    /// must clear stored session state and IDENTIFY again with a backoff.
+    /// must clear stored session state and IDENTIFY again with a long backoff.
     SessionInvalidated,
+    /// We sent RESUME on this connection and the loop ended without an opcode
+    /// signal — typically Discord rejecting RESUME via a close code (4007
+    /// invalid seq, 4009 session timeout, etc.). Clear session state so the
+    /// next attempt is a fresh IDENTIFY; otherwise we'd hot-loop on RESUME.
+    ResumeFailedNoSignal,
+    /// IDENTIFY-path connection ended without an opcode signal — generic
+    /// transport close, IO error, or server-side close without an opcode.
+    /// Apply the standard 5s backoff and keep whatever session state a READY
+    /// may have populated (so the next attempt can RESUME if applicable).
+    GenericClose,
+}
+
+impl DisconnectReason {
+    /// Pure classifier so the mapping is unit-testable without a real socket.
+    fn from_signal(signal: Option<HandlerSignal>, attempted_resume: bool) -> Self {
+        match (signal, attempted_resume) {
+            (Some(HandlerSignal::SessionInvalidated), _) => Self::SessionInvalidated,
+            (Some(HandlerSignal::Reconnect), _) => Self::OpcodeResumable,
+            (None, true) => Self::ResumeFailedNoSignal,
+            (None, false) => Self::GenericClose,
+        }
+    }
 }
 
 /// Signal from [`DiscordConnector::handle_payload`] back to the event loop
@@ -353,11 +376,26 @@ impl DiscordConnector {
                     );
                     Duration::from_secs(secs)
                 }
-                Some(DisconnectReason::Resumable) => {
+                Some(DisconnectReason::ResumeFailedNoSignal) => {
+                    // RESUME-attempt connection died without an opcode signal —
+                    // typically Discord rejecting RESUME via a close code (4007
+                    // invalid seq, 4009 session timeout, etc.). Drop session
+                    // state and apply the invalid-session backoff so the next
+                    // attempt does a fresh IDENTIFY instead of hot-looping on a
+                    // RESUME the server keeps refusing.
+                    tracing::warn!(
+                        "RESUME ended without opcode signal; clearing session and falling back to IDENTIFY"
+                    );
+                    self.clear_session_state();
+                    consecutive_invalid_sessions = consecutive_invalid_sessions.saturating_add(1);
+                    let secs = invalid_session_backoff_secs(consecutive_invalid_sessions);
+                    Duration::from_secs(secs)
+                }
+                Some(DisconnectReason::OpcodeResumable) => {
                     consecutive_invalid_sessions = 0;
                     Duration::from_secs(1)
                 }
-                None => {
+                Some(DisconnectReason::GenericClose) | None => {
                     consecutive_invalid_sessions = 0;
                     Duration::from_secs(5)
                 }
@@ -435,18 +473,21 @@ impl DiscordConnector {
         // session id and a non-negative last sequence from a prior connection.
         let session_for_resume = self.current_session();
         let seq_for_resume = self.last_sequence.load(Ordering::Relaxed);
-        let initial_payload = match session_for_resume.as_deref() {
+        let (initial_payload, attempted_resume) = match session_for_resume.as_deref() {
             Some(sid) if seq_for_resume >= 0 => {
                 tracing::info!(
                     session_id = sid,
                     seq = seq_for_resume,
                     "Sending RESUME to Discord Gateway"
                 );
-                build_resume_payload(&self.token, sid, seq_for_resume)
+                (build_resume_payload(&self.token, sid, seq_for_resume), true)
             }
             _ => {
                 tracing::info!("Sending IDENTIFY to Discord Gateway");
-                build_identify_payload(&self.token, &self.agent_name)
+                (
+                    build_identify_payload(&self.token, &self.agent_name),
+                    false,
+                )
             }
         };
         write
@@ -517,10 +558,7 @@ impl DiscordConnector {
             }
         }
 
-        Ok(match signal {
-            Some(HandlerSignal::SessionInvalidated) => DisconnectReason::SessionInvalidated,
-            Some(HandlerSignal::Reconnect) | None => DisconnectReason::Resumable,
-        })
+        Ok(DisconnectReason::from_signal(signal, attempted_resume))
     }
 
     async fn handle_payload(&self, payload: &Value) -> Option<HandlerSignal> {
@@ -988,6 +1026,56 @@ mod tests {
         let shutting_down = Arc::new(AtomicBool::new(false));
         let connector = Arc::new(DiscordConnector::new("token", "agent", tx, shutting_down));
         (connector, rx)
+    }
+
+    // DisconnectReason classifier — pure mapping so we don't need a real socket
+    // to verify each (signal, attempted_resume) pair lands on the right branch.
+
+    #[test]
+    fn classify_session_invalidated_signal_overrides_attempted_resume() {
+        // Op 9 (d=false) must invalidate even if we'd just sent IDENTIFY.
+        assert_eq!(
+            DisconnectReason::from_signal(Some(HandlerSignal::SessionInvalidated), false),
+            DisconnectReason::SessionInvalidated
+        );
+        assert_eq!(
+            DisconnectReason::from_signal(Some(HandlerSignal::SessionInvalidated), true),
+            DisconnectReason::SessionInvalidated
+        );
+    }
+
+    #[test]
+    fn classify_opcode_reconnect_signal_overrides_attempted_resume() {
+        // Op 7 RECONNECT or Op 9 (d=true) — keep session, short backoff.
+        assert_eq!(
+            DisconnectReason::from_signal(Some(HandlerSignal::Reconnect), false),
+            DisconnectReason::OpcodeResumable
+        );
+        assert_eq!(
+            DisconnectReason::from_signal(Some(HandlerSignal::Reconnect), true),
+            DisconnectReason::OpcodeResumable
+        );
+    }
+
+    #[test]
+    fn classify_no_signal_after_resume_falls_back_to_identify() {
+        // The P1 review case: RESUME closed without opcode (likely close-code
+        // 4007/4009). Must classify as ResumeFailedNoSignal so run() clears
+        // session state and the next attempt is a fresh IDENTIFY.
+        assert_eq!(
+            DisconnectReason::from_signal(None, true),
+            DisconnectReason::ResumeFailedNoSignal
+        );
+    }
+
+    #[test]
+    fn classify_no_signal_after_identify_is_generic_close() {
+        // The P2 review case: a transport-level close on an IDENTIFY-path
+        // connection should not get the 1s "happy path" backoff.
+        assert_eq!(
+            DisconnectReason::from_signal(None, false),
+            DisconnectReason::GenericClose
+        );
     }
 
     #[test]

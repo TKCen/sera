@@ -43,6 +43,15 @@ export function ChatView() {
       );
     } else if (event.type === 'done') {
       setThinking(false);
+    } else if (event.type === 'error') {
+      // sera-aepj: gateway emits an `error` SSE frame when the runtime
+      // returned an empty reply (or otherwise failed mid-turn). Surface
+      // it on the assistant placeholder so the user sees the failure
+      // instead of a stuck "thinking…" spinner.
+      setMessages((prev) =>
+        prev.map((m) => (m.id === msgId ? { ...m, error: event.error } : m)),
+      );
+      setThinking(false);
     }
   }, []);
 

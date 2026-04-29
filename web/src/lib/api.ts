@@ -134,7 +134,14 @@ export interface ChatStreamDone {
   usage: { promptTokens: number; completionTokens: number; totalTokens: number };
 }
 
-export type ChatStreamEvent = ChatStreamDelta | ChatStreamDone;
+export interface ChatStreamError {
+  type: 'error';
+  error: string;
+  sessionId?: string;
+  messageId?: string;
+}
+
+export type ChatStreamEvent = ChatStreamDelta | ChatStreamDone | ChatStreamError;
 
 /** Parse a raw SSE message into a ChatStreamEvent. Returns null for unknown event types or malformed JSON. */
 export function parseChatSseEvent(
@@ -167,6 +174,19 @@ export function parseChatSseEvent(
           completionTokens: raw.usage?.completion_tokens ?? 0,
           totalTokens: raw.usage?.total_tokens ?? 0,
         },
+      };
+    }
+    if (eventType === 'error') {
+      const raw = JSON.parse(dataJson) as {
+        error: string;
+        session_id?: string;
+        message_id?: string;
+      };
+      return {
+        type: 'error',
+        error: raw.error,
+        sessionId: raw.session_id,
+        messageId: raw.message_id,
       };
     }
   } catch {

@@ -22,6 +22,12 @@ services:
       - RUST_LOG=${RUST_LOG:-info}
       - SERA_RUNTIME_BIN=/usr/local/bin/sera-runtime
       - SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=${SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE:-1}
+      # L.3 (#1104) made the admin server gate on this in non-local mode.
+      # `--local` would auto-generate it, but `--local` also probes
+      # localhost:1234 which isn't reachable from inside this container —
+      # the host's LM Studio sits on host.docker.internal. So provide a token
+      # explicitly.
+      - SERA_ADMIN_TOKEN=${SERA_ADMIN_TOKEN:-sera-admin-dev}
     # Bridge networking so published ports reach the host on WSL2 Docker Desktop.
     # (network_mode: host binds to the Docker Desktop VM netns, not the WSL2
     # distro, so `ports:` is ignored and host curl to localhost:3001 times out.)

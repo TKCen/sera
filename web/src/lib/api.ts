@@ -223,3 +223,30 @@ export async function chatStream({
     },
   });
 }
+
+// ── Sessions ───────────────────────────────────────────────────────────────
+
+export interface SessionInfo {
+  id: string;
+  agent_id: string;
+  session_key: string;
+  state: string;
+  principal_id: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface TranscriptEntry {
+  id: number;
+  session_id: string;
+  role: string;
+  content: string | null;
+  tool_calls: string | null;
+  tool_call_id: string | null;
+  created_at: string;
+}
+
+export const getSessions = () => apiFetch<SessionInfo[]>('/sessions');
+
+export const getSessionTranscript = (id: string) =>
+  apiFetch<TranscriptEntry[]>(`/sessions/${encodeURIComponent(id)}/transcript`);

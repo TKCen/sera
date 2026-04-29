@@ -13,6 +13,8 @@ import { DashboardView } from '@/views/DashboardView';
 import { AgentsListView } from '@/views/AgentsListView';
 import { AgentDetailView } from '@/views/AgentDetailView';
 import { ChatView } from '@/views/ChatView';
+import { SessionsListView } from '@/views/SessionsListView';
+import { SessionDetailView } from '@/views/SessionDetailView';
 
 const el = document.getElementById('root');
 if (!el) throw new Error('Root element not found');
@@ -36,6 +38,8 @@ createRoot(el).render(
               <Route path="agents" element={<AgentsListView />} />
               <Route path="agents/:id" element={<AgentDetailView />} />
               <Route path="chat" element={<ChatView />} />
+              <Route path="sessions" element={<SessionsListView />} />
+              <Route path="sessions/:id" element={<SessionDetailView />} />
             </Route>
           </Routes>
         </BrowserRouter>

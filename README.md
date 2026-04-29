@@ -114,6 +114,16 @@ cargo run --bin sera-tui
 
 Agent list, live session view, inline HITL approvals, evolve-proposal status.
 
+### Web operator console
+
+```bash
+cd web
+bun install
+bun run dev          # http://localhost:5173 — proxies /api → :3001
+```
+
+A React 19 + Vite + Tailwind v4 SPA against the rust gateway. Five pages: dashboard (health/readiness/identity), live SSE chat, agents list/detail, sessions list + transcript, hooks registry. Sign in with `sera_bootstrap_dev_123` (or your `SERA_BOOTSTRAP_API_KEY`). See `web/CLAUDE.md` for the full local-run + Docker story.
+
 > **Demo placeholder.** A terminal-cast of the CLI + TUI flow is planned for the next release. If you record one while evaluating SERA, a PR adding `docs/media/quickstart.gif` is welcome.
 
 ## Quickstart — enterprise profile (Postgres + pgvector + Centrifugo)
@@ -122,7 +132,7 @@ Agent list, live session view, inline HITL approvals, evolve-proposal status.
 docker compose -f docker-compose.rust.yaml up --build
 ```
 
-Starts Postgres (with pgvector), Centrifugo, and `sera-gateway` on :3001. The gateway auto-detects `DATABASE_URL` and switches from SQLite to Postgres for all stores; pgvector replaces the SQLite hybrid store for Tier-1 semantic memory; Centrifugo enables multi-pod thought streaming.
+Starts Postgres (with pgvector), Centrifugo, `sera-gateway` on :3001, and the web operator console on <http://localhost:5173>. The gateway auto-detects `DATABASE_URL` and switches from SQLite to Postgres for all stores; pgvector replaces the SQLite hybrid store for Tier-1 semantic memory; Centrifugo enables multi-pod thought streaming.
 
 ## Memory tiers
 

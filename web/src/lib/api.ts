@@ -102,3 +102,18 @@ function isReadiness(value: unknown): value is Readiness {
 }
 
 export const getAuthMe = () => apiFetch<AuthMe>('/auth/me');
+
+// ── Agents ─────────────────────────────────────────────────────────────────
+
+export interface AgentInfo {
+  name: string;
+  provider: string;
+  model?: string | null;
+  has_tools: boolean;
+}
+
+// Detail shape is loose JSON from the gateway — use a wide type.
+export type AgentDetail = Record<string, unknown> & { name?: string; provider?: string };
+
+export const getAgents = () => apiFetch<AgentInfo[]>('/agents');
+export const getAgent = (id: string) => apiFetch<AgentDetail>(`/agents/${encodeURIComponent(id)}`);

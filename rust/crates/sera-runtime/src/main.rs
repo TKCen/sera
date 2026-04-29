@@ -229,15 +229,29 @@ async fn main() -> anyhow::Result<()> {
     let dispatcher = RegistryDispatcher::new(Arc::clone(&registry))
         .with_capability_registry(Arc::clone(&capability_registry), config.agent_id.clone());
 
-    // Pre-compute tool definitions for the LLM via serde round-trip
-    let tool_defs: Vec<sera_types::tool::ToolDefinition> = registry
-        .definitions()
-        .iter()
-        .filter_map(|d| {
-            let value = serde_json::to_value(d).ok()?;
-            serde_json::from_value(value).ok()
-        })
-        .collect();
+    // Pre-compute tool definitions for the LLM via serde round-trip, then
+    // narrow to the manifest-allowed subset (bead sera-hwny). The gateway
+    // forwards the agent's `tools.allow` list as `SERA_AGENT_TOOLS_ALLOW` and
+    // reserves `SERA_AGENT_TOOLS_DENY` for ops/operator override; an unset or
+    // empty allow list preserves the legacy "expose every built-in" behaviour.
+    let tool_filter = sera_runtime::tools::filter::ToolNameFilter::from_env();
+    let tool_defs: Vec<sera_types::tool::ToolDefinition> = {
+        let runtime_defs = registry.definitions();
+        let filtered = tool_filter.filter_definitions(runtime_defs);
+        filtered
+            .iter()
+            .filter_map(|d| {
+                let value = serde_json::to_value(d).ok()?;
+                serde_json::from_value(value).ok()
+            })
+            .collect()
+    };
+    if !tool_filter.is_pass_through() {
+        tracing::info!(
+            tool_count = tool_defs.len(),
+            "tool schema filter active (SERA_AGENT_TOOLS_ALLOW/DENY)"
+        );
+    }
 
     // sera-jvi + sera-48v: opportunistically attach an [`AccountPool`] and a
     // unified [`ThinkingConfig`] when the corresponding env vars are set.

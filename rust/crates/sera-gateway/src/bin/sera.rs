@@ -3575,6 +3575,23 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         if let Ok(dir) = std::env::var("SERA_CAPABILITY_POLICIES_DIR") {
             env.insert("SERA_CAPABILITY_POLICIES_DIR".to_string(), dir);
         }
+        // sera-hwny: forward the agent manifest's `tools.allow` list as a
+        // comma-separated glob set so the runtime can narrow the tool
+        // definitions handed to the LLM. We always set the var (empty = no
+        // filter) so a stale parent-process value cannot leak into a
+        // freshly-restricted agent. `SERA_AGENT_TOOLS_DENY` is reserved for
+        // an operator override / future manifest field; the runtime reads it
+        // unconditionally. CapabilityRegistry remains the execution gate;
+        // this filter only controls schema disclosure to the LLM.
+        let tools_allow_csv = agent_spec
+            .tools
+            .as_ref()
+            .map(|t| t.allow.join(","))
+            .unwrap_or_default();
+        env.insert("SERA_AGENT_TOOLS_ALLOW".to_string(), tools_allow_csv);
+        if let Ok(deny) = std::env::var("SERA_AGENT_TOOLS_DENY") {
+            env.insert("SERA_AGENT_TOOLS_DENY".to_string(), deny);
+        }
 
         match StdioHarness::spawn(&runtime_bin, env).await {
             Ok(harness) => {

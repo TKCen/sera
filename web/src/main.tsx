@@ -5,8 +5,11 @@ import { BrowserRouter, Routes, Route } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { queryClient } from '@/lib/query-client';
+import { AuthProvider } from '@/contexts/AuthContext';
+import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { Layout } from '@/components/Layout';
-import { HomeView } from '@/views/HomeView';
+import { LoginView } from '@/views/LoginView';
+import { DashboardView } from '@/views/DashboardView';
 
 const el = document.getElementById('root');
 if (!el) throw new Error('Root element not found');
@@ -14,14 +17,23 @@ if (!el) throw new Error('Root element not found');
 createRoot(el).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <Toaster position="top-right" theme="dark" />
-      <BrowserRouter>
-        <Routes>
-          <Route element={<Layout />}>
-            <Route index element={<HomeView />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
+      <AuthProvider>
+        <Toaster position="top-right" theme="dark" />
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<LoginView />} />
+            <Route
+              element={
+                <ProtectedRoute>
+                  <Layout />
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<DashboardView />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

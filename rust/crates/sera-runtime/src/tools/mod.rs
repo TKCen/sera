@@ -15,6 +15,7 @@ pub mod dispatcher;
 pub mod file_edit;
 pub mod file_ops;
 pub mod file_write;
+pub mod filter;
 pub mod glob;
 pub mod grep;
 pub mod http_request;

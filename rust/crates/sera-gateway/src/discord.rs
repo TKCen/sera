@@ -162,12 +162,6 @@ pub fn parse_invalid_session_resumable(payload: &Value) -> Option<bool> {
     Some(payload.get("d").and_then(Value::as_bool).unwrap_or(false))
 }
 
-/// Returns `true` if the payload is opcode 7 (RECONNECT) — server is asking the
-/// client to disconnect and resume.
-pub fn is_op_reconnect(payload: &Value) -> bool {
-    payload.get("op").and_then(Value::as_u64) == Some(OP_RECONNECT)
-}
-
 /// Extract `(session_id, resume_gateway_url)` from a READY dispatch payload.
 /// Both pieces are required to RESUME a session after disconnect.
 pub fn parse_ready_session(payload: &Value) -> Option<(String, Option<String>)> {
@@ -1028,19 +1022,6 @@ mod tests {
         // If `d` is missing or non-bool, treat as non-resumable (safer default).
         let p = serde_json::json!({ "op": 9 });
         assert_eq!(parse_invalid_session_resumable(&p), Some(false));
-    }
-
-    #[test]
-    fn is_op_reconnect_true() {
-        assert!(is_op_reconnect(&serde_json::json!({ "op": 7, "d": null })));
-    }
-
-    #[test]
-    fn is_op_reconnect_false() {
-        assert!(!is_op_reconnect(&serde_json::json!({ "op": 0, "d": {} })));
-        assert!(!is_op_reconnect(
-            &serde_json::json!({ "op": 9, "d": false })
-        ));
     }
 
     #[test]

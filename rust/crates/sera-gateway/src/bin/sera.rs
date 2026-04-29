@@ -2202,16 +2202,32 @@ async fn execute_steer(
             }
         }
         res = tokio::time::timeout(timeout, async {
-            // Read TurnCompleted event.
+            // Drain the steer turn until its terminal `turn_completed` frame.
+            // The runtime emits the event type at `msg.type` (mirroring
+            // `StdioHarness::send_turn`); a stale code path read `type` at
+            // the top level and never matched, so the loop wedged the lane
+            // until `SERA_TURN_TIMEOUT_SECS` (sera-y9f8).
+            //
+            // We must consume every frame this steer produces — including
+            // intermediate `streaming_delta`s and the final `turn_completed`.
+            // `send_turn` reads from the same harness stdout and exits on the
+            // first `turn_completed` it sees (no `submission_id` correlation),
+            // so any leftover steer event would be misread as the next user
+            // turn's completion and short-circuit it with empty output.
             let mut line = String::new();
             loop {
                 match stdout.read_line(&mut line).await {
                     Ok(0) => break,
                     Ok(_) => {
-                        if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line)
-                            && event.get("type").and_then(|v| v.as_str()) == Some("turn_completed")
-                        {
-                            break;
+                        if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) {
+                            let msg_type = event
+                                .get("msg")
+                                .and_then(|m| m.get("type"))
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("");
+                            if msg_type == "turn_completed" {
+                                break;
+                            }
                         }
                     }
                     Err(_) => break,
@@ -5936,6 +5952,77 @@ spec:
         assert!(
             start.elapsed() < std::time::Duration::from_secs(1),
             "timeout must fire near its bound, not after the test harness limit"
+        );
+    }
+
+    /// sera-y9f8 regression guard: `execute_steer` must read the event
+    /// type from `msg.type` (mirroring `StdioHarness::send_turn`) **and**
+    /// fully drain the steer turn through its terminal `turn_completed`.
+    ///
+    /// Two failure modes are guarded here:
+    /// 1. The original bug — reading `event.type` (top-level) never
+    ///    matched, so the loop wedged the lane until the
+    ///    `SERA_TURN_TIMEOUT_SECS` deadline. We pin the env var to 1 s so
+    ///    a regression bounds the test to ~1 s instead of the 600 s
+    ///    default.
+    /// 2. The follow-up bug flagged on PR #1117 — breaking early on
+    ///    `streaming_delta` leaves the steer's `turn_completed` unread on
+    ///    the shared harness stdout. The next `send_turn` (which does not
+    ///    correlate by `submission_id`) would then consume that leftover
+    ///    completion and return an empty response. We assert that a
+    ///    follow-up `send_turn` still observes the mock's normal
+    ///    `streaming_delta("mock response")` payload, proving no steer
+    ///    frames leaked past the steer call.
+    #[tokio::test]
+    async fn execute_steer_drains_until_turn_completed() {
+        let prior = std::env::var("SERA_TURN_TIMEOUT_SECS").ok();
+        // SAFETY: test-only env mutation; `turn_timeout()` reads the var
+        // each call, so the value is observed inline. Restored before the
+        // test returns to keep parallel tests hermetic.
+        unsafe { std::env::set_var("SERA_TURN_TIMEOUT_SECS", "1") };
+
+        let harness = StdioHarness::spawn_mock().await.unwrap();
+        let cancel = CancellationToken::new();
+        let steer_messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+
+        let start = std::time::Instant::now();
+        let result =
+            execute_steer(&harness, &steer_messages, "y9f8-test-session", &cancel).await;
+        let elapsed = start.elapsed();
+
+        // Follow-up turn on the same harness: must see the mock's normal
+        // payload, not stale steer frames. With an early `streaming_delta`
+        // break, this would observe an empty response because the steer's
+        // `turn_completed` would be the first frame `send_turn` reads.
+        let follow_up = harness
+            .send_turn(Vec::new(), "y9f8-test-session")
+            .await
+            .expect("follow-up send_turn must succeed against a fresh harness state");
+
+        // SAFETY: restoring the pre-test value; same caveat as above.
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("SERA_TURN_TIMEOUT_SECS", v),
+                None => std::env::remove_var("SERA_TURN_TIMEOUT_SECS"),
+            }
+        }
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(900),
+            "execute_steer must break on the steer's `turn_completed` well \
+             before the 1 s SERA_TURN_TIMEOUT_SECS deadline (elapsed={:?})",
+            elapsed
+        );
+        assert_eq!(
+            result.reply, "[steer injected]",
+            "expected the success sentinel, got: {}",
+            result.reply
+        );
+        assert_eq!(
+            follow_up.response, "mock response",
+            "follow-up turn must read the mock's fresh streaming_delta, not \
+             a leaked steer frame; got: {:?}",
+            follow_up.response
         );
     }
 

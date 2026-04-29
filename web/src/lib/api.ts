@@ -54,3 +54,35 @@ function safeJson(text: string): unknown {
     return text;
   }
 }
+
+// ── Typed endpoints ────────────────────────────────────────────────────────
+
+export interface Health {
+  status: 'ok';
+}
+
+export interface Readiness {
+  status: 'ready' | 'not_ready';
+  runtime_connected: boolean;
+}
+
+export interface AuthMe {
+  id: string;
+  principal_id: string;
+  sub: string;
+  roles: string[];
+  mode: 'autonomous' | string;
+}
+
+export const getHealth = () => apiFetch<Health>('/health');
+
+export const getReadiness = () =>
+  apiFetch<Readiness>('/health/ready').catch((err) => {
+    // 503 is a valid readiness response carrying {status:"not_ready", ...}
+    if (err instanceof ApiError && err.status === 503 && err.body) {
+      return err.body as Readiness;
+    }
+    throw err;
+  });
+
+export const getAuthMe = () => apiFetch<AuthMe>('/auth/me');

@@ -136,37 +136,42 @@ export interface ChatStreamDone {
 
 export type ChatStreamEvent = ChatStreamDelta | ChatStreamDone;
 
-/** Parse a raw SSE message into a ChatStreamEvent. Returns null for unknown event types. */
+/** Parse a raw SSE message into a ChatStreamEvent. Returns null for unknown event types or malformed JSON. */
 export function parseChatSseEvent(
   eventType: string,
   dataJson: string,
 ): ChatStreamEvent | null {
-  if (eventType === 'message') {
-    const raw = JSON.parse(dataJson) as {
-      delta: string;
-      message_id: string;
-      session_id: string;
-    };
-    return {
-      type: 'delta',
-      delta: raw.delta,
-      messageId: raw.message_id,
-      sessionId: raw.session_id,
-    };
-  }
-  if (eventType === 'done') {
-    const raw = JSON.parse(dataJson) as {
-      status: string;
-      usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
-    };
-    return {
-      type: 'done',
-      usage: {
-        promptTokens: raw.usage.prompt_tokens,
-        completionTokens: raw.usage.completion_tokens,
-        totalTokens: raw.usage.total_tokens,
-      },
-    };
+  try {
+    if (eventType === 'message') {
+      const raw = JSON.parse(dataJson) as {
+        delta: string;
+        message_id: string;
+        session_id: string;
+      };
+      return {
+        type: 'delta',
+        delta: raw.delta,
+        messageId: raw.message_id,
+        sessionId: raw.session_id,
+      };
+    }
+    if (eventType === 'done') {
+      const raw = JSON.parse(dataJson) as {
+        status: string;
+        usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+      };
+      return {
+        type: 'done',
+        usage: {
+          promptTokens: raw.usage?.prompt_tokens ?? 0,
+          completionTokens: raw.usage?.completion_tokens ?? 0,
+          totalTokens: raw.usage?.total_tokens ?? 0,
+        },
+      };
+    }
+  } catch {
+    // Malformed JSON — ignore gracefully, same contract as unknown event types
+    return null;
   }
   // Unknown event type — ignore gracefully
   return null;

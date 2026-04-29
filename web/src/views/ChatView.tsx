@@ -18,6 +18,7 @@ export function ChatView() {
   const [thinking, setThinking] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(true);
 
   // Scroll to bottom whenever messages change
   useEffect(() => {
@@ -26,7 +27,9 @@ export function ChatView() {
 
   // Abort stream on unmount
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       abortRef.current?.abort();
     };
   }, []);
@@ -65,6 +68,7 @@ export function ChatView() {
         onEvent: (ev) => handleEvent(assistantMsgId, ev),
         onError: (err) => {
           if (err instanceof ApiError && err.status === 401) {
+            setThinking(false);
             signOut();
             return;
           }
@@ -81,17 +85,20 @@ export function ChatView() {
       // AbortError is expected on unmount — ignore
       if (err instanceof DOMException && err.name === 'AbortError') return;
       if (err instanceof ApiError && err.status === 401) {
+        if (mountedRef.current) setThinking(false);
         signOut();
         return;
       }
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMsgId ? { ...m, error: msg } : m,
-        ),
-      );
+      if (mountedRef.current) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsgId ? { ...m, error: msg } : m,
+          ),
+        );
+      }
     } finally {
-      setThinking(false);
+      if (mountedRef.current) setThinking(false);
     }
   }, [input, thinking, handleEvent, signOut]);
 

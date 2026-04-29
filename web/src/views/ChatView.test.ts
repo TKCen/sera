@@ -34,6 +34,19 @@ describe('parseChatSseEvent', () => {
     expect(result).toBeNull();
   });
 
+  it('returns null for malformed JSON in a message event', () => {
+    const result = parseChatSseEvent('message', 'not-valid-json{{{');
+    expect(result).toBeNull();
+  });
+
+  it('returns done with zero usage when usage field is absent', () => {
+    const result = parseChatSseEvent('done', JSON.stringify({ status: 'complete' }));
+    expect(result).toEqual({
+      type: 'done',
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    });
+  });
+
   it('accumulates deltas correctly when applied sequentially', () => {
     const events = [
       { event: 'message', data: JSON.stringify({ delta: 'Hello ', message_id: 'm1', session_id: 's1' }) },

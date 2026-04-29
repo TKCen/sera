@@ -40,6 +40,39 @@ pub struct DiscordConnector {
     /// Shared shutdown flag from `AppState`. When `true` the reconnect loop
     /// exits instead of sleeping for the next attempt.
     shutting_down: Arc<AtomicBool>,
+    /// Session id captured from the most recent READY dispatch. Required to
+    /// send Resume (opcode 6) after a reconnect; cleared on Op 9 with
+    /// `d=false` so the next attempt does a fresh IDENTIFY.
+    session_id: std::sync::Mutex<Option<String>>,
+    /// Per-session reconnect URL captured from READY. When set, subsequent
+    /// reconnects target this host instead of `GATEWAY_URL`.
+    resume_gateway_url: std::sync::Mutex<Option<String>>,
+    /// Last sequence number observed from the gateway. Persists across
+    /// connections so RESUME can replay missed dispatches. `-1` means "no
+    /// sequence yet" (serializes as JSON `null`).
+    last_sequence: Arc<AtomicI64>,
+}
+
+/// Why the current gateway connection ended. Drives the backoff and IDENTIFY-vs-RESUME
+/// decision in [`DiscordConnector::run`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisconnectReason {
+    /// Connection ended in a state where the existing session may still be
+    /// resumed: a normal close, an Op 7 RECONNECT, or an Op 9 with `d=true`.
+    Resumable,
+    /// Server told us the session is dead (Op 9 with `d=false`). The connector
+    /// must clear stored session state and IDENTIFY again with a backoff.
+    SessionInvalidated,
+}
+
+/// Signal from [`DiscordConnector::handle_payload`] back to the event loop
+/// asking it to terminate the current connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HandlerSignal {
+    /// Op 7 RECONNECT or Op 9 with `d=true` — close and resume.
+    Reconnect,
+    /// Op 9 with `d=false` — close, drop session state, re-IDENTIFY.
+    SessionInvalidated,
 }
 
 // ---------------------------------------------------------------------------
@@ -66,11 +99,17 @@ pub const DISCORD_INTENTS: u64 =
 const OP_DISPATCH: u64 = 0;
 const OP_HEARTBEAT: u64 = 1;
 const OP_IDENTIFY: u64 = 2;
+const OP_RESUME: u64 = 6;
+const OP_RECONNECT: u64 = 7;
+const OP_INVALID_SESSION: u64 = 9;
 const OP_HELLO: u64 = 10;
-// const OP_HEARTBEAT_ACK: u64 = 11; // logged but unused
+const OP_HEARTBEAT_ACK: u64 = 11;
 
 const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
 const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
+
+/// Query string Discord requires when connecting to a `resume_gateway_url`.
+const GATEWAY_QUERY: &str = "/?v=10&encoding=json";
 
 // ---------------------------------------------------------------------------
 // Payload helpers (pure functions, tested independently)
@@ -98,6 +137,70 @@ pub fn build_heartbeat_payload(sequence: Option<i64>) -> Value {
         "op": OP_HEARTBEAT,
         "d": sequence,
     })
+}
+
+/// Build a Resume payload (opcode 6) for replaying missed events on a previously
+/// established session.
+pub fn build_resume_payload(token: &str, session_id: &str, sequence: i64) -> Value {
+    serde_json::json!({
+        "op": OP_RESUME,
+        "d": {
+            "token": token,
+            "session_id": session_id,
+            "seq": sequence,
+        }
+    })
+}
+
+/// Returns `Some(resumable)` when the payload is opcode 9 (INVALID_SESSION).
+/// Per Discord docs, `d` is a boolean: `true` means the session can be resumed,
+/// `false` means it must be re-IDENTIFYd from scratch.
+pub fn parse_invalid_session_resumable(payload: &Value) -> Option<bool> {
+    if payload.get("op")?.as_u64()? != OP_INVALID_SESSION {
+        return None;
+    }
+    Some(payload.get("d").and_then(Value::as_bool).unwrap_or(false))
+}
+
+/// Returns `true` if the payload is opcode 7 (RECONNECT) — server is asking the
+/// client to disconnect and resume.
+pub fn is_op_reconnect(payload: &Value) -> bool {
+    payload.get("op").and_then(Value::as_u64) == Some(OP_RECONNECT)
+}
+
+/// Extract `(session_id, resume_gateway_url)` from a READY dispatch payload.
+/// Both pieces are required to RESUME a session after disconnect.
+pub fn parse_ready_session(payload: &Value) -> Option<(String, Option<String>)> {
+    if payload.get("op")?.as_u64()? != OP_DISPATCH {
+        return None;
+    }
+    if payload.get("t")?.as_str()? != "READY" {
+        return None;
+    }
+    let d = payload.get("d")?;
+    let session_id = d.get("session_id")?.as_str()?.to_owned();
+    let resume_url = d
+        .get("resume_gateway_url")
+        .and_then(Value::as_str)
+        .map(String::from);
+    Some((session_id, resume_url))
+}
+
+/// Backoff schedule for INVALID_SESSION re-IDENTIFY attempts.
+///
+/// Discord's spec says clients should wait a random 1-5 seconds before sending a
+/// new IDENTIFY. We follow that for the first few attempts then escalate to a
+/// 30-second cap so a misbehaving server can't keep us in a hot loop. Caller
+/// passes the running consecutive-INVALID_SESSION count (1 for the first one).
+pub fn invalid_session_backoff_secs(consecutive: u32) -> u64 {
+    match consecutive {
+        0 | 1 => 1,
+        2 => 3,
+        3 => 5,
+        4 => 10,
+        5 => 20,
+        _ => 30,
+    }
 }
 
 /// Extract `heartbeat_interval` from a Hello (opcode 10) payload.
@@ -198,23 +301,77 @@ impl DiscordConnector {
             tx,
             bot_user_id: std::sync::Mutex::new(None),
             shutting_down,
+            session_id: std::sync::Mutex::new(None),
+            resume_gateway_url: std::sync::Mutex::new(None),
+            last_sequence: Arc::new(AtomicI64::new(-1)),
         }
     }
 
+    fn clear_session_state(&self) {
+        if let Ok(mut g) = self.session_id.lock() {
+            *g = None;
+        }
+        if let Ok(mut g) = self.resume_gateway_url.lock() {
+            *g = None;
+        }
+        self.last_sequence.store(-1, Ordering::Relaxed);
+    }
+
+    fn current_session(&self) -> Option<String> {
+        self.session_id.lock().ok().and_then(|g| g.clone())
+    }
+
+    fn current_resume_url(&self) -> Option<String> {
+        self.resume_gateway_url.lock().ok().and_then(|g| g.clone())
+    }
+
     /// Start the connector — connects to Discord Gateway, runs heartbeat loop,
-    /// dispatches MESSAGE_CREATE events. Reconnects on close after 5 seconds.
+    /// dispatches MESSAGE_CREATE events. Reconnects after a backoff that
+    /// adapts to the disconnect reason:
+    ///
+    /// * normal close / transport error → 5s, attempt RESUME
+    /// * Op 7 RECONNECT or Op 9 (`d=true`) → 1s, attempt RESUME
+    /// * Op 9 (`d=false`) → escalating 1-30s, drop session, fresh IDENTIFY
+    ///
     /// Exits immediately when `shutting_down` is set to `true`.
     pub async fn run(&self) -> anyhow::Result<()> {
+        let mut consecutive_invalid_sessions: u32 = 0;
         while !self.shutting_down.load(Ordering::Relaxed) {
-            if let Err(e) = self.connect_and_run().await {
-                tracing::error!("Discord gateway error: {e}");
-            }
+            let outcome = match self.connect_and_run().await {
+                Ok(reason) => Some(reason),
+                Err(e) => {
+                    tracing::error!("Discord gateway error: {e}");
+                    None
+                }
+            };
             if self.shutting_down.load(Ordering::Relaxed) {
                 break;
             }
-            tracing::info!("Reconnecting to Discord in 5 seconds...");
+
+            let backoff = match outcome {
+                Some(DisconnectReason::SessionInvalidated) => {
+                    self.clear_session_state();
+                    consecutive_invalid_sessions = consecutive_invalid_sessions.saturating_add(1);
+                    let secs = invalid_session_backoff_secs(consecutive_invalid_sessions);
+                    tracing::warn!(
+                        consecutive = consecutive_invalid_sessions,
+                        "Discord session invalidated; sleeping {secs}s before re-IDENTIFY"
+                    );
+                    Duration::from_secs(secs)
+                }
+                Some(DisconnectReason::Resumable) => {
+                    consecutive_invalid_sessions = 0;
+                    Duration::from_secs(1)
+                }
+                None => {
+                    consecutive_invalid_sessions = 0;
+                    Duration::from_secs(5)
+                }
+            };
+
+            tracing::info!("Reconnecting to Discord in {:?}...", backoff);
             // Sleep interruptibly: wake every 100ms and check the flag.
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            let deadline = tokio::time::Instant::now() + backoff;
             while tokio::time::Instant::now() < deadline {
                 if self.shutting_down.load(Ordering::Relaxed) {
                     return Ok(());
@@ -248,16 +405,23 @@ impl DiscordConnector {
     // Internal
     // -----------------------------------------------------------------------
 
-    async fn connect_and_run(&self) -> anyhow::Result<()> {
-        tracing::info!("Connecting to Discord Gateway...");
+    async fn connect_and_run(&self) -> anyhow::Result<DisconnectReason> {
+        // Pick host: per-session resume URL if we have one, else the canonical
+        // gateway. Both must carry the v=10/encoding=json query string.
+        let url = match self.current_resume_url() {
+            Some(base) => format!("{base}{GATEWAY_QUERY}"),
+            None => GATEWAY_URL.to_owned(),
+        };
+        tracing::info!(url = %url, "Connecting to Discord Gateway...");
 
-        let (ws_stream, _) = tokio_tungstenite::connect_async(GATEWAY_URL).await?;
+        let (ws_stream, _) = tokio_tungstenite::connect_async(&url).await?;
         let (mut write, mut read) = ws_stream.split();
 
         tracing::info!("Discord Gateway connection opened");
 
-        // Shared sequence counter for heartbeats
-        let sequence = Arc::new(AtomicI64::new(-1)); // -1 means null
+        // Sequence counter is shared across reconnects so RESUME can replay
+        // missed events. The heartbeat task gets a clone.
+        let sequence = Arc::clone(&self.last_sequence);
 
         // Read the Hello payload to get heartbeat_interval
         let hello_msg = read
@@ -273,15 +437,31 @@ impl DiscordConnector {
 
         tracing::info!("Heartbeat interval: {heartbeat_ms}ms");
 
-        // Send Identify
-        let identify = build_identify_payload(&self.token, &self.agent_name);
+        // Decide IDENTIFY vs RESUME. We can RESUME only if we have both a
+        // session id and a non-negative last sequence from a prior connection.
+        let session_for_resume = self.current_session();
+        let seq_for_resume = self.last_sequence.load(Ordering::Relaxed);
+        let initial_payload = match session_for_resume.as_deref() {
+            Some(sid) if seq_for_resume >= 0 => {
+                tracing::info!(
+                    session_id = sid,
+                    seq = seq_for_resume,
+                    "Sending RESUME to Discord Gateway"
+                );
+                build_resume_payload(&self.token, sid, seq_for_resume)
+            }
+            _ => {
+                tracing::info!("Sending IDENTIFY to Discord Gateway");
+                build_identify_payload(&self.token, &self.agent_name)
+            }
+        };
         write
-            .send(Message::Text(identify.to_string().into()))
+            .send(Message::Text(initial_payload.to_string().into()))
             .await?;
 
         // Spawn heartbeat loop — exits when hb_tx is dropped (connection closed)
         // or when the shared shutting_down flag is set.
-        let hb_sequence = sequence.clone();
+        let hb_sequence = Arc::clone(&sequence);
         let hb_shutting_down = Arc::clone(&self.shutting_down);
         let (hb_tx, mut hb_rx) = mpsc::channel::<Message>(16);
 
@@ -302,7 +482,10 @@ impl DiscordConnector {
             }
         });
 
-        // Main event loop — merge heartbeat sends with reads
+        // Main event loop — merge heartbeat sends with reads. The handler
+        // returns Some(signal) when an opcode mandates closing the connection;
+        // we propagate that as the DisconnectReason.
+        let mut signal: Option<HandlerSignal> = None;
         loop {
             tokio::select! {
                 Some(hb_msg) = hb_rx.recv() => {
@@ -316,7 +499,10 @@ impl DiscordConnector {
                         Some(Ok(Message::Text(text))) => {
                             match serde_json::from_str::<Value>(&text) {
                                 Ok(payload) => {
-                                    self.handle_payload(&payload, &sequence).await;
+                                    if let Some(sig) = self.handle_payload(&payload).await {
+                                        signal = Some(sig);
+                                        break;
+                                    }
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to parse Discord payload: {e}");
@@ -337,13 +523,17 @@ impl DiscordConnector {
             }
         }
 
-        Ok(())
+        Ok(match signal {
+            Some(HandlerSignal::SessionInvalidated) => DisconnectReason::SessionInvalidated,
+            Some(HandlerSignal::Reconnect) | None => DisconnectReason::Resumable,
+        })
     }
 
-    async fn handle_payload(&self, payload: &Value, sequence: &AtomicI64) {
-        // Update sequence number
+    async fn handle_payload(&self, payload: &Value) -> Option<HandlerSignal> {
+        // Update sequence number — written to the shared Arc so RESUME after
+        // reconnect can pick up where we left off.
         if let Some(s) = parse_sequence(payload) {
-            sequence.store(s, Ordering::Relaxed);
+            self.last_sequence.store(s, Ordering::Relaxed);
         }
 
         let op = payload
@@ -367,6 +557,17 @@ impl DiscordConnector {
                             {
                                 *guard = Some(uid.clone());
                             }
+                            // Capture session_id and resume_gateway_url so a
+                            // future reconnect can RESUME instead of dropping
+                            // events.
+                            if let Some((session_id, resume_url)) = parse_ready_session(payload) {
+                                if let Ok(mut g) = self.session_id.lock() {
+                                    *g = Some(session_id);
+                                }
+                                if let Ok(mut g) = self.resume_gateway_url.lock() {
+                                    *g = resume_url;
+                                }
+                            }
                             let username = payload
                                 .get("d")
                                 .and_then(|d| d.get("user"))
@@ -374,6 +575,9 @@ impl DiscordConnector {
                                 .and_then(Value::as_str)
                                 .unwrap_or("unknown");
                             tracing::info!("Discord adapter ready as {username}");
+                        }
+                        "RESUMED" => {
+                            tracing::info!("Discord session RESUMED");
                         }
                         "MESSAGE_CREATE" => {
                             let bot_id = self.bot_user_id.lock().ok().and_then(|g| g.clone());
@@ -388,15 +592,47 @@ impl DiscordConnector {
                         }
                     }
                 }
+                None
             }
-            11 => {
-                // Heartbeat ACK — no action needed
+            OP_RECONNECT => {
+                tracing::warn!("Discord Op 7 RECONNECT received — closing to resume");
+                Some(HandlerSignal::Reconnect)
+            }
+            OP_INVALID_SESSION => {
+                let resumable = parse_invalid_session_resumable(payload).unwrap_or(false);
+                tracing::warn!(resumable, "Discord Op 9 INVALID_SESSION received");
+                if resumable {
+                    Some(HandlerSignal::Reconnect)
+                } else {
+                    Some(HandlerSignal::SessionInvalidated)
+                }
+            }
+            OP_HEARTBEAT_ACK => {
                 tracing::trace!("Heartbeat ACK received");
+                None
             }
             _ => {
                 tracing::debug!("Unhandled opcode: {op}");
+                None
             }
         }
+    }
+
+    // -- Test-only state inspectors ------------------------------------------
+
+    #[cfg(test)]
+    fn test_session_id(&self) -> Option<String> {
+        self.current_session()
+    }
+
+    #[cfg(test)]
+    fn test_resume_gateway_url(&self) -> Option<String> {
+        self.current_resume_url()
+    }
+
+    #[cfg(test)]
+    fn test_last_sequence(&self) -> i64 {
+        self.last_sequence.load(Ordering::Relaxed)
     }
 }
 
@@ -746,5 +982,222 @@ mod tests {
 
         // Sender is still alive — channel was NOT closed.
         drop(tx);
+    }
+
+    // -----------------------------------------------------------------------
+    // Reconnect / RESUME / INVALID_SESSION coverage (sera-m0az / sera-v4fp /
+    // sera-70fs)
+    // -----------------------------------------------------------------------
+
+    fn test_connector() -> (Arc<DiscordConnector>, mpsc::Receiver<DiscordMessage>) {
+        let (tx, rx) = mpsc::channel(4);
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let connector = Arc::new(DiscordConnector::new("token", "agent", tx, shutting_down));
+        (connector, rx)
+    }
+
+    #[test]
+    fn build_resume_payload_shape() {
+        let p = build_resume_payload("tok", "sess-xyz", 42);
+        assert_eq!(p["op"], 6);
+        assert_eq!(p["d"]["token"], "tok");
+        assert_eq!(p["d"]["session_id"], "sess-xyz");
+        assert_eq!(p["d"]["seq"], 42);
+    }
+
+    #[test]
+    fn parse_invalid_session_resumable_true() {
+        let p = serde_json::json!({ "op": 9, "d": true });
+        assert_eq!(parse_invalid_session_resumable(&p), Some(true));
+    }
+
+    #[test]
+    fn parse_invalid_session_resumable_false() {
+        let p = serde_json::json!({ "op": 9, "d": false });
+        assert_eq!(parse_invalid_session_resumable(&p), Some(false));
+    }
+
+    #[test]
+    fn parse_invalid_session_wrong_opcode() {
+        let p = serde_json::json!({ "op": 7, "d": null });
+        assert_eq!(parse_invalid_session_resumable(&p), None);
+    }
+
+    #[test]
+    fn parse_invalid_session_missing_d_defaults_false() {
+        // If `d` is missing or non-bool, treat as non-resumable (safer default).
+        let p = serde_json::json!({ "op": 9 });
+        assert_eq!(parse_invalid_session_resumable(&p), Some(false));
+    }
+
+    #[test]
+    fn is_op_reconnect_true() {
+        assert!(is_op_reconnect(&serde_json::json!({ "op": 7, "d": null })));
+    }
+
+    #[test]
+    fn is_op_reconnect_false() {
+        assert!(!is_op_reconnect(&serde_json::json!({ "op": 0, "d": {} })));
+        assert!(!is_op_reconnect(
+            &serde_json::json!({ "op": 9, "d": false })
+        ));
+    }
+
+    #[test]
+    fn parse_ready_session_with_resume_url() {
+        let p = serde_json::json!({
+            "op": 0,
+            "t": "READY",
+            "s": 1,
+            "d": {
+                "session_id": "abc-123",
+                "resume_gateway_url": "wss://gateway-eu.discord.gg",
+                "user": { "id": "u1", "username": "sera" }
+            }
+        });
+        let (sid, url) = parse_ready_session(&p).expect("ready");
+        assert_eq!(sid, "abc-123");
+        assert_eq!(url.as_deref(), Some("wss://gateway-eu.discord.gg"));
+    }
+
+    #[test]
+    fn parse_ready_session_without_resume_url() {
+        // Older payloads or malformed READYs without resume_gateway_url still
+        // give us a session_id; we'll fall back to the canonical gateway.
+        let p = serde_json::json!({
+            "op": 0,
+            "t": "READY",
+            "s": 1,
+            "d": { "session_id": "sid", "user": {} }
+        });
+        let (sid, url) = parse_ready_session(&p).expect("ready");
+        assert_eq!(sid, "sid");
+        assert!(url.is_none());
+    }
+
+    #[test]
+    fn parse_ready_session_rejects_non_ready() {
+        let p = serde_json::json!({ "op": 0, "t": "GUILD_CREATE", "s": 2, "d": {} });
+        assert!(parse_ready_session(&p).is_none());
+    }
+
+    #[test]
+    fn invalid_session_backoff_schedule() {
+        // First attempts stay within Discord's "1-5 second" guidance, then
+        // escalate to a 30s cap so we can't hot-loop indefinitely.
+        assert_eq!(invalid_session_backoff_secs(0), 1);
+        assert_eq!(invalid_session_backoff_secs(1), 1);
+        assert_eq!(invalid_session_backoff_secs(2), 3);
+        assert_eq!(invalid_session_backoff_secs(3), 5);
+        assert_eq!(invalid_session_backoff_secs(4), 10);
+        assert_eq!(invalid_session_backoff_secs(5), 20);
+        assert_eq!(invalid_session_backoff_secs(6), 30);
+        assert_eq!(invalid_session_backoff_secs(100), 30);
+    }
+
+    #[tokio::test]
+    async fn handle_payload_op7_signals_reconnect() {
+        let (conn, _rx) = test_connector();
+        let p = serde_json::json!({ "op": 7, "d": null });
+        assert_eq!(
+            conn.handle_payload(&p).await,
+            Some(HandlerSignal::Reconnect)
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_payload_op9_resumable_signals_reconnect() {
+        let (conn, _rx) = test_connector();
+        let p = serde_json::json!({ "op": 9, "d": true });
+        assert_eq!(
+            conn.handle_payload(&p).await,
+            Some(HandlerSignal::Reconnect)
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_payload_op9_not_resumable_signals_invalidated() {
+        let (conn, _rx) = test_connector();
+        let p = serde_json::json!({ "op": 9, "d": false });
+        assert_eq!(
+            conn.handle_payload(&p).await,
+            Some(HandlerSignal::SessionInvalidated)
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_payload_unhandled_opcode_returns_none() {
+        // Unknown opcodes must NOT signal a reconnect — they used to fall
+        // through to a debug log and dropping connection on Op 7/9 was the
+        // bug. Here we check a genuinely unknown opcode (e.g. 99) is silent.
+        let (conn, _rx) = test_connector();
+        let p = serde_json::json!({ "op": 99, "d": null });
+        assert_eq!(conn.handle_payload(&p).await, None);
+    }
+
+    #[tokio::test]
+    async fn ready_event_captures_session_state() {
+        let (conn, _rx) = test_connector();
+        let ready = serde_json::json!({
+            "op": 0,
+            "t": "READY",
+            "s": 1,
+            "d": {
+                "session_id": "sess-1",
+                "resume_gateway_url": "wss://gateway-resume.discord.gg",
+                "user": { "id": "bot1", "username": "sera" }
+            }
+        });
+        assert_eq!(conn.handle_payload(&ready).await, None);
+
+        assert_eq!(conn.test_session_id().as_deref(), Some("sess-1"));
+        assert_eq!(
+            conn.test_resume_gateway_url().as_deref(),
+            Some("wss://gateway-resume.discord.gg")
+        );
+        assert_eq!(conn.test_last_sequence(), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_updates_sequence_for_resume() {
+        // Even on dispatch events we don't act on (e.g. GUILD_CREATE), the
+        // sequence number must be tracked so RESUME knows where to pick up.
+        let (conn, _rx) = test_connector();
+        let evt = serde_json::json!({ "op": 0, "t": "GUILD_CREATE", "s": 17, "d": {} });
+        assert_eq!(conn.handle_payload(&evt).await, None);
+        assert_eq!(conn.test_last_sequence(), 17);
+    }
+
+    #[tokio::test]
+    async fn op9_invalidated_keeps_state_until_run_clears() {
+        // handle_payload itself just signals; the run() loop is what clears
+        // session state. Verify the signal returns and state persists at this
+        // layer (run() clears in test below via clear_session_state).
+        let (conn, _rx) = test_connector();
+        let ready = serde_json::json!({
+            "op": 0,
+            "t": "READY",
+            "s": 5,
+            "d": {
+                "session_id": "sess-keep",
+                "resume_gateway_url": "wss://gw",
+                "user": { "id": "b", "username": "n" }
+            }
+        });
+        conn.handle_payload(&ready).await;
+        assert_eq!(conn.test_session_id().as_deref(), Some("sess-keep"));
+
+        let invalid = serde_json::json!({ "op": 9, "d": false });
+        assert_eq!(
+            conn.handle_payload(&invalid).await,
+            Some(HandlerSignal::SessionInvalidated)
+        );
+        // Still set — clearing happens in run() after the connection ends.
+        assert_eq!(conn.test_session_id().as_deref(), Some("sess-keep"));
+
+        conn.clear_session_state();
+        assert!(conn.test_session_id().is_none());
+        assert!(conn.test_resume_gateway_url().is_none());
+        assert_eq!(conn.test_last_sequence(), -1);
     }
 }

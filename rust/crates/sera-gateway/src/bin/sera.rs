@@ -1440,6 +1440,34 @@ async fn chat_handler(
                             lq.complete_run(&session_key);
                         }
 
+                        // sera-aepj: empty-reply guard mirrors the sync branch
+                        // (line ~1561). Without this, the SSE stream emits zero
+                        // `message` frames followed by `done` with usage=0/0/0,
+                        // which the web client renders as a stuck "thinking…"
+                        // spinner. Surface a structured `error` event instead
+                        // so clients can show the failure.
+                        if result.reply.is_empty() {
+                            tracing::error!(
+                                session_id = %session_id,
+                                agent = %agent_name,
+                                prompt_tokens = result.usage.prompt_tokens,
+                                completion_tokens = result.usage.completion_tokens,
+                                total_tokens = result.usage.total_tokens,
+                                tool_events_count = result.tool_events.len(),
+                                tools_ran = !result.tool_events.is_empty(),
+                                "execute_turn returned empty reply (stream); runtime produced no text"
+                            );
+                            let payload = serde_json::json!({
+                                "error": "runtime returned empty reply",
+                                "session_id": session_id,
+                                "message_id": message_id,
+                            });
+                            let event = Event::default()
+                                .event("error")
+                                .data(payload.to_string());
+                            return Some((Some(Ok(event)), StreamState::Done));
+                        }
+
                         // Save tool events and assistant response.
                         {
                             let db = state.db.lock().await;
@@ -5517,6 +5545,26 @@ spec:
         let events: Vec<_> = stream.collect().await;
         // 2 chunks + 1 done event = 3 total
         assert_eq!(events.len(), 3);
+    }
+
+    /// sera-aepj: documents the SSE shape the streaming branch emits when
+    /// `execute_turn` returns an empty reply. The web client's
+    /// `parseChatSseEvent` matches on `event: error` + `data.error` to surface
+    /// the failure rather than rendering a stuck "thinking…" spinner.
+    #[test]
+    fn empty_reply_error_event_payload_shape() {
+        let session_id = "sess-empty";
+        let message_id = "msg_deadbeef";
+        let payload = serde_json::json!({
+            "error": "runtime returned empty reply",
+            "session_id": session_id,
+            "message_id": message_id,
+        });
+        let parsed: serde_json::Value =
+            serde_json::from_str(&payload.to_string()).expect("payload re-parses");
+        assert_eq!(parsed["error"], "runtime returned empty reply");
+        assert_eq!(parsed["session_id"], session_id);
+        assert_eq!(parsed["message_id"], message_id);
     }
 
     /// Verify StreamState::Done immediately terminates the stream.

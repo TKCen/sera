@@ -47,6 +47,41 @@ describe('parseChatSseEvent', () => {
     });
   });
 
+  it('parses an error event with session/message ids', () => {
+    const result = parseChatSseEvent(
+      'error',
+      JSON.stringify({
+        error: 'runtime returned empty reply',
+        session_id: 'sess_1',
+        message_id: 'msg_abc',
+      }),
+    );
+    expect(result).toEqual({
+      type: 'error',
+      error: 'runtime returned empty reply',
+      sessionId: 'sess_1',
+      messageId: 'msg_abc',
+    });
+  });
+
+  it('parses an error event without optional ids', () => {
+    const result = parseChatSseEvent(
+      'error',
+      JSON.stringify({ error: 'runtime timed out' }),
+    );
+    expect(result).toEqual({
+      type: 'error',
+      error: 'runtime timed out',
+      sessionId: undefined,
+      messageId: undefined,
+    });
+  });
+
+  it('returns null for malformed JSON in an error event', () => {
+    const result = parseChatSseEvent('error', 'not-json');
+    expect(result).toBeNull();
+  });
+
   it('accumulates deltas correctly when applied sequentially', () => {
     const events = [
       { event: 'message', data: JSON.stringify({ delta: 'Hello ', message_id: 'm1', session_id: 's1' }) },

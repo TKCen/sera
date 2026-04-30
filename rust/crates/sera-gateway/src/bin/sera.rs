@@ -1055,6 +1055,10 @@ impl AgentTurnTransport for RuntimeChildSupervisor {
         }
         Ok(())
     }
+
+    fn dispatch_kind(&self) -> &'static str {
+        "runtime"
+    }
 }
 
 // ── Turn event types ────────────────────────────────────────────────────────
@@ -7904,12 +7908,112 @@ spec:
             post_turn: Arc<AtomicU64>,
         }
 
+        /// sera-ve9x PR 3: which dispatch backend the production-E2E fixture
+        /// wires into `AppState.harnesses`. `Runtime` (legacy default) spawns
+        /// a real `sera-runtime --ndjson` child via
+        /// [`RuntimeChildSupervisor`]; `Embedded` builds an in-process
+        /// [`EmbeddedRuntimeTransport`] backed by a `DefaultRuntime` with no
+        /// child process. Both feed the same gateway path
+        /// (`process_message` / `chat_handler` -> `AgentTurnTransport`) so
+        /// every assertion below applies to both backends — that's the ADR §4
+        /// step 2 acceptance gate this module exists to mechanise.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum DispatchMode {
+            Runtime,
+            Embedded,
+        }
+
+        /// Serialises the runtime-mode child spawn against the embedded
+        /// "no child spawn" sample window. Without this, peer runtime-mode
+        /// production_e2e tests (`discord_path_round_trip`,
+        /// `http_chat_path_round_trip`) can spawn `sera-runtime` children
+        /// during [`embedded_path_no_runtime_child_spawns`]'s before/after
+        /// window and false-positive its assertion. The runtime-mode branch
+        /// of [`production_e2e_state_with_mode`] takes this lock for the
+        /// duration of `RuntimeChildSupervisor::start`; the embedded
+        /// no-spawn test holds it across its entire sample window so a
+        /// strict zero-delta assertion is reliable.
+        static RUNTIME_SPAWN_SAMPLE_LOCK: tokio::sync::Mutex<()> =
+            tokio::sync::Mutex::const_new(());
+
+        /// sera-ve9x PR 3: in-process embedded transport for production-E2E
+        /// fixtures. Bypasses `build_embedded_transport` so the test does not
+        /// have to mutate `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE` /
+        /// `SERA_AGENT_TOOLS_DENY` in the gateway process env. The
+        /// `DefaultRuntime` constructed here mirrors the production builder:
+        /// `LlmClient::build_from_config` against the mock LLM URL,
+        /// `TraitToolRegistry::with_builtins_and_authz` with an empty
+        /// `CapabilityRegistry`, and `permissive_gate=true` (matches the
+        /// runtime path which forwards `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE=1`
+        /// to the child env).
+        fn build_embedded_transport_for_test(
+            agent_name: &str,
+            mock_llm_url: &str,
+        ) -> Arc<dyn AgentTurnTransport> {
+            use sera_runtime::config::RuntimeConfig;
+            use sera_runtime::context_engine::pipeline::ContextPipeline;
+            use sera_runtime::default_runtime::DefaultRuntime;
+            use sera_runtime::tools::TraitToolRegistry;
+            use sera_runtime::tools::dispatcher::RegistryDispatcher;
+
+            let mut runtime_config = RuntimeConfig::from_env();
+            runtime_config.llm_base_url = format!("{mock_llm_url}/v1");
+            runtime_config.llm_model = "mock-model".to_string();
+            runtime_config.llm_api_key = "test-key".to_string();
+            runtime_config.agent_id = agent_name.to_string();
+            runtime_config.lifecycle_mode = "task".to_string();
+            runtime_config.chat_port = 0;
+
+            let cap_registry = Arc::new(sera_config::CapabilityRegistry::empty());
+            let delegation_bus = sera_runtime::delegation_bus::DelegationBus::new();
+            let registry = Arc::new(
+                TraitToolRegistry::with_builtins_and_authz(runtime_config.tool_authz_enabled)
+                    .with_delegation(delegation_bus),
+            );
+            let dispatcher = RegistryDispatcher::new(Arc::clone(&registry))
+                .with_capability_registry(cap_registry, agent_name.to_string());
+            let authz_provider =
+                sera_runtime::authz_builder::build_provider_from_config(&runtime_config);
+            let llm_client = sera_runtime::llm_client::build_from_config(&runtime_config);
+
+            let runtime = DefaultRuntime::new(Box::new(ContextPipeline::new()))
+                .with_llm(Box::new(llm_client))
+                .with_tool_dispatcher(Box::new(dispatcher))
+                .with_authz_provider(authz_provider)
+                .with_allow_missing_constitutional_gate(true);
+
+            Arc::new(EmbeddedRuntimeTransport::new(
+                agent_name.to_string(),
+                Arc::new(runtime),
+                vec![],
+            ))
+        }
+
         /// Build an `AppState` whose harness map contains a real
         /// `StdioHarness::spawn` (i.e. a live `sera-runtime --ndjson` child),
         /// pointed at the mock LLM, and whose hook registry has a counting
         /// hook + chain wired in for each of the four happy-turn points.
+        ///
+        /// Thin wrapper that pins the legacy default to keep existing test
+        /// call sites unchanged. New parity tests use
+        /// [`production_e2e_state_with_mode`] directly.
         async fn production_e2e_state(
             mock_llm_url: &str,
+        ) -> (Arc<AppState>, HookCounters) {
+            production_e2e_state_with_mode(mock_llm_url, DispatchMode::Runtime).await
+        }
+
+        /// sera-ve9x PR 3: dispatch-mode-parameterised variant of
+        /// [`production_e2e_state`]. Both modes wire the same hook chains,
+        /// the same in-memory SQLite, the same `LaneQueue`, and the same
+        /// `Arc<dyn AgentTurnTransport>` interface — only the transport
+        /// constructor differs. That is the parity surface ADR §4 step 2
+        /// requires before flipping the default; making this a single
+        /// helper means every test below applies to both backends with no
+        /// drift.
+        async fn production_e2e_state_with_mode(
+            mock_llm_url: &str,
+            mode: DispatchMode,
         ) -> (Arc<AppState>, HookCounters) {
             let manifests =
                 parse_manifests(&production_e2e_manifest_yaml(mock_llm_url)).expect("manifest");
@@ -8010,29 +8114,48 @@ spec:
                 chain_specs.len()
             );
 
-            // Spawn the real runtime child.
-            let runtime_bin = locate_runtime_bin();
-            let mut env = std::collections::HashMap::new();
-            env.insert("LLM_BASE_URL".to_string(), format!("{mock_llm_url}/v1"));
-            env.insert("LLM_MODEL".to_string(), "mock-model".to_string());
-            env.insert("LLM_API_KEY".to_string(), "test-key".to_string());
-            env.insert("AGENT_ID".to_string(), "sera".to_string());
-            env.insert(
-                "SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE".to_string(),
-                "1".to_string(),
-            );
-            // Empty allow list — match the manifest's `tools.allow: []`.
-            env.insert("SERA_AGENT_TOOLS_ALLOW".to_string(), String::new());
-            let supervisor = RuntimeChildSupervisor::start(
-                "sera".to_string(),
-                runtime_bin.to_string_lossy().into_owned(),
-                env,
-            )
-            .await
-            .expect("spawn real sera-runtime supervisor");
+            // sera-ve9x PR 3: branch on the parameterised dispatch mode.
+            // Runtime mode preserves the legacy fixture exactly — locate the
+            // sera-runtime binary, build the child env, and spawn a real
+            // supervised stdio child. Embedded mode skips that path entirely
+            // (no `locate_runtime_bin`, no `Command::new`) and constructs an
+            // in-process `EmbeddedRuntimeTransport` against the mock LLM URL.
             let mut harnesses: std::collections::HashMap<String, Arc<dyn AgentTurnTransport>> =
                 std::collections::HashMap::new();
-            harnesses.insert("sera".to_string(), supervisor);
+            match mode {
+                DispatchMode::Runtime => {
+                    // Hold RUNTIME_SPAWN_SAMPLE_LOCK across the actual
+                    // `RuntimeChildSupervisor::start` so the embedded
+                    // no-child-spawn test can sample its before/after
+                    // child-count window without racing peer runtime-mode
+                    // tests' spawns.
+                    let _spawn_guard = RUNTIME_SPAWN_SAMPLE_LOCK.lock().await;
+                    let runtime_bin = locate_runtime_bin();
+                    let mut env = std::collections::HashMap::new();
+                    env.insert("LLM_BASE_URL".to_string(), format!("{mock_llm_url}/v1"));
+                    env.insert("LLM_MODEL".to_string(), "mock-model".to_string());
+                    env.insert("LLM_API_KEY".to_string(), "test-key".to_string());
+                    env.insert("AGENT_ID".to_string(), "sera".to_string());
+                    env.insert(
+                        "SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE".to_string(),
+                        "1".to_string(),
+                    );
+                    // Empty allow list — match the manifest's `tools.allow: []`.
+                    env.insert("SERA_AGENT_TOOLS_ALLOW".to_string(), String::new());
+                    let supervisor = RuntimeChildSupervisor::start(
+                        "sera".to_string(),
+                        runtime_bin.to_string_lossy().into_owned(),
+                        env,
+                    )
+                    .await
+                    .expect("spawn real sera-runtime supervisor");
+                    harnesses.insert("sera".to_string(), supervisor);
+                }
+                DispatchMode::Embedded => {
+                    let transport = build_embedded_transport_for_test("sera", mock_llm_url);
+                    harnesses.insert("sera".to_string(), transport);
+                }
+            }
 
             let state = Arc::new(AppState {
                 db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
@@ -8329,6 +8452,485 @@ spec:
                      missed on success path"
                 );
             }
+
+            drop(state);
+            drop(mock);
+        }
+
+        // ── sera-ve9x PR 3: embedded-mode parity ───────────────────────────
+        //
+        // Each test below mirrors a runtime-mode test above, swapping
+        // `DispatchMode::Runtime` for `DispatchMode::Embedded` on the same
+        // fixture. Every assertion (transcript persistence, lane release,
+        // hook-counter parity, chat response shape) is preserved byte-for-
+        // byte. Together with the runtime tests, these form the ADR §4
+        // step 2 acceptance gate: the same gateway path produces the same
+        // observable result against both backends.
+
+        /// Discord-path round trip against the in-process embedded backend.
+        ///
+        /// Mirrors [`discord_path_round_trip`] but routes through
+        /// [`EmbeddedRuntimeTransport`] instead of a `sera-runtime --ndjson`
+        /// child. No `locate_runtime_bin()` call, no child process, but the
+        /// same transcript / lane / hook-counter assertions hold — that's
+        /// the parity proof PR 3 was written to mechanise.
+        #[tokio::test]
+        async fn discord_path_round_trip_embedded() {
+            let mock = start_mock_llm("hello from mock", 0).await;
+            let (state, counters) =
+                production_e2e_state_with_mode(&mock.base_url, DispatchMode::Embedded).await;
+
+            let (tx, rx) = mpsc::channel::<DiscordMessage>(8);
+            let event_state = Arc::clone(&state);
+            let handle = tokio::spawn(async move {
+                event_loop(event_state, rx).await;
+            });
+
+            tx.send(DiscordMessage {
+                channel_id: "ch_ve9x".into(),
+                user_id: "user_ve9x".into(),
+                username: "tester".into(),
+                content: "ping".into(),
+                message_id: "msg_ve9x_1".into(),
+                is_dm: true,
+                mentions_bot: false,
+            })
+            .await
+            .expect("send discord message");
+
+            let session_key = "discord:sera:ch_ve9x";
+            let session_id = {
+                let start = std::time::Instant::now();
+                loop {
+                    let maybe = {
+                        let db = state.db.lock().await;
+                        db.get_session_by_key(session_key).ok().flatten()
+                    };
+                    if let Some(s) = maybe {
+                        break s.id;
+                    }
+                    if start.elapsed() > std::time::Duration::from_secs(10) {
+                        panic!(
+                            "session for {session_key} never created — \
+                             process_message did not reach the session-store \
+                             write under EmbeddedRuntimeTransport"
+                        );
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+            };
+            wait_for_transcript_len(&state, &session_id, 2, std::time::Duration::from_secs(10))
+                .await;
+
+            drop(tx);
+            handle.await.expect("event_loop join");
+
+            let transcript = {
+                let db = state.db.lock().await;
+                db.get_transcript(&session_id).expect("get_transcript")
+            };
+            assert_eq!(
+                transcript.len(),
+                2,
+                "expected exactly 2 transcript rows (user + assistant), got {}",
+                transcript.len()
+            );
+            assert_eq!(transcript[0].role, "user");
+            assert_eq!(transcript[0].content.as_deref(), Some("ping"));
+            assert_eq!(
+                transcript[1].role, "assistant",
+                "row[1] must be the assistant reply (embedded path)"
+            );
+            assert_eq!(
+                transcript[1].content.as_deref(),
+                Some("hello from mock"),
+                "embedded transport must surface the mock LLM body byte-for-\
+                 byte; mismatch indicates the in-process LlmClient SSE \
+                 parser or `turn_events_from_outcome` projection regressed"
+            );
+
+            {
+                let lq = state.lane_queue.lock().await;
+                assert!(
+                    !lq.has_pending(session_key),
+                    "lane queue still has pending events for {session_key} \
+                     after a happy turn — embedded path leaked a lane slot"
+                );
+                assert_eq!(
+                    lq.active_runs(),
+                    0,
+                    "lane_queue.active_runs() != 0 after happy embedded turn"
+                );
+            }
+
+            assert_eq!(
+                counters.pre_route.load(Ordering::SeqCst),
+                1,
+                "pre_route hook chain did not fire exactly once (embedded)"
+            );
+            assert_eq!(
+                counters.post_route.load(Ordering::SeqCst),
+                1,
+                "post_route hook chain did not fire exactly once (embedded)"
+            );
+            assert_eq!(
+                counters.pre_turn.load(Ordering::SeqCst),
+                1,
+                "pre_turn hook chain did not fire exactly once (embedded)"
+            );
+            assert_eq!(
+                counters.post_turn.load(Ordering::SeqCst),
+                1,
+                "post_turn hook chain did not fire exactly once (embedded)"
+            );
+
+            drop(state);
+            drop(mock);
+        }
+
+        /// HTTP `/api/chat` round trip against the in-process embedded
+        /// backend. Mirrors [`http_chat_path_round_trip`] — same body shape,
+        /// same usage propagation, same lane release.
+        #[tokio::test]
+        async fn http_chat_path_round_trip_embedded() {
+            let mock = start_mock_llm("hello from mock", 0).await;
+            let (state, _counters) =
+                production_e2e_state_with_mode(&mock.base_url, DispatchMode::Embedded).await;
+            let app = build_router(Arc::clone(&state));
+
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/chat")
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "message": "ping" }).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .expect("oneshot /api/chat");
+
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "embedded chat_handler returned non-200; in-process \
+                 production HTTP path broken"
+            );
+            let body_bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .expect("read response body");
+            let body: serde_json::Value =
+                serde_json::from_slice(&body_bytes).expect("response body must be JSON");
+
+            assert_eq!(
+                body["response"].as_str(),
+                Some("hello from mock"),
+                "ChatResponse.response is wrong on embedded path; got {body}"
+            );
+            assert_eq!(
+                body["usage"]["prompt_tokens"], 7,
+                "embedded usage.prompt_tokens not propagated from mock LLM"
+            );
+            assert_eq!(
+                body["usage"]["completion_tokens"], 5,
+                "embedded usage.completion_tokens not propagated from mock LLM"
+            );
+            assert_eq!(
+                body["usage"]["total_tokens"], 12,
+                "embedded usage.total_tokens not propagated end-to-end \
+                 (DefaultRuntime -> turn_events_from_outcome -> chat_handler)"
+            );
+
+            {
+                let lq = state.lane_queue.lock().await;
+                assert_eq!(
+                    lq.active_runs(),
+                    0,
+                    "embedded HTTP chat_handler leaked a lane slot"
+                );
+            }
+
+            drop(state);
+            drop(mock);
+        }
+
+        /// Snapshot the *set* of direct child PIDs of the current process
+        /// whose `/proc/<pid>/comm` matches `comm_filter` (case-sensitive).
+        /// Used by [`embedded_path_no_runtime_child_spawns`] for set-
+        /// difference detection: any PID present in the post-window snapshot
+        /// but absent from the pre-window snapshot is a fresh spawn.
+        ///
+        /// A pure count delta is unreliable because reaps and spawns can
+        /// cancel out — e.g. a peer runtime-mode test reaps its
+        /// `sera-runtime` child during our window while the embedded path
+        /// (regressed) spawns a new one, leaving the count unchanged.
+        /// PID-set comparison cannot be defeated by such cancellation.
+        ///
+        /// Returns `None` on non-Linux or if `/proc` is unreadable; the
+        /// caller then degrades to the structural assertion that the
+        /// embedded branch in [`production_e2e_state_with_mode`] does not
+        /// call `locate_runtime_bin`.
+        fn list_direct_children_with_comm(
+            comm_filter: &str,
+        ) -> Option<std::collections::HashSet<u32>> {
+            let my_pid = std::process::id();
+            let entries = std::fs::read_dir("/proc").ok()?;
+            let mut pids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let Some(name_str) = name.to_str() else {
+                    continue;
+                };
+                let Ok(child_pid) = name_str.parse::<u32>() else {
+                    continue;
+                };
+                let stat = match std::fs::read_to_string(entry.path().join("stat")) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                // /proc/<pid>/stat format: "pid (comm) state ppid ...".
+                // The comm field can contain spaces and parens, so split
+                // after the last ')'.
+                let after_comm = match stat.rsplit_once(')') {
+                    Some((_, rest)) => rest.trim(),
+                    None => continue,
+                };
+                let parts: Vec<&str> = after_comm.split_whitespace().collect();
+                // After the comm field: state (idx 0), ppid (idx 1), ...
+                let Some(ppid_str) = parts.get(1) else {
+                    continue;
+                };
+                let Ok(ppid) = ppid_str.parse::<u32>() else {
+                    continue;
+                };
+                if ppid != my_pid {
+                    continue;
+                }
+                // Read /proc/<pid>/comm directly (truncated to ~16 chars
+                // by the kernel; matches "sera-runtime" exactly).
+                let comm = match std::fs::read_to_string(entry.path().join("comm")) {
+                    Ok(c) => c.trim_end().to_string(),
+                    Err(_) => continue,
+                };
+                if comm == comm_filter {
+                    pids.insert(child_pid);
+                }
+            }
+            Some(pids)
+        }
+
+        /// Embedded mode must not spawn a `sera-runtime --ndjson` child.
+        /// Asserts (a) the embedded boot/turn round-trips successfully via
+        /// the in-process transport, and (b) no *new* `sera-runtime` PID
+        /// appears as a direct child of the test process during the
+        /// embedded fixture's run.
+        ///
+        /// PID-set difference rather than count delta: a pure count check
+        /// can be defeated when a peer runtime-mode test's child reaps
+        /// during the same window as a regressed embedded spawn (count
+        /// stays equal, regression slips through). Comparing the
+        /// pre-window and post-window PID sets and asserting `after \\
+        /// before` is empty makes the check robust against cancellation.
+        ///
+        /// Reliability under cargo test parallelism: the runtime-mode
+        /// branch of [`production_e2e_state_with_mode`] takes
+        /// [`RUNTIME_SPAWN_SAMPLE_LOCK`] across `RuntimeChildSupervisor::start`,
+        /// and this test holds the same lock across its sample window. So
+        /// no peer runtime-mode test can spawn a `sera-runtime` child
+        /// while we sample. We further filter by `comm == "sera-runtime"`
+        /// so peer `bash` mocks from `StdioHarness::spawn_mock` are
+        /// ignored. On non-Linux (no `/proc`) the test still asserts the
+        /// embedded round-trip and the `dispatch_kind()` belt-and-braces
+        /// assertion; the structural absence of `RuntimeChildSupervisor::start`
+        /// from the embedded branch in `production_e2e_state_with_mode`
+        /// carries the load there.
+        #[tokio::test]
+        async fn embedded_path_no_runtime_child_spawns() {
+            let _spawn_guard = RUNTIME_SPAWN_SAMPLE_LOCK.lock().await;
+            let baseline = list_direct_children_with_comm("sera-runtime");
+
+            let mock = start_mock_llm("hello from mock", 0).await;
+            let (state, _counters) =
+                production_e2e_state_with_mode(&mock.base_url, DispatchMode::Embedded).await;
+
+            // Round-trip through the in-process backend.
+            let app = build_router(Arc::clone(&state));
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/chat")
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "message": "ping" }).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .expect("oneshot /api/chat");
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "embedded boot/turn must succeed without spawning a child"
+            );
+
+            // PID-set difference: any PID present in `after` but absent from
+            // `before` is a fresh `sera-runtime` spawn that occurred during
+            // our sample window. Under RUNTIME_SPAWN_SAMPLE_LOCK, no peer
+            // runtime-mode test could have spawned during this window — so
+            // a non-empty difference is attributable to this test and means
+            // the embedded branch accidentally took the runtime-supervisor
+            // path. PID disappearances (peer reaps) do NOT affect the
+            // difference, so reap/spawn cancellation cannot mask a
+            // regression.
+            if let (Some(before), Some(after)) =
+                (baseline, list_direct_children_with_comm("sera-runtime"))
+            {
+                let new_pids: Vec<u32> = after.difference(&before).copied().collect();
+                assert!(
+                    new_pids.is_empty(),
+                    "embedded path spawned `sera-runtime` child PIDs {new_pids:?} \
+                     during the sample window; embedded boot must not invoke \
+                     RuntimeChildSupervisor::start"
+                );
+            }
+
+            // Belt-and-braces: the wired transport reports its backend
+            // identity directly, so a regression that wires
+            // `RuntimeChildSupervisor` under `DispatchMode::Embedded`
+            // fails this assertion even on platforms without `/proc`.
+            let transport = state
+                .harnesses
+                .get("sera")
+                .cloned()
+                .expect("embedded transport present");
+            assert_eq!(
+                transport.dispatch_kind(),
+                "embedded",
+                "DispatchMode::Embedded must wire EmbeddedRuntimeTransport, \
+                 not the stdio supervisor"
+            );
+
+            drop(state);
+            drop(mock);
+        }
+
+        /// Closest steer parity test against production state: exercise the
+        /// transport-level steer staging path on an embedded
+        /// `production_e2e_state_with_mode` fixture, then prove the next
+        /// turn drains the staged item without wedging the lane queue. This
+        /// is the embedded mirror of the stdio backend's "steer-then-turn"
+        /// behaviour (`execute_steer_drains_until_turn_completed` covers
+        /// the same shape against `StdioHarness::spawn_mock`).
+        #[tokio::test]
+        async fn embedded_steer_drains_into_next_turn_via_production_state() {
+            let mock = start_mock_llm("ack", 0).await;
+            let (state, _counters) =
+                production_e2e_state_with_mode(&mock.base_url, DispatchMode::Embedded).await;
+
+            let session_key = "discord:sera:ch_ve9x_steer";
+            let transport = state
+                .harnesses
+                .get("sera")
+                .cloned()
+                .expect("embedded sera transport present");
+
+            transport
+                .send_steer(
+                    vec![serde_json::json!({"role": "user", "content": "guidance"})],
+                    session_key,
+                )
+                .await
+                .expect("steer staged");
+
+            let events = transport
+                .send_turn(
+                    vec![serde_json::json!({"role": "user", "content": "ping"})],
+                    session_key,
+                )
+                .await
+                .expect("turn after steer");
+
+            assert_eq!(
+                events.response, "ack",
+                "embedded turn after steer must produce the mock reply — \
+                 a wedge would surface as an empty / timed-out response"
+            );
+
+            // Lane queue idle (no `process_message` invocation made; this is
+            // a transport-level parity check, mirroring
+            // `execute_steer_drains_until_turn_completed`).
+            {
+                let lq = state.lane_queue.lock().await;
+                assert_eq!(
+                    lq.active_runs(),
+                    0,
+                    "embedded steer must not allocate or leak a lane slot"
+                );
+            }
+
+            drop(state);
+            drop(mock);
+        }
+
+        /// `effective_dispatch_mode_label()` reads the
+        /// `SERA_DISPATCH_MODE` env var; this test asserts it returns
+        /// `embedded` while an embedded `production_e2e_state` is live. The
+        /// guard restores the env var on drop so concurrent tests are
+        /// unaffected. Coverage parity with the existing
+        /// `effective_dispatch_mode_*` tests, but evaluated alongside an
+        /// embedded fixture so the label and the active backend are
+        /// asserted together.
+        #[tokio::test]
+        async fn dispatch_mode_label_reflects_active_backend_in_embedded_state() {
+            // P1 fix (Codex review on PR #1131): keep the
+            // `DispatchModeEnvGuard` strictly inside the
+            // `DISPATCH_MODE_ENV_LOCK` critical section so its `Drop`
+            // (which calls unsafe `std::env::set_var/remove_var`) cannot
+            // race with peer tests that mutate `SERA_DISPATCH_MODE`. The
+            // env mutation + label assertion happens synchronously under
+            // the lock; the lock and guard are released together before
+            // any await. After release, the assertion no longer holds —
+            // the env reverts to its prior value — but the production-
+            // state setup below does NOT read `SERA_DISPATCH_MODE`
+            // (`production_e2e_state_with_mode` takes the dispatch mode
+            // as an explicit parameter), so the embedded fixture runs
+            // independently of process env state.
+            {
+                let _lock = DISPATCH_MODE_ENV_LOCK
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let _guard = DispatchModeEnvGuard::set("embedded");
+                assert_eq!(
+                    effective_dispatch_mode_label(),
+                    "embedded",
+                    "effective dispatch mode must report `embedded` when \
+                     the env requests it"
+                );
+                // _guard drops here (unsafe env restore happens while
+                // _lock is still held), then _lock drops.
+            }
+
+            let mock = start_mock_llm("hello from mock", 0).await;
+            let (state, _counters) =
+                production_e2e_state_with_mode(&mock.base_url, DispatchMode::Embedded).await;
+            // P2 fix (Codex review on PR #1131): both runtime and embedded
+            // branches insert the same `"sera"` key into `harnesses`, so a
+            // `contains_key` check is vacuous. Verify backend selection by
+            // querying `dispatch_kind()` on the trait object — fails if the
+            // embedded branch accidentally wires `RuntimeChildSupervisor`.
+            let transport = state
+                .harnesses
+                .get("sera")
+                .cloned()
+                .expect("embedded production state must wire a transport for `sera`");
+            assert_eq!(
+                transport.dispatch_kind(),
+                "embedded",
+                "DispatchMode::Embedded must wire EmbeddedRuntimeTransport"
+            );
 
             drop(state);
             drop(mock);

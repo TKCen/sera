@@ -107,13 +107,39 @@ fn wimse_escape_segment(input: &str) -> String {
     }
 }
 
+/// Sanitize the trust-domain component of a SPIFFE/WIMSE URI.
+///
+/// SPIFFE-ID restricts the trust domain to lowercase ASCII letters, digits,
+/// dot (`.`), dash (`-`), and underscore (`_`); ports, path characters,
+/// uppercase letters, and empty values are forbidden. Operators set the
+/// domain via `SERA_WIMSE_DOMAIN` (see `sera-config::AuthConfig`), so this
+/// helper guarantees the projection emits a SPIFFE-conformant URI even
+/// when the configured value is invalid (for example `example.com:443`,
+/// `EXAMPLE.COM`, `bad/path`, or empty). Uppercase ASCII is lowercased,
+/// any other disallowed byte is replaced with `_`, and an empty result
+/// becomes a single `_`.
+fn wimse_sanitize_domain(input: &str) -> String {
+    let mut out = String::with_capacity(input.len().max(1));
+    for byte in input.bytes() {
+        let lower = byte.to_ascii_lowercase();
+        let is_safe = matches!(lower, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_');
+        out.push(if is_safe { lower as char } else { '_' });
+    }
+    if out.is_empty() {
+        "_".to_string()
+    } else {
+        out
+    }
+}
+
 /// Build a deterministic WIMSE/SPIFFE URI projection from principal coordinates.
 ///
-/// Form: `spiffe://{domain}/{account}/{project}/{kind}/{id}`. Every path
-/// segment except `kind` (which is a fixed snake_case keyword) is sanitized
-/// via `wimse_escape_segment` so the resulting URI always satisfies the
-/// SPIFFE-ID character allow-list, even when callers pass `account_id` or
-/// `project_id` containing forbidden characters or empty values.
+/// Form: `spiffe://{domain}/{account}/{project}/{kind}/{id}`. The trust
+/// domain is sanitized via `wimse_sanitize_domain`; every path segment
+/// except `kind` (which is a fixed snake_case keyword) is sanitized via
+/// `wimse_escape_segment`. The resulting URI always satisfies the
+/// SPIFFE-ID character allow-list, even when callers pass invalid
+/// `domain`, `account_id`, or `project_id` values.
 fn build_wimse_uri(
     domain: &str,
     account_id: &str,
@@ -123,7 +149,7 @@ fn build_wimse_uri(
 ) -> String {
     format!(
         "spiffe://{domain}/{account}/{project}/{kind}/{id}",
-        domain = domain,
+        domain = wimse_sanitize_domain(domain),
         account = wimse_escape_segment(account_id),
         project = wimse_escape_segment(project_id),
         kind = kind.as_path_segment(),
@@ -626,6 +652,53 @@ mod tests {
         assert_eq!(
             pp.wimse_uri("sera.local"),
             "spiffe://sera.local/local/default/agent/__",
+        );
+    }
+
+    // ── Trust-domain sanitization ───────────────────────────────────────────
+
+    #[test]
+    fn wimse_sanitize_domain_passthrough_for_valid_domain() {
+        assert_eq!(wimse_sanitize_domain("sera.local"), "sera.local");
+        assert_eq!(wimse_sanitize_domain("sera.example.com"), "sera.example.com");
+    }
+
+    #[test]
+    fn wimse_sanitize_domain_lowercases_uppercase() {
+        assert_eq!(wimse_sanitize_domain("EXAMPLE.COM"), "example.com");
+        assert_eq!(wimse_sanitize_domain("Sera.Local"), "sera.local");
+    }
+
+    /// `:` (port suffix), `/` (path injection), and whitespace are not
+    /// permitted in a SPIFFE trust domain — all collapse to `_`.
+    #[test]
+    fn wimse_sanitize_domain_replaces_port_and_path_chars() {
+        assert_eq!(wimse_sanitize_domain("example.com:443"), "example.com_443");
+        assert_eq!(wimse_sanitize_domain("bad/path"), "bad_path");
+        assert_eq!(wimse_sanitize_domain("with space"), "with_space");
+    }
+
+    #[test]
+    fn wimse_sanitize_domain_empty_substituted() {
+        assert_eq!(wimse_sanitize_domain(""), "_");
+    }
+
+    /// End-to-end: an invalid `SERA_WIMSE_DOMAIN` value reaching
+    /// `Principal::wimse_uri` must still produce a SPIFFE-conformant URI.
+    #[test]
+    fn wimse_uri_sanitizes_invalid_domain() {
+        let p = Principal::default_admin();
+        assert_eq!(
+            p.wimse_uri("EXAMPLE.COM:443"),
+            "spiffe://example.com_443/local/default/human/admin",
+        );
+        assert_eq!(
+            p.wimse_uri(""),
+            "spiffe://_/local/default/human/admin",
+        );
+        assert_eq!(
+            p.wimse_uri("bad/path"),
+            "spiffe://bad_path/local/default/human/admin",
         );
     }
 

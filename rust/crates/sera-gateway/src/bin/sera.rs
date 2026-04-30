@@ -7237,12 +7237,21 @@ spec:
         use tokio::net::TcpListener;
         use tokio::sync::oneshot;
 
-        /// Locate the workspace's `target/debug/sera-runtime` binary,
-        /// building it on demand if absent. `sera-gateway` depends on
-        /// `sera-runtime` as a library, so a clean `cargo test -p
-        /// sera-gateway` does not build the runtime's binary target — we
-        /// must invoke `cargo build -p sera-runtime --bin sera-runtime`
-        /// ourselves to make the test self-contained.
+        /// Locate the workspace's `target/debug/sera-runtime` binary.
+        ///
+        /// Resolution order:
+        ///   1. `SERA_E2E_RUNTIME_BIN=<path>` explicit override, if set.
+        ///   2. `CARGO_TARGET_DIR/debug/sera-runtime`, then any ancestor
+        ///      `target/debug/sera-runtime` of the gateway crate.
+        ///   3. If still missing AND `SERA_E2E_ALLOW_RUNTIME_BUILD=1`, run
+        ///      `cargo build -p sera-runtime --bin sera-runtime` to build it.
+        ///   4. Otherwise panic with a message instructing the caller.
+        ///
+        /// The opt-in nested build exists because Cargo does not export
+        /// `--frozen`/`--locked`/`--offline` to the test process, so a
+        /// silent `cargo build` here could violate hermetic outer-test mode.
+        /// Default behavior is therefore to refuse the build and require an
+        /// explicit opt-in or a prebuilt binary.
         fn locate_runtime_bin() -> PathBuf {
             let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             let exe_name = if cfg!(windows) {
@@ -7250,6 +7259,15 @@ spec:
             } else {
                 "sera-runtime"
             };
+
+            if let Ok(p) = std::env::var("SERA_E2E_RUNTIME_BIN") {
+                let candidate = PathBuf::from(&p);
+                assert!(
+                    candidate.exists(),
+                    "SERA_E2E_RUNTIME_BIN=`{p}` does not exist"
+                );
+                return candidate;
+            }
 
             let find_existing = || -> Option<PathBuf> {
                 if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
@@ -7273,28 +7291,30 @@ spec:
                 return found;
             }
 
-            // Build the binary via the same cargo that's running these tests.
-            // Cargo sets CARGO to its own path; fall back to PATH lookup.
-            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-            let mut cmd = std::process::Command::new(&cargo);
-            cmd.args(["build", "-p", "sera-runtime", "--bin", "sera-runtime"]);
-            // Propagate the outer cargo invocation's network/lockfile mode so a
-            // `cargo test --offline`/`--locked`/`--frozen` doesn't trigger
-            // registry or lockfile mutations from this nested build. Only
-            // `CARGO_NET_OFFLINE` is officially set by cargo; `CARGO_LOCKED`
-            // and `CARGO_FROZEN` are honored as opt-ins for CI/local use.
-            for (env_var, flag) in [
-                ("CARGO_NET_OFFLINE", "--offline"),
-                ("CARGO_LOCKED", "--locked"),
-                ("CARGO_FROZEN", "--frozen"),
-            ] {
-                if std::env::var(env_var).as_deref() == Ok("true") {
-                    cmd.arg(flag);
-                }
+            if std::env::var("SERA_E2E_ALLOW_RUNTIME_BUILD").as_deref() != Ok("1") {
+                panic!(
+                    "sera-runtime binary not found (searched CARGO_TARGET_DIR \
+                     and ancestor target/debug/{exe_name} from {}). Build it \
+                     first with `cargo build -p sera-runtime --bin sera-runtime`, \
+                     point SERA_E2E_RUNTIME_BIN=<path> at a prebuilt binary, or \
+                     set SERA_E2E_ALLOW_RUNTIME_BUILD=1 to let this test invoke \
+                     `cargo build` itself (note: the nested build cannot inherit \
+                     the outer cargo's --frozen/--locked/--offline mode).",
+                    manifest_dir.display()
+                );
             }
-            let status = cmd.status().unwrap_or_else(|e| {
-                panic!("failed to invoke `{cargo} build -p sera-runtime`: {e}")
-            });
+
+            // Opt-in nested build. Cargo sets CARGO to its own path; fall
+            // back to PATH lookup. The caller has explicitly accepted that
+            // this nested build does not honor the outer cargo's network/
+            // lockfile mode, so no flag propagation is attempted here.
+            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+            let status = std::process::Command::new(&cargo)
+                .args(["build", "-p", "sera-runtime", "--bin", "sera-runtime"])
+                .status()
+                .unwrap_or_else(|e| {
+                    panic!("failed to invoke `{cargo} build -p sera-runtime`: {e}")
+                });
             assert!(
                 status.success(),
                 "`cargo build -p sera-runtime --bin sera-runtime` failed with {status}"

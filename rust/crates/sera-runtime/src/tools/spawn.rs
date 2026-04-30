@@ -80,7 +80,13 @@ impl Tool for SpawnEphemeral {
             payload["agent_template"] = serde_json::Value::String(template.to_string());
         }
 
-        let client = reqwest::Client::new();
+        // sera-rdg4: pre-flight `core_url` through the internal-service
+        // validator (allowlist-relaxed for `sera-core` etc., strict
+        // fallback for unsafe overrides; cloud-metadata always blocked)
+        // and pin the resolved addrs on the client.
+        let client = crate::tools::safe_client::build_internal_service_client(&core_url)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         let resp = client
             .post(format!("{}/api/sandbox/subagent", core_url))
             .bearer_auth(&token)

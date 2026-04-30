@@ -66,7 +66,12 @@ impl Tool for ToolSearch {
             .unwrap_or_else(|_| "http://sera-core:3000".to_string());
         let token = std::env::var("SERA_IDENTITY_TOKEN").unwrap_or_default();
 
-        let client = reqwest::Client::new();
+        // sera-rdg4: internal-service client (allowlisted internal SERA
+        // hostnames are permitted to resolve to private IPs in Docker/k8s;
+        // off-allowlist overrides are still rejected).
+        let client = crate::tools::safe_client::build_internal_service_client(&core_url)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         let resp = client
             .get(format!("{}/api/tools/catalog", core_url))
             .bearer_auth(&token)
@@ -160,7 +165,12 @@ impl Tool for SkillSearch {
             .unwrap_or_else(|_| "http://sera-core:3000".to_string());
         let token = std::env::var("SERA_IDENTITY_TOKEN").unwrap_or_default();
 
-        let client = reqwest::Client::new();
+        // sera-rdg4: internal-service client (allowlisted internal SERA
+        // hostnames are permitted to resolve to private IPs in Docker/k8s;
+        // off-allowlist overrides are still rejected).
+        let client = crate::tools::safe_client::build_internal_service_client(&core_url)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         let resp = client
             .get(format!("{}/api/skills", core_url))
             .bearer_auth(&token)

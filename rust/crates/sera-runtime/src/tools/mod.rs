@@ -23,6 +23,7 @@ pub mod knowledge;
 pub mod memory_search;
 pub mod mvs_tools;
 pub mod propose_correction;
+pub mod safe_client;
 pub mod shell_exec;
 pub mod spawn;
 pub mod tool_search;

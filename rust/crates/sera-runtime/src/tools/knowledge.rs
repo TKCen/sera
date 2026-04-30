@@ -90,7 +90,13 @@ impl Tool for KnowledgeStore {
             .unwrap_or_else(|_| "http://sera-core:3000".to_string());
         let token = std::env::var("SERA_IDENTITY_TOKEN").unwrap_or_default();
 
-        let client = reqwest::Client::new();
+        // sera-rdg4: validate `core_url` against the internal-service
+        // policy (allowlist-relaxed for `sera-core` etc., strict for
+        // unsafe overrides; cloud-metadata always blocked) before sending
+        // the write request.
+        let client = crate::tools::safe_client::build_internal_service_client(&core_url)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         let payload = serde_json::json!({
             "key": key,
             "content": content,
@@ -203,7 +209,13 @@ impl Tool for KnowledgeQuery {
             payload["scope"] = serde_json::Value::String(s.to_string());
         }
 
-        let client = reqwest::Client::new();
+        // sera-rdg4: internal-service client (allowlisted internal SERA
+        // hostnames are permitted to resolve to private IPs in Docker/k8s;
+        // off-allowlist overrides — unsafe IPs, cloud-metadata, loopback
+        // hostnames — are still rejected before any request).
+        let client = crate::tools::safe_client::build_internal_service_client(&core_url)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         let resp = client
             .post(format!("{}/api/knowledge/query", core_url))
             .bearer_auth(&token)

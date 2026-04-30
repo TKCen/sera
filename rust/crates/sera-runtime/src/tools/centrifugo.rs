@@ -164,7 +164,15 @@ impl CentrifugoPublisher {
     }
 
     async fn send_request(&self, payload: serde_json::Value) -> anyhow::Result<()> {
-        let client = reqwest::Client::new();
+        // sera-rdg4: pre-flight the configured Centrifugo base URL through
+        // the internal-service policy.  The default Centrifugo hostname
+        // (`centrifugo`/`sera-centrifugo`) is allowlisted so Docker/k8s
+        // private-IP DNS answers go through; cloud-metadata and
+        // off-allowlist unsafe overrides remain blocked.  Resolved addrs
+        // are pinned to mitigate DNS rebinding.
+        let client = crate::tools::safe_client::build_internal_service_client(&self.base_url)
+            .await
+            .map_err(|e| anyhow::anyhow!("centrifugo: {e}"))?;
         let resp = client
             .post(format!("{}/api/publish", self.base_url))
             .header("Authorization", format!("apikey {}", self.api_key))

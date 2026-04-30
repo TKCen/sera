@@ -1255,6 +1255,37 @@ impl AppState {
         }
         count
     }
+
+    /// Cancel the in-flight HTTP `/api/chat` turn for `session_id` (sera-mplr).
+    ///
+    /// Matches keys formatted as `http:{agent_name}:{session_id}` (see
+    /// `chat_handler` line ~1794). Returns `true` when a token was found,
+    /// cancelled, and removed from the registry; `false` when no active HTTP
+    /// turn is registered for this session. The Discord transport's
+    /// `discord:{agent}:{channel_id}` keys are deliberately not matched —
+    /// `/api/chat/cancel` is the HTTP-surface cancel route.
+    fn cancel_http_chat_session(&self, session_id: &str) -> bool {
+        let suffix = format!(":{session_id}");
+        let mut map = self
+            .active_cancellation_tokens
+            .lock()
+            .expect("active_cancellation_tokens mutex poisoned");
+        let key = map
+            .keys()
+            .find(|k| k.starts_with("http:") && k.ends_with(&suffix))
+            .cloned();
+        match key {
+            Some(k) => {
+                if let Some(token) = map.remove(&k) {
+                    token.cancel();
+                    true
+                } else {
+                    false
+                }
+            }
+            None => false,
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -1518,6 +1549,12 @@ struct ChatRequest {
     agent: Option<String>,
     #[serde(default)]
     stream: bool,
+}
+
+/// Request body for `POST /api/chat/cancel` (sera-mplr / J.0.4 ESC-cancel).
+#[derive(Deserialize)]
+struct ChatCancelRequest {
+    session_id: String,
 }
 
 /// Custom JSON extractor that maps axum's `JsonRejection` (which produces 422
@@ -2251,6 +2288,38 @@ async fn chat_handler(
             usage: result.usage,
         })
         .into_response())
+    }
+}
+
+/// `POST /api/chat/cancel` — abort the in-flight HTTP `/api/chat` turn for
+/// the given `session_id` (sera-mplr / J.0.4 ESC-cancel flow).
+///
+/// Looks up the session's `CancellationToken` in the in-memory registry
+/// populated by `chat_handler` (see [`AppState::register_cancellation_token`])
+/// and fires it. The cancelled `execute_turn` returns via its
+/// `tokio::select!` cancel arm; the lane slot is released by the existing
+/// chat handler exit path.
+///
+/// - `204 No Content` when an active turn was cancelled.
+/// - `404 Not Found` when no HTTP turn is in flight for that session.
+async fn chat_cancel_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    ValidatedJson(req): ValidatedJson<ChatCancelRequest>,
+) -> Result<axum::response::Response, StatusCode> {
+    validate_api_key(&state, &headers)?;
+    if state.cancel_http_chat_session(&req.session_id) {
+        Ok(StatusCode::NO_CONTENT.into_response())
+    } else {
+        Ok((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "not_found",
+                "reason": "no_active_turn",
+                "session_id": req.session_id,
+            })),
+        )
+            .into_response())
     }
 }
 
@@ -4708,6 +4777,9 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/health/ready", get(readiness_handler))
         .route("/api/auth/me", get(auth_me_handler))
         .route("/api/chat", post(chat_handler))
+        // sera-mplr / J.0.4 ESC-cancel: abort the in-flight HTTP turn for a
+        // session_id. Returns 204 on cancel, 404 when no turn is in flight.
+        .route("/api/chat/cancel", post(chat_cancel_handler))
         .route("/api/agents", get(agents_handler))
         .route("/api/agents/{id}", get(agent_by_id_handler))
         .route("/api/sessions", get(sessions_handler))
@@ -6947,6 +7019,156 @@ spec:
                 .is_empty(),
             "registry must be drained"
         );
+    }
+
+    /// sera-mplr: `AppState::cancel_http_chat_session` cancels the matching
+    /// `http:{agent}:{session_id}` token, removes it from the registry, and
+    /// returns `true`. Mirrors the cleanup path that `execute_turn` runs on
+    /// terminal states.
+    #[tokio::test]
+    async fn cancel_http_chat_session_cancels_and_removes_matching_token() {
+        let state = test_state_async().await;
+        let token = state.register_cancellation_token("http:sera:ses_abc123");
+
+        let cancelled = state.cancel_http_chat_session("ses_abc123");
+
+        assert!(cancelled, "must report a token was cancelled");
+        assert!(token.is_cancelled(), "token must be cancelled");
+        assert!(
+            state.active_cancellation_tokens.lock().unwrap().is_empty(),
+            "registry must be drained of the cancelled entry"
+        );
+    }
+
+    /// sera-mplr: cancelling a session_id with no active turn returns `false`
+    /// (the route translates this to a 404).
+    #[tokio::test]
+    async fn cancel_http_chat_session_returns_false_when_no_active_turn() {
+        let state = test_state_async().await;
+        assert!(!state.cancel_http_chat_session("ses_missing"));
+    }
+
+    /// sera-mplr: cancelling one session_id must not affect any other
+    /// in-flight HTTP turn. Cross-session cancellation would let one client
+    /// interrupt another's lane slot.
+    #[tokio::test]
+    async fn cancel_http_chat_session_does_not_cancel_other_sessions() {
+        let state = test_state_async().await;
+        let target = state.register_cancellation_token("http:sera:ses_target");
+        let bystander = state.register_cancellation_token("http:sera:ses_bystander");
+
+        assert!(state.cancel_http_chat_session("ses_target"));
+
+        assert!(target.is_cancelled());
+        assert!(
+            !bystander.is_cancelled(),
+            "bystander session must not be cancelled"
+        );
+        let map = state.active_cancellation_tokens.lock().unwrap();
+        assert!(map.contains_key("http:sera:ses_bystander"));
+        assert!(!map.contains_key("http:sera:ses_target"));
+    }
+
+    /// sera-mplr: `/api/chat/cancel` is the HTTP-surface cancel route — it
+    /// must not match Discord transport keys (`discord:{agent}:{channel_id}`)
+    /// even when the suffix happens to coincide with the inbound session_id.
+    #[tokio::test]
+    async fn cancel_http_chat_session_ignores_non_http_transport_keys() {
+        let state = test_state_async().await;
+        let discord = state.register_cancellation_token("discord:sera:ses_collide");
+
+        assert!(!state.cancel_http_chat_session("ses_collide"));
+        assert!(!discord.is_cancelled());
+        assert!(
+            state
+                .active_cancellation_tokens
+                .lock()
+                .unwrap()
+                .contains_key("discord:sera:ses_collide")
+        );
+    }
+
+    /// sera-mplr route-level: 204 when an active HTTP turn is cancelled.
+    #[tokio::test]
+    async fn chat_cancel_endpoint_returns_204_when_active_turn_cancelled() {
+        let state = test_state_async().await;
+        let token = state.register_cancellation_token("http:sera:ses_route_ok");
+        let app = build_router(Arc::clone(&state));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat/cancel")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "session_id": "ses_route_ok" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(token.is_cancelled());
+    }
+
+    /// sera-mplr route-level: 404 when no active turn matches the session_id.
+    #[tokio::test]
+    async fn chat_cancel_endpoint_returns_404_when_no_active_turn() {
+        let state = test_state_async().await;
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat/cancel")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "session_id": "ses_nope" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "not_found");
+        assert_eq!(json["reason"], "no_active_turn");
+        assert_eq!(json["session_id"], "ses_nope");
+    }
+
+    /// sera-mplr route-level: cancelling one session via the endpoint must
+    /// leave another session's token intact.
+    #[tokio::test]
+    async fn chat_cancel_endpoint_does_not_cancel_other_sessions() {
+        let state = test_state_async().await;
+        let target = state.register_cancellation_token("http:sera:ses_target_route");
+        let bystander = state.register_cancellation_token("http:sera:ses_bystander_route");
+        let app = build_router(Arc::clone(&state));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat/cancel")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "session_id": "ses_target_route" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(target.is_cancelled());
+        assert!(!bystander.is_cancelled());
     }
 
     /// sera-un35 regression guard: when the child exits before the gateway

@@ -108,8 +108,12 @@ services:
       - "5173:80"
     networks:
       - sera_net
+    # Use 127.0.0.1 explicitly: on Windows/WSL Docker setups `localhost` can
+    # resolve to `::1` first, but the nginx `listen 80` directive in this
+    # image only binds IPv4 inside the container, producing a false
+    # unhealthy state when wget tries the IPv6 address first.
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:80/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/ || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

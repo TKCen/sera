@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod agent_transport;
 pub mod capability_enforcement;
+pub mod embedded_transport;
 pub mod connector;
 pub mod constitutional_config;
 pub mod db_backend;

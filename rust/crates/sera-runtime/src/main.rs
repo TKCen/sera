@@ -13,19 +13,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use clap::Parser;
-use sera_auth::authz::{ActionKind, AuthzProviderAdapter, RoleBasedAuthzProvider};
 use sera_config::CapabilityRegistry;
+use sera_runtime::authz_builder;
 use sera_runtime::config::RuntimeConfig;
 use sera_runtime::context_engine::pipeline::ContextPipeline;
 use sera_runtime::default_runtime::DefaultRuntime;
 use sera_runtime::health;
-use sera_runtime::llm_client::LlmClient;
+use sera_runtime::llm_client;
 use sera_runtime::stdio;
 use sera_runtime::tools::TraitToolRegistry;
 use sera_runtime::tools::dispatcher::RegistryDispatcher;
-use sera_types::principal::PrincipalId;
 use sera_types::runtime::{AgentRuntime, TurnContext, TurnOutcome};
-use sera_types::tool::AuthzProviderHandle;
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
@@ -94,85 +92,10 @@ impl Cli {
 }
 
 // ── Authz provider construction ──────────────────────────────────────────────
-
-/// Build an [`AuthzProviderHandle`] from config.
-///
-/// When `config.tool_authz_roles` is set, parses a compact role definition
-/// string and constructs a [`RoleBasedAuthzProvider`] wrapped in an
-/// [`AuthzProviderAdapter`]. Format:
-///
-/// ```text
-/// <role>:<kind>[,<kind>...][;<role>:...]
-/// ```
-///
-/// Supported `<kind>` names (case-insensitive): `read`, `write`, `execute`,
-/// `admin`, `tool_call`, `session_op`, `memory_access`, `config_change`,
-/// `propose_change`, `approve_change`.
-///
-/// Principal assignments are not parsed here — they are set per-agent via
-/// `TOOL_AUTHZ_PRINCIPALS` (future bead). For now the provider is useful for
-/// role-grant inspection and tests that inject principals directly.
-///
-/// When `tool_authz_roles` is `None`, returns the allow-all default stub.
-fn build_authz_provider(config: &RuntimeConfig) -> Arc<dyn AuthzProviderHandle> {
-    let Some(roles_str) = &config.tool_authz_roles else {
-        return Arc::new(sera_types::tool::DefaultAuthzProviderStub);
-    };
-
-    let mut builder = RoleBasedAuthzProvider::builder();
-
-    for role_clause in roles_str.split(';') {
-        let role_clause = role_clause.trim();
-        if role_clause.is_empty() {
-            continue;
-        }
-        let Some((role, kinds_str)) = role_clause.split_once(':') else {
-            tracing::warn!(
-                "TOOL_AUTHZ_ROLES: skipping malformed clause (no ':'): {role_clause}"
-            );
-            continue;
-        };
-        let role = role.trim();
-        let kinds: Vec<ActionKind> = kinds_str
-            .split(',')
-            .filter_map(|k| parse_action_kind(k.trim()))
-            .collect();
-        builder = builder.grant(role, kinds);
-    }
-
-    // Assign the runtime's own agent-id as a full-access principal so the
-    // default single-agent deployment works without additional config.
-    if let Ok(agent_id) = std::env::var("AGENT_ID")
-        && !agent_id.is_empty()
-    {
-        builder = builder.assign(
-            PrincipalId::new(format!("agent:{agent_id}")),
-            ["operator"],
-        );
-    }
-
-    Arc::new(AuthzProviderAdapter::new(builder.build()))
-}
-
-/// Parse a single action-kind name (case-insensitive).
-fn parse_action_kind(s: &str) -> Option<ActionKind> {
-    match s.to_ascii_lowercase().as_str() {
-        "read" => Some(ActionKind::Read),
-        "write" => Some(ActionKind::Write),
-        "execute" => Some(ActionKind::Execute),
-        "admin" => Some(ActionKind::Admin),
-        "tool_call" => Some(ActionKind::ToolCall),
-        "session_op" => Some(ActionKind::SessionOp),
-        "memory_access" => Some(ActionKind::MemoryAccess),
-        "config_change" => Some(ActionKind::ConfigChange),
-        "propose_change" => Some(ActionKind::ProposeChange),
-        "approve_change" => Some(ActionKind::ApproveChange),
-        other => {
-            tracing::warn!("TOOL_AUTHZ_ROLES: unknown action kind '{other}', skipping");
-            None
-        }
-    }
-}
+//
+// Construction lives in [`sera_runtime::authz_builder`] (sera-ve9x) so the
+// gateway's embedded dispatch path can build the same provider without
+// duplicating the role-clause parser.
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
@@ -209,7 +132,7 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let authz_provider = build_authz_provider(&config);
+    let authz_provider = authz_builder::build_provider_from_config(&config);
 
     // sera-a1u: every runtime owns a shared DelegationBus so the three
     // delegation tools (session_spawn / session_yield / session_send) can
@@ -266,7 +189,7 @@ async fn main() -> anyhow::Result<()> {
     let permissive_gate = resolve_allow_missing_gate();
 
     let context_engine = Box::new(ContextPipeline::new());
-    let llm_client = Box::new(build_llm_client(&config));
+    let llm_client = Box::new(llm_client::build_from_config(&config));
     let runtime = DefaultRuntime::new(context_engine)
         .with_llm(llm_client)
         .with_tool_dispatcher(Box::new(dispatcher))
@@ -378,73 +301,10 @@ async fn run_interactive(
 }
 
 // ── LLM client wiring ────────────────────────────────────────────────────────
-
-/// Build an [`LlmClient`] with optional sera-jvi account pool + sera-48v
-/// thinking config attached.
-///
-/// The runtime stays fully backwards-compatible: when `SERA_<PROVIDER>_KEYS`
-/// is not set for the inferred provider id, no pool is attached and the
-/// client falls back to the single-account `LLM_BASE_URL` / `LLM_API_KEY`
-/// path.  Likewise `SERA_REASONING_LEVEL` defaults to `off` when unset.
-fn build_llm_client(config: &RuntimeConfig) -> LlmClient {
-    use sera_config::providers::ProviderAccountsConfig;
-    use sera_models::{
-        AccountPool, CooldownConfig, ProviderAccount, ProviderKind, ReasoningLevel, ThinkingConfig,
-    };
-
-    // Provider kind is inferred from LLM_MODEL (e.g. "gpt-4o" → OpenAI,
-    // "claude-3-5-sonnet" → Anthropic).  Operators can also set
-    // SERA_LLM_PROVIDER_ID to pin the inference explicitly.
-    let provider_id = std::env::var("SERA_LLM_PROVIDER_ID")
-        .unwrap_or_else(|_| config.llm_model.clone());
-    let provider_kind = ProviderKind::infer(&provider_id);
-
-    // Thinking / reasoning level.
-    let level = std::env::var("SERA_REASONING_LEVEL")
-        .ok()
-        .and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
-            "off" | "none" | "" => Some(ReasoningLevel::Off),
-            "low" => Some(ReasoningLevel::Low),
-            "medium" | "med" => Some(ReasoningLevel::Medium),
-            "high" => Some(ReasoningLevel::High),
-            _ => None,
-        })
-        .unwrap_or(ReasoningLevel::Off);
-    let budget = std::env::var("SERA_REASONING_BUDGET_TOKENS")
-        .ok()
-        .and_then(|v| v.parse::<u32>().ok());
-    let mut thinking = ThinkingConfig::new(level);
-    thinking.budget_tokens = budget;
-
-    let mut client = LlmClient::new(config)
-        .with_thinking(thinking)
-        .with_provider_kind(provider_kind);
-
-    // Account pool (sera-jvi).  Only attached when at least one key is
-    // configured for the active provider id.
-    let accounts_cfg = ProviderAccountsConfig::from_env();
-    if let Some(keys) = accounts_cfg.keys_for(&provider_id)
-        && !keys.is_empty()
-    {
-        let accounts: Vec<ProviderAccount> = keys
-            .iter()
-            .enumerate()
-            .map(|(idx, key)| ProviderAccount::new(format!("{provider_id}-{idx}"), key.clone(), None))
-            .collect();
-        let pool = Arc::new(
-            AccountPool::new(provider_id.clone(), accounts, CooldownConfig::default())
-                .with_default_base_url(config.llm_base_url.clone()),
-        );
-        tracing::info!(
-            provider = %provider_id,
-            account_count = keys.len(),
-            "Attached LLM account pool (sera-jvi)"
-        );
-        client = client.with_account_pool(pool);
-    }
-
-    client
-}
+//
+// `build_llm_client` lives in [`sera_runtime::llm_client::build_from_config`]
+// (sera-ve9x) so the gateway's embedded dispatch path can construct the same
+// client without duplicating the env-var reads.
 
 // ── Constitutional gate resolution ───────────────────────────────────────────
 

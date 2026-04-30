@@ -55,6 +55,7 @@ use sera_gateway::admin::{
 };
 use sera_gateway::agent_transport::{AgentTurnTransport, ToolEvent, TurnEvents, UsageInfo};
 use sera_gateway::capability_enforcement::{CapabilityRegistry, PolicyDenial};
+use sera_gateway::embedded_transport::EmbeddedRuntimeTransport;
 use sera_gateway::hitl_gateway::{
     HitlAppState, InMemoryTicketStore, TicketStore, resolve_approval_routing, resolve_hitl_mode,
 };
@@ -125,6 +126,132 @@ fn wants_pgvector_backend(backend_pref: Option<&str>, database_url: Option<&str>
     matches!(backend_pref, Some("pgvector")) || (backend_pref.is_none() && database_url.is_some())
 }
 
+/// sera-ve9x: build an in-process [`AgentTurnTransport`] backed by the
+/// gateway-bundled `DefaultRuntime` for one agent.
+///
+/// Selected when `SERA_DISPATCH_MODE=embedded`. Skips spawning a
+/// `sera-runtime --ndjson` child and avoids mutating the gateway process
+/// env (in particular: `LLM_API_KEY` is passed through `RuntimeConfig` only,
+/// so the key never enters `/proc/<gateway-pid>/environ`).
+///
+/// The capability registry is loaded with the same fail-closed semantics as
+/// the runtime binary's `load_capability_registry` (sera-eo71): a missing /
+/// unresolved `policy_ref` aborts construction so the agent is skipped
+/// rather than silently running unconstrained.
+fn build_embedded_transport(
+    agent_name: &str,
+    agent_spec: &AgentSpec,
+    base_url: &str,
+    model: &str,
+    api_key_val: &str,
+) -> anyhow::Result<Arc<dyn AgentTurnTransport>> {
+    use sera_runtime::config::RuntimeConfig;
+    use sera_runtime::context_engine::pipeline::ContextPipeline;
+    use sera_runtime::default_runtime::DefaultRuntime;
+    use sera_runtime::tools::TraitToolRegistry;
+    use sera_runtime::tools::dispatcher::RegistryDispatcher;
+    use sera_runtime::tools::filter::ToolNameFilter;
+
+    // Start from gateway-process env defaults (max_tokens, semantic_*,
+    // tool_authz_*, thinking_level) and override the per-agent fields
+    // explicitly. `llm_api_key` is in-memory; we never call
+    // `std::env::set_var("LLM_API_KEY", …)`, which closes a
+    // `/proc/<gateway-pid>/environ` exposure window.
+    let mut runtime_config = RuntimeConfig::from_env();
+    runtime_config.llm_base_url = base_url.to_string();
+    runtime_config.llm_model = model.to_string();
+    runtime_config.llm_api_key = api_key_val.to_string();
+    runtime_config.agent_id = agent_name.to_string();
+    runtime_config.lifecycle_mode = "task".to_string();
+    runtime_config.chat_port = 0;
+
+    // sera-eo71: fail-closed capability registry load (mirrors the runtime
+    // binary's `load_capability_registry`). The gateway's
+    // `/admin/policies/reload` endpoint cannot yet propagate to embedded
+    // transports — known parity caveat with the stdio child path, where the
+    // child also loads the registry once on spawn.
+    let policies_dir = sera_config::CapabilityRegistry::resolve_policies_dir();
+    let policy_ref = agent_spec
+        .policy_ref
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let bindings = vec![(agent_name.to_string(), policy_ref.clone())];
+    let capability_registry = sera_config::CapabilityRegistry::load_and_bind(
+        &policies_dir,
+        bindings,
+    )
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "embedded: failed to load capability registry for agent {agent_name}: {e}"
+        )
+    })?;
+    tracing::info!(
+        agent = %agent_name,
+        policy_ref = ?policy_ref,
+        loaded_policies = capability_registry.policy_count(),
+        "Embedded capability registry loaded (sera-eo71)"
+    );
+    let capability_registry = Arc::new(capability_registry);
+
+    // sera-hwny: tool schema filter from the agent manifest's allow list.
+    // Deny is read from the gateway process env directly — no env mutation
+    // needed because `ToolNameFilter::from_globs` accepts explicit lists.
+    let tools_allow: Vec<String> = agent_spec
+        .tools
+        .as_ref()
+        .map(|t| t.allow.clone())
+        .unwrap_or_default();
+    let tools_deny: Vec<String> = std::env::var("SERA_AGENT_TOOLS_DENY")
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let tool_filter = ToolNameFilter::from_globs(tools_allow, tools_deny);
+
+    // sera-a1u: per-agent DelegationBus, mirroring the runtime binary path.
+    let delegation_bus = sera_runtime::delegation_bus::DelegationBus::new();
+    let registry = TraitToolRegistry::with_builtins_and_authz(runtime_config.tool_authz_enabled)
+        .with_delegation(delegation_bus);
+    let registry = Arc::new(registry);
+
+    let runtime_defs = registry.definitions();
+    let filtered = tool_filter.filter_definitions(runtime_defs);
+    let tool_defs: Vec<sera_types::tool::ToolDefinition> = filtered
+        .iter()
+        .filter_map(|d| {
+            let value = serde_json::to_value(d).ok()?;
+            serde_json::from_value(value).ok()
+        })
+        .collect();
+
+    let dispatcher = RegistryDispatcher::new(Arc::clone(&registry))
+        .with_capability_registry(Arc::clone(&capability_registry), agent_name.to_string());
+
+    let authz_provider = sera_runtime::authz_builder::build_provider_from_config(&runtime_config);
+    let permissive_gate = std::env::var("SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+
+    let context_engine = Box::new(ContextPipeline::new());
+    let llm_client = Box::new(sera_runtime::llm_client::build_from_config(&runtime_config));
+    let runtime = DefaultRuntime::new(context_engine)
+        .with_llm(llm_client)
+        .with_tool_dispatcher(Box::new(dispatcher))
+        .with_authz_provider(authz_provider)
+        .with_allow_missing_constitutional_gate(permissive_gate);
+
+    Ok(Arc::new(EmbeddedRuntimeTransport::new(
+        agent_name.to_string(),
+        Arc::new(runtime),
+        tool_defs,
+    )))
+}
+
 /// sera-y45a: parses the operator-requested dispatch mode from the
 /// `SERA_DISPATCH_MODE` env var.
 ///
@@ -158,18 +285,29 @@ fn configured_dispatch_mode_label() -> &'static str {
     parse_configured_dispatch_mode(raw.as_deref())
 }
 
-/// sera-y45a: the dispatch mode that actually applies to the running code.
+/// sera-y45a / sera-ve9x: the dispatch mode that actually applies to the
+/// running code.
 ///
-/// This binary always spawns `sera-runtime` via `StdioHarness::spawn`, so
-/// dispatch ownership is always `runtime` regardless of what
-/// `SERA_DISPATCH_MODE` requests. The boot log uses this as the truthful
-/// `dispatch_mode` field; the configured value is logged separately as
-/// `dispatch_mode_configured` so operators can still see what was asked for
-/// without the log claiming a security model the code does not implement.
-/// Future migration PRs (ADR §4 steps 2–4) will replace this constant with a
-/// real switch wired to the dispatcher selection.
+/// `runtime` (default) spawns `sera-runtime --ndjson` per agent and routes
+/// turns through [`crate::agent_transport::AgentTurnTransport`] backed by
+/// `RuntimeChildSupervisor`.
+///
+/// `embedded` (sera-ve9x) constructs a `DefaultRuntime` in-process per
+/// agent and routes turns through
+/// [`crate::embedded_transport::EmbeddedRuntimeTransport`] — there is no
+/// child process. Selected via `SERA_DISPATCH_MODE=embedded`.
+///
+/// `gateway` (ADR §4 step 3) is still unimplemented; the parser silently
+/// falls back to `runtime` until the gateway-owned dispatcher lands so an
+/// unimplemented target cannot masquerade as an active dispatch model.
 fn effective_dispatch_mode_label() -> &'static str {
-    "runtime"
+    match configured_dispatch_mode_label() {
+        "embedded" => "embedded",
+        // "gateway" is not yet implemented; fall back to runtime so the boot
+        // log never claims a model the code does not own. The configured
+        // request is still surfaced under `dispatch_mode_configured`.
+        _ => "runtime",
+    }
 }
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
@@ -3878,17 +4016,17 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         exe_dir.join("sera-runtime").to_string_lossy().to_string()
     });
 
-    // sera-y45a: surface the dispatch model in the boot log so operators can
-    // read which process owns tool dispatch without diving into source.
-    // `dispatch_mode` is the *effective* mode — what the running code
-    // actually does. `dispatch_mode_configured` is what the operator
-    // requested via SERA_DISPATCH_MODE. They diverge today because this
-    // binary always spawns `sera-runtime` via `StdioHarness`, so the
-    // effective mode is `runtime` regardless of the request. When the
-    // configured mode names a not-yet-implemented target (gateway/embedded),
-    // a warning is emitted so the log cannot be mistaken for an active
-    // gateway/embedded deployment. See
-    // docs/plan/decisions/2026-04-29-dispatch-ownership.md.
+    // sera-y45a / sera-ve9x: surface the dispatch model in the boot log so
+    // operators can read which process owns tool dispatch without diving
+    // into source. `dispatch_mode` is the *effective* mode — what the
+    // running code actually does. `dispatch_mode_configured` is what the
+    // operator requested via SERA_DISPATCH_MODE.
+    //
+    // After sera-ve9x PR 2: `runtime` (default) spawns `sera-runtime --ndjson`
+    // per agent, `embedded` builds a `DefaultRuntime` in-process via
+    // `EmbeddedRuntimeTransport` (no child process), and `gateway` is still
+    // unimplemented and falls back to runtime with a warning.
+    // See docs/plan/decisions/2026-04-29-dispatch-ownership.md.
     let dispatch_mode = effective_dispatch_mode_label();
     let dispatch_mode_configured = configured_dispatch_mode_label();
     tracing::info!(
@@ -3901,7 +4039,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
             dispatch_mode = dispatch_mode,
             dispatch_mode_configured = dispatch_mode_configured,
             "SERA_DISPATCH_MODE requests a not-yet-implemented dispatch mode; \
-             effective mode remains `runtime` until ADR §4 migration lands"
+             effective mode falls back to `runtime` until ADR §4 step 3 lands"
         );
     }
 
@@ -3935,9 +4073,9 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         };
 
         let mut env = std::collections::HashMap::new();
-        env.insert("LLM_BASE_URL".to_string(), base_url);
+        env.insert("LLM_BASE_URL".to_string(), base_url.clone());
         env.insert("LLM_MODEL".to_string(), model.clone());
-        env.insert("LLM_API_KEY".to_string(), api_key_val);
+        env.insert("LLM_API_KEY".to_string(), api_key_val.clone());
         env.insert("AGENT_ID".to_string(), agent_name.to_string());
         // Forward permissive-gate flag to the runtime process when the operator
         // has set SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE in the environment.
@@ -3981,38 +4119,74 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
             env.insert("SERA_AGENT_TOOLS_DENY".to_string(), deny);
         }
 
-        // sera-ojp3: wrap the runtime child in a supervisor so a panic does
-        // not permanently wedge the agent. The supervisor performs the
-        // initial spawn eagerly so a startup failure surfaces here just like
-        // the previous `StdioHarness::spawn` call did.
-        match RuntimeChildSupervisor::start(
-            agent_name.to_string(),
-            runtime_bin.clone(),
-            env,
-        )
-        .await
-        {
-            Ok(supervisor) => {
-                // sera-y45a: include both the effective and configured
-                // dispatch_mode markers so per-agent boot logs answer "which
-                // process owns tool dispatch for this agent?" truthfully
-                // without operators correlating against the process-level
-                // line above. `dispatch_mode` reflects what the running code
-                // does (always `runtime` while the supervisor still spawns
-                // sera-runtime as a child); `dispatch_mode_configured`
-                // reflects the operator request.
-                tracing::info!(
-                    agent = %agent_name,
-                    model = %model,
-                    dispatch_mode = dispatch_mode,
-                    dispatch_mode_configured = dispatch_mode_configured,
-                    "Spawned runtime harness via supervisor (sera-ojp3)"
-                );
-                harnesses.insert(agent_name.to_string(), supervisor);
+        // sera-ve9x: branch on the effective dispatch mode. `runtime` (default)
+        // spawns the existing supervised stdio child; `embedded` builds an
+        // in-process `DefaultRuntime` and routes turns through
+        // `EmbeddedRuntimeTransport`. Both yield an
+        // `Arc<dyn AgentTurnTransport>` so the rest of the gateway is
+        // backend-agnostic.
+        let transport: Option<Arc<dyn AgentTurnTransport>> = match dispatch_mode {
+            "embedded" => {
+                match build_embedded_transport(
+                    agent_name,
+                    &agent_spec,
+                    &base_url,
+                    &model,
+                    &api_key_val,
+                ) {
+                    Ok(t) => {
+                        tracing::info!(
+                            agent = %agent_name,
+                            model = %model,
+                            dispatch_mode = dispatch_mode,
+                            dispatch_mode_configured = dispatch_mode_configured,
+                            "Built embedded runtime transport (sera-ve9x)"
+                        );
+                        Some(t)
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            agent = %agent_name,
+                            error = %e,
+                            "Failed to build embedded runtime transport"
+                        );
+                        None
+                    }
+                }
             }
-            Err(e) => {
-                tracing::error!(agent = %agent_name, error = %e, "Failed to spawn runtime harness");
+            // runtime mode (default) — sera-ojp3 supervisor wrapping the
+            // long-lived `sera-runtime --ndjson` child process.
+            _ => {
+                match RuntimeChildSupervisor::start(
+                    agent_name.to_string(),
+                    runtime_bin.clone(),
+                    env,
+                )
+                .await
+                {
+                    Ok(supervisor) => {
+                        tracing::info!(
+                            agent = %agent_name,
+                            model = %model,
+                            dispatch_mode = dispatch_mode,
+                            dispatch_mode_configured = dispatch_mode_configured,
+                            "Spawned runtime harness via supervisor (sera-ojp3)"
+                        );
+                        Some(supervisor as Arc<dyn AgentTurnTransport>)
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            agent = %agent_name,
+                            error = %e,
+                            "Failed to spawn runtime harness"
+                        );
+                        None
+                    }
+                }
             }
+        };
+        if let Some(t) = transport {
+            harnesses.insert(agent_name.to_string(), t);
         }
     }
 
@@ -4611,50 +4785,85 @@ mod tests {
         assert_eq!(parse_configured_dispatch_mode(Some("foo")), "runtime");
     }
 
+    // sera-ve9x: `effective_dispatch_mode_label()` reads SERA_DISPATCH_MODE,
+    // so the tests below mutate process-global env. Holding this mutex
+    // serialises them past the cargo-test default of parallel execution.
+    static DISPATCH_MODE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// RAII guard that sets/unsets `SERA_DISPATCH_MODE` and restores the
+    /// prior value on drop. Use under `DISPATCH_MODE_ENV_LOCK` only.
+    struct DispatchModeEnvGuard {
+        prev: Option<String>,
+    }
+
+    impl DispatchModeEnvGuard {
+        fn unset() -> Self {
+            let prev = std::env::var("SERA_DISPATCH_MODE").ok();
+            // SAFETY: callers hold DISPATCH_MODE_ENV_LOCK so no concurrent
+            // reader can observe a torn value.
+            unsafe { std::env::remove_var("SERA_DISPATCH_MODE") };
+            Self { prev }
+        }
+        fn set(value: &str) -> Self {
+            let prev = std::env::var("SERA_DISPATCH_MODE").ok();
+            // SAFETY: see DispatchModeEnvGuard::unset.
+            unsafe { std::env::set_var("SERA_DISPATCH_MODE", value) };
+            Self { prev }
+        }
+    }
+
+    impl Drop for DispatchModeEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: see DispatchModeEnvGuard::unset.
+            unsafe {
+                match &self.prev {
+                    Some(v) => std::env::set_var("SERA_DISPATCH_MODE", v),
+                    None => std::env::remove_var("SERA_DISPATCH_MODE"),
+                }
+            }
+        }
+    }
+
     #[test]
-    fn effective_dispatch_mode_is_runtime_until_migration() {
-        // This binary always launches StdioHarness::spawn for sera-runtime,
-        // so the effective mode is `runtime` regardless of the configured
-        // value. When ADR §4 step 2/3 lands, this test must be updated in
-        // lock-step with the dispatcher implementation — flipping it without
-        // moving real dispatch would re-introduce the very mismatch the
-        // ADR records.
+    fn effective_dispatch_mode_defaults_to_runtime_when_env_unset() {
+        let _lock = DISPATCH_MODE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = DispatchModeEnvGuard::unset();
         assert_eq!(effective_dispatch_mode_label(), "runtime");
     }
 
     #[test]
-    fn effective_dispatch_mode_never_echoes_unimplemented_request() {
-        // The boot log path uses `effective_dispatch_mode_label()` for the
-        // `dispatch_mode` field. For every value an operator can put in
-        // SERA_DISPATCH_MODE — including the not-yet-implemented `gateway`
-        // and `embedded` targets — the effective mode must remain `runtime`
-        // so the active label cannot claim a security model the code does
-        // not implement.
-        for requested in [
-            None,
-            Some("runtime"),
-            Some("gateway"),
-            Some("embedded"),
-            Some("Gateway"),
-            Some("foo"),
-            Some(""),
-        ] {
-            let configured = parse_configured_dispatch_mode(requested);
-            let effective = effective_dispatch_mode_label();
+    fn effective_dispatch_mode_switches_to_embedded_when_configured() {
+        // sera-ve9x PR 2: `SERA_DISPATCH_MODE=embedded` flips the effective
+        // mode so the boot log (and per-agent log lines) report the truthful
+        // active backend. Before PR 2 this returned `"runtime"` regardless.
+        let _lock = DISPATCH_MODE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = DispatchModeEnvGuard::set("embedded");
+        assert_eq!(effective_dispatch_mode_label(), "embedded");
+    }
+
+    #[test]
+    fn effective_dispatch_mode_falls_back_to_runtime_for_unimplemented_targets() {
+        // `gateway` is still unimplemented — until ADR §4 step 3 lands, the
+        // effective label must remain `runtime` so the active mode cannot
+        // claim a security model the code does not own.
+        let _lock = DISPATCH_MODE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for value in ["gateway", "Gateway", "foo", "RUNTIME", ""] {
+            let _guard = DispatchModeEnvGuard::set(value);
             assert_eq!(
-                effective, "runtime",
-                "effective mode must be `runtime` until ADR §4 lands (request={requested:?})"
+                effective_dispatch_mode_label(),
+                "runtime",
+                "effective mode for SERA_DISPATCH_MODE={value:?} must remain runtime"
             );
-            // Either the request agrees with the effective mode, or the
-            // boot log is responsible for surfacing the divergence under a
-            // distinct field — never as the active `dispatch_mode`.
-            if configured != effective {
-                assert!(
-                    matches!(configured, "gateway" | "embedded"),
-                    "only known migration targets may diverge; got {configured:?}"
-                );
-            }
         }
+    }
+
+    #[test]
+    fn effective_dispatch_mode_runtime_value_is_explicit_runtime() {
+        // The `runtime` value must round-trip through both the parser and
+        // the effective-mode switch.
+        let _lock = DISPATCH_MODE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = DispatchModeEnvGuard::set("runtime");
+        assert_eq!(effective_dispatch_mode_label(), "runtime");
     }
 
     fn test_manifests() -> ManifestSet {

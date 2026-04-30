@@ -54,6 +54,7 @@ pub mod stdio;
 pub mod tool_hooks;
 
 // Retained modules
+pub mod authz_builder;
 pub mod config;
 pub mod memory_budget;
 pub mod context;

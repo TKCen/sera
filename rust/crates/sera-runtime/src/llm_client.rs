@@ -845,6 +845,83 @@ impl LlmClient {
 }
 
 // ---------------------------------------------------------------------------
+// Library-side construction helpers (sera-ve9x)
+// ---------------------------------------------------------------------------
+
+/// Build an [`LlmClient`] with the same opportunistic [`AccountPool`] +
+/// [`ThinkingConfig`] wiring the runtime binary uses.
+///
+/// Lifted out of `sera-runtime/src/main.rs` so the gateway's embedded
+/// dispatch path (`sera-ve9x`) can construct an in-process client without
+/// duplicating the env-var reads. The runtime stays fully backwards
+/// compatible: when `SERA_<PROVIDER>_KEYS` is not set for the inferred
+/// provider id, no pool is attached and the client falls back to the
+/// single-account `LLM_BASE_URL` / `LLM_API_KEY` path. Likewise
+/// `SERA_REASONING_LEVEL` defaults to `off` when unset.
+pub fn build_from_config(config: &RuntimeConfig) -> LlmClient {
+    use sera_config::providers::ProviderAccountsConfig;
+    use sera_models::{
+        AccountPool, CooldownConfig, ProviderAccount, ProviderKind, ReasoningLevel,
+        ThinkingConfig,
+    };
+
+    // Provider kind is inferred from LLM_MODEL (e.g. "gpt-4o" → OpenAI,
+    // "claude-3-5-sonnet" → Anthropic).  Operators can also set
+    // SERA_LLM_PROVIDER_ID to pin the inference explicitly.
+    let provider_id = std::env::var("SERA_LLM_PROVIDER_ID")
+        .unwrap_or_else(|_| config.llm_model.clone());
+    let provider_kind = ProviderKind::infer(&provider_id);
+
+    // Thinking / reasoning level.
+    let level = std::env::var("SERA_REASONING_LEVEL")
+        .ok()
+        .and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" | "" => Some(ReasoningLevel::Off),
+            "low" => Some(ReasoningLevel::Low),
+            "medium" | "med" => Some(ReasoningLevel::Medium),
+            "high" => Some(ReasoningLevel::High),
+            _ => None,
+        })
+        .unwrap_or(ReasoningLevel::Off);
+    let budget = std::env::var("SERA_REASONING_BUDGET_TOKENS")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok());
+    let mut thinking = ThinkingConfig::new(level);
+    thinking.budget_tokens = budget;
+
+    let mut client = LlmClient::new(config)
+        .with_thinking(thinking)
+        .with_provider_kind(provider_kind);
+
+    // Account pool (sera-jvi). Only attached when at least one key is
+    // configured for the active provider id.
+    let accounts_cfg = ProviderAccountsConfig::from_env();
+    if let Some(keys) = accounts_cfg.keys_for(&provider_id)
+        && !keys.is_empty()
+    {
+        let accounts: Vec<ProviderAccount> = keys
+            .iter()
+            .enumerate()
+            .map(|(idx, key)| {
+                ProviderAccount::new(format!("{provider_id}-{idx}"), key.clone(), None)
+            })
+            .collect();
+        let pool = Arc::new(
+            AccountPool::new(provider_id.clone(), accounts, CooldownConfig::default())
+                .with_default_base_url(config.llm_base_url.clone()),
+        );
+        tracing::info!(
+            provider = %provider_id,
+            account_count = keys.len(),
+            "Attached LLM account pool (sera-jvi)"
+        );
+        client = client.with_account_pool(pool);
+    }
+
+    client
+}
+
+// ---------------------------------------------------------------------------
 // LlmProvider implementation
 // ---------------------------------------------------------------------------
 

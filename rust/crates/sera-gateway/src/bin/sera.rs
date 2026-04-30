@@ -7385,4 +7385,742 @@ spec:
             .unwrap();
         assert_ne!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
+
+    // ── Production-path E2E tests (sera-ov7z) ────────────────────────────────
+    //
+    // These tests drive a synthetic message through the *real* production wire
+    // path: process_message / chat_handler -> StdioHarness::send_turn -> a
+    // real `sera-runtime --ndjson` child subprocess -> a deterministic mock
+    // LLM HTTP server bound to 127.0.0.1:0. They guard the seams that
+    // mock-bash `spawn_mock` cannot exercise — runtime startup, NDJSON frame
+    // ordering, submission shape, runtime LLM streaming parser, transcript
+    // persistence on the success path, lane-queue release, and hook-chain
+    // firing on each of the four happy-turn points.
+    //
+    // Design report: artifacts/reports/coordination/ov7z-production-e2e-test-design-2026-04-29.md
+    // Preflight: artifacts/reports/research/ov7z-implementation-preflight-spark-2026-04-29.md
+    mod production_e2e {
+        use super::*;
+        use async_trait::async_trait;
+        use sera_hooks::Hook;
+        use sera_types::hook::{HookChain, HookMetadata, HookPoint};
+        use std::path::PathBuf;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use tokio::net::TcpListener;
+        use tokio::sync::oneshot;
+
+        /// Locate the workspace's `target/debug/sera-runtime` binary.
+        ///
+        /// Resolution order:
+        ///   1. `SERA_E2E_RUNTIME_BIN=<path>` explicit override, if set.
+        ///   2. `CARGO_TARGET_DIR/debug/sera-runtime`, then any ancestor
+        ///      `target/debug/sera-runtime` of the gateway crate.
+        ///   3. If still missing AND `SERA_E2E_ALLOW_RUNTIME_BUILD=1`, run
+        ///      `cargo build -p sera-runtime --bin sera-runtime` to build it.
+        ///   4. Otherwise panic with a message instructing the caller.
+        ///
+        /// The opt-in nested build exists because Cargo does not export
+        /// `--frozen`/`--locked`/`--offline` to the test process, so a
+        /// silent `cargo build` here could violate hermetic outer-test mode.
+        /// Default behavior is therefore to refuse the build and require an
+        /// explicit opt-in or a prebuilt binary.
+        fn locate_runtime_bin() -> PathBuf {
+            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let exe_name = if cfg!(windows) {
+                "sera-runtime.exe"
+            } else {
+                "sera-runtime"
+            };
+
+            if let Ok(p) = std::env::var("SERA_E2E_RUNTIME_BIN") {
+                let candidate = PathBuf::from(&p);
+                assert!(
+                    candidate.exists(),
+                    "SERA_E2E_RUNTIME_BIN=`{p}` does not exist"
+                );
+                return candidate;
+            }
+
+            let find_existing = || -> Option<PathBuf> {
+                if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
+                    let candidate = PathBuf::from(target).join("debug").join(exe_name);
+                    if candidate.exists() {
+                        return Some(candidate);
+                    }
+                }
+                let mut here: Option<&std::path::Path> = Some(&manifest_dir);
+                while let Some(dir) = here {
+                    let candidate = dir.join("target").join("debug").join(exe_name);
+                    if candidate.exists() {
+                        return Some(candidate);
+                    }
+                    here = dir.parent();
+                }
+                None
+            };
+
+            if let Some(found) = find_existing() {
+                return found;
+            }
+
+            if std::env::var("SERA_E2E_ALLOW_RUNTIME_BUILD").as_deref() != Ok("1") {
+                panic!(
+                    "sera-runtime binary not found (searched CARGO_TARGET_DIR \
+                     and ancestor target/debug/{exe_name} from {}). Build it \
+                     first with `cargo build -p sera-runtime --bin sera-runtime`, \
+                     point SERA_E2E_RUNTIME_BIN=<path> at a prebuilt binary, or \
+                     set SERA_E2E_ALLOW_RUNTIME_BUILD=1 to let this test invoke \
+                     `cargo build` itself (note: the nested build cannot inherit \
+                     the outer cargo's --frozen/--locked/--offline mode).",
+                    manifest_dir.display()
+                );
+            }
+
+            // Opt-in nested build. Cargo sets CARGO to its own path; fall
+            // back to PATH lookup. The caller has explicitly accepted that
+            // this nested build does not honor the outer cargo's network/
+            // lockfile mode, so no flag propagation is attempted here.
+            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+            let status = std::process::Command::new(&cargo)
+                .args(["build", "-p", "sera-runtime", "--bin", "sera-runtime"])
+                .status()
+                .unwrap_or_else(|e| {
+                    panic!("failed to invoke `{cargo} build -p sera-runtime`: {e}")
+                });
+            assert!(
+                status.success(),
+                "`cargo build -p sera-runtime --bin sera-runtime` failed with {status}"
+            );
+
+            find_existing().unwrap_or_else(|| {
+                panic!(
+                    "sera-runtime binary still not found after `cargo build -p \
+                     sera-runtime` (searched CARGO_TARGET_DIR and ancestor \
+                     target/debug/{exe_name} from {})",
+                    manifest_dir.display()
+                )
+            })
+        }
+
+        /// Manifest YAML used by the production-E2E fixture. Differs from
+        /// `TEMPLATE_YAML` only in `base_url`/`default_model` (re-pointed at
+        /// the mock LLM) and `tools.allow` (empty so we don't hit memory_*
+        /// during the turn).
+        fn production_e2e_manifest_yaml(mock_llm_url: &str) -> String {
+            format!(
+                r#"---
+apiVersion: sera.dev/v1
+kind: Instance
+metadata:
+  name: my-sera
+spec:
+---
+apiVersion: sera.dev/v1
+kind: Provider
+metadata:
+  name: lm-studio
+spec:
+  kind: openai-compatible
+  base_url: "{mock_llm_url}/v1"
+  default_model: mock-model
+---
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: sera
+spec:
+  provider: lm-studio
+  model: mock-model
+  persona:
+    immutable_anchor: |
+      You are Sera under E2E test.
+  tools:
+    allow: []
+"#
+            )
+        }
+
+        /// Handle to the in-process mock LLM HTTP server. Drop to shut down.
+        struct MockLlm {
+            base_url: String,
+            shutdown: Option<oneshot::Sender<()>>,
+        }
+
+        impl Drop for MockLlm {
+            fn drop(&mut self) {
+                if let Some(tx) = self.shutdown.take() {
+                    let _ = tx.send(());
+                }
+            }
+        }
+
+        /// Start an OpenAI-compatible mock server on 127.0.0.1:0. Always
+        /// returns SSE-streaming chunks for `POST /v1/chat/completions` —
+        /// matches what `LlmClient::chat_typed_with_behavior` requests. The
+        /// reply text is fixed so assertions can compare exactly.
+        async fn start_mock_llm(reply: &'static str, delay_ms: u64) -> MockLlm {
+            use axum::Router;
+            use axum::response::sse::{Event, Sse};
+            use axum::routing::{get, post};
+            use futures_util::stream;
+
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("mock LLM bind");
+            let port = listener.local_addr().expect("mock LLM addr").port();
+
+            let chat_handler = move || {
+                let reply = reply.to_string();
+                async move {
+                    if delay_ms > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    }
+                    // Emit two delta chunks (role + content) and a terminal
+                    // chunk with `usage`. LlmClient::parse_sse_stream expects
+                    // standard OpenAI SSE.
+                    let role_chunk = serde_json::json!({
+                        "id": "chatcmpl-mock",
+                        "object": "chat.completion.chunk",
+                        "choices": [{
+                            "index": 0,
+                            "delta": { "role": "assistant", "content": "" },
+                            "finish_reason": null
+                        }]
+                    })
+                    .to_string();
+                    let content_chunk = serde_json::json!({
+                        "id": "chatcmpl-mock",
+                        "object": "chat.completion.chunk",
+                        "choices": [{
+                            "index": 0,
+                            "delta": { "content": reply },
+                            "finish_reason": null
+                        }]
+                    })
+                    .to_string();
+                    let final_chunk = serde_json::json!({
+                        "id": "chatcmpl-mock",
+                        "object": "chat.completion.chunk",
+                        "choices": [{
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {
+                            "prompt_tokens": 7,
+                            "completion_tokens": 5,
+                            "total_tokens": 12
+                        }
+                    })
+                    .to_string();
+                    let events: Vec<Result<Event, std::convert::Infallible>> = vec![
+                        Ok(Event::default().data(role_chunk)),
+                        Ok(Event::default().data(content_chunk)),
+                        Ok(Event::default().data(final_chunk)),
+                        Ok(Event::default().data("[DONE]")),
+                    ];
+                    Sse::new(stream::iter(events))
+                }
+            };
+
+            let models_handler = || async {
+                axum::Json(serde_json::json!({
+                    "object": "list",
+                    "data": [{ "id": "mock-model", "object": "model" }]
+                }))
+            };
+
+            let app: Router = Router::new()
+                .route("/v1/models", get(models_handler))
+                .route("/v1/chat/completions", post(chat_handler));
+
+            let (tx, rx) = oneshot::channel::<()>();
+            tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async move {
+                        let _ = rx.await;
+                    })
+                    .await
+                    .ok();
+            });
+
+            MockLlm {
+                base_url: format!("http://127.0.0.1:{port}"),
+                shutdown: Some(tx),
+            }
+        }
+
+        /// Counting hook — increments a shared atomic on every `execute`.
+        /// Registered four times (one per HookPoint) so each lifecycle point
+        /// has its own counter; A5 from the design report asserts each
+        /// counter == 1 for a happy turn.
+        struct CountingHook {
+            name: String,
+            point: HookPoint,
+            counter: Arc<AtomicU64>,
+        }
+
+        #[async_trait]
+        impl Hook for CountingHook {
+            fn metadata(&self) -> HookMetadata {
+                HookMetadata {
+                    name: self.name.clone(),
+                    description: "ov7z production-E2E counter hook".to_string(),
+                    version: "1.0.0".to_string(),
+                    supported_points: vec![self.point],
+                    author: Some("sera-ov7z-test".to_string()),
+                }
+            }
+            async fn init(
+                &mut self,
+                _config: serde_json::Value,
+            ) -> Result<(), sera_hooks::HookError> {
+                Ok(())
+            }
+            async fn execute(
+                &self,
+                _ctx: &sera_types::hook::HookContext,
+            ) -> Result<sera_types::hook::HookResult, sera_hooks::HookError> {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+                Ok(sera_types::hook::HookResult::pass())
+            }
+        }
+
+        /// All four counter handles exposed by `production_e2e_state`.
+        struct HookCounters {
+            pre_route: Arc<AtomicU64>,
+            post_route: Arc<AtomicU64>,
+            pre_turn: Arc<AtomicU64>,
+            post_turn: Arc<AtomicU64>,
+        }
+
+        /// Build an `AppState` whose harness map contains a real
+        /// `StdioHarness::spawn` (i.e. a live `sera-runtime --ndjson` child),
+        /// pointed at the mock LLM, and whose hook registry has a counting
+        /// hook + chain wired in for each of the four happy-turn points.
+        async fn production_e2e_state(
+            mock_llm_url: &str,
+        ) -> (Arc<AppState>, HookCounters) {
+            let manifests =
+                parse_manifests(&production_e2e_manifest_yaml(mock_llm_url)).expect("manifest");
+
+            // Build hook registry with one CountingHook per point.
+            let pre_route = Arc::new(AtomicU64::new(0));
+            let post_route = Arc::new(AtomicU64::new(0));
+            let pre_turn = Arc::new(AtomicU64::new(0));
+            let post_turn = Arc::new(AtomicU64::new(0));
+
+            let mut hreg = HookRegistry::new();
+            hreg.register(Box::new(CountingHook {
+                name: "ov7z-counter-pre-route".to_string(),
+                point: HookPoint::PreRoute,
+                counter: Arc::clone(&pre_route),
+            }));
+            hreg.register(Box::new(CountingHook {
+                name: "ov7z-counter-post-route".to_string(),
+                point: HookPoint::PostRoute,
+                counter: Arc::clone(&post_route),
+            }));
+            hreg.register(Box::new(CountingHook {
+                name: "ov7z-counter-pre-turn".to_string(),
+                point: HookPoint::PreTurn,
+                counter: Arc::clone(&pre_turn),
+            }));
+            hreg.register(Box::new(CountingHook {
+                name: "ov7z-counter-post-turn".to_string(),
+                point: HookPoint::PostTurn,
+                counter: Arc::clone(&post_turn),
+            }));
+            let hook_registry = Arc::new(hreg);
+            let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
+
+            // Build the four chains and stash them on a synthetic manifest.
+            // process_message reads chains via `state.manifests.hook_chain_specs()`,
+            // which is constructed off the parsed YAML; the cleanest way to
+            // inject them is through the YAML manifest. Add HookChain manifests
+            // pointing at the hook names registered above.
+            let chains_yaml = r#"---
+apiVersion: sera.dev/v1
+kind: HookChain
+metadata:
+  name: ov7z-chain-pre-route
+spec:
+  name: ov7z-chain-pre-route
+  point: pre_route
+  hooks:
+    - hook_ref: ov7z-counter-pre-route
+  timeout_ms: 5000
+  fail_open: false
+---
+apiVersion: sera.dev/v1
+kind: HookChain
+metadata:
+  name: ov7z-chain-post-route
+spec:
+  name: ov7z-chain-post-route
+  point: post_route
+  hooks:
+    - hook_ref: ov7z-counter-post-route
+  timeout_ms: 5000
+  fail_open: false
+---
+apiVersion: sera.dev/v1
+kind: HookChain
+metadata:
+  name: ov7z-chain-pre-turn
+spec:
+  name: ov7z-chain-pre-turn
+  point: pre_turn
+  hooks:
+    - hook_ref: ov7z-counter-pre-turn
+  timeout_ms: 5000
+  fail_open: false
+---
+apiVersion: sera.dev/v1
+kind: HookChain
+metadata:
+  name: ov7z-chain-post-turn
+spec:
+  name: ov7z-chain-post-turn
+  point: post_turn
+  hooks:
+    - hook_ref: ov7z-counter-post-turn
+  timeout_ms: 5000
+  fail_open: false
+"#;
+            let mut manifests = manifests;
+            let chain_manifests = parse_manifests(chains_yaml).expect("chain manifests");
+            manifests.merge_in(chain_manifests);
+            // Sanity: the four chains should serialize back through hook_chain_specs.
+            let chain_specs: Vec<HookChain> = manifests.hook_chain_specs();
+            assert_eq!(
+                chain_specs.len(),
+                4,
+                "expected 4 hook chains, got {}",
+                chain_specs.len()
+            );
+
+            // Spawn the real runtime child.
+            let runtime_bin = locate_runtime_bin();
+            let mut env = std::collections::HashMap::new();
+            env.insert("LLM_BASE_URL".to_string(), format!("{mock_llm_url}/v1"));
+            env.insert("LLM_MODEL".to_string(), "mock-model".to_string());
+            env.insert("LLM_API_KEY".to_string(), "test-key".to_string());
+            env.insert("AGENT_ID".to_string(), "sera".to_string());
+            env.insert(
+                "SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE".to_string(),
+                "1".to_string(),
+            );
+            // Empty allow list — match the manifest's `tools.allow: []`.
+            env.insert("SERA_AGENT_TOOLS_ALLOW".to_string(), String::new());
+            let supervisor = RuntimeChildSupervisor::start(
+                "sera".to_string(),
+                runtime_bin.to_string_lossy().into_owned(),
+                env,
+            )
+            .await
+            .expect("spawn real sera-runtime supervisor");
+            let mut harnesses = std::collections::HashMap::new();
+            harnesses.insert("sera".to_string(), supervisor);
+
+            let state = Arc::new(AppState {
+                db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+                manifests,
+                discord: None,
+                api_key: None,
+                lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+                hook_registry,
+                chain_executor,
+                harnesses,
+                runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                    Arc::new(InMemoryEnvelopeIndex::default()),
+                    None,
+                )),
+                mail_lookup: Arc::new(InMemoryMailLookup::new()),
+                a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+                a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                    Ok(serde_json::json!({"status": "test"}))
+                })),
+                agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+                plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+                skill_engine: Arc::new(SkillDispatchEngine::new()),
+                semantic_store: Arc::new(
+                    SqliteMemoryStore::open_in_memory(None)
+                        .expect("open in-memory semantic store"),
+                ),
+                kill_switch: Arc::new(KillSwitch::new()),
+                active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
+                    std::collections::HashMap::new(),
+                )),
+                session_store: Arc::new(InMemorySessionStore::new()),
+                constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
+                capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
+                ticket_store: Arc::new(InMemoryTicketStore::new()),
+                workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+                admin_auth: None,
+                admin_audit: None,
+            });
+
+            (
+                state,
+                HookCounters {
+                    pre_route,
+                    post_route,
+                    pre_turn,
+                    post_turn,
+                },
+            )
+        }
+
+        /// Poll `db.get_transcript` for `session_id` until the row count
+        /// reaches `expected` or `budget` elapses. Yields a precise failure
+        /// message naming the missing row so a regression in process_message
+        /// is diagnosable from CI output alone.
+        async fn wait_for_transcript_len(
+            state: &Arc<AppState>,
+            session_id: &str,
+            expected: usize,
+            budget: std::time::Duration,
+        ) {
+            let start = std::time::Instant::now();
+            loop {
+                let len = {
+                    let db = state.db.lock().await;
+                    db.get_transcript(session_id).map(|t| t.len()).unwrap_or(0)
+                };
+                if len >= expected {
+                    return;
+                }
+                if start.elapsed() > budget {
+                    panic!(
+                        "transcript did not reach expected len {expected} within \
+                         {:?} (saw {len}); session_id={session_id} — production \
+                         E2E path likely broke between process_message and \
+                         transcript persistence",
+                        budget
+                    );
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
+
+        /// Discord-path round trip:
+        /// inject DiscordMessage -> event_loop -> process_message ->
+        /// StdioHarness::send_turn -> real sera-runtime --ndjson child ->
+        /// LlmClient -> mock LLM HTTP -> reply -> transcript persisted ->
+        /// lane idle -> hook chain points fired.
+        ///
+        /// Guards the seams that `spawn_mock` cannot exercise:
+        ///   - runtime startup + handshake skip in StdioHarness::send_turn
+        ///   - canonical Submission shape (op.type=user_turn, session_key)
+        ///   - runtime SSE parser on a real LLM body
+        ///   - persist_tool_events + assistant transcript append
+        ///   - lane_queue.complete_run on every exit path
+        ///   - run_hook_point firing for pre_route, post_route, pre_turn, post_turn
+        #[tokio::test]
+        async fn discord_path_round_trip() {
+            let mock = start_mock_llm("hello from mock", 0).await;
+            let (state, counters) = production_e2e_state(&mock.base_url).await;
+
+            let (tx, rx) = mpsc::channel::<DiscordMessage>(8);
+            let event_state = Arc::clone(&state);
+            let handle = tokio::spawn(async move {
+                event_loop(event_state, rx).await;
+            });
+
+            tx.send(DiscordMessage {
+                channel_id: "ch_ov7z".into(),
+                user_id: "user_ov7z".into(),
+                username: "tester".into(),
+                content: "ping".into(),
+                message_id: "msg_ov7z_1".into(),
+                is_dm: true,
+                mentions_bot: false,
+            })
+            .await
+            .expect("send discord message");
+
+            // Wait for the assistant row to appear (deterministic, no sleep).
+            let session_key = "discord:sera:ch_ov7z";
+            let session_id = {
+                let start = std::time::Instant::now();
+                loop {
+                    let maybe = {
+                        let db = state.db.lock().await;
+                        db.get_session_by_key(session_key).ok().flatten()
+                    };
+                    if let Some(s) = maybe {
+                        break s.id;
+                    }
+                    if start.elapsed() > std::time::Duration::from_secs(10) {
+                        panic!(
+                            "session for {session_key} never created — \
+                             process_message did not reach the session-store \
+                             write. Check runtime startup + StdioHarness::spawn"
+                        );
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+            };
+            wait_for_transcript_len(&state, &session_id, 2, std::time::Duration::from_secs(10))
+                .await;
+
+            // Tear down the event loop.
+            drop(tx);
+            handle.await.expect("event_loop join");
+
+            // ── Assertions ───────────────────────────────────────────────
+
+            // A2/A3: assistant reply persisted with mock content.
+            let transcript = {
+                let db = state.db.lock().await;
+                db.get_transcript(&session_id).expect("get_transcript")
+            };
+            assert_eq!(
+                transcript.len(),
+                2,
+                "expected exactly 2 transcript rows (user + assistant), got {}",
+                transcript.len()
+            );
+            assert_eq!(transcript[0].role, "user");
+            assert_eq!(transcript[0].content.as_deref(), Some("ping"));
+            assert_eq!(
+                transcript[1].role, "assistant",
+                "row[1] must be the assistant reply"
+            );
+            assert_eq!(
+                transcript[1].content.as_deref(),
+                Some("hello from mock"),
+                "assistant reply must match mock LLM body byte-for-byte; an \
+                 empty or mismatched value indicates the runtime SSE parser \
+                 or the gateway streaming-delta accumulator regressed (see \
+                 sera-aepj)"
+            );
+
+            // A4: lane slot released; no pending events for the session.
+            {
+                let lq = state.lane_queue.lock().await;
+                assert!(
+                    !lq.has_pending(session_key),
+                    "lane queue still has pending events for {session_key} \
+                     after a happy turn — sera-y9f8-style wedge"
+                );
+                assert_eq!(
+                    lq.active_runs(),
+                    0,
+                    "lane_queue.active_runs() != 0 after happy turn; \
+                     complete_run was missed on some exit path"
+                );
+            }
+
+            // A5: each lifecycle hook chain fired exactly once.
+            assert_eq!(
+                counters.pre_route.load(Ordering::SeqCst),
+                1,
+                "pre_route hook chain did not fire exactly once"
+            );
+            assert_eq!(
+                counters.post_route.load(Ordering::SeqCst),
+                1,
+                "post_route hook chain did not fire exactly once"
+            );
+            assert_eq!(
+                counters.pre_turn.load(Ordering::SeqCst),
+                1,
+                "pre_turn hook chain did not fire exactly once"
+            );
+            assert_eq!(
+                counters.post_turn.load(Ordering::SeqCst),
+                1,
+                "post_turn hook chain did not fire exactly once — guards a \
+                 regression where post_turn is skipped on the success path"
+            );
+
+            // Drop state — owning `Arc<AppState>` releases the runtime
+            // child's stdin (via StdioHarness Drop), so the child sees EOF
+            // and exits its NDJSON loop cleanly.
+            drop(state);
+            drop(mock);
+        }
+
+        /// HTTP `/api/chat` round trip:
+        /// chat_handler -> StdioHarness::send_turn -> real sera-runtime
+        /// --ndjson child -> mock LLM -> ChatResponse with body + usage.
+        ///
+        /// Guards the HTTP-specific seams that the Discord path does not
+        /// exercise:
+        ///   - ChatResponse.response carries the assistant reply (sera-aepj
+        ///     empty-reply guard on the sync branch)
+        ///   - ChatResponse.usage carries the provider-reported token counts
+        ///   - lane_queue.complete_run on the HTTP exit path
+        #[tokio::test]
+        async fn http_chat_path_round_trip() {
+            let mock = start_mock_llm("hello from mock", 0).await;
+            let (state, _counters) = production_e2e_state(&mock.base_url).await;
+            let app = build_router(Arc::clone(&state));
+
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/chat")
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "message": "ping" }).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .expect("oneshot /api/chat");
+
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "chat_handler returned non-200; production HTTP path broken"
+            );
+            let body_bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .expect("read response body");
+            let body: serde_json::Value =
+                serde_json::from_slice(&body_bytes).expect("response body must be JSON");
+
+            // Body shape (production-path contract): { response, session_id, usage }.
+            assert_eq!(
+                body["response"].as_str(),
+                Some("hello from mock"),
+                "ChatResponse.response is wrong; got {body}; if empty, \
+                 regression of sera-aepj (empty-reply guard) on /api/chat \
+                 sync path"
+            );
+            assert_eq!(
+                body["usage"]["prompt_tokens"], 7,
+                "usage.prompt_tokens not propagated from mock LLM"
+            );
+            assert_eq!(
+                body["usage"]["completion_tokens"], 5,
+                "usage.completion_tokens not propagated from mock LLM"
+            );
+            assert_eq!(
+                body["usage"]["total_tokens"], 12,
+                "usage.total_tokens not propagated end-to-end (runtime \
+                 TurnCompleted -> harness.send_turn -> chat_handler)"
+            );
+
+            // Lane idle after happy turn.
+            {
+                let lq = state.lane_queue.lock().await;
+                assert_eq!(
+                    lq.active_runs(),
+                    0,
+                    "HTTP chat_handler leaked a lane slot — complete_run \
+                     missed on success path"
+                );
+            }
+
+            drop(state);
+            drop(mock);
+        }
+    }
 }

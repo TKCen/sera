@@ -30,6 +30,9 @@ jobs:
       - name: Clippy
         run: cd rust && cargo clippy --workspace -- -D warnings
 
+      - name: Build sera-runtime (production_e2e prerequisite)
+        run: cd rust && cargo build -p sera-runtime --bin sera-runtime
+
       - name: Test
         run: cd rust && cargo test --workspace
 

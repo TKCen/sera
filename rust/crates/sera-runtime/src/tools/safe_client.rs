@@ -23,7 +23,13 @@
 //!   `SERA_CORE_URL` to point at IMDS still gets stopped.
 
 use sera_tools::ssrf::{SsrfError, SsrfValidator};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+
+/// AWS IMDSv2 IPv6 endpoint (`fd00:ec2::254`).  Even though it sits inside
+/// the IPv6 ULA range that the trusted-host path otherwise relaxes, it is
+/// never a legitimate internal SERA service target — block it explicitly so
+/// a poisoned-DNS trusted hostname cannot reach native-IPv6 cloud metadata.
+const AWS_IMDS_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254);
 
 /// Errors from base-URL validation + client construction.
 #[derive(Debug, thiserror::Error)]
@@ -68,6 +74,12 @@ pub async fn build_validated_client(
 
     reqwest::Client::builder()
         .resolve_to_addrs(&host, &addrs)
+        // Reqwest's default policy follows up to 10 redirects without
+        // re-running SSRF validation — only the first hop is pre-flighted,
+        // so a public attacker-controlled host could 302 us to IMDS.  These
+        // helpers target operator-configured runtime endpoints that have no
+        // legitimate reason to redirect; disable redirects entirely.
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| SafeClientError::Build(e.to_string()))
@@ -136,6 +148,13 @@ fn reject_always_dangerous(host: &str, addr: &SocketAddr) -> Result<(), SafeClie
                 if octets == [169, 254, 169, 254] || octets == [100, 100, 100, 200] {
                     return Err(err(SsrfError::CloudMetadata));
                 }
+            } else if v6 == AWS_IMDS_V6 {
+                // Native IPv6 cloud-metadata endpoints (e.g. AWS IMDSv2 at
+                // fd00:ec2::254) sit inside the ULA range that the trusted
+                // path otherwise relaxes — block them by exact match so a
+                // trusted hostname resolving to native-IPv6 metadata is
+                // still stopped here.
+                return Err(err(SsrfError::CloudMetadata));
             }
         }
     }
@@ -206,6 +225,11 @@ pub async fn build_internal_service_client(
 
     reqwest::Client::builder()
         .resolve_to_addrs(&host, &addrs)
+        // Internal SERA services (sera-core, centrifugo) respond directly —
+        // never via redirects.  Disabling redirects ensures a compromised
+        // upstream (or a DNS-poisoned trusted hostname) cannot bounce us
+        // out of the validated internal target on a 3xx response.
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| SafeClientError::Build(e.to_string()))
@@ -517,6 +541,82 @@ mod tests {
         let addr: SocketAddr = "172.18.0.5:3000".parse().unwrap();
         reject_always_dangerous("sera-core", &addr)
             .expect("RFC-1918 must be allowed on the trusted-hostname path");
+    }
+
+    /// reject_always_dangerous: a trusted hostname that resolves to AWS
+    /// IMDSv2's *native IPv6* endpoint (`fd00:ec2::254`) is still blocked.
+    /// Pre-fix this slipped through because the IPv6 branch only checked
+    /// IPv4-mapped metadata; a poisoned-DNS path through a trusted hostname
+    /// could reach native-IPv6 IMDS.
+    #[test]
+    fn reject_always_dangerous_blocks_imds_v6_native() {
+        let addr: SocketAddr = "[fd00:ec2::254]:80".parse().unwrap();
+        let err = reject_always_dangerous("sera-core", &addr)
+            .expect_err("native-IPv6 IMDS must be rejected");
+        assert!(
+            matches!(err, SafeClientError::Ssrf { ref reason, .. } if *reason == SsrfError::CloudMetadata),
+            "got {err:?}"
+        );
+    }
+
+    /// reject_always_dangerous: a benign IPv6 ULA address (Docker IPv6 DNS
+    /// answer is the realistic case) is still *allowed* — only the explicit
+    /// metadata endpoint is blocked.  Guards against an over-broad fix that
+    /// would re-introduce the regression Comment 1 fixes.
+    #[test]
+    fn reject_always_dangerous_allows_benign_ipv6_ula() {
+        let addr: SocketAddr = "[fd12:3456::1]:3000".parse().unwrap();
+        reject_always_dangerous("sera-core", &addr)
+            .expect("benign IPv6 ULA must be allowed on the trusted-hostname path");
+    }
+
+    /// Redirect policy guard (Comment 2).  The helpers wrap reqwest's
+    /// builder with `redirect::Policy::none()` so a 302 response is *not*
+    /// followed — otherwise a public attacker-controlled host could 302 us
+    /// to IMDS and bypass the SSRF prevalidation.  We exercise the same
+    /// builder pattern the helpers use against a `wiremock` 302 (matching
+    /// the existing `pinned_addrs_route_to_mock_server` style — wiremock
+    /// binds on loopback, which the validator would otherwise reject).
+    #[tokio::test]
+    async fn safe_client_pattern_does_not_follow_redirects() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/redirect"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", "http://attacker.example/elsewhere"),
+            )
+            .mount(&server)
+            .await;
+
+        let uri = server.uri();
+        let parsed = reqwest::Url::parse(&uri).unwrap();
+        let port = parsed.port().unwrap();
+        let mock_addr: std::net::SocketAddr =
+            format!("127.0.0.1:{port}").parse().unwrap();
+
+        let host = "safe-test.example";
+        let client = reqwest::Client::builder()
+            .resolve_to_addrs(host, &[mock_addr])
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+
+        let resp = client
+            .get(format!("http://{host}:{port}/redirect"))
+            .send()
+            .await
+            .expect("GET must complete (no redirect to follow)");
+        assert_eq!(
+            resp.status().as_u16(),
+            302,
+            "safe client must NOT follow redirects — saw status {}",
+            resp.status()
+        );
     }
 
     /// `internal_trusted_hosts` returns the defaults plus any

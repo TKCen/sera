@@ -110,11 +110,14 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
     tick: Duration,
 ) -> Result<()> {
     let (sse_tx, mut sse_rx) = mpsc::unbounded_channel();
+    let (app_tx, mut app_rx) = mpsc::unbounded_channel();
     let mut app = App::new(client, TuiKeybindings::defaults());
-    let mut runtime = Runtime::new(sse_tx);
+    let mut runtime = Runtime::new(sse_tx, app_tx);
 
-    // Initial fetch.
-    Runtime::refresh_all(&mut app).await;
+    // Queue the initial refresh through the command channel so the first
+    // `terminal.draw` lands before any network round-trip.  See sera-e7fp.
+    app.status = app::Status::info("connecting…");
+    app.pending.push(app::AppCommand::RefreshAll);
 
     loop {
         terminal.draw(|f| ui::render(f, &mut app))?;
@@ -122,6 +125,11 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
         // Drain any pending SSE updates first — non-blocking.
         while let Ok(update) = sse_rx.try_recv() {
             app.apply_sse(update);
+        }
+
+        // Drain background-fetch results from the runtime — non-blocking.
+        while let Ok(update) = app_rx.try_recv() {
+            app::apply_app_update(&mut app, update);
         }
 
         // Poll crossterm for input with a short budget so SSE + timer

@@ -15,7 +15,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio_stream::StreamExt as _;
 
-use crate::client::{ConnectionState, GatewayClient, HitlRequest, SseUpdate};
+use crate::client::{
+    Agent, ClientError, ConnectionState, EvolveProposal, GatewayClient, HitlRequest, SseUpdate,
+};
 use crate::keybindings::TuiKeybindings;
 use crate::views::agent_list::AgentListView;
 use crate::views::evolve_status::EvolveStatusView;
@@ -59,6 +61,17 @@ impl Status {
             level: StatusLevel::Error,
         }
     }
+}
+
+/// Result of a background fetch the runtime ran on a spawned task.  The
+/// main loop drains these from `app_rx` and applies them via
+/// [`apply_app_update`] so network I/O never holds `&mut App` across an
+/// await on the draw path.
+#[derive(Debug)]
+pub enum AppUpdate {
+    Agents(Result<Vec<Agent>, ClientError>),
+    Hitl(Result<Vec<HitlRequest>, ClientError>),
+    Evolve(Result<Vec<EvolveProposal>, ClientError>),
 }
 
 /// Async command emitted by the reducer when a view transition needs
@@ -578,6 +591,50 @@ pub fn maybe_show_hitl_modal(app: &mut App, req: HitlRequest) {
     }
 }
 
+/// Apply a freshly-fetched HITL list to the app, preserving the auto-popup
+/// behavior.  Split out so the modal-trigger logic stays on the main thread
+/// after the fetch itself moved off the draw path onto a spawned task.
+pub fn apply_hitl_update(app: &mut App, list: Vec<HitlRequest>) {
+    let n = list.len();
+    if let Some(active_agent) = app.active_agent_id.clone()
+        && let Some(req) = list
+            .iter()
+            .find(|r| r.agent_id == active_agent && r.status == "pending")
+            .cloned()
+    {
+        maybe_show_hitl_modal(app, req);
+    }
+    app.hitl.set_requests(list);
+    app.status = Status::info(format!("{n} HITL request(s)"));
+}
+
+/// Apply a background fetch result to the app.  Called by the main loop
+/// after draining `app_rx`.
+pub fn apply_app_update(app: &mut App, update: AppUpdate) {
+    match update {
+        AppUpdate::Agents(Ok(list)) => {
+            let n = list.len();
+            app.agents.set_agents(list);
+            app.status = Status::info(format!("{n} agent(s) loaded"));
+        }
+        AppUpdate::Agents(Err(e)) => {
+            app.status = Status::error(format!("agent list failed: {e}"));
+        }
+        AppUpdate::Hitl(Ok(list)) => apply_hitl_update(app, list),
+        AppUpdate::Hitl(Err(e)) => {
+            app.status = Status::warn(format!("HITL list unavailable: {e}"));
+        }
+        AppUpdate::Evolve(Ok(list)) => {
+            let n = list.len();
+            app.evolve.set_proposals(list);
+            app.status = Status::info(format!("{n} evolve proposal(s)"));
+        }
+        AppUpdate::Evolve(Err(e)) => {
+            app.status = Status::warn(format!("evolve list unavailable: {e}"));
+        }
+    }
+}
+
 fn display_first(bindings: &[crate::keybindings::KeyBinding]) -> String {
     bindings
         .first()
@@ -591,58 +648,68 @@ fn display_first(bindings: &[crate::keybindings::KeyBinding]) -> String {
 pub struct Runtime {
     pub sse_task: Option<tokio::task::JoinHandle<()>>,
     pub sse_tx: UnboundedSender<SseUpdate>,
+    pub app_tx: UnboundedSender<AppUpdate>,
 }
 
 impl Runtime {
-    pub fn new(sse_tx: UnboundedSender<SseUpdate>) -> Self {
+    pub fn new(sse_tx: UnboundedSender<SseUpdate>, app_tx: UnboundedSender<AppUpdate>) -> Self {
         Self {
             sse_task: None,
             sse_tx,
+            app_tx,
         }
     }
 
-    /// Drain pending commands, spawning async work for each.  Completed
-    /// data lands back on the App via status messages or via direct
-    /// setters — we keep the flow unidirectional via the event loop.
+    /// Drain pending commands, spawning async work for each.  Refresh
+    /// fetches run on detached tasks that ship their result through
+    /// `app_tx`; user-driven HITL actions still await inline because
+    /// they only fire in response to explicit operator input, not on
+    /// the cold-start draw path.
     pub async fn execute(&mut self, app: &mut App) {
         let pending = std::mem::take(&mut app.pending);
         for cmd in pending {
             match cmd {
-                AppCommand::RefreshAll => Self::refresh_all(app).await,
-                AppCommand::RefreshCurrent => self.refresh_focus(app).await,
+                AppCommand::RefreshAll => self.spawn_refresh_all(app),
+                AppCommand::RefreshCurrent => self.spawn_refresh_focus(app),
                 AppCommand::LoadSessionFor(agent_id) => {
                     self.load_session_for(app, agent_id).await;
                 }
-                AppCommand::Approve(id) => match app.client.approve_hitl(&id).await {
-                    Ok(()) => {
-                        app.status = Status::info(format!("approved {id}"));
-                        Self::refresh_hitl(app).await;
+                AppCommand::Approve(id) | AppCommand::ApproveModal(id) => {
+                    match app.client.approve_hitl(&id).await {
+                        Ok(()) => {
+                            app.status = Status::info(format!("approved {id}"));
+                            self.spawn_refresh_hitl(app);
+                        }
+                        Err(e) => {
+                            app.hitl.set_error(e.to_string());
+                            app.status = Status::error(format!("approve failed: {e}"));
+                        }
                     }
-                    Err(e) => {
-                        app.hitl.set_error(e.to_string());
-                        app.status = Status::error(format!("approve failed: {e}"));
+                }
+                AppCommand::Reject(id) | AppCommand::RejectModal(id) => {
+                    match app.client.reject_hitl(&id).await {
+                        Ok(()) => {
+                            app.status = Status::info(format!("rejected {id}"));
+                            self.spawn_refresh_hitl(app);
+                        }
+                        Err(e) => {
+                            app.hitl.set_error(e.to_string());
+                            app.status = Status::error(format!("reject failed: {e}"));
+                        }
                     }
-                },
-                AppCommand::Reject(id) => match app.client.reject_hitl(&id).await {
-                    Ok(()) => {
-                        app.status = Status::info(format!("rejected {id}"));
-                        Self::refresh_hitl(app).await;
+                }
+                AppCommand::Escalate(id) | AppCommand::EscalateModal(id) => {
+                    match app.client.escalate_hitl(&id).await {
+                        Ok(()) => {
+                            app.status = Status::info(format!("escalated {id}"));
+                            self.spawn_refresh_hitl(app);
+                        }
+                        Err(e) => {
+                            app.hitl.set_error(e.to_string());
+                            app.status = Status::error(format!("escalate failed: {e}"));
+                        }
                     }
-                    Err(e) => {
-                        app.hitl.set_error(e.to_string());
-                        app.status = Status::error(format!("reject failed: {e}"));
-                    }
-                },
-                AppCommand::Escalate(id) => match app.client.escalate_hitl(&id).await {
-                    Ok(()) => {
-                        app.status = Status::info(format!("escalated {id}"));
-                        Self::refresh_hitl(app).await;
-                    }
-                    Err(e) => {
-                        app.hitl.set_error(e.to_string());
-                        app.status = Status::error(format!("escalate failed: {e}"));
-                    }
-                },
+                }
                 AppCommand::SendChat { agent, message } => {
                     self.send_chat(app, agent, message).await;
                 }
@@ -662,102 +729,49 @@ impl Runtime {
                 AppCommand::OpenSession(session_id) => {
                     self.load_session_by_id(app, session_id).await;
                 }
-                AppCommand::ApproveModal(id) => match app.client.approve_hitl(&id).await {
-                    Ok(()) => {
-                        app.status = Status::info(format!("approved {id}"));
-                        Self::refresh_hitl(app).await;
-                    }
-                    Err(e) => {
-                        app.hitl.set_error(e.to_string());
-                        app.status = Status::error(format!("approve failed: {e}"));
-                    }
-                },
-                AppCommand::RejectModal(id) => match app.client.reject_hitl(&id).await {
-                    Ok(()) => {
-                        app.status = Status::info(format!("rejected {id}"));
-                        Self::refresh_hitl(app).await;
-                    }
-                    Err(e) => {
-                        app.hitl.set_error(e.to_string());
-                        app.status = Status::error(format!("reject failed: {e}"));
-                    }
-                },
-                AppCommand::EscalateModal(id) => match app.client.escalate_hitl(&id).await {
-                    Ok(()) => {
-                        app.status = Status::info(format!("escalated {id}"));
-                        Self::refresh_hitl(app).await;
-                    }
-                    Err(e) => {
-                        app.hitl.set_error(e.to_string());
-                        app.status = Status::error(format!("escalate failed: {e}"));
-                    }
-                },
             }
         }
     }
 
-    pub async fn refresh_all(app: &mut App) {
-        Self::refresh_agents(app).await;
-        Self::refresh_hitl(app).await;
-        Self::refresh_evolve(app).await;
+    /// Spawn fetches for agents + HITL + evolve concurrently; results land
+    /// on `app_tx`.
+    fn spawn_refresh_all(&self, app: &App) {
+        self.spawn_refresh_agents(app);
+        self.spawn_refresh_hitl(app);
+        self.spawn_refresh_evolve(app);
     }
 
-    async fn refresh_focus(&mut self, app: &mut App) {
+    fn spawn_refresh_focus(&self, app: &App) {
         match app.focus {
-            ViewKind::Agents => Self::refresh_agents(app).await,
+            ViewKind::Agents => self.spawn_refresh_agents(app),
             ViewKind::Session => { /* driven by SSE + explicit load */ }
-            ViewKind::Hitl => Self::refresh_hitl(app).await,
-            ViewKind::Evolve => Self::refresh_evolve(app).await,
+            ViewKind::Hitl => self.spawn_refresh_hitl(app),
+            ViewKind::Evolve => self.spawn_refresh_evolve(app),
         }
     }
 
-    async fn refresh_agents(app: &mut App) {
-        match app.client.list_agents().await {
-            Ok(list) => {
-                let n = list.len();
-                app.agents.set_agents(list);
-                app.status = Status::info(format!("{n} agent(s) loaded"));
-            }
-            Err(e) => {
-                app.status = Status::error(format!("agent list failed: {e}"));
-            }
-        }
+    fn spawn_refresh_agents(&self, app: &App) {
+        let client = Arc::clone(&app.client);
+        let tx = self.app_tx.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(AppUpdate::Agents(client.list_agents().await));
+        });
     }
 
-    async fn refresh_hitl(app: &mut App) {
-        match app.client.list_hitl().await {
-            Ok(list) => {
-                let n = list.len();
-                // If the active session's agent has a pending request and no
-                // modal is already open, surface it immediately.
-                if let Some(active_agent) = &app.active_agent_id.clone()
-                    && let Some(req) = list
-                        .iter()
-                        .find(|r| r.agent_id == *active_agent && r.status == "pending")
-                        .cloned()
-                {
-                    maybe_show_hitl_modal(app, req);
-                }
-                app.hitl.set_requests(list);
-                app.status = Status::info(format!("{n} HITL request(s)"));
-            }
-            Err(e) => {
-                app.status = Status::warn(format!("HITL list unavailable: {e}"));
-            }
-        }
+    fn spawn_refresh_hitl(&self, app: &App) {
+        let client = Arc::clone(&app.client);
+        let tx = self.app_tx.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(AppUpdate::Hitl(client.list_hitl().await));
+        });
     }
 
-    async fn refresh_evolve(app: &mut App) {
-        match app.client.list_evolve_proposals().await {
-            Ok(list) => {
-                let n = list.len();
-                app.evolve.set_proposals(list);
-                app.status = Status::info(format!("{n} evolve proposal(s)"));
-            }
-            Err(e) => {
-                app.status = Status::warn(format!("evolve list unavailable: {e}"));
-            }
-        }
+    fn spawn_refresh_evolve(&self, app: &App) {
+        let client = Arc::clone(&app.client);
+        let tx = self.app_tx.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(AppUpdate::Evolve(client.list_evolve_proposals().await));
+        });
     }
 
     /// Spawn a task that POSTs to `/api/chat` and pipes SSE events into the
@@ -1142,5 +1156,99 @@ mod tests {
             app.pending.last(),
             Some(AppCommand::LoadSessionFor(id)) if id == "fresh-agent"
         ));
+    }
+
+    // --- sera-e7fp: non-blocking startup tests ---
+
+    /// First frame must be renderable with no prior network round-trip:
+    /// pre-loop, the loop seeds an `AppCommand::RefreshAll` and then
+    /// `terminal.draw` runs.  This test stands in for the latter against
+    /// a `TestBackend`, proving `ui::render` does not require any
+    /// data to be loaded first.
+    #[test]
+    fn first_frame_renders_before_any_refresh_completes() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        // Mirror what main.rs does at startup.
+        app.status = Status::info("connecting…");
+        app.pending.push(AppCommand::RefreshAll);
+
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|f| crate::ui::render(f, &mut app))
+            .expect("first frame draws without network");
+
+        let buf = terminal.backend().buffer();
+        let mut rendered = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                rendered.push_str(buf[(x, y)].symbol());
+            }
+            rendered.push('\n');
+        }
+        // Status text seeded before the first draw must be visible.
+        assert!(
+            rendered.contains("connecting"),
+            "first frame should surface the connecting status; got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn apply_app_update_agents_ok_populates_view() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        apply_app_update(
+            &mut app,
+            AppUpdate::Agents(Ok(vec![agent("x"), agent("y")])),
+        );
+        assert_eq!(app.agents.selected_id().as_deref(), Some("x"));
+        assert!(app.status.text.contains("2 agent"));
+    }
+
+    #[test]
+    fn apply_app_update_agents_err_sets_error_status() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        apply_app_update(
+            &mut app,
+            AppUpdate::Agents(Err(ClientError::NotAvailable("/api/agents".into()))),
+        );
+        assert!(matches!(app.status.level, StatusLevel::Error));
+        assert!(app.status.text.contains("agent list failed"));
+    }
+
+    #[test]
+    fn apply_hitl_update_pops_modal_for_active_agent() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.active_agent_id = Some("a1".into());
+        apply_hitl_update(
+            &mut app,
+            vec![HitlRequest {
+                id: "h1".into(),
+                agent_id: "a1".into(),
+                summary: "read".into(),
+                age: "".into(),
+                status: "pending".into(),
+            }],
+        );
+        assert!(app.show_hitl_modal.is_some());
+        assert_eq!(app.show_hitl_modal.as_ref().unwrap().id, "h1");
+    }
+
+    #[test]
+    fn apply_hitl_update_skips_modal_when_no_active_agent() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        apply_hitl_update(
+            &mut app,
+            vec![HitlRequest {
+                id: "h1".into(),
+                agent_id: "a1".into(),
+                summary: "read".into(),
+                age: "".into(),
+                status: "pending".into(),
+            }],
+        );
+        assert!(app.show_hitl_modal.is_none());
+        assert_eq!(app.hitl.selected_id().as_deref(), Some("h1"));
     }
 }

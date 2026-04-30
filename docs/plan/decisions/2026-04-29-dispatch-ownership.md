@@ -76,14 +76,21 @@ Until all five hold, `dispatch_mode=runtime` remains the default and the boot lo
 
 ## 5. Boot-log contract
 
-The gateway emits `dispatch_mode` as a structured field:
+The gateway emits two structured fields so the log cannot lie about what the running binary actually does:
+
+- `dispatch_mode` — the **effective** mode (what the running code does). Today this binary always spawns `sera-runtime` via `StdioHarness`, so the effective mode is always `runtime` regardless of operator request. Future migration PRs (§4 steps 2–4) replace the constant returning `"runtime"` with a real switch wired to the dispatcher selection.
+- `dispatch_mode_configured` — the **operator-requested** mode parsed from `SERA_DISPATCH_MODE` (default `runtime`). One of `runtime | gateway | embedded`. Unrecognised values silently fall back to `runtime` so a typo cannot accidentally claim a security model the code does not implement.
+
+Both fields are emitted:
 
 - **Per process at startup**, immediately before agent harness spawn (one info-level line, even when no agents are configured).
 - **Per agent at spawn time**, alongside `agent` and `model` on the existing `"Spawned runtime harness"` line.
 
-The value is one of `runtime | gateway | embedded`, sourced from the `SERA_DISPATCH_MODE` env (default `runtime`). Unrecognised values silently fall back to `runtime` so a typo cannot accidentally claim a security model the code does not implement. The accepted set is documented here and validated by a unit test in the gateway crate; future migration PRs extend the validator and its tests in lock-step with the dispatcher implementation.
+When `dispatch_mode_configured` names a not-yet-implemented mode (`gateway` or `embedded`) and therefore differs from `dispatch_mode`, the gateway also emits a single warn-level line at process startup so operators cannot misread the request as an active deployment.
 
-The label is **declarative**, not behavioural: this PR does not change which process executes tools. It only makes the active model visible.
+The accepted configured set is documented here and validated by unit tests in the gateway crate; future migration PRs extend both the validator and the effective-mode resolver in lock-step with the dispatcher implementation.
+
+The label is **declarative**, not behavioural: this PR does not change which process executes tools. It only makes the active model visible while keeping the effective and requested modes distinguishable.
 
 ## 6. Consequences
 

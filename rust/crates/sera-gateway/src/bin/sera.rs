@@ -124,15 +124,21 @@ fn wants_pgvector_backend(backend_pref: Option<&str>, database_url: Option<&str>
     matches!(backend_pref, Some("pgvector")) || (backend_pref.is_none() && database_url.is_some())
 }
 
-/// sera-y45a: declares which process owns tool dispatch for the running gateway.
+/// sera-y45a: parses the operator-requested dispatch mode from the
+/// `SERA_DISPATCH_MODE` env var.
 ///
-/// `runtime` (default) = the `sera-runtime` child owns the LLM client, tool
-/// registry, capability gate, and dispatcher; the gateway audits `tool_call_*`
-/// events post-hoc. `gateway` and `embedded` are the migration targets — see
-/// `docs/plan/decisions/2026-04-29-dispatch-ownership.md`. This is a
-/// **declarative** marker only: the value is logged at boot so operators can
-/// see the active model. Changing it does not yet change which process
-/// dispatches tools.
+/// `runtime` (default) names the shipped MVS where the `sera-runtime` child
+/// owns the LLM client, tool registry, capability gate, and dispatcher.
+/// `gateway` and `embedded` are the migration targets — see
+/// `docs/plan/decisions/2026-04-29-dispatch-ownership.md`. Unrecognised /
+/// empty values silently fall back to `runtime` so a typo cannot accidentally
+/// claim a security model the code does not implement.
+///
+/// **Note:** this returns the *configured/requested* mode, not the
+/// *effective* one. This binary always launches `StdioHarness::spawn` for
+/// `sera-runtime`, so the effective mode is always `runtime` until the
+/// migration steps in ADR §4 land. Use [`effective_dispatch_mode_label`] for
+/// the value that describes what the running code actually does.
 fn dispatch_mode_label(raw: Option<&str>) -> &'static str {
     match raw.map(str::trim) {
         Some("gateway") => "gateway",
@@ -142,9 +148,23 @@ fn dispatch_mode_label(raw: Option<&str>) -> &'static str {
     }
 }
 
-fn current_dispatch_mode_label() -> &'static str {
+fn configured_dispatch_mode_label() -> &'static str {
     let raw = std::env::var("SERA_DISPATCH_MODE").ok();
     dispatch_mode_label(raw.as_deref())
+}
+
+/// sera-y45a: the dispatch mode that actually applies to the running code.
+///
+/// This binary always spawns `sera-runtime` via `StdioHarness::spawn`, so
+/// dispatch ownership is always `runtime` regardless of what
+/// `SERA_DISPATCH_MODE` requests. The boot log uses this as the truthful
+/// `dispatch_mode` field; the configured value is logged separately as
+/// `dispatch_mode_configured` so operators can still see what was asked for
+/// without the log claiming a security model the code does not implement.
+/// Future migration PRs (ADR §4 steps 2–4) will replace this constant with a
+/// real switch wired to the dispatcher selection.
+fn effective_dispatch_mode_label() -> &'static str {
+    "runtime"
 }
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
@@ -3867,16 +3887,32 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         exe_dir.join("sera-runtime").to_string_lossy().to_string()
     });
 
-    // sera-y45a: surface the active dispatch model in the boot log so
-    // operators can read which process owns tool dispatch without diving
-    // into source. The current MVS ships `runtime`; `gateway` and
-    // `embedded` are migration targets. See
+    // sera-y45a: surface the dispatch model in the boot log so operators can
+    // read which process owns tool dispatch without diving into source.
+    // `dispatch_mode` is the *effective* mode — what the running code
+    // actually does. `dispatch_mode_configured` is what the operator
+    // requested via SERA_DISPATCH_MODE. They diverge today because this
+    // binary always spawns `sera-runtime` via `StdioHarness`, so the
+    // effective mode is `runtime` regardless of the request. When the
+    // configured mode names a not-yet-implemented target (gateway/embedded),
+    // a warning is emitted so the log cannot be mistaken for an active
+    // gateway/embedded deployment. See
     // docs/plan/decisions/2026-04-29-dispatch-ownership.md.
-    let dispatch_mode = current_dispatch_mode_label();
+    let dispatch_mode = effective_dispatch_mode_label();
+    let dispatch_mode_configured = configured_dispatch_mode_label();
     tracing::info!(
         dispatch_mode = dispatch_mode,
+        dispatch_mode_configured = dispatch_mode_configured,
         "Tool dispatch ownership (sera-y45a)"
     );
+    if dispatch_mode_configured != dispatch_mode {
+        tracing::warn!(
+            dispatch_mode = dispatch_mode,
+            dispatch_mode_configured = dispatch_mode_configured,
+            "SERA_DISPATCH_MODE requests a not-yet-implemented dispatch mode; \
+             effective mode remains `runtime` until ADR §4 migration lands"
+        );
+    }
 
     let mut harnesses = std::collections::HashMap::new();
 
@@ -3965,14 +4001,19 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         .await
         {
             Ok(supervisor) => {
-                // sera-y45a: include the dispatch_mode marker so per-agent
-                // boot logs answer "which process owns tool dispatch for
-                // this agent?" without operators correlating against the
-                // process-level line above.
+                // sera-y45a: include both the effective and configured
+                // dispatch_mode markers so per-agent boot logs answer "which
+                // process owns tool dispatch for this agent?" truthfully
+                // without operators correlating against the process-level
+                // line above. `dispatch_mode` reflects what the running code
+                // does (always `runtime` while the supervisor still spawns
+                // sera-runtime as a child); `dispatch_mode_configured`
+                // reflects the operator request.
                 tracing::info!(
                     agent = %agent_name,
                     model = %model,
                     dispatch_mode = dispatch_mode,
+                    dispatch_mode_configured = dispatch_mode_configured,
                     "Spawned runtime harness via supervisor (sera-ojp3)"
                 );
                 harnesses.insert(agent_name.to_string(), supervisor);
@@ -4539,10 +4580,12 @@ mod tests {
     // ── sera-y45a: dispatch_mode_label() ────────────────────────────────────
     //
     // The label is declarative: it surfaces which process owns tool dispatch
-    // in boot logs but does not change behaviour. The default is `runtime`
-    // (the shipped MVS); `gateway` and `embedded` are migration targets.
-    // Unrecognised values fail safe to `runtime` so a typo cannot accidentally
-    // claim a security model the code does not implement.
+    // in boot logs but does not change behaviour. `dispatch_mode_label`
+    // parses the operator-requested (configured) mode; `effective_dispatch_mode_label`
+    // reports what the running binary actually does. They diverge today
+    // because this binary always spawns `sera-runtime` via `StdioHarness`.
+    // Unrecognised configured values fail safe to `runtime` so a typo cannot
+    // accidentally claim a security model the code does not implement.
     // See docs/plan/decisions/2026-04-29-dispatch-ownership.md.
 
     #[test]
@@ -4572,6 +4615,30 @@ mod tests {
         assert_eq!(dispatch_mode_label(Some("RUNTIME")), "runtime");
         assert_eq!(dispatch_mode_label(Some("Gateway")), "runtime");
         assert_eq!(dispatch_mode_label(Some("foo")), "runtime");
+    }
+
+    #[test]
+    fn effective_dispatch_mode_is_runtime_until_migration() {
+        // This binary always launches StdioHarness::spawn for sera-runtime,
+        // so the effective mode is `runtime` regardless of the configured
+        // value. When ADR §4 step 2/3 lands, this test must be updated in
+        // lock-step with the dispatcher implementation — flipping it without
+        // moving real dispatch would re-introduce the very mismatch the
+        // ADR records.
+        assert_eq!(effective_dispatch_mode_label(), "runtime");
+    }
+
+    #[test]
+    fn effective_and_configured_diverge_for_target_modes() {
+        // Even when the operator requests gateway/embedded, the effective
+        // label must not echo the request. Boot logs report effective as
+        // `runtime` and surface the configured request separately.
+        assert_eq!(effective_dispatch_mode_label(), "runtime");
+        assert_ne!(dispatch_mode_label(Some("gateway")), effective_dispatch_mode_label());
+        assert_ne!(dispatch_mode_label(Some("embedded")), effective_dispatch_mode_label());
+        // Default and explicit `runtime` request agree with effective.
+        assert_eq!(dispatch_mode_label(Some("runtime")), effective_dispatch_mode_label());
+        assert_eq!(dispatch_mode_label(None), effective_dispatch_mode_label());
     }
 
     fn test_manifests() -> ManifestSet {

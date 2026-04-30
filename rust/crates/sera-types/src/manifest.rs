@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::sandbox::{EgressEndpoint, EgressManifest, EgressMode};
 use crate::LifecycleMode;
 
 /// Top-level AgentTemplate YAML document.
@@ -73,6 +74,16 @@ pub struct TemplateSpec {
     pub context_files: Option<Vec<SpecContextFile>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<SpecSandbox>,
+    /// Declared egress allow-list for sandboxed agents.
+    ///
+    /// When this template is sandboxed (`sandbox` or `sandbox_boundary` is
+    /// set) and `mode != Disabled`, [`EgressEndpoint::InferenceLocal`] must
+    /// be present in `allowed` — `validate_and_normalize_egress` either
+    /// inserts it as a baseline (when `egress` is absent) or rejects the
+    /// manifest (when `egress` is present but drops it). See `sera-eq0m`
+    /// and `sera-xgb0`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub egress: Option<EgressManifest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,6 +189,68 @@ pub struct SpecContextFile {
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
+}
+
+/// Errors raised by [`AgentTemplate::validate_and_normalize_egress`].
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum EgressManifestError {
+    /// Sandboxed manifest declared an `egress` block but dropped
+    /// `InferenceLocal` from `allowed` while `mode != Disabled`.
+    #[error(
+        "sandboxed AgentTemplate '{name}' must allow EgressEndpoint::InferenceLocal \
+         (the canonical inference.local proxy) unless egress.mode is 'disabled'"
+    )]
+    MissingInferenceLocalBaseline { name: String },
+}
+
+impl AgentTemplate {
+    /// Returns true when this template runs in any sandbox — either an
+    /// explicit `spec.sandbox` block or a `spec.sandboxBoundary` reference.
+    pub fn is_sandboxed(&self) -> bool {
+        self.spec.sandbox.is_some() || self.spec.sandbox_boundary.is_some()
+    }
+
+    /// Apply the implicit `InferenceLocal` baseline to a sandboxed template
+    /// and reject manifests that opt out of it without `mode = Disabled`.
+    ///
+    /// Behaviour:
+    ///
+    /// - Non-sandboxed template: no-op. `egress` is left untouched.
+    /// - Sandboxed template with no `egress`: an `EgressManifest` with
+    ///   `mode = Strict` and `allowed = [InferenceLocal]` is inserted.
+    /// - Sandboxed template with `egress.mode = Disabled`: left untouched
+    ///   (compliance opt-out — `InferenceLocal` is not required).
+    /// - Sandboxed template with `egress` and `mode != Disabled`: must
+    ///   already include `InferenceLocal` in `allowed`, or
+    ///   [`EgressManifestError::MissingInferenceLocalBaseline`] is
+    ///   returned. The `allowed` list is left exactly as the operator
+    ///   declared it (no silent re-adds beyond the absent-egress case).
+    pub fn validate_and_normalize_egress(&mut self) -> Result<(), EgressManifestError> {
+        if !self.is_sandboxed() {
+            return Ok(());
+        }
+
+        match self.spec.egress.as_mut() {
+            None => {
+                self.spec.egress = Some(EgressManifest {
+                    allowed: vec![EgressEndpoint::InferenceLocal],
+                    mode: EgressMode::Strict,
+                });
+                Ok(())
+            }
+            Some(manifest) => {
+                if manifest.mode == EgressMode::Disabled {
+                    return Ok(());
+                }
+                if manifest.allows_inference_local() {
+                    return Ok(());
+                }
+                Err(EgressManifestError::MissingInferenceLocalBaseline {
+                    name: self.metadata.name.clone(),
+                })
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -463,6 +536,189 @@ spec:
         assert_eq!(fallback[0].name, "gpt-4o");
         assert_eq!(fallback[0].max_complexity, Some(2));
         assert!(fallback[1].max_complexity.is_none());
+    }
+
+    fn make_minimal_template(name: &str) -> AgentTemplate {
+        AgentTemplate {
+            api_version: "sera/v1".to_string(),
+            kind: "AgentTemplate".to_string(),
+            metadata: TemplateMetadata {
+                name: name.to_string(),
+                display_name: None,
+                icon: None,
+                builtin: false,
+                category: None,
+                description: None,
+            },
+            spec: TemplateSpec {
+                identity: None,
+                model: None,
+                sandbox_boundary: None,
+                policy_ref: None,
+                lifecycle: None,
+                capabilities: None,
+                skills: None,
+                skill_packages: None,
+                tools: None,
+                subagents: None,
+                resources: None,
+                workspace: None,
+                memory: None,
+                schedules: None,
+                context_files: None,
+                sandbox: None,
+                egress: None,
+            },
+        }
+    }
+
+    #[test]
+    fn validate_egress_no_sandbox_is_noop() {
+        let mut t = make_minimal_template("plain");
+        assert!(!t.is_sandboxed());
+        assert!(t.validate_and_normalize_egress().is_ok());
+        assert!(t.spec.egress.is_none());
+    }
+
+    #[test]
+    fn validate_egress_sandboxed_defaults_to_inference_local_baseline() {
+        let mut t = make_minimal_template("sandboxed");
+        t.spec.sandbox = Some(SpecSandbox {
+            image: Some("img".to_string()),
+            entrypoint: None,
+            command: None,
+            chat_port: None,
+        });
+
+        assert!(t.is_sandboxed());
+        assert!(t.spec.egress.is_none());
+
+        t.validate_and_normalize_egress().unwrap();
+
+        let egress = t.spec.egress.as_ref().expect("baseline must be inserted");
+        assert_eq!(egress.mode, EgressMode::Strict);
+        assert!(egress.allows_inference_local());
+        assert_eq!(egress.allowed.len(), 1);
+    }
+
+    #[test]
+    fn validate_egress_sandbox_boundary_only_also_triggers_baseline() {
+        let mut t = make_minimal_template("boundary-only");
+        t.spec.sandbox_boundary = Some("tier-2".to_string());
+        t.validate_and_normalize_egress().unwrap();
+        assert!(
+            t.spec
+                .egress
+                .as_ref()
+                .unwrap()
+                .allows_inference_local()
+        );
+    }
+
+    #[test]
+    fn validate_egress_existing_manifest_with_inference_local_is_preserved() {
+        let mut t = make_minimal_template("explicit");
+        t.spec.sandbox_boundary = Some("tier-2".to_string());
+        t.spec.egress = Some(EgressManifest {
+            allowed: vec![
+                EgressEndpoint::InferenceLocal,
+                EgressEndpoint::Domain {
+                    name: "api.github.com".to_string(),
+                },
+            ],
+            mode: EgressMode::Strict,
+        });
+
+        let original = t.spec.egress.clone();
+        t.validate_and_normalize_egress().unwrap();
+        assert_eq!(t.spec.egress, original, "operator-declared list must not be mutated");
+    }
+
+    #[test]
+    fn validate_egress_rejects_sandboxed_manifest_missing_inference_local() {
+        let mut t = make_minimal_template("strip-inference");
+        t.spec.sandbox = Some(SpecSandbox {
+            image: Some("img".to_string()),
+            entrypoint: None,
+            command: None,
+            chat_port: None,
+        });
+        t.spec.egress = Some(EgressManifest {
+            allowed: vec![EgressEndpoint::Domain {
+                name: "api.github.com".to_string(),
+            }],
+            mode: EgressMode::Strict,
+        });
+
+        let err = t.validate_and_normalize_egress().unwrap_err();
+        assert_eq!(
+            err,
+            EgressManifestError::MissingInferenceLocalBaseline {
+                name: "strip-inference".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn validate_egress_audit_only_still_requires_inference_local() {
+        let mut t = make_minimal_template("audit-only-no-inference");
+        t.spec.sandbox_boundary = Some("tier-1".to_string());
+        t.spec.egress = Some(EgressManifest {
+            allowed: vec![EgressEndpoint::Cidr {
+                range: "10.0.0.0/8".to_string(),
+            }],
+            mode: EgressMode::AuditOnly,
+        });
+
+        assert!(t.validate_and_normalize_egress().is_err());
+    }
+
+    #[test]
+    fn validate_egress_disabled_mode_allows_dropping_inference_local() {
+        let mut t = make_minimal_template("opted-out");
+        t.spec.sandbox_boundary = Some("tier-3".to_string());
+        t.spec.egress = Some(EgressManifest {
+            allowed: vec![],
+            mode: EgressMode::Disabled,
+        });
+
+        t.validate_and_normalize_egress().unwrap();
+
+        let egress = t.spec.egress.as_ref().unwrap();
+        assert_eq!(egress.mode, EgressMode::Disabled);
+        assert!(egress.allowed.is_empty());
+    }
+
+    #[test]
+    fn template_egress_field_is_omitted_when_none_for_backwards_compat() {
+        let t = make_minimal_template("plain");
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(!json.contains("egress"));
+    }
+
+    #[test]
+    fn template_with_egress_yaml_parses() {
+        let yaml = r#"
+apiVersion: sera/v1
+kind: AgentTemplate
+metadata:
+  name: with-egress
+spec:
+  sandboxBoundary: tier-2
+  egress:
+    mode: audit_only
+    allowed:
+      - type: inference_local
+      - type: domain
+        name: api.github.com
+      - type: cidr
+        range: 10.0.0.0/8
+"#;
+        let template: AgentTemplate = serde_yaml::from_str(yaml).unwrap();
+        let egress = template.spec.egress.as_ref().unwrap();
+        assert_eq!(egress.mode, EgressMode::AuditOnly);
+        assert_eq!(egress.allowed.len(), 3);
+        assert!(egress.allows_inference_local());
     }
 
     #[test]

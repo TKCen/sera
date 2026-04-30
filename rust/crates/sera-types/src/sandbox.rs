@@ -4,6 +4,69 @@ use serde::{Deserialize, Serialize};
 
 use crate::LifecycleMode;
 
+/// Declared egress endpoint for a sandboxed agent.
+///
+/// Lives in `sera-types` (rather than `sera-tools::sandbox::policy`) so the
+/// gateway, manifest layer, and runtime can all consume it without depending
+/// on `sera-tools`. Mirrors `NetworkEndpoint` from
+/// `sera-tools/src/sandbox/policy.rs`; the two enums must stay aligned.
+///
+/// `InferenceLocal` is the canonical default — it names the gateway-side
+/// `inference.local:443` proxy that sandboxed agents must use to reach any
+/// upstream LLM provider. See `sera-eq0m` and the egress scout report at
+/// `artifacts/reports/research/eq0m-egress-restriction-scout-2026-04-30.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EgressEndpoint {
+    /// The gateway-managed `inference.local` LLM proxy. Always implicitly
+    /// allowed for sandboxed agents unless egress is explicitly disabled.
+    InferenceLocal,
+    /// A named DNS domain, e.g. `api.github.com`.
+    Domain { name: String },
+    /// A CIDR range, e.g. `10.0.0.0/8`.
+    Cidr { range: String },
+}
+
+/// Egress enforcement mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EgressMode {
+    /// Implicit-deny. Anything not in `allowed` is blocked at enforcement
+    /// time. The compliance posture.
+    #[default]
+    Strict,
+    /// Log violations but do not block. Used as a migration ramp before
+    /// flipping to `Strict`.
+    AuditOnly,
+    /// Egress restriction is opted out entirely. The agent runs without an
+    /// `InferenceLocal` baseline and may dial anywhere. Reserved for
+    /// non-sandboxed and dev-mode flows.
+    Disabled,
+}
+
+/// The egress manifest block declared on an `AgentTemplate.spec.egress`.
+///
+/// Implicit-deny: only endpoints in `allowed` are permitted (subject to
+/// `mode`). Sandboxed manifests must include [`EgressEndpoint::InferenceLocal`]
+/// in `allowed` unless `mode = Disabled` — this invariant is enforced by
+/// `AgentTemplate::validate_and_normalize_egress`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EgressManifest {
+    #[serde(default)]
+    pub allowed: Vec<EgressEndpoint>,
+    #[serde(default)]
+    pub mode: EgressMode,
+}
+
+impl EgressManifest {
+    /// True iff `allowed` already contains `InferenceLocal`.
+    pub fn allows_inference_local(&self) -> bool {
+        self.allowed
+            .iter()
+            .any(|e| matches!(e, EgressEndpoint::InferenceLocal))
+    }
+}
+
 /// A read-only source bind-mount for agent containers.
 /// Separates operator-provided reference material from agent-generated knowledge.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,6 +289,120 @@ mod tests {
         let parsed: SandboxInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.sources.len(), 1);
         assert_eq!(parsed.sources[0].host_path, "/host/ref");
+    }
+
+    #[test]
+    fn egress_endpoint_inference_local_roundtrip() {
+        let endpoint = EgressEndpoint::InferenceLocal;
+        let json = serde_json::to_string(&endpoint).unwrap();
+        assert_eq!(json, r#"{"type":"inference_local"}"#);
+        let parsed: EgressEndpoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, EgressEndpoint::InferenceLocal);
+    }
+
+    #[test]
+    fn egress_endpoint_domain_roundtrip() {
+        let endpoint = EgressEndpoint::Domain {
+            name: "api.github.com".to_string(),
+        };
+        let json = serde_json::to_string(&endpoint).unwrap();
+        let parsed: EgressEndpoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, endpoint);
+        assert!(json.contains(r#""type":"domain""#));
+        assert!(json.contains(r#""name":"api.github.com""#));
+    }
+
+    #[test]
+    fn egress_endpoint_cidr_roundtrip() {
+        let endpoint = EgressEndpoint::Cidr {
+            range: "10.0.0.0/8".to_string(),
+        };
+        let json = serde_json::to_string(&endpoint).unwrap();
+        let parsed: EgressEndpoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, endpoint);
+        assert!(json.contains(r#""type":"cidr""#));
+        assert!(json.contains(r#""range":"10.0.0.0/8""#));
+    }
+
+    #[test]
+    fn egress_mode_default_is_strict() {
+        assert_eq!(EgressMode::default(), EgressMode::Strict);
+    }
+
+    #[test]
+    fn egress_mode_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&EgressMode::Strict).unwrap(),
+            "\"strict\"",
+        );
+        assert_eq!(
+            serde_json::to_string(&EgressMode::AuditOnly).unwrap(),
+            "\"audit_only\"",
+        );
+        assert_eq!(
+            serde_json::to_string(&EgressMode::Disabled).unwrap(),
+            "\"disabled\"",
+        );
+    }
+
+    #[test]
+    fn egress_mode_all_roundtrip() {
+        for mode in [EgressMode::Strict, EgressMode::AuditOnly, EgressMode::Disabled] {
+            let json = serde_json::to_string(&mode).unwrap();
+            let parsed: EgressMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, mode);
+        }
+    }
+
+    #[test]
+    fn egress_manifest_default_is_strict_with_no_allowed() {
+        let m = EgressManifest::default();
+        assert!(m.allowed.is_empty());
+        assert_eq!(m.mode, EgressMode::Strict);
+        assert!(!m.allows_inference_local());
+    }
+
+    #[test]
+    fn egress_manifest_full_roundtrip() {
+        let m = EgressManifest {
+            allowed: vec![
+                EgressEndpoint::InferenceLocal,
+                EgressEndpoint::Domain {
+                    name: "api.github.com".to_string(),
+                },
+                EgressEndpoint::Cidr {
+                    range: "10.0.0.0/8".to_string(),
+                },
+            ],
+            mode: EgressMode::AuditOnly,
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        let parsed: EgressManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, m);
+        assert!(parsed.allows_inference_local());
+    }
+
+    #[test]
+    fn egress_manifest_omitted_fields_default() {
+        let parsed: EgressManifest = serde_json::from_str("{}").unwrap();
+        assert_eq!(parsed.mode, EgressMode::Strict);
+        assert!(parsed.allowed.is_empty());
+    }
+
+    #[test]
+    fn egress_manifest_allows_inference_local_detects_presence() {
+        let with = EgressManifest {
+            allowed: vec![EgressEndpoint::InferenceLocal],
+            mode: EgressMode::Strict,
+        };
+        let without = EgressManifest {
+            allowed: vec![EgressEndpoint::Domain {
+                name: "x".to_string(),
+            }],
+            mode: EgressMode::Strict,
+        };
+        assert!(with.allows_inference_local());
+        assert!(!without.allows_inference_local());
     }
 
     #[test]

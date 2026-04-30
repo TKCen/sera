@@ -165,10 +165,12 @@ impl CentrifugoPublisher {
 
     async fn send_request(&self, payload: serde_json::Value) -> anyhow::Result<()> {
         // sera-rdg4: pre-flight the configured Centrifugo base URL through
-        // the SSRF validator and pin the resolved addrs.  Loopback /
-        // private / link-local / cloud-metadata overrides of `base_url`
-        // are rejected before any request is sent.
-        let client = crate::tools::safe_client::build_validated_client(&self.base_url)
+        // the internal-service policy.  The default Centrifugo hostname
+        // (`centrifugo`/`sera-centrifugo`) is allowlisted so Docker/k8s
+        // private-IP DNS answers go through; cloud-metadata and
+        // off-allowlist unsafe overrides remain blocked.  Resolved addrs
+        // are pinned to mitigate DNS rebinding.
+        let client = crate::tools::safe_client::build_internal_service_client(&self.base_url)
             .await
             .map_err(|e| anyhow::anyhow!("centrifugo: {e}"))?;
         let resp = client

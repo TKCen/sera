@@ -1,19 +1,29 @@
 //! Shared SSRF-validated `reqwest::Client` builder for tools that talk to
 //! configured runtime URLs (bead sera-rdg4).
 //!
-//! The four runtime tool sites that previously called `reqwest::Client::new()`
-//! against a host taken from configuration (`SERA_CORE_URL`, the Centrifugo
-//! base URL) now route through [`build_validated_client`].  The helper
-//! pre-flights the URL through [`SsrfValidator::resolve_and_validate`] and
-//! pins the resolved addrs via `reqwest::ClientBuilder::resolve_to_addrs` to
-//! mitigate DNS rebinding — the same pattern already used by
-//! [`crate::tools::http_request`] and [`crate::tools::web_fetch`].
+//! Two helpers, two trust models:
 //!
-//! Loopback (127.0.0.0/8, ::1), RFC-1918 private ranges, link-local,
-//! IPv6 ULA, and cloud metadata endpoints (169.254.169.254, 100.100.100.200)
-//! are rejected before any connection attempt.
+//! * [`build_validated_client`] — strict.  For URLs that may be influenced
+//!   by an LLM or end-user.  Pre-flights through
+//!   [`SsrfValidator::resolve_and_validate`], rejects loopback / RFC-1918 /
+//!   link-local / IPv6 ULA / cloud-metadata, and pins the resolved addrs via
+//!   `reqwest::ClientBuilder::resolve_to_addrs` to mitigate DNS rebinding.
+//!   Same pattern as [`crate::tools::http_request`] and
+//!   [`crate::tools::web_fetch`].
+//!
+//! * [`build_internal_service_client`] — relaxed for *operator-configured*
+//!   internal SERA service URLs (`SERA_CORE_URL`, the Centrifugo base URL).
+//!   In Docker / Kubernetes those hostnames (`sera-core`, `centrifugo`, …)
+//!   resolve to RFC-1918 addresses, which the strict path would reject.
+//!   The relaxation is gated on a hostname allowlist
+//!   ([`internal_trusted_hosts`]) — only a hostname that the operator
+//!   intends as an internal service is trusted; anything else falls back to
+//!   the strict path.  Cloud-metadata and unspecified addresses are
+//!   *always* blocked regardless of trust, so an attacker who rewrites
+//!   `SERA_CORE_URL` to point at IMDS still gets stopped.
 
 use sera_tools::ssrf::{SsrfError, SsrfValidator};
+use std::net::{IpAddr, SocketAddr};
 
 /// Errors from base-URL validation + client construction.
 #[derive(Debug, thiserror::Error)]
@@ -55,6 +65,144 @@ pub async fn build_validated_client(
             host: host.clone(),
             reason: e,
         })?;
+
+    reqwest::Client::builder()
+        .resolve_to_addrs(&host, &addrs)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| SafeClientError::Build(e.to_string()))
+}
+
+/// Default allowlist of internal SERA service hostnames.  These are the
+/// container/service names that the operator deploys SERA components under —
+/// in Docker Compose and Kubernetes they resolve to RFC-1918 addresses, so
+/// the strict validator would reject them.
+const DEFAULT_INTERNAL_TRUSTED_HOSTS: &[&str] = &[
+    "sera-core",
+    "sera-centrifugo",
+    "centrifugo",
+];
+
+/// Resolve the active allowlist of trusted internal service hostnames.
+///
+/// The default list ([`DEFAULT_INTERNAL_TRUSTED_HOSTS`]) covers the standard
+/// SERA Docker Compose / k8s service names.  Operators can extend it with
+/// the comma-separated env var `SERA_INTERNAL_TRUSTED_HOSTS` for deployments
+/// that rename services (e.g. `sera-core-staging`).  Hostname comparison is
+/// case-insensitive and ignores surrounding whitespace.
+fn internal_trusted_hosts() -> Vec<String> {
+    let mut hosts: Vec<String> = DEFAULT_INTERNAL_TRUSTED_HOSTS
+        .iter()
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+    if let Ok(extra) = std::env::var("SERA_INTERNAL_TRUSTED_HOSTS") {
+        for h in extra.split(',') {
+            let h = h.trim();
+            if !h.is_empty() {
+                hosts.push(h.to_ascii_lowercase());
+            }
+        }
+    }
+    hosts
+}
+
+/// Block addresses that are *always* dangerous regardless of operator trust.
+///
+/// Cloud metadata IPs and unspecified / broadcast addresses are never a
+/// legitimate target for an internal SERA service.  An attacker who can
+/// rewrite `SERA_CORE_URL` to a trusted hostname still cannot redirect us
+/// to IMDS through this gate.
+fn reject_always_dangerous(host: &str, addr: &SocketAddr) -> Result<(), SafeClientError> {
+    let err = |reason: SsrfError| SafeClientError::Ssrf {
+        host: host.to_string(),
+        reason,
+    };
+    match addr.ip() {
+        IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            if octets == [169, 254, 169, 254] || octets == [100, 100, 100, 200] {
+                return Err(err(SsrfError::CloudMetadata));
+            }
+            if octets == [0, 0, 0, 0] || octets == [255, 255, 255, 255] {
+                return Err(err(SsrfError::Unspecified));
+            }
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_unspecified() {
+                return Err(err(SsrfError::Unspecified));
+            }
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                let octets = v4.octets();
+                if octets == [169, 254, 169, 254] || octets == [100, 100, 100, 200] {
+                    return Err(err(SsrfError::CloudMetadata));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate `base_url` for use against an *operator-configured* internal
+/// SERA service (`SERA_CORE_URL`, the Centrifugo base URL).
+///
+/// If `base_url`'s hostname matches the [`internal_trusted_hosts`]
+/// allowlist, the RFC-1918 / loopback / link-local / IPv6-ULA blocklist is
+/// relaxed — those ranges are how Docker DNS hands back service IPs — but
+/// cloud-metadata and unspecified addresses remain blocked, and the resolved
+/// addrs are still pinned via `reqwest::ClientBuilder::resolve_to_addrs`
+/// (DNS rebinding mitigation).
+///
+/// If the hostname is *not* on the allowlist, this falls through to the
+/// strict [`build_validated_client`] so an attacker-controlled override
+/// (e.g. `SERA_CORE_URL=http://10.0.0.5/` or `…=http://169.254.169.254/`)
+/// is still rejected.
+pub async fn build_internal_service_client(
+    base_url: &str,
+) -> Result<reqwest::Client, SafeClientError> {
+    let parsed = reqwest::Url::parse(base_url).map_err(|e| SafeClientError::InvalidUrl {
+        url: base_url.to_string(),
+        reason: e.to_string(),
+    })?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| SafeClientError::InvalidUrl {
+            url: base_url.to_string(),
+            reason: "URL has no host".to_string(),
+        })?
+        .to_owned();
+    let port = parsed.port_or_known_default().unwrap_or(80);
+
+    let trusted = internal_trusted_hosts();
+    let host_lc = host.to_ascii_lowercase();
+    if !trusted.iter().any(|h| h == &host_lc) {
+        // Hostname is not on the operator allowlist — apply strict
+        // validation so an unsafe override is still rejected.
+        return build_validated_client(base_url).await;
+    }
+
+    let target = format!("{host}:{port}");
+    let addrs: Vec<SocketAddr> = match tokio::net::lookup_host(&target).await {
+        Ok(iter) => iter.collect(),
+        Err(e) => {
+            return Err(SafeClientError::Ssrf {
+                host: host.clone(),
+                reason: SsrfError::ParseError {
+                    reason: format!("DNS lookup for {host} failed: {e}"),
+                },
+            });
+        }
+    };
+    if addrs.is_empty() {
+        return Err(SafeClientError::Ssrf {
+            host: host.clone(),
+            reason: SsrfError::ParseError {
+                reason: format!("DNS lookup for {host} returned no addresses"),
+            },
+        });
+    }
+    for addr in &addrs {
+        reject_always_dangerous(&host, addr)?;
+    }
 
     reqwest::Client::builder()
         .resolve_to_addrs(&host, &addrs)
@@ -232,5 +380,154 @@ mod tests {
             .await
             .expect("request must succeed against the mock");
         assert_eq!(resp.status().as_u16(), 200);
+    }
+
+    // ── build_internal_service_client: allowlist relaxation for operator-configured
+    //    internal SERA service URLs.  The defaults are the Docker Compose / k8s
+    //    hostnames that resolve to RFC-1918 — those must build a Client.  Unsafe
+    //    overrides (off-allowlist hostnames, off-allowlist private literal IPs,
+    //    cloud metadata) must still be rejected.
+
+    /// Allowed default: `http://sera-core:3000` is the canonical runtime →
+    /// core URL.  In CI the hostname does not resolve, so we expect either a
+    /// successful build (if Docker DNS happens to hand it back) or a DNS
+    /// `ParseError` — what we *must not* see is a `PrivateRange` /
+    /// `Loopback` / `LinkLocal` rejection on a resolved RFC-1918 IP.
+    #[tokio::test]
+    async fn internal_service_allowlist_permits_sera_core_default() {
+        let result = build_internal_service_client("http://sera-core:3000").await;
+        match result {
+            Ok(_) => {}
+            Err(SafeClientError::Ssrf {
+                reason: SsrfError::ParseError { .. },
+                ..
+            }) => {}
+            Err(other) => panic!(
+                "default sera-core URL must not be rejected for being private/loopback/link-local; got {other:?}"
+            ),
+        }
+    }
+
+    /// Allowed default: `http://sera-core:3001` (the alternate core port —
+    /// see `rust/proxy/nginx.conf`).  Same expectation as the 3000 case.
+    #[tokio::test]
+    async fn internal_service_allowlist_permits_sera_core_3001() {
+        let result = build_internal_service_client("http://sera-core:3001").await;
+        match result {
+            Ok(_) => {}
+            Err(SafeClientError::Ssrf {
+                reason: SsrfError::ParseError { .. },
+                ..
+            }) => {}
+            Err(other) => panic!(
+                "default sera-core:3001 must not be rejected for being private/loopback/link-local; got {other:?}"
+            ),
+        }
+    }
+
+    /// Allowed default: Centrifugo internal hostname.
+    #[tokio::test]
+    async fn internal_service_allowlist_permits_centrifugo() {
+        let result = build_internal_service_client("http://centrifugo:8000").await;
+        match result {
+            Ok(_) => {}
+            Err(SafeClientError::Ssrf {
+                reason: SsrfError::ParseError { .. },
+                ..
+            }) => {}
+            Err(other) => panic!(
+                "default centrifugo URL must not be rejected for being private/loopback/link-local; got {other:?}"
+            ),
+        }
+    }
+
+    /// Unsafe override: even through the relaxed entrypoint, a literal IP in
+    /// RFC-1918 space is *not* on the hostname allowlist, so it falls back to
+    /// the strict path and is rejected.
+    #[tokio::test]
+    async fn internal_service_rejects_rfc1918_literal_override() {
+        let err = build_internal_service_client("http://10.0.0.5:3000")
+            .await
+            .expect_err("RFC-1918 literal must be rejected even via the internal entrypoint");
+        assert!(
+            matches!(err, SafeClientError::Ssrf { ref reason, .. } if *reason == SsrfError::PrivateRange),
+            "got {err:?}"
+        );
+    }
+
+    /// Unsafe override: cloud metadata is *always* dangerous.  Even if an
+    /// attacker rewrote `SERA_CORE_URL` to point at the IMDS literal, the
+    /// strict-fallback path rejects the off-allowlist hostname/IP.
+    #[tokio::test]
+    async fn internal_service_rejects_cloud_metadata_override() {
+        let err = build_internal_service_client("http://169.254.169.254/")
+            .await
+            .expect_err("cloud metadata must be rejected even via the internal entrypoint");
+        assert!(
+            matches!(err, SafeClientError::Ssrf { ref reason, .. } if *reason == SsrfError::CloudMetadata),
+            "got {err:?}"
+        );
+    }
+
+    /// Unsafe override: an off-allowlist hostname that resolves to loopback
+    /// (`localhost`) is rejected via the strict-fallback path.
+    #[tokio::test]
+    async fn internal_service_rejects_localhost_override() {
+        let err = build_internal_service_client("http://localhost:3000/")
+            .await
+            .expect_err("off-allowlist hostname resolving to loopback must be rejected");
+        assert!(
+            matches!(err, SafeClientError::Ssrf { .. }),
+            "got {err:?}"
+        );
+    }
+
+    /// reject_always_dangerous: a trusted hostname that *resolves to* IMDS
+    /// is still blocked.  We exercise the helper directly with a synthetic
+    /// `SocketAddr` rather than relying on DNS to return 169.254.169.254.
+    #[test]
+    fn reject_always_dangerous_blocks_imds_v4() {
+        let addr: SocketAddr = "169.254.169.254:80".parse().unwrap();
+        let err = reject_always_dangerous("sera-core", &addr)
+            .expect_err("IMDS literal must be rejected");
+        assert!(
+            matches!(err, SafeClientError::Ssrf { ref reason, .. } if *reason == SsrfError::CloudMetadata),
+            "got {err:?}"
+        );
+    }
+
+    /// reject_always_dangerous: 0.0.0.0 connects to loopback on Linux, so
+    /// it stays blocked even on the trusted-hostname path.
+    #[test]
+    fn reject_always_dangerous_blocks_unspecified_v4() {
+        let addr: SocketAddr = "0.0.0.0:80".parse().unwrap();
+        let err = reject_always_dangerous("sera-core", &addr)
+            .expect_err("0.0.0.0 must be rejected");
+        assert!(
+            matches!(err, SafeClientError::Ssrf { ref reason, .. } if *reason == SsrfError::Unspecified),
+            "got {err:?}"
+        );
+    }
+
+    /// reject_always_dangerous: an RFC-1918 address (e.g. the Docker DNS
+    /// answer for `sera-core`) is *allowed* — that's the whole point of the
+    /// relaxed path.
+    #[test]
+    fn reject_always_dangerous_allows_docker_rfc1918() {
+        let addr: SocketAddr = "172.18.0.5:3000".parse().unwrap();
+        reject_always_dangerous("sera-core", &addr)
+            .expect("RFC-1918 must be allowed on the trusted-hostname path");
+    }
+
+    /// `internal_trusted_hosts` returns the defaults plus any
+    /// `SERA_INTERNAL_TRUSTED_HOSTS` extras, lowercased.  Reads an env var,
+    /// so we serialise against other env-touching tests in the file with a
+    /// process-wide mutex.
+    #[test]
+    fn internal_trusted_hosts_includes_defaults() {
+        let hosts = internal_trusted_hosts();
+        assert!(hosts.iter().any(|h| h == "sera-core"));
+        assert!(hosts.iter().any(|h| h == "centrifugo"));
+        assert!(hosts.iter().any(|h| h == "sera-centrifugo"));
     }
 }

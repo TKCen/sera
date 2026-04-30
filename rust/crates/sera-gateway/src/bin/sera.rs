@@ -1075,6 +1075,20 @@ impl AgentTurnTransport for RuntimeChildSupervisor {
 
 // ── Shared state ────────────────────────────────────────────────────────────
 
+/// Per-session cancellation registry entry (sera-bsem + sera-mplr).
+///
+/// Holds the in-flight turn's `CancellationToken` plus a flag that lets
+/// `chat_handler` distinguish a user-driven `POST /api/chat/cancel`
+/// (sera-mplr) from the operator-driven ROLLBACK / admin-cancel paths.
+/// `cancel_http_chat_session` sets `client_cancelled = true` before firing
+/// the token; `deregister_cancellation_token` reads it on cleanup so the
+/// chat handler can short-circuit to a real cancelled outcome instead of
+/// persisting the rollback-class synthetic reply.
+struct CancelHandle {
+    token: CancellationToken,
+    client_cancelled: std::sync::atomic::AtomicBool,
+}
+
 struct AppState {
     db: Mutex<SqliteDb>,
     manifests: ManifestSet,
@@ -1157,7 +1171,7 @@ struct AppState {
     /// `HashMap` insert/remove/drain with no awaits, and the admin socket's
     /// `on_rollback` callback is a synchronous `Fn()` that would panic if it
     /// called `tokio::sync::Mutex::blocking_lock` from inside the runtime.
-    active_cancellation_tokens: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
+    active_cancellation_tokens: Arc<std::sync::Mutex<std::collections::HashMap<String, CancelHandle>>>,
     /// Submission envelope store — every agent-facing route appends a
     /// Submission here before calling the underlying service (sera-r1g8).
     /// Production boot uses SqliteGitSessionStore (sera-4i4i); tests keep
@@ -1215,11 +1229,15 @@ impl AppState {
     /// contract.
     fn register_cancellation_token(&self, session_key: &str) -> CancellationToken {
         let token = CancellationToken::new();
+        let handle = CancelHandle {
+            token: token.clone(),
+            client_cancelled: std::sync::atomic::AtomicBool::new(false),
+        };
         let mut map = self
             .active_cancellation_tokens
             .lock()
             .expect("active_cancellation_tokens mutex poisoned");
-        map.insert(session_key.to_string(), token.clone());
+        map.insert(session_key.to_string(), handle);
         token
     }
 
@@ -1229,12 +1247,20 @@ impl AppState {
     /// timeout, harness error, and cancellation — so the map does not leak
     /// entries. Missing keys are silently ignored (e.g. when the ROLLBACK path
     /// has already cleared the map).
-    fn deregister_cancellation_token(&self, session_key: &str) {
+    ///
+    /// Returns `true` when the cancellation was driven by a user-initiated
+    /// `POST /api/chat/cancel` (sera-mplr), so `chat_handler` can return a
+    /// distinct cancelled outcome instead of persisting the rollback-class
+    /// synthetic reply. Operator-driven paths (ROLLBACK, admin
+    /// `cancel_session`) and normal completion all return `false`.
+    fn deregister_cancellation_token(&self, session_key: &str) -> bool {
         let mut map = self
             .active_cancellation_tokens
             .lock()
             .expect("active_cancellation_tokens mutex poisoned");
-        map.remove(session_key);
+        map.remove(session_key)
+            .map(|h| h.client_cancelled.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(false)
     }
 
     /// Cancel every in-flight turn/steer and clear the registry (sera-bsem).
@@ -1250,8 +1276,8 @@ impl AppState {
             .lock()
             .expect("active_cancellation_tokens mutex poisoned");
         let count = map.len();
-        for (_key, token) in map.drain() {
-            token.cancel();
+        for (_key, handle) in map.drain() {
+            handle.token.cancel();
         }
         count
     }
@@ -1259,29 +1285,33 @@ impl AppState {
     /// Cancel the in-flight HTTP `/api/chat` turn for `session_id` (sera-mplr).
     ///
     /// Matches keys formatted as `http:{agent_name}:{session_id}` (see
-    /// `chat_handler` line ~1794). Returns `true` when a token was found,
-    /// cancelled, and removed from the registry; `false` when no active HTTP
-    /// turn is registered for this session. The Discord transport's
-    /// `discord:{agent}:{channel_id}` keys are deliberately not matched —
-    /// `/api/chat/cancel` is the HTTP-surface cancel route.
+    /// `chat_handler` line ~1794). Returns `true` when a matching handle was
+    /// found, marked as client-cancelled, and its token fired; `false` when
+    /// no active HTTP turn is registered for this session. The Discord
+    /// transport's `discord:{agent}:{channel_id}` keys are deliberately not
+    /// matched — `/api/chat/cancel` is the HTTP-surface cancel route.
+    ///
+    /// The handle is **not** removed from the map here — the chat handler's
+    /// `deregister_cancellation_token` call after `execute_turn` returns is
+    /// the cleanup point, and reading `client_cancelled` there is what tells
+    /// it to return a real cancelled outcome instead of the rollback-class
+    /// synthetic reply.
     fn cancel_http_chat_session(&self, session_id: &str) -> bool {
         let suffix = format!(":{session_id}");
-        let mut map = self
+        let map = self
             .active_cancellation_tokens
             .lock()
             .expect("active_cancellation_tokens mutex poisoned");
-        let key = map
-            .keys()
-            .find(|k| k.starts_with("http:") && k.ends_with(&suffix))
-            .cloned();
-        match key {
-            Some(k) => {
-                if let Some(token) = map.remove(&k) {
-                    token.cancel();
-                    true
-                } else {
-                    false
-                }
+        match map
+            .iter()
+            .find(|(k, _)| k.starts_with("http:") && k.ends_with(&suffix))
+        {
+            Some((_, handle)) => {
+                handle
+                    .client_cancelled
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                handle.token.cancel();
+                true
             }
             None => false,
         }
@@ -1357,8 +1387,8 @@ impl AdminAppState for AppState {
             .active_cancellation_tokens
             .lock()
             .expect("active_cancellation_tokens mutex poisoned");
-        if let Some(token) = map.remove(session_key) {
-            token.cancel();
+        if let Some(handle) = map.remove(session_key) {
+            handle.token.cancel();
             true
         } else {
             false
@@ -1673,6 +1703,14 @@ struct MvsTurnResult {
     reply: String,
     tool_events: Vec<ToolEvent>,
     usage: UsageInfo,
+    /// `true` when `execute_turn` / `execute_steer` returned via the
+    /// `tokio::select!` cancel arm rather than a success/error/timeout arm.
+    /// Combined with `AppState::deregister_cancellation_token`'s return value
+    /// in `chat_handler`, this distinguishes a user-driven `/api/chat/cancel`
+    /// (sera-mplr) from the rollback-class synthetic-reply path so the route
+    /// can return a real cancelled outcome instead of persisting the
+    /// `[sera] Runtime turn aborted` sentinel as transcript content.
+    cancelled: bool,
 }
 
 // ── Authentication ──────────────────────────────────────────────────────────
@@ -2077,7 +2115,7 @@ async fn chat_handler(
                             &cap_reg,
                         )
                         .await;
-                        state.deregister_cancellation_token(&session_key);
+                        let user_cancelled = state.deregister_cancellation_token(&session_key);
 
                         // Release the lane slot — the turn is complete even
                         // though we still need to stream the reply back out.
@@ -2086,6 +2124,30 @@ async fn chat_handler(
                         {
                             let mut lq = state.lane_queue.lock().await;
                             lq.complete_run(&session_key);
+                        }
+
+                        // sera-mplr: a `POST /api/chat/cancel` for this
+                        // session set `client_cancelled` and fired the cancel
+                        // arm. Emit a `cancelled` SSE event and end the stream
+                        // without persisting the synthetic "[sera] turn
+                        // aborted" reply as transcript content.
+                        if user_cancelled && result.cancelled {
+                            tracing::info!(
+                                session_id = %session_id,
+                                agent = %agent_name,
+                                session_key = %session_key,
+                                "Chat stream cancelled by client (POST /api/chat/cancel)"
+                            );
+                            let payload = serde_json::json!({
+                                "cancelled": true,
+                                "reason": "client_cancel",
+                                "session_id": session_id,
+                                "message_id": message_id,
+                            });
+                            let event = Event::default()
+                                .event("cancelled")
+                                .data(payload.to_string());
+                            return Some((Some(Ok(event)), StreamState::Done));
                         }
 
                         // sera-aepj: empty-reply guard mirrors the sync branch
@@ -2224,11 +2286,38 @@ async fn chat_handler(
             &cap_reg,
         )
         .await;
-        state.deregister_cancellation_token(&session_key);
+        let user_cancelled = state.deregister_cancellation_token(&session_key);
 
         // Release the lane slot now that the turn has completed. Mirrors the
         // `complete_run` call in the Discord message loop after `execute_turn`.
         release_lane(&state, &session_key).await;
+
+        // sera-mplr: a `POST /api/chat/cancel` for this session set
+        // `client_cancelled` and fired the cancel arm. Skip the
+        // empty-reply guard, transcript persist, and `response_sent` audit
+        // so the synthetic "[sera] turn aborted" reply doesn't pollute the
+        // transcript, and return a 499 client-closed outcome with a
+        // structured cancelled body. The race with a late cancel after a
+        // successful turn is excluded by `result.cancelled` — the
+        // `tokio::select!` cancel arm only sets it when it actually wins.
+        if user_cancelled && result.cancelled {
+            tracing::info!(
+                session_id = %session_id,
+                agent = %agent_name,
+                session_key = %session_key,
+                "Chat turn cancelled by client (POST /api/chat/cancel)"
+            );
+            return Ok((
+                StatusCode::from_u16(499)
+                    .expect("499 Client Closed Request is a valid status code"),
+                Json(serde_json::json!({
+                    "cancelled": true,
+                    "reason": "client_cancel",
+                    "session_id": session_id,
+                })),
+            )
+                .into_response());
+        }
 
         // Guard: an empty reply is a silent failure — the runtime returned
         // Ok(events) but produced no text. Log richly so the root cause can
@@ -2661,6 +2750,7 @@ async fn execute_turn(
                     completion_tokens: 0,
                     total_tokens: 0,
                 },
+                cancelled: true,
             }
         }
         res = tokio::time::timeout(timeout, transport.send_turn(messages, session_key)) => match res {
@@ -2675,6 +2765,7 @@ async fn execute_turn(
                     reply: events.response,
                     tool_events: filtered_events,
                     usage: events.usage,
+                    cancelled: false,
                 }
             }
             Ok(Err(e)) => {
@@ -2694,6 +2785,7 @@ async fn execute_turn(
                         completion_tokens: 0,
                         total_tokens: 0,
                     },
+                    cancelled: false,
                 }
             }
             Err(_elapsed) => {
@@ -2710,6 +2802,7 @@ async fn execute_turn(
                         completion_tokens: 0,
                         total_tokens: 0,
                     },
+                    cancelled: false,
                 }
             }
         }
@@ -2856,6 +2949,7 @@ async fn execute_steer(
                     completion_tokens: 0,
                     total_tokens: 0,
                 },
+                cancelled: true,
             }
         }
         res = tokio::time::timeout(timeout, transport.send_steer(items, session_key)) => match res {
@@ -2867,6 +2961,7 @@ async fn execute_steer(
                     completion_tokens: 0,
                     total_tokens: 0,
                 },
+                cancelled: false,
             },
             Ok(Err(e)) => {
                 tracing::error!(
@@ -2882,6 +2977,7 @@ async fn execute_steer(
                         completion_tokens: 0,
                         total_tokens: 0,
                     },
+                    cancelled: false,
                 }
             }
             Err(_elapsed) => {
@@ -2898,6 +2994,7 @@ async fn execute_steer(
                         completion_tokens: 0,
                         total_tokens: 0,
                     },
+                    cancelled: false,
                 }
             }
         }
@@ -7021,12 +7118,15 @@ spec:
         );
     }
 
-    /// sera-mplr: `AppState::cancel_http_chat_session` cancels the matching
-    /// `http:{agent}:{session_id}` token, removes it from the registry, and
-    /// returns `true`. Mirrors the cleanup path that `execute_turn` runs on
-    /// terminal states.
+    /// sera-mplr: `AppState::cancel_http_chat_session` marks the matching
+    /// `http:{agent}:{session_id}` handle as client-cancelled and fires its
+    /// token. The handle is **not** removed here — the chat handler's
+    /// `deregister_cancellation_token` call after `execute_turn` returns is
+    /// the cleanup point, and it is what reads `client_cancelled` to decide
+    /// whether to short-circuit with a real cancelled outcome (sera-mplr
+    /// Codex follow-up — distinct cancellation result path).
     #[tokio::test]
-    async fn cancel_http_chat_session_cancels_and_removes_matching_token() {
+    async fn cancel_http_chat_session_marks_handle_and_fires_token() {
         let state = test_state_async().await;
         let token = state.register_cancellation_token("http:sera:ses_abc123");
 
@@ -7034,9 +7134,58 @@ spec:
 
         assert!(cancelled, "must report a token was cancelled");
         assert!(token.is_cancelled(), "token must be cancelled");
+        // Entry stays in the map; chat_handler's deregister is the cleanup point.
+        assert!(
+            state
+                .active_cancellation_tokens
+                .lock()
+                .unwrap()
+                .contains_key("http:sera:ses_abc123")
+        );
+    }
+
+    /// sera-mplr: `deregister_cancellation_token` after a client cancel returns
+    /// `true` and removes the entry — this is the cleanup-after-terminal-state
+    /// path the chat handler keys off to short-circuit with a 499 cancelled
+    /// outcome instead of persisting the rollback-class synthetic reply.
+    #[tokio::test]
+    async fn deregister_after_client_cancel_returns_true_and_removes_entry() {
+        let state = test_state_async().await;
+        let _ = state.register_cancellation_token("http:sera:ses_abc123");
+        assert!(state.cancel_http_chat_session("ses_abc123"));
+
+        assert!(
+            state.deregister_cancellation_token("http:sera:ses_abc123"),
+            "deregister must report the cancel was client-driven"
+        );
         assert!(
             state.active_cancellation_tokens.lock().unwrap().is_empty(),
-            "registry must be drained of the cancelled entry"
+            "registry must be drained on deregister"
+        );
+    }
+
+    /// sera-mplr: `deregister_cancellation_token` returns `false` when the
+    /// turn ran to completion without any cancel — chat_handler then takes
+    /// the existing transcript-persist path.
+    #[tokio::test]
+    async fn deregister_after_normal_completion_returns_false() {
+        let state = test_state_async().await;
+        let _ = state.register_cancellation_token("http:sera:ses_abc123");
+        assert!(!state.deregister_cancellation_token("http:sera:ses_abc123"));
+    }
+
+    /// sera-mplr: `deregister_cancellation_token` returns `false` after a
+    /// rollback-style cancel (admin ROLLBACK / `cancel_all_in_flight`). That
+    /// way chat_handler keeps its existing synthetic-reply contract for
+    /// operator-driven cancels — only `/api/chat/cancel` flips the flag.
+    #[tokio::test]
+    async fn deregister_after_rollback_returns_false() {
+        let state = test_state_async().await;
+        let _ = state.register_cancellation_token("http:sera:ses_abc123");
+        let _ = state.cancel_all_in_flight();
+        assert!(
+            !state.deregister_cancellation_token("http:sera:ses_abc123"),
+            "rollback path must not look like a client cancel"
         );
     }
 
@@ -7064,9 +7213,10 @@ spec:
             !bystander.is_cancelled(),
             "bystander session must not be cancelled"
         );
+        // Both entries remain in the map; deregister is the cleanup point.
         let map = state.active_cancellation_tokens.lock().unwrap();
         assert!(map.contains_key("http:sera:ses_bystander"));
-        assert!(!map.contains_key("http:sera:ses_target"));
+        assert!(map.contains_key("http:sera:ses_target"));
     }
 
     /// sera-mplr: `/api/chat/cancel` is the HTTP-surface cancel route — it
@@ -7141,6 +7291,125 @@ spec:
         assert_eq!(json["error"], "not_found");
         assert_eq!(json["reason"], "no_active_turn");
         assert_eq!(json["session_id"], "ses_nope");
+    }
+
+    /// sera-mplr Codex follow-up: when a `/api/chat` turn is cancelled by a
+    /// concurrent `/api/chat/cancel`, the chat handler must:
+    ///   1. return a 499 Client Closed Request with a `{cancelled, reason,
+    ///      session_id}` body — not 200 with the synthetic
+    ///      `[sera] Runtime turn aborted by KillSwitch ROLLBACK` reply, and
+    ///   2. **not** persist the synthetic reply as an assistant transcript
+    ///      row (so cancellations don't pollute the conversation history).
+    ///
+    /// Uses the existing `spawn_mock_hang` harness pattern (see the
+    /// `readiness_*` tests above) to keep `execute_turn` blocked long enough
+    /// for the cancel to race in.
+    #[tokio::test]
+    async fn chat_handler_returns_499_and_skips_transcript_when_user_cancels_mid_turn() {
+        let mut state = test_state_async().await;
+        let hanging_sup: Arc<dyn AgentTurnTransport> =
+            RuntimeChildSupervisor::start_with_factory("sera", || async {
+                StdioHarness::spawn_mock_hang().await
+            })
+            .await
+            .unwrap();
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert("sera".to_string(), hanging_sup);
+        let app = build_router(Arc::clone(&state));
+
+        // Kick off the chat request in the background — it will hang inside
+        // `execute_turn` until we cancel it.
+        let chat_app = app.clone();
+        let chat_handle = tokio::spawn(async move {
+            chat_app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/chat")
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "message": "hello" }).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        });
+
+        // Wait for `chat_handler` to register its cancellation token, then
+        // extract the session_id from the registry key
+        // (`http:{agent}:{session_id}`).
+        let session_key = {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                if let Some(key) = state
+                    .active_cancellation_tokens
+                    .lock()
+                    .unwrap()
+                    .keys()
+                    .find(|k| k.starts_with("http:sera:"))
+                    .cloned()
+                {
+                    break key;
+                }
+                if std::time::Instant::now() > deadline {
+                    panic!("chat_handler never registered a cancellation token");
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        };
+        let session_id = session_key
+            .splitn(3, ':')
+            .nth(2)
+            .expect("session_id segment")
+            .to_string();
+
+        let cancel_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat/cancel")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "session_id": session_id }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cancel_response.status(), StatusCode::NO_CONTENT);
+
+        let chat_response = chat_handle.await.expect("chat_handler task joined");
+        assert_eq!(
+            chat_response.status(),
+            StatusCode::from_u16(499).unwrap(),
+            "chat_handler must return 499 Client Closed Request on user cancel"
+        );
+        let body = axum::body::to_bytes(chat_response.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["cancelled"], true);
+        assert_eq!(json["reason"], "client_cancel");
+        assert_eq!(json["session_id"], session_id);
+
+        // The synthetic "[sera] Runtime turn aborted ..." reply must NOT be
+        // persisted as an assistant transcript row.
+        let assistant_rows: Vec<_> = {
+            let db = state.db.lock().await;
+            db.get_transcript(&session_id)
+                .expect("get transcript")
+                .into_iter()
+                .filter(|r| r.role == "assistant")
+                .collect()
+        };
+        assert!(
+            assistant_rows.is_empty(),
+            "no assistant transcript row should be persisted on user cancel; got: {assistant_rows:?}"
+        );
     }
 
     /// sera-mplr route-level: cancelling one session via the endpoint must

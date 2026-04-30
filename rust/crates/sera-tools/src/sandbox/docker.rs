@@ -29,7 +29,10 @@ use uuid::Uuid;
 
 use sera_types::sandbox::SourceMount;
 
-use super::{ExecResult, MountSpec, SandboxConfig, SandboxError, SandboxHandle, SandboxProvider};
+use super::{
+    EgressBridgeConfig, EgressEndpoint, EgressManifest, EgressMode, ExecResult, MountSpec,
+    SandboxConfig, SandboxError, SandboxHandle, SandboxProvider,
+};
 
 /// Default per-exec timeout (60 s).
 const DEFAULT_EXEC_TIMEOUT: Duration = Duration::from_secs(60);
@@ -58,6 +61,91 @@ struct StoredConfig {
     env: HashMap<String, String>,
     source_binds: Vec<String>,
     additional_binds: Vec<String>,
+    egress: Option<EgressManifest>,
+    egress_bridge: Option<EgressBridgeConfig>,
+}
+
+/// Translate an [`EgressManifest`] into the Docker argv that enforces it.
+///
+/// Returns:
+/// - `Ok(vec![])` when egress is `Disabled` or `AuditOnly` (regardless of
+///   whether a bridge is configured). Per the [`EgressMode::AuditOnly`]
+///   contract — *log violations but do not block* — the Docker provider
+///   never attaches the sandbox to the egress bridge in audit mode; doing
+///   so would silently restrict outbound traffic via Docker's network
+///   isolation and contradict the migration-ramp semantics. Audit logging
+///   is the gateway proxy's responsibility.
+/// - `Err(SandboxError::PolicyViolation)` when `Strict` is requested without a
+///   bridge — fail-closed.
+/// - On `Strict` with a bridge: `--network=<name>`,
+///   `--add-host=inference.local:<gateway>`, `--cap-drop=ALL`,
+///   `--security-opt=no-new-privileges:true` in that order.
+///
+/// `Domain` / `Cidr` entries in `egress.allowed` are not yet enforced by the
+/// Docker provider; under `Strict` they emit a warn log and fall through to
+/// the strict bridge (so unlisted hosts remain unreachable — the safer
+/// failure mode).
+fn build_egress_args(
+    egress: &EgressManifest,
+    bridge: Option<&EgressBridgeConfig>,
+) -> Result<Vec<String>, SandboxError> {
+    match egress.mode {
+        EgressMode::Disabled => Ok(vec![]),
+        EgressMode::AuditOnly => {
+            tracing::info!(
+                target: "sera_tools::sandbox::egress",
+                bridge_configured = bridge.is_some(),
+                "egress audit-only: no enforcement applied at the Docker \
+                 provider; gateway proxy is responsible for recording \
+                 would-have-blocked calls",
+            );
+            Ok(vec![])
+        }
+        EgressMode::Strict => build_strict_egress_args(egress, bridge),
+    }
+}
+
+fn build_strict_egress_args(
+    egress: &EgressManifest,
+    bridge: Option<&EgressBridgeConfig>,
+) -> Result<Vec<String>, SandboxError> {
+    for endpoint in &egress.allowed {
+        match endpoint {
+            EgressEndpoint::InferenceLocal => {}
+            EgressEndpoint::Domain { name } => {
+                tracing::warn!(
+                    target: "sera_tools::sandbox::egress",
+                    domain = %name,
+                    "domain egress not enforced by Docker provider yet; \
+                     traffic will be blocked by the strict bridge",
+                );
+            }
+            EgressEndpoint::Cidr { range } => {
+                tracing::warn!(
+                    target: "sera_tools::sandbox::egress",
+                    cidr = %range,
+                    "cidr egress not enforced by Docker provider yet; \
+                     traffic will be blocked by the strict bridge",
+                );
+            }
+        }
+    }
+
+    let bridge = bridge.ok_or_else(|| SandboxError::PolicyViolation {
+        reason: "egress mode 'strict' requires an egress_bridge but none \
+                 was provisioned. To run this sandboxed agent: (1) provision \
+                 the sera-egress bridge before launching this sandbox, or \
+                 (2) set spec.egress.mode = 'disabled' in the agent template \
+                 (compliance opt-out)."
+            .to_string(),
+    })?;
+
+    Ok(vec![
+        format!("--network={}", bridge.network_name),
+        format!("--add-host=inference.local:{}", bridge.gateway_target),
+        "--cap-drop=ALL".to_string(),
+        "--security-opt=no-new-privileges:true".to_string(),
+    ])
 }
 
 impl DockerSandboxProvider {
@@ -145,6 +233,8 @@ impl SandboxProvider for DockerSandboxProvider {
             env: config.env.clone(),
             source_binds,
             additional_binds,
+            egress: config.egress.clone(),
+            egress_bridge: config.egress_bridge.clone(),
         };
 
         let id = format!("sera-sbx-{}", Uuid::new_v4());
@@ -169,6 +259,12 @@ impl SandboxProvider for DockerSandboxProvider {
 
         let mut cmd = Command::new(&self.docker_bin);
         cmd.arg("run").arg("--rm").arg("-i");
+
+        if let Some(egress) = &stored.egress {
+            for arg in build_egress_args(egress, stored.egress_bridge.as_ref())? {
+                cmd.arg(arg);
+            }
+        }
 
         // Merge env: stored (from create) first, per-exec overrides second.
         for (k, v) in stored.env.iter().chain(env.iter()) {
@@ -454,6 +550,161 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, SandboxError::ExecFailed { .. }));
+    }
+
+    fn strict_inference_local_manifest() -> EgressManifest {
+        EgressManifest {
+            allowed: vec![EgressEndpoint::InferenceLocal],
+            mode: EgressMode::Strict,
+        }
+    }
+
+    fn sample_bridge() -> EgressBridgeConfig {
+        EgressBridgeConfig {
+            network_name: "sera-egress".to_string(),
+            gateway_target: "172.18.0.2".to_string(),
+        }
+    }
+
+    #[test]
+    fn build_egress_args_strict_with_bridge() {
+        let manifest = strict_inference_local_manifest();
+        let bridge = sample_bridge();
+        let args = build_egress_args(&manifest, Some(&bridge)).expect("strict + bridge");
+        assert_eq!(
+            args,
+            vec![
+                "--network=sera-egress".to_string(),
+                "--add-host=inference.local:172.18.0.2".to_string(),
+                "--cap-drop=ALL".to_string(),
+                "--security-opt=no-new-privileges:true".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_egress_args_strict_without_bridge_fails_closed() {
+        let manifest = strict_inference_local_manifest();
+        let err = build_egress_args(&manifest, None).unwrap_err();
+        match err {
+            SandboxError::PolicyViolation { reason } => {
+                assert!(
+                    reason.contains("egress_bridge"),
+                    "reason should mention egress_bridge: {reason}"
+                );
+            }
+            other => panic!("expected PolicyViolation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_egress_args_disabled_returns_empty() {
+        let manifest = EgressManifest {
+            allowed: vec![],
+            mode: EgressMode::Disabled,
+        };
+        let args = build_egress_args(&manifest, None).expect("disabled");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn build_egress_args_audit_only_without_bridge_fails_open() {
+        let manifest = EgressManifest {
+            allowed: vec![],
+            mode: EgressMode::AuditOnly,
+        };
+        let args = build_egress_args(&manifest, None).expect("audit-only fails open");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn build_egress_args_audit_only_with_bridge_does_not_enforce() {
+        // AuditOnly contract: "Log violations but do not block." Even when a
+        // bridge is provisioned, the Docker provider must not attach the
+        // sandbox to it — doing so would silently block outbound traffic via
+        // network isolation. Audit logging is the gateway proxy's job.
+        let manifest = EgressManifest {
+            allowed: vec![EgressEndpoint::InferenceLocal],
+            mode: EgressMode::AuditOnly,
+        };
+        let bridge = sample_bridge();
+        let args = build_egress_args(&manifest, Some(&bridge)).expect("audit-only + bridge");
+        assert!(
+            args.is_empty(),
+            "AuditOnly must not emit enforcement argv even with a bridge; got: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_egress_args_domain_and_cidr_fall_through_to_strict_bridge() {
+        let manifest = EgressManifest {
+            allowed: vec![
+                EgressEndpoint::InferenceLocal,
+                EgressEndpoint::Domain {
+                    name: "api.github.com".to_string(),
+                },
+                EgressEndpoint::Cidr {
+                    range: "10.0.0.0/8".to_string(),
+                },
+            ],
+            mode: EgressMode::Strict,
+        };
+        let bridge = sample_bridge();
+        let args = build_egress_args(&manifest, Some(&bridge)).expect("strict + extras + bridge");
+        assert_eq!(
+            args,
+            vec![
+                "--network=sera-egress".to_string(),
+                "--add-host=inference.local:172.18.0.2".to_string(),
+                "--cap-drop=ALL".to_string(),
+                "--security-opt=no-new-privileges:true".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_with_strict_egress_and_no_bridge_executes_fail_closed() {
+        let Ok(provider) = DockerSandboxProvider::new() else {
+            eprintln!("docker client init failed; skipping test");
+            return;
+        };
+        let config = SandboxConfig {
+            image: Some("alpine:3".to_string()),
+            egress: Some(strict_inference_local_manifest()),
+            egress_bridge: None,
+            ..Default::default()
+        };
+        let handle = provider.create(&config).await.expect("create");
+        let err = provider
+            .execute(&handle, "echo x", &HashMap::new())
+            .await
+            .unwrap_err();
+        match err {
+            SandboxError::PolicyViolation { reason } => {
+                assert!(reason.contains("egress_bridge"), "reason: {reason}");
+            }
+            other => panic!("expected PolicyViolation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_stores_egress_and_bridge() {
+        let Ok(provider) = DockerSandboxProvider::new() else {
+            eprintln!("docker client init failed; skipping test");
+            return;
+        };
+        let bridge = sample_bridge();
+        let config = SandboxConfig {
+            image: Some("alpine:3".to_string()),
+            egress: Some(strict_inference_local_manifest()),
+            egress_bridge: Some(bridge.clone()),
+            ..Default::default()
+        };
+        let handle = provider.create(&config).await.expect("create");
+        let guard = provider.configs.lock().await;
+        let stored = guard.get(&handle.0).expect("stored config");
+        assert_eq!(stored.egress.as_ref().unwrap().mode, EgressMode::Strict);
+        assert_eq!(stored.egress_bridge.as_ref().unwrap(), &bridge);
     }
 
     #[tokio::test]

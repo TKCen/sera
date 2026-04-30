@@ -14,6 +14,7 @@ pub use policy::{
     DockerSandboxPolicy, FileSystemSandboxPolicy, L7Protocol, L7Rule, NetworkEndpoint,
     NetworkPolicyRule, NetworkSandboxPolicy, PolicyAction, PolicyStatus, SandboxPolicy,
 };
+pub use sera_types::sandbox::{EgressEndpoint, EgressManifest, EgressMode};
 
 use std::collections::HashMap;
 
@@ -22,6 +23,20 @@ use sera_types::sandbox::SourceMount;
 use thiserror::Error;
 
 pub use policy::SandboxPolicy as SandboxPolicyType;
+
+/// Runtime location of the egress bridge that sandbox containers attach to
+/// when an [`EgressManifest`] is enforced.
+///
+/// `network_name` is the user-defined Docker bridge (e.g. `sera-egress`) and
+/// `gateway_target` is the IP or hostname the gateway listens on for
+/// `inference.local` traffic. Both are resolved by the bridge provisioning
+/// layer (a follow-up PR) and not persisted — WSL2 changes bridge IPs across
+/// daemon restarts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EgressBridgeConfig {
+    pub network_name: String,
+    pub gateway_target: String,
+}
 
 /// Opaque handle to a running sandbox.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -57,6 +72,15 @@ pub struct SandboxConfig {
     /// Additional bind mounts requested by the caller (ephemeral agents etc.).
     /// Appended after [`Self::sources`] into the Docker `-v` flag list.
     pub additional_mounts: Vec<MountSpec>,
+    /// Declared egress policy. When `Some(.)` and `mode != Disabled`, the
+    /// Docker provider translates this into `--network` / `--add-host` /
+    /// cap-drop argv. When `None`, legacy default-bridge behaviour is
+    /// preserved (no enforcement).
+    pub egress: Option<EgressManifest>,
+    /// Bridge configuration consumed when [`Self::egress`] is enforced.
+    /// Required for `EgressMode::Strict`; missing-bridge under Strict is
+    /// fail-closed at sandbox launch.
+    pub egress_bridge: Option<EgressBridgeConfig>,
 }
 
 /// Output from executing a command inside a sandbox.

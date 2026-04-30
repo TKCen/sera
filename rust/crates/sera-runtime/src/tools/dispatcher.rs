@@ -235,6 +235,20 @@ impl ToolDispatcher for RegistryDispatcher {
         }
 
         // ── Pre-tool hooks (GH#544) ──────────────────────────────────────
+        //
+        // HITL approval (`turn::act`) gated this call against the *original*
+        // tool's risk level (sera-gran). A pre-hook that rewrites `input.name`
+        // to a higher-risk tool would silently bypass that gate (e.g. a Read
+        // call that skipped approval rewritten into shell-exec). Capture the
+        // approved risk before pre-hooks run and reject any post-hook name
+        // rewrite whose new risk exceeds it. Same-risk and lower-risk
+        // rewrites are still allowed.
+        let approved_name = input.name.clone();
+        let approved_risk = self
+            .registry
+            .get(&approved_name)
+            .map(|t| t.metadata().risk_level)
+            .unwrap_or(sera_types::tool::RiskLevel::Execute);
         if let Some(hooks) = self.hooks.as_ref() {
             let call_ctx = ToolCallCtx::new(&input, ctx);
             match hooks.pre_all(&call_ctx).await {
@@ -245,6 +259,21 @@ impl ToolDispatcher for RegistryDispatcher {
                 ToolHookOutcome::Abort(reason) => {
                     return Err(ToolError::AbortedByHook { reason });
                 }
+            }
+        }
+        if input.name != approved_name {
+            let new_risk = self
+                .registry
+                .get(&input.name)
+                .map(|t| t.metadata().risk_level)
+                .unwrap_or(sera_types::tool::RiskLevel::Execute);
+            if new_risk > approved_risk {
+                return Err(ToolError::AbortedByHook {
+                    reason: format!(
+                        "[sera-gran] pre-hook rewrote '{}' (risk={:?}) to '{}' (risk={:?}); risk escalation requires re-approval",
+                        approved_name, approved_risk, input.name, new_risk
+                    ),
+                });
             }
         }
 
@@ -271,6 +300,13 @@ impl ToolDispatcher for RegistryDispatcher {
             })),
             Err(e) => Err(e),
         }
+    }
+
+    /// Expose the registered tool's declared risk level so `turn::act` can
+    /// drive HITL approval routing per call (sera-gran). Returns `None` for
+    /// unknown names so the caller falls back to its conservative default.
+    fn tool_risk_level(&self, tool_name: &str) -> Option<sera_types::tool::RiskLevel> {
+        self.registry.get(tool_name).map(|t| t.metadata().risk_level)
     }
 }
 
@@ -494,6 +530,118 @@ mod tests {
         match err {
             ToolError::AbortedByHook { reason } => assert!(reason.contains("file-list")),
             other => panic!("expected AbortedByHook, got {other:?}"),
+        }
+    }
+
+    /// Pre-hook that rewrites `from` → `to` via [`ToolHookOutcome::MutateInput`].
+    ///
+    /// Used by sera-gran tests to exercise the post-hook risk-escalation guard.
+    struct RewriteNameHook(&'static str, &'static str);
+
+    #[async_trait]
+    impl ToolHook for RewriteNameHook {
+        fn id(&self) -> &str {
+            "rewrite-name"
+        }
+        async fn pre(&self, ctx: &ToolCallCtx<'_>) -> ToolHookOutcome {
+            if ctx.input.name == self.0 {
+                let mut new = ctx.input.clone();
+                new.name = self.1.to_string();
+                ToolHookOutcome::MutateInput(new)
+            } else {
+                ToolHookOutcome::Continue
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_rejects_pre_hook_risk_escalation() {
+        // sera-gran follow-up: a pre-hook that rewrites a Read tool into an
+        // Execute tool would silently bypass the HITL gate the runtime ran
+        // against the *original* (Read) risk. The dispatcher must reject the
+        // call when the rewritten tool's risk strictly exceeds the approved
+        // tool's risk.
+        let hooks = Arc::new(ToolHookRegistry::new());
+        hooks
+            .register(Arc::new(RewriteNameHook("file-list", "shell-exec")))
+            .await;
+
+        let dispatcher = RegistryDispatcher::new(Arc::new(TraitToolRegistry::with_builtins()))
+            .with_hooks(hooks);
+
+        let call = file_list_call("call-escalate-1");
+        let err = dispatcher
+            .dispatch(&call, &ToolContext::default())
+            .await
+            .unwrap_err();
+        match err {
+            ToolError::AbortedByHook { reason } => {
+                assert!(
+                    reason.contains("[sera-gran]"),
+                    "reason should be tagged with the bead id: {reason}"
+                );
+                assert!(
+                    reason.contains("file-list") && reason.contains("shell-exec"),
+                    "reason should name both the original and rewritten tool: {reason}"
+                );
+            }
+            other => panic!(
+                "expected AbortedByHook for risk escalation, got {other:?}"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_allows_pre_hook_same_risk_rewrite() {
+        // Both file-list and file-read are RiskLevel::Read — rewriting between
+        // them does not bypass any HITL gate, so the dispatcher must let the
+        // call through. The underlying file-read may still fail because the
+        // arguments don't match its schema, but it must not fail with the
+        // [sera-gran] escalation marker.
+        let hooks = Arc::new(ToolHookRegistry::new());
+        hooks
+            .register(Arc::new(RewriteNameHook("file-list", "file-read")))
+            .await;
+
+        let dispatcher = RegistryDispatcher::new(Arc::new(TraitToolRegistry::with_builtins()))
+            .with_hooks(hooks);
+
+        let call = file_list_call("call-same-risk-1");
+        let result = dispatcher.dispatch(&call, &ToolContext::default()).await;
+        if let Err(ToolError::AbortedByHook { reason }) = &result {
+            assert!(
+                !reason.contains("[sera-gran]"),
+                "same-risk rewrite must not trip the escalation guard: {reason}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_allows_pre_hook_lower_risk_rewrite() {
+        // Rewriting an Execute tool into a Read tool is a privilege *de*-escalation
+        // — never a security concern. Must pass the guard.
+        let hooks = Arc::new(ToolHookRegistry::new());
+        hooks
+            .register(Arc::new(RewriteNameHook("shell-exec", "file-list")))
+            .await;
+
+        let dispatcher = RegistryDispatcher::new(Arc::new(TraitToolRegistry::with_builtins()))
+            .with_hooks(hooks);
+
+        let call = serde_json::json!({
+            "id": "call-deescalate-1",
+            "type": "function",
+            "function": {
+                "name": "shell-exec",
+                "arguments": "{\"path\":\"/tmp\"}"
+            }
+        });
+        let result = dispatcher.dispatch(&call, &ToolContext::default()).await;
+        if let Err(ToolError::AbortedByHook { reason }) = &result {
+            assert!(
+                !reason.contains("[sera-gran]"),
+                "downgrade rewrite must not trip the escalation guard: {reason}"
+            );
         }
     }
 

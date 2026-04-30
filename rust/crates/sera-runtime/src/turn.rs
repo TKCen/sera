@@ -153,6 +153,20 @@ pub trait ToolDispatcher: Send + Sync {
         tool_call: &serde_json::Value,
         ctx: &ToolContext,
     ) -> Result<serde_json::Value, ToolError>;
+
+    /// Return the static [`RiskLevel`](sera_types::tool::RiskLevel) declared by
+    /// the registered tool, if any.
+    ///
+    /// Used by [`act`] to drive HITL approval routing per call instead of
+    /// hard-coding a single risk for every tool (sera-gran). Dispatchers
+    /// backed by a `Tool` registry should return
+    /// `Some(metadata().risk_level)`; dispatchers without a registry view
+    /// (mocks, ad-hoc test stubs) keep the default `None`, in which case
+    /// [`act`] falls back to [`RiskLevel::Execute`](sera_types::tool::RiskLevel)
+    /// — the prior, conservative behaviour.
+    fn tool_risk_level(&self, _tool_name: &str) -> Option<sera_types::tool::RiskLevel> {
+        None
+    }
 }
 
 // ── Turn context ─────────────────────────────────────────────────────────────
@@ -460,8 +474,13 @@ pub async fn act(
             .and_then(|n| n.as_str())
             .unwrap_or("unknown");
 
-        // Default to Execute risk for tool calls (can be refined later with per-tool risk)
-        let risk_level = sera_types::tool::RiskLevel::Execute;
+        // Per-tool risk drives the routing decision; fall back to Execute when
+        // the dispatcher cannot expose a risk level for this tool (sera-gran).
+        // Falling back to Execute preserves the prior conservative behaviour:
+        // unknown tools route as if they could mutate state.
+        let risk_level = tool_dispatcher
+            .and_then(|d| d.tool_risk_level(tool_name))
+            .unwrap_or(sera_types::tool::RiskLevel::Execute);
 
         if sera_hitl::ApprovalRouter::needs_approval(
             ctx.enforcement_mode,
@@ -1553,6 +1572,192 @@ mod tests {
         assert!(
             content.contains("LLM error") && content.contains("tool_use_behavior"),
             "expected error stub mentioning unsupported tool_use_behavior, got: {content}"
+        );
+    }
+
+    /// Test-only dispatcher that maps tool names to a fixed risk level.
+    ///
+    /// `dispatch` is unreachable in `act_hitl_*` tests because they short-circuit
+    /// on `WaitingForApproval` or skip approval before dispatch — but the trait
+    /// still requires it, so we panic to flag any accidental wiring change.
+    struct StaticRiskDispatcher {
+        risks: std::collections::HashMap<String, sera_types::tool::RiskLevel>,
+    }
+
+    impl StaticRiskDispatcher {
+        fn new(entries: &[(&str, sera_types::tool::RiskLevel)]) -> Self {
+            Self {
+                risks: entries
+                    .iter()
+                    .map(|(n, r)| ((*n).to_string(), *r))
+                    .collect(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ToolDispatcher for StaticRiskDispatcher {
+        async fn dispatch(
+            &self,
+            tool_call: &serde_json::Value,
+            _ctx: &ToolContext,
+        ) -> Result<serde_json::Value, ToolError> {
+            // Tests that fall through approval still hit dispatch — return a
+            // benign OK so we can assert the non-approval branch was taken.
+            let id = tool_call
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            Ok(serde_json::json!({
+                "tool_call_id": id,
+                "role": "tool",
+                "content": "ok",
+            }))
+        }
+
+        fn tool_risk_level(&self, tool_name: &str) -> Option<sera_types::tool::RiskLevel> {
+            self.risks.get(tool_name).copied()
+        }
+    }
+
+    /// Build a Standard-mode routing whose Dynamic policy only escalates when
+    /// risk_score ≥ 0.5 — i.e. Read (0.1) skips approval, Execute (0.7) needs it.
+    fn execute_or_above_routing() -> sera_hitl::ApprovalRouting {
+        sera_hitl::ApprovalRouting::Dynamic(sera_hitl::ApprovalPolicy {
+            risk_thresholds: vec![sera_hitl::RiskThreshold {
+                min_risk_score: 0.5,
+                chain: vec![sera_hitl::ApprovalTarget::Role {
+                    name: "admin".to_string(),
+                }],
+                required_approvals: 1,
+            }],
+            fallback_chain: vec![],
+        })
+    }
+
+    #[tokio::test]
+    async fn act_hitl_standard_mode_skips_approval_for_read_risk() {
+        // Standard mode + threshold-at-0.5 routing — a Read tool (score 0.1)
+        // resolves to an empty chain → no approval needed, dispatch proceeds.
+        let mut ctx = make_turn_ctx(vec![]);
+        ctx.enforcement_mode = sera_hitl::HitlMode::Standard;
+        ctx.approval_routing = execute_or_above_routing();
+        let dispatcher = StaticRiskDispatcher::new(&[
+            ("file-read", sera_types::tool::RiskLevel::Read),
+        ]);
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "reading"}),
+            tool_calls: vec![serde_json::json!({
+                "id": "call_read",
+                "type": "function",
+                "function": { "name": "file-read", "arguments": "{}" }
+            })],
+            tokens: TokenUsage::default(),
+            plan: None,
+        };
+        let result = act(&mut ctx, &think_result, Some(&dispatcher)).await;
+        // Read-risk under threshold@0.5 must skip approval. We don't care
+        // which non-approval branch we land in — the goal is to prove we did
+        // *not* gate. Without dispatcher consultation this would have routed
+        // at Execute and returned WaitingForApproval.
+        assert!(
+            !matches!(result, ActResult::WaitingForApproval { .. }),
+            "Read-risk tool must not require approval under Standard + threshold@0.5, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn act_hitl_standard_mode_requires_approval_for_execute_risk() {
+        // Same routing, same mode — an Execute tool (score 0.7) resolves to
+        // the admin chain → must produce WaitingForApproval.
+        let mut ctx = make_turn_ctx(vec![]);
+        ctx.enforcement_mode = sera_hitl::HitlMode::Standard;
+        ctx.approval_routing = execute_or_above_routing();
+        let dispatcher = StaticRiskDispatcher::new(&[
+            ("shell-exec", sera_types::tool::RiskLevel::Execute),
+        ]);
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "running"}),
+            tool_calls: vec![serde_json::json!({
+                "id": "call_exec",
+                "type": "function",
+                "function": { "name": "shell-exec", "arguments": "{}" }
+            })],
+            tokens: TokenUsage::default(),
+            plan: None,
+        };
+        let result = act(&mut ctx, &think_result, Some(&dispatcher)).await;
+        match result {
+            ActResult::WaitingForApproval { tool_call, ticket_id } => {
+                assert!(!ticket_id.is_empty());
+                assert_eq!(
+                    tool_call.get("function").unwrap().get("name").unwrap().as_str().unwrap(),
+                    "shell-exec"
+                );
+            }
+            other => panic!("expected WaitingForApproval for Execute-risk tool, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn act_hitl_standard_mode_falls_back_to_execute_when_risk_unknown() {
+        // The dispatcher does not know this tool — fall back to Execute. Under
+        // the threshold@0.5 routing that means the call must be gated. This
+        // preserves the prior conservative behaviour for unmapped tools.
+        let mut ctx = make_turn_ctx(vec![]);
+        ctx.enforcement_mode = sera_hitl::HitlMode::Standard;
+        ctx.approval_routing = execute_or_above_routing();
+        // Empty dispatcher → tool_risk_level returns None for every name.
+        let dispatcher = StaticRiskDispatcher::new(&[]);
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "unknown"}),
+            tool_calls: vec![serde_json::json!({
+                "id": "call_unknown",
+                "type": "function",
+                "function": { "name": "totally-unregistered", "arguments": "{}" }
+            })],
+            tokens: TokenUsage::default(),
+            plan: None,
+        };
+        let result = act(&mut ctx, &think_result, Some(&dispatcher)).await;
+        match result {
+            ActResult::WaitingForApproval { tool_call, .. } => {
+                assert_eq!(
+                    tool_call.get("function").unwrap().get("name").unwrap().as_str().unwrap(),
+                    "totally-unregistered"
+                );
+            }
+            other => panic!(
+                "expected WaitingForApproval (fallback Execute) for unknown tool, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn act_hitl_no_dispatcher_falls_back_to_execute() {
+        // No dispatcher provided at all — must still default to Execute risk
+        // so existing strict/standard tests keep working without wiring a
+        // dispatcher just for risk lookup.
+        let mut ctx = make_turn_ctx(vec![]);
+        ctx.enforcement_mode = sera_hitl::HitlMode::Standard;
+        ctx.approval_routing = execute_or_above_routing();
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "no dispatcher"}),
+            tool_calls: vec![serde_json::json!({
+                "id": "call_no_disp",
+                "type": "function",
+                "function": { "name": "anything", "arguments": "{}" }
+            })],
+            tokens: TokenUsage::default(),
+            plan: None,
+        };
+        let result = act(&mut ctx, &think_result, None).await;
+        assert!(
+            matches!(result, ActResult::WaitingForApproval { .. }),
+            "expected WaitingForApproval when no dispatcher is wired (fallback=Execute), got {:?}",
+            result
         );
     }
 

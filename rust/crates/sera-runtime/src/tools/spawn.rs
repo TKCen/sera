@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
-    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema, ToolScope,
 };
 
 pub struct SpawnEphemeral;
@@ -25,6 +25,9 @@ impl Tool for SpawnEphemeral {
             risk_level: RiskLevel::Execute,
             execution_target: ExecutionTarget::Remote("sera-core".to_string()),
             tags: vec!["subagent".to_string()],
+            // sera-u4gj: spawn-ephemeral is a sub-agent dispatch tool, so
+            // `Agent` scope per design report §5.4.
+            scope: ToolScope::Agent,
         }
     }
 
@@ -118,5 +121,12 @@ mod tests {
     fn metadata_risk_level_is_execute() {
         assert_eq!(SpawnEphemeral.metadata().risk_level, RiskLevel::Execute);
         assert_eq!(SpawnEphemeral.metadata().name, "spawn-ephemeral");
+    }
+
+    /// sera-u4gj — spawn-ephemeral dispatches sub-agents, so it carries
+    /// `ToolScope::Agent` per design report §5.4.
+    #[test]
+    fn metadata_scope_is_agent() {
+        assert_eq!(SpawnEphemeral.metadata().scope, ToolScope::Agent);
     }
 }

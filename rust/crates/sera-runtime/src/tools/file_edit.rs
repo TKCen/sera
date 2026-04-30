@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
-    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema, ToolScope,
 };
 
 use crate::tools::file_write::locked_write;
@@ -28,6 +28,7 @@ impl Tool for FileEdit {
             risk_level: RiskLevel::Write,
             execution_target: ExecutionTarget::Local,
             tags: vec!["fs".to_string()],
+            scope: ToolScope::Write,
         }
     }
 
@@ -120,5 +121,11 @@ mod tests {
     fn metadata_risk_level_is_write() {
         assert_eq!(FileEdit.metadata().risk_level, RiskLevel::Write);
         assert_eq!(FileEdit.metadata().name, "file-edit");
+    }
+
+    /// sera-u4gj — file-edit mutates files, so it carries `ToolScope::Write`.
+    #[test]
+    fn metadata_scope_is_write() {
+        assert_eq!(FileEdit.metadata().scope, ToolScope::Write);
     }
 }

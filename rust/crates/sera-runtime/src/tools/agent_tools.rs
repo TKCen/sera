@@ -19,7 +19,7 @@ use sera_types::agent_tool::AgentToolKind;
 use sera_types::capability::ResolvedCapabilities;
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
-    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema, ToolScope,
 };
 
 use crate::agent_tool_registry::{
@@ -130,6 +130,9 @@ impl Tool for DelegateTaskTool {
             risk_level: RiskLevel::Execute,
             execution_target: ExecutionTarget::InProcess,
             tags: vec!["agent-tool".to_string(), "subagent".to_string()],
+            // sera-u4gj: delegation is the canonical `Agent` scope per
+            // design report §5.4.
+            scope: ToolScope::Agent,
         }
     }
 
@@ -207,6 +210,8 @@ impl Tool for AskAgentTool {
             risk_level: RiskLevel::Execute,
             execution_target: ExecutionTarget::InProcess,
             tags: vec!["agent-tool".to_string(), "subagent".to_string()],
+            // sera-u4gj: agent-to-agent question routing is `Agent` scope.
+            scope: ToolScope::Agent,
         }
     }
 
@@ -276,6 +281,9 @@ impl Tool for BackgroundTaskTool {
             risk_level: RiskLevel::Execute,
             execution_target: ExecutionTarget::InProcess,
             tags: vec!["agent-tool".to_string(), "subagent".to_string()],
+            // sera-u4gj: spawning a background task on another agent is
+            // `Agent` scope per design report §5.4.
+            scope: ToolScope::Agent,
         }
     }
 
@@ -344,6 +352,18 @@ mod tests {
         for meta in [d.metadata(), a.metadata(), b.metadata()] {
             assert_eq!(meta.risk_level, RiskLevel::Execute);
             assert!(meta.tags.iter().any(|t| t == "agent-tool"));
+        }
+    }
+
+    /// sera-u4gj — every agent-as-tool entry declares `ToolScope::Agent`
+    /// per design report §5.4 so the dispatcher gate (PR3) can reject
+    /// agents whose policy lacks `Agent` scope.
+    #[test]
+    fn metadata_scopes_are_agent() {
+        let r = Arc::new(AgentToolRegistry::new());
+        let (d, a, b) = build_agent_tools(r);
+        for meta in [d.metadata(), a.metadata(), b.metadata()] {
+            assert_eq!(meta.scope, ToolScope::Agent);
         }
     }
 

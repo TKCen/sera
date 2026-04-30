@@ -15,7 +15,7 @@ use sera_tools::corrections::{
 };
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
-    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema, ToolScope,
 };
 
 pub struct ProposeCorrection {
@@ -43,6 +43,10 @@ impl Tool for ProposeCorrection {
             risk_level: RiskLevel::Write,
             execution_target: ExecutionTarget::InProcess,
             tags: vec!["meta".to_string(), "correction".to_string()],
+            // sera-u4gj: this is a meta-tool that mutates the live rule
+            // catalog, so it carries `Admin` scope per design report §5.4
+            // (hot-reloadable rule edits).
+            scope: ToolScope::Admin,
         }
     }
 
@@ -255,6 +259,16 @@ mod tests {
 
     fn make_ctx() -> ToolContext {
         ToolContext::default()
+    }
+
+    /// sera-u4gj — `propose-correction` mutates the live correction rule
+    /// catalog, so it carries `ToolScope::Admin` per design report §5.4.
+    #[test]
+    fn metadata_scope_is_admin() {
+        let dir = TempDir::new().unwrap();
+        let cat = Arc::new(CorrectionCatalog::load(dir.path()).unwrap());
+        let tool = ProposeCorrection::new(cat);
+        assert_eq!(tool.metadata().scope, ToolScope::Admin);
     }
 
     #[tokio::test]

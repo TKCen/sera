@@ -22,7 +22,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
-    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema, ToolScope,
 };
 
 use crate::delegation_bus::{ChildSessionMeta, DelegationBus, DelegationEvent};
@@ -73,6 +73,9 @@ impl Tool for SessionSpawnTool {
             risk_level: RiskLevel::Execute,
             execution_target: ExecutionTarget::InProcess,
             tags: vec!["delegation".to_string(), "subagent".to_string()],
+            // sera-u4gj: spawning a child session under another agent is
+            // sub-agent dispatch — `Agent` scope.
+            scope: ToolScope::Agent,
         }
     }
 
@@ -193,6 +196,10 @@ impl Tool for SessionYieldTool {
             risk_level: RiskLevel::Read,
             execution_target: ExecutionTarget::InProcess,
             tags: vec!["delegation".to_string()],
+            // sera-u4gj: yielding only observes the next bus event — the
+            // child session must already exist (gated by `session_spawn`),
+            // so this surface is read-only on the parent side.
+            scope: ToolScope::Read,
         }
     }
 
@@ -295,6 +302,9 @@ impl Tool for SessionSendTool {
             risk_level: RiskLevel::Write,
             execution_target: ExecutionTarget::InProcess,
             tags: vec!["delegation".to_string()],
+            // sera-u4gj: delivering a message into another agent's session
+            // is cross-agent communication — `Agent` scope.
+            scope: ToolScope::Agent,
         }
     }
 
@@ -716,6 +726,18 @@ mod tests {
         let send_required = send.schema().parameters.required;
         assert!(send_required.contains(&"session_id".to_string()));
         assert!(send_required.contains(&"message".to_string()));
+    }
+
+    /// sera-u4gj — explicit `ToolScope` per delegation tool. Spawning and
+    /// sending into a named child session are cross-agent operations
+    /// (`Agent`); yielding only observes the next bus event (`Read`).
+    #[test]
+    fn metadata_scopes() {
+        let bus = DelegationBus::new();
+        let (spawn, yield_tool, send) = build_delegation_tools(bus);
+        assert_eq!(spawn.metadata().scope, ToolScope::Agent);
+        assert_eq!(yield_tool.metadata().scope, ToolScope::Read);
+        assert_eq!(send.metadata().scope, ToolScope::Agent);
     }
 
     #[tokio::test]

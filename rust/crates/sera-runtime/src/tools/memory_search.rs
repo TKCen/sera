@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use sera_types::memory::{MemoryId as TierOneMemoryId, MemorySearchResult, MemoryTier, SegmentKind};
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
-    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema, ToolScope,
 };
 use sera_types::EmbeddingService;
 use sera_memory::{ScoredEntry, SemanticMemoryStore, SemanticQuery};
@@ -126,6 +126,10 @@ impl Tool for MemorySearchTool {
             risk_level: RiskLevel::Read,
             execution_target: ExecutionTarget::InProcess,
             tags: vec!["memory".to_string(), "tier-2".to_string()],
+            // sera-u4gj: semantic recall is read-only from the agent's
+            // perspective; the `last_accessed_at` touch is access
+            // tracking, not material state.
+            scope: ToolScope::Read,
         }
     }
 
@@ -530,6 +534,8 @@ mod tests {
         assert_eq!(meta.name, TOOL_NAME);
         assert_eq!(meta.risk_level, RiskLevel::Read);
         assert_eq!(meta.execution_target, ExecutionTarget::InProcess);
+        // sera-u4gj — explicit `Read` scope.
+        assert_eq!(meta.scope, ToolScope::Read);
     }
 
     #[test]

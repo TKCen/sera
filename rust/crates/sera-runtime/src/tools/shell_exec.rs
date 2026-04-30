@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
-    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema, ToolScope,
 };
 use tokio::process::Command;
 
@@ -25,6 +25,7 @@ impl Tool for ShellExec {
             risk_level: RiskLevel::Execute,
             execution_target: ExecutionTarget::Local,
             tags: vec!["shell".to_string()],
+            scope: ToolScope::Execute,
         }
     }
 
@@ -110,5 +111,12 @@ mod tests {
     fn metadata_risk_level_is_execute() {
         assert_eq!(ShellExec.metadata().risk_level, RiskLevel::Execute);
         assert_eq!(ShellExec.metadata().name, "shell-exec");
+    }
+
+    /// sera-u4gj — shell-exec runs arbitrary processes, so its scope is
+    /// `Execute` per design report §5.4.
+    #[test]
+    fn metadata_scope_is_execute() {
+        assert_eq!(ShellExec.metadata().scope, ToolScope::Execute);
     }
 }

@@ -10,7 +10,7 @@ use std::path::Path;
 use async_trait::async_trait;
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
-    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema, ToolScope,
 };
 
 pub struct Grep;
@@ -26,6 +26,7 @@ impl Tool for Grep {
             risk_level: RiskLevel::Read,
             execution_target: ExecutionTarget::Local,
             tags: vec!["fs".to_string(), "search".to_string()],
+            scope: ToolScope::Read,
         }
     }
 
@@ -159,5 +160,11 @@ mod tests {
     fn metadata_risk_level_is_read() {
         assert_eq!(Grep.metadata().risk_level, RiskLevel::Read);
         assert_eq!(Grep.metadata().name, "grep");
+    }
+
+    /// sera-u4gj — grep only reads file contents, so `ToolScope::Read`.
+    #[test]
+    fn metadata_scope_is_read() {
+        assert_eq!(Grep.metadata().scope, ToolScope::Read);
     }
 }

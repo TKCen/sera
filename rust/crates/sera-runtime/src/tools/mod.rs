@@ -261,7 +261,7 @@ mod trait_registry_tests {
     use sera_types::tool::{
         AuditHandle, CredentialBag, ExecutionTarget, FunctionParameters, RiskLevel,
         SessionRef, Tool, ToolContext, ToolError, ToolInput, ToolMetadata, ToolOutput,
-        ToolPolicy, ToolProfile, ToolSchema,
+        ToolPolicy, ToolProfile, ToolSchema, ToolScope,
     };
     use sera_types::principal::{PrincipalId, PrincipalRef};
     use std::collections::HashMap;
@@ -281,6 +281,7 @@ mod trait_registry_tests {
                 risk_level: RiskLevel::Read,
                 execution_target: ExecutionTarget::InProcess,
                 tags: vec![],
+                scope: ToolScope::Read,
             }
         }
 
@@ -532,6 +533,89 @@ mod trait_registry_tests {
                 "risk_level mismatch for tool '{name}'"
             );
         }
+    }
+
+    /// sera-u4gj — per-tool `ToolScope` assignments. This is the contract
+    /// the dispatcher gate (PR3) and the persona presets (PR4) consume; if
+    /// someone changes a built-in's scope, they must update this assertion
+    /// AND the design report §5.4 mapping. Mirrors
+    /// `with_builtins_risk_levels_are_correct` so reviewers can audit both
+    /// dimensions side-by-side.
+    #[test]
+    fn with_builtins_scopes_are_correct() {
+        let registry = TraitToolRegistry::with_builtins();
+
+        let expected: &[(&str, ToolScope)] = &[
+            // Read — design report §5.4
+            ("file-read", ToolScope::Read),
+            ("file-list", ToolScope::Read),
+            ("glob", ToolScope::Read),
+            ("grep", ToolScope::Read),
+            ("knowledge-query", ToolScope::Read),
+            ("tool-search", ToolScope::Read),
+            ("skill-search", ToolScope::Read),
+            // Write
+            ("file-write", ToolScope::Write),
+            ("file-edit", ToolScope::Write),
+            ("knowledge-store", ToolScope::Write),
+            // Execute
+            ("shell-exec", ToolScope::Execute),
+            // Network — both http-request and web-fetch egress.
+            ("http-request", ToolScope::Network),
+            ("web-fetch", ToolScope::Network),
+            // Agent — sub-agent dispatch.
+            ("spawn-ephemeral", ToolScope::Agent),
+        ];
+        for (name, expected_scope) in expected {
+            let tool = registry
+                .get(name)
+                .unwrap_or_else(|| panic!("built-in tool '{name}' missing"));
+            assert_eq!(
+                tool.metadata().scope,
+                *expected_scope,
+                "scope mismatch for tool '{name}'"
+            );
+        }
+    }
+
+    /// sera-u4gj — `with_agent_tools` produces three `Agent`-scope entries
+    /// regardless of risk level. The dispatcher gate (PR3) keys off scope.
+    #[test]
+    fn with_agent_tools_scopes_are_agent() {
+        use crate::agent_tool_registry::AgentToolRegistry;
+        use std::sync::Arc;
+        let agents = Arc::new(AgentToolRegistry::new());
+        let registry = TraitToolRegistry::with_builtins().with_agent_tools(agents);
+        for name in ["delegate-task", "ask-agent", "background-task"] {
+            let tool = registry.get(name).unwrap();
+            assert_eq!(
+                tool.metadata().scope,
+                ToolScope::Agent,
+                "{name} must declare ToolScope::Agent"
+            );
+        }
+    }
+
+    /// sera-u4gj — `with_delegation` pins `Agent` for the writing surfaces
+    /// (`session_spawn`, `session_send`) and `Read` for the observe-only
+    /// `session_yield`.
+    #[test]
+    fn with_delegation_scopes_match_design() {
+        use crate::delegation_bus::DelegationBus;
+        let bus = DelegationBus::new();
+        let registry = TraitToolRegistry::with_builtins().with_delegation(bus);
+        assert_eq!(
+            registry.get("session_spawn").unwrap().metadata().scope,
+            ToolScope::Agent
+        );
+        assert_eq!(
+            registry.get("session_yield").unwrap().metadata().scope,
+            ToolScope::Read
+        );
+        assert_eq!(
+            registry.get("session_send").unwrap().metadata().scope,
+            ToolScope::Agent
+        );
     }
 
     /// `with_builtins_and_authz` must produce the same set of tools as

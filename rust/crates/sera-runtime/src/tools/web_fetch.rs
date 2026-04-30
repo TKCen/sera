@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use sera_tools::ssrf::SsrfValidator;
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
-    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema, ToolScope,
 };
 
 pub struct WebFetch;
@@ -32,6 +32,10 @@ impl Tool for WebFetch {
             risk_level: RiskLevel::Read,
             execution_target: ExecutionTarget::External,
             tags: vec!["network".to_string()],
+            // sera-u4gj: web-fetch is GET-only but still produces network
+            // egress — exfiltration risk is what `Network` scope gates.
+            // Per design report §5.4.
+            scope: ToolScope::Network,
         }
     }
 
@@ -153,6 +157,14 @@ mod tests {
     fn metadata_risk_level_is_read() {
         assert_eq!(WebFetch.metadata().risk_level, RiskLevel::Read);
         assert_eq!(WebFetch.metadata().name, "web-fetch");
+    }
+
+    /// sera-u4gj — web-fetch emits outbound network traffic, so it carries
+    /// `ToolScope::Network` per design report §5.4 even though
+    /// `RiskLevel` stays `Read` (no remote-state mutation).
+    #[test]
+    fn metadata_scope_is_network() {
+        assert_eq!(WebFetch.metadata().scope, ToolScope::Network);
     }
 
     /// sera-udjf — web-fetch must honour the same SSRF blocklist as the

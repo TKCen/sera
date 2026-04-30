@@ -4,6 +4,7 @@
 //! - `SeraConfig`: BYOH agent container config (env vars per BYOH contract)
 //! - `CoreConfig`: sera-core server config (env vars + providers.json)
 
+pub mod agent_template_loader;
 pub mod capability_registry;
 pub mod config_root;
 pub mod core_config;

@@ -1,16 +1,19 @@
-//! OpenAI-compatible inference proxy (sera-7ivj PR 1).
+//! Inference proxy routes (sera-7ivj).
 //!
-//! Implements `POST /v1/chat/completions` as a byte-stream forwarder. The
-//! gateway owns the upstream provider credential — the inbound `Authorization`
-//! header is stripped before dispatch and replaced with the gateway-resolved
-//! upstream key.
+//! PR 1 implements `POST /v1/chat/completions` (OpenAI-compatible) as a
+//! byte-stream forwarder. PR 2 adds `POST /v1/messages` (Anthropic-compatible)
+//! using the same plumbing: same auth, same budget gate seam, same audit seam,
+//! and the same response-forwarding tail.
 //!
-//! This is the corrected first slice from the post-`ve9x` reassessment
-//! (`artifacts/reports/research/7ivj-post-ve9x-first-slice-reassessment-2026-04-30.md`):
-//! no shared LLM crate, no SSE accumulator, no body-builder lift. The proxy
-//! forwards bytes, records one audit event per call, and exposes an
-//! [`LlmBudgetGate`] trait seam so a future bead can attach token-bucket
-//! enforcement without touching the route handler.
+//! In both routes the gateway owns the upstream credential. The inbound
+//! `Authorization` and `x-api-key` headers are not forwarded — the outbound
+//! request is built fresh and only carries headers the proxy chooses to set.
+//! When the resolved upstream has no key configured (e.g. local LM Studio
+//! with auth disabled), the proxy omits the upstream auth header rather than
+//! synthesising an empty `Bearer ` / `x-api-key:` value.
+//!
+//! No shared LLM crate, no SSE accumulator, no body-builder lift (per the
+//! post-`ve9x` reassessment, `artifacts/reports/research/7ivj-post-ve9x-first-slice-reassessment-2026-04-30.md`).
 #![allow(dead_code)]
 
 use async_trait::async_trait;
@@ -30,9 +33,10 @@ use std::time::Duration;
 
 /// Gateway-resolved upstream provider.
 ///
-/// `base_url` is expected to be the OpenAI-compatible v1 root (e.g.
-/// `https://api.openai.com/v1` or `http://127.0.0.1:1234/v1`). The proxy
-/// appends `/chat/completions` when dispatching.
+/// `base_url` is the v1 root (e.g. `https://api.openai.com/v1`,
+/// `https://api.anthropic.com/v1`, or `http://127.0.0.1:1234/v1`). Each route
+/// appends its own URL suffix (`/chat/completions` or `/messages`) when
+/// dispatching.
 #[derive(Debug, Clone)]
 pub struct UpstreamProvider {
     pub base_url: String,
@@ -161,10 +165,20 @@ pub trait InferenceProxyAppState: Send + Sync + 'static {
     /// every caller must present `Authorization: Bearer <key>`.
     fn proxy_api_key(&self) -> &Option<String>;
 
-    /// Gateway-resolved upstream provider. Returns `None` when no usable
-    /// upstream is configured — the route then refuses with a stable 503 so
-    /// the caller never sees the upstream name or any credential.
+    /// Gateway-resolved OpenAI-shaped upstream (used by
+    /// `POST /v1/chat/completions`). Returns `None` when no usable upstream is
+    /// configured — the route then refuses with a stable 503 so the caller
+    /// never sees the upstream name or any credential.
     fn proxy_upstream(&self) -> Option<UpstreamProvider>;
+
+    /// Gateway-resolved Anthropic-shaped upstream (used by
+    /// `POST /v1/messages`). Independent of [`Self::proxy_upstream`]: an
+    /// operator may configure either, both, or neither. The default returns
+    /// `None`, which makes `POST /v1/messages` 503 — opt-in via the binary's
+    /// concrete impl.
+    fn proxy_anthropic_upstream(&self) -> Option<UpstreamProvider> {
+        None
+    }
 
     /// Shared reqwest client (cheap to clone — wraps an internal Arc).
     fn proxy_http_client(&self) -> reqwest::Client;
@@ -201,12 +215,7 @@ pub async fn chat_completions<S: InferenceProxyAppState>(
     // 1. Auth — refuse unauthenticated callers when an api_key is configured.
     let principal = match check_auth(state.proxy_api_key(), &headers) {
         Ok(p) => p,
-        Err(()) => {
-            // No audit row for unauthenticated requests — the principal is
-            // unknown and we don't want anonymous callers to populate the
-            // audit stream.
-            return unauthorized();
-        }
+        Err(()) => return unauthorized(),
     };
 
     // 2. Best-effort body peek (streaming flag + model) for budget/audit.
@@ -215,65 +224,38 @@ pub async fn chat_completions<S: InferenceProxyAppState>(
     let model_requested = peek.model.clone();
 
     // 3. Budget gate.
-    let gate = state.proxy_budget_gate();
-    let budget_ctx = BudgetCtx {
-        principal: principal.clone(),
-        model_requested: model_requested.clone(),
-    };
-    if let BudgetDecision::Deny {
-        reason,
-        retry_after,
-    } = gate.check(&budget_ctx).await
+    if let Some(resp) = check_budget_or_record(
+        &*state,
+        &principal,
+        model_requested.as_deref(),
+        stream_flag,
+        &state.proxy_upstream(),
+    )
+    .await
     {
-        // Resolve provider for audit metadata only; if it can't be resolved
-        // we still emit the row with the intended provider blanked out.
-        let provider_url = state
-            .proxy_upstream()
-            .map(|u| u.base_url)
-            .unwrap_or_default();
-        state
-            .proxy_audit()
-            .record(ProxyAuditEvent {
-                principal: principal.clone(),
-                provider_base_url: provider_url,
-                model_requested: model_requested.clone(),
-                stream: stream_flag,
-                status: StatusCode::TOO_MANY_REQUESTS.as_u16(),
-                outcome: ProxyOutcome::BudgetExceeded,
-            })
-            .await;
-        return budget_denied(reason, retry_after);
+        return resp;
     }
 
     // 4. Resolve upstream provider. Refuse cleanly if absent.
     let upstream = match state.proxy_upstream() {
         Some(u) => u,
         None => {
-            state
-                .proxy_audit()
-                .record(ProxyAuditEvent {
-                    principal: principal.clone(),
-                    provider_base_url: String::new(),
-                    model_requested: model_requested.clone(),
-                    stream: stream_flag,
-                    status: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                    outcome: ProxyOutcome::NoUpstream,
-                })
-                .await;
-            return service_unavailable("no_upstream");
+            return record_no_upstream(
+                &*state,
+                &principal,
+                model_requested.as_deref(),
+                stream_flag,
+            )
+            .await;
         }
     };
 
-    // 5. Forward to upstream. The inbound `Authorization` is *not* attached
-    //    to the outbound request — we build a fresh request with only the
-    //    headers the proxy chooses to set. Inbound `Authorization` therefore
-    //    cannot leak upstream.
-    //
-    //    When the resolved provider has no configured key (e.g. a local
-    //    LM Studio with auth disabled), the inbound `Authorization` header is
-    //    still stripped — but we also omit the outbound header rather than
-    //    sending `Authorization: Bearer ` (an empty bearer), which some
-    //    upstreams reject as malformed.
+    // 5. Build the outbound request. The inbound `Authorization` is *not*
+    //    attached — we build a fresh request with only the headers the proxy
+    //    chooses to set, so the inbound bearer cannot leak upstream. When the
+    //    resolved provider has no configured key (e.g. local LM Studio with
+    //    auth disabled), we omit the outbound `Authorization` header rather
+    //    than synthesising an empty `Bearer ` value.
     let url = build_chat_url(&upstream.base_url);
     let mut upstream_req = state
         .proxy_http_client()
@@ -285,7 +267,199 @@ pub async fn chat_completions<S: InferenceProxyAppState>(
             format!("Bearer {}", upstream.api_key),
         );
     }
-    let upstream_resp = upstream_req.body(body.clone()).send().await;
+
+    forward_to_upstream(
+        &*state,
+        upstream_req,
+        body,
+        ForwardMeta {
+            principal,
+            provider_base_url: upstream.base_url,
+            model_requested,
+            stream: stream_flag,
+        },
+    )
+    .await
+}
+
+/// Default Anthropic API version when the client omits `anthropic-version`.
+///
+/// Anthropic requires every request to declare an API version; missing the
+/// header would surface as a 4xx upstream. Forwarding a stable default keeps
+/// well-behaved Anthropic-compatible clients working without each having to
+/// re-declare the version, while clients that *do* set the header still take
+/// precedence (their value is forwarded verbatim).
+pub const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
+
+const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
+const ANTHROPIC_API_KEY_HEADER: &str = "x-api-key";
+
+/// `POST /v1/messages`. Anthropic-compatible byte-stream forwarder.
+///
+/// Mirrors the [`chat_completions`] scaffold — same auth, same body peek,
+/// same budget gate, same audit and forwarding tail — but routes to a
+/// distinct upstream ([`InferenceProxyAppState::proxy_anthropic_upstream`])
+/// and dispatches with Anthropic protocol headers (`x-api-key`,
+/// `anthropic-version`) instead of `Authorization: Bearer`.
+pub async fn chat_messages<S: InferenceProxyAppState>(
+    State(state): State<Arc<S>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    // 1. Auth.
+    let principal = match check_auth(state.proxy_api_key(), &headers) {
+        Ok(p) => p,
+        Err(()) => return unauthorized(),
+    };
+
+    // 2. Body peek.
+    let peek: PeekBody = serde_json::from_slice(&body).unwrap_or_default();
+    let stream_flag = peek.stream.unwrap_or(false);
+    let model_requested = peek.model.clone();
+
+    // 3. Budget gate.
+    if let Some(resp) = check_budget_or_record(
+        &*state,
+        &principal,
+        model_requested.as_deref(),
+        stream_flag,
+        &state.proxy_anthropic_upstream(),
+    )
+    .await
+    {
+        return resp;
+    }
+
+    // 4. Resolve Anthropic upstream.
+    let upstream = match state.proxy_anthropic_upstream() {
+        Some(u) => u,
+        None => {
+            return record_no_upstream(
+                &*state,
+                &principal,
+                model_requested.as_deref(),
+                stream_flag,
+            )
+            .await;
+        }
+    };
+
+    // 5. Build outbound request. Inbound `Authorization` AND inbound
+    //    `x-api-key` are dropped naturally — we never copy headers from the
+    //    request, only set the ones the proxy chose. The default
+    //    `anthropic-version` is applied only when the client omitted the
+    //    header; an explicit client value is forwarded as-is.
+    let url = build_messages_url(&upstream.base_url);
+    let anthropic_version = headers
+        .get(ANTHROPIC_VERSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(String::from)
+        .unwrap_or_else(|| DEFAULT_ANTHROPIC_VERSION.to_string());
+
+    let mut upstream_req = state
+        .proxy_http_client()
+        .post(&url)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(ANTHROPIC_VERSION_HEADER, &anthropic_version);
+    if !upstream.api_key.is_empty() {
+        upstream_req = upstream_req.header(ANTHROPIC_API_KEY_HEADER, &upstream.api_key);
+    }
+
+    forward_to_upstream(
+        &*state,
+        upstream_req,
+        body,
+        ForwardMeta {
+            principal,
+            provider_base_url: upstream.base_url,
+            model_requested,
+            stream: stream_flag,
+        },
+    )
+    .await
+}
+
+/// Audit/identity context shared by both proxy routes' forwarding tail.
+struct ForwardMeta {
+    principal: String,
+    provider_base_url: String,
+    model_requested: Option<String>,
+    stream: bool,
+}
+
+/// Pre-dispatch budget gate. Returns `Some(response)` when the gate denies and
+/// the route should short-circuit. The audit row is emitted with the upstream
+/// base_url that the route *would* have called (for traceability), or empty
+/// when the upstream was not configurable.
+async fn check_budget_or_record<S: InferenceProxyAppState + ?Sized>(
+    state: &S,
+    principal: &str,
+    model_requested: Option<&str>,
+    stream: bool,
+    upstream: &Option<UpstreamProvider>,
+) -> Option<Response> {
+    let gate = state.proxy_budget_gate();
+    let ctx = BudgetCtx {
+        principal: principal.to_string(),
+        model_requested: model_requested.map(String::from),
+    };
+    let BudgetDecision::Deny {
+        reason,
+        retry_after,
+    } = gate.check(&ctx).await
+    else {
+        return None;
+    };
+    let provider_url = upstream
+        .as_ref()
+        .map(|u| u.base_url.clone())
+        .unwrap_or_default();
+    state
+        .proxy_audit()
+        .record(ProxyAuditEvent {
+            principal: principal.to_string(),
+            provider_base_url: provider_url,
+            model_requested: model_requested.map(String::from),
+            stream,
+            status: StatusCode::TOO_MANY_REQUESTS.as_u16(),
+            outcome: ProxyOutcome::BudgetExceeded,
+        })
+        .await;
+    Some(budget_denied(reason, retry_after))
+}
+
+/// Emit the `no_upstream` audit row and return a stable 503.
+async fn record_no_upstream<S: InferenceProxyAppState + ?Sized>(
+    state: &S,
+    principal: &str,
+    model_requested: Option<&str>,
+    stream: bool,
+) -> Response {
+    state
+        .proxy_audit()
+        .record(ProxyAuditEvent {
+            principal: principal.to_string(),
+            provider_base_url: String::new(),
+            model_requested: model_requested.map(String::from),
+            stream,
+            status: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            outcome: ProxyOutcome::NoUpstream,
+        })
+        .await;
+    service_unavailable("no_upstream")
+}
+
+/// Send the prepared request, emit one audit row, and stream the upstream
+/// body back to the caller. Body and status are forwarded verbatim — the
+/// proxy never rewrites the upstream payload, so SSE / event-stream chunks
+/// pass through unchanged for both OpenAI and Anthropic clients.
+async fn forward_to_upstream<S: InferenceProxyAppState + ?Sized>(
+    state: &S,
+    upstream_req: reqwest::RequestBuilder,
+    body: Bytes,
+    meta: ForwardMeta,
+) -> Response {
+    let upstream_resp = upstream_req.body(body).send().await;
 
     let response = match upstream_resp {
         Ok(r) => r,
@@ -293,24 +467,21 @@ pub async fn chat_completions<S: InferenceProxyAppState>(
             state
                 .proxy_audit()
                 .record(ProxyAuditEvent {
-                    principal: principal.clone(),
-                    provider_base_url: upstream.base_url.clone(),
-                    model_requested: model_requested.clone(),
-                    stream: stream_flag,
+                    principal: meta.principal,
+                    provider_base_url: meta.provider_base_url,
+                    model_requested: meta.model_requested,
+                    stream: meta.stream,
                     status: StatusCode::BAD_GATEWAY.as_u16(),
                     outcome: ProxyOutcome::UpstreamUnreachable,
                 })
                 .await;
-            // The error itself can carry transport detail; do not leak it
-            // back to the caller — the upstream URL or other reqwest-internal
-            // state could end up in the body.
+            // The reqwest error can carry transport detail (URLs, etc.); do
+            // not propagate it to the caller body.
             tracing::warn!(error = %err, "inference proxy upstream unreachable");
             return upstream_unreachable();
         }
     };
 
-    // 6. Map upstream status to outcome bucket. Body and status are forwarded
-    //    verbatim; we never rewrite the upstream payload.
     let upstream_status = response.status();
     let outcome = if upstream_status.is_success() {
         ProxyOutcome::Success
@@ -320,23 +491,21 @@ pub async fn chat_completions<S: InferenceProxyAppState>(
         ProxyOutcome::ProviderError
     };
 
-    // Capture audit-relevant headers before consuming the response.
     let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
     let retry_after = response.headers().get(header::RETRY_AFTER).cloned();
 
     state
         .proxy_audit()
         .record(ProxyAuditEvent {
-            principal: principal.clone(),
-            provider_base_url: upstream.base_url.clone(),
-            model_requested: model_requested.clone(),
-            stream: stream_flag,
+            principal: meta.principal,
+            provider_base_url: meta.provider_base_url,
+            model_requested: meta.model_requested,
+            stream: meta.stream,
             status: upstream_status.as_u16(),
             outcome,
         })
         .await;
 
-    // 7. Stream body back. Works for SSE and plain JSON alike.
     let mut builder = Response::builder().status(upstream_status);
     if let Some(ct) = content_type {
         builder = builder.header(header::CONTENT_TYPE, ct);
@@ -378,6 +547,10 @@ fn check_auth(api_key: &Option<String>, headers: &HeaderMap) -> Result<String, (
 
 fn build_chat_url(base: &str) -> String {
     format!("{}/chat/completions", base.trim_end_matches('/'))
+}
+
+fn build_messages_url(base: &str) -> String {
+    format!("{}/messages", base.trim_end_matches('/'))
 }
 
 fn unauthorized() -> Response {
@@ -446,6 +619,7 @@ mod tests {
     struct TestState {
         api_key: Option<String>,
         upstream: Option<UpstreamProvider>,
+        anthropic_upstream: Option<UpstreamProvider>,
         client: reqwest::Client,
         gate: Arc<dyn LlmBudgetGate>,
         audit: Arc<RecordingAudit>,
@@ -456,6 +630,24 @@ mod tests {
             Arc::new(Self {
                 api_key: api_key.map(String::from),
                 upstream,
+                anthropic_upstream: None,
+                client: reqwest::Client::builder()
+                    .timeout(Duration::from_secs(5))
+                    .build()
+                    .expect("client"),
+                gate: Arc::new(NoopBudgetGate),
+                audit: Arc::new(RecordingAudit::default()),
+            })
+        }
+
+        fn new_anthropic(
+            api_key: Option<&str>,
+            anthropic_upstream: Option<UpstreamProvider>,
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                api_key: api_key.map(String::from),
+                upstream: None,
+                anthropic_upstream,
                 client: reqwest::Client::builder()
                     .timeout(Duration::from_secs(5))
                     .build()
@@ -480,6 +672,9 @@ mod tests {
         }
         fn proxy_upstream(&self) -> Option<UpstreamProvider> {
             self.upstream.clone()
+        }
+        fn proxy_anthropic_upstream(&self) -> Option<UpstreamProvider> {
+            self.anthropic_upstream.clone()
         }
         fn proxy_http_client(&self) -> reqwest::Client {
             self.client.clone()
@@ -532,6 +727,8 @@ mod tests {
     #[derive(Debug, Default, Clone)]
     struct CapturedRequest {
         authorization: Option<String>,
+        x_api_key: Option<String>,
+        anthropic_version: Option<String>,
         body: Vec<u8>,
     }
 
@@ -574,9 +771,19 @@ mod tests {
                     .get(header::AUTHORIZATION)
                     .and_then(|v| v.to_str().ok())
                     .map(String::from);
+                let x_api_key = headers
+                    .get(ANTHROPIC_API_KEY_HEADER)
+                    .and_then(|v| v.to_str().ok())
+                    .map(String::from);
+                let anthropic_version = headers
+                    .get(ANTHROPIC_VERSION_HEADER)
+                    .and_then(|v| v.to_str().ok())
+                    .map(String::from);
                 {
                     let mut c = captured.lock().unwrap();
                     c.authorization = auth;
+                    c.x_api_key = x_api_key;
+                    c.anthropic_version = anthropic_version;
                     c.body = body.to_vec();
                 }
                 match resp {
@@ -604,7 +811,9 @@ mod tests {
             }
         };
 
-        let app: Router = Router::new().route("/v1/chat/completions", post(handler));
+        let app: Router = Router::new()
+            .route("/v1/chat/completions", post(handler.clone()))
+            .route("/v1/messages", post(handler));
 
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind mock");
         let port = listener.local_addr().unwrap().port();
@@ -1024,5 +1233,451 @@ mod tests {
             build_chat_url("https://api.openai.com/v1/"),
             "https://api.openai.com/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn build_messages_url_handles_trailing_slash() {
+        assert_eq!(
+            build_messages_url("https://api.anthropic.com/v1"),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(
+            build_messages_url("https://api.anthropic.com/v1/"),
+            "https://api.anthropic.com/v1/messages"
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // Anthropic /v1/messages — sera-7ivj PR 2
+    // ---------------------------------------------------------------------
+
+    fn messages_route(state: Arc<TestState>) -> Router {
+        Router::new()
+            .route("/v1/messages", post(chat_messages::<TestState>))
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn messages_unauthenticated_returns_401() {
+        let mock = start_mock_upstream(MockResponse::Json {
+            status: StatusCode::OK,
+            body: serde_json::json!({"ok": true}),
+            retry_after: None,
+        })
+        .await;
+        let state = TestState::new_anthropic(
+            Some("expected-key"),
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: "upstream-key".into(),
+            }),
+        );
+        let app = messages_route(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(json_body(serde_json::json!({"model": "claude-3-5-sonnet"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        // No upstream call.
+        assert!(mock.captured.lock().unwrap().body.is_empty());
+        // No audit row for unauthenticated callers.
+        assert!(state.audit.snapshot().is_empty());
+    }
+
+    #[tokio::test]
+    async fn messages_non_streaming_forwards_and_audits_success() {
+        let mock = start_mock_upstream(MockResponse::Json {
+            status: StatusCode::OK,
+            body: serde_json::json!({
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi"}],
+                "model": "claude-3-5-sonnet",
+                "usage": {"input_tokens": 4, "output_tokens": 2}
+            }),
+            retry_after: None,
+        })
+        .await;
+        let state = TestState::new_anthropic(
+            None,
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: "upstream-key".into(),
+            }),
+        );
+        let app = messages_route(Arc::clone(&state));
+
+        let request_body = serde_json::json!({
+            "model": "claude-3-5-sonnet",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": false,
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(json_body(request_body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["id"], "msg_01");
+
+        let captured = mock.captured.lock().unwrap().clone();
+        // Body forwarded verbatim — no translation between protocols.
+        let forwarded: serde_json::Value = serde_json::from_slice(&captured.body).unwrap();
+        assert_eq!(forwarded, request_body);
+        // Anthropic auth header injected; OpenAI-style Authorization absent.
+        assert_eq!(captured.x_api_key.as_deref(), Some("upstream-key"));
+        assert!(captured.authorization.is_none());
+
+        let events = state.audit.snapshot();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].outcome, ProxyOutcome::Success);
+        assert_eq!(events[0].status, 200);
+        assert_eq!(
+            events[0].model_requested.as_deref(),
+            Some("claude-3-5-sonnet")
+        );
+        assert!(!events[0].stream);
+    }
+
+    #[tokio::test]
+    async fn messages_streaming_forwards_sse_bytes_and_audits_once() {
+        // Anthropic-shaped SSE events; bytes pass through unchanged.
+        let mock = start_mock_upstream(MockResponse::SseChunks(vec![
+            r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","role":"assistant"}}"#,
+            r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#,
+            r#"event: message_stop
+data: {"type":"message_stop"}"#,
+        ]))
+        .await;
+        let state = TestState::new_anthropic(
+            None,
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: "upstream-key".into(),
+            }),
+        );
+        let app = messages_route(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(json_body(serde_json::json!({
+                        "model": "claude-3-5-sonnet",
+                        "max_tokens": 32,
+                        "stream": true,
+                    })))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            ct.starts_with("text/event-stream"),
+            "expected SSE content-type, got {ct}"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        // Anthropic event names round-trip unchanged.
+        assert!(body_str.contains("message_start"));
+        assert!(body_str.contains("content_block_delta"));
+        assert!(body_str.contains("message_stop"));
+        // No translation into OpenAI's `[DONE]` sentinel.
+        assert!(!body_str.contains("[DONE]"));
+
+        // Single audit row for the whole stream — never per chunk.
+        let events = state.audit.snapshot();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].stream);
+        assert_eq!(events[0].outcome, ProxyOutcome::Success);
+    }
+
+    #[tokio::test]
+    async fn messages_inbound_auth_and_x_api_key_are_not_forwarded() {
+        let mock = start_mock_upstream(MockResponse::Json {
+            status: StatusCode::OK,
+            body: serde_json::json!({"ok": true}),
+            retry_after: None,
+        })
+        .await;
+        let state = TestState::new_anthropic(
+            Some("gateway-key"),
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: "upstream-secret".into(),
+            }),
+        );
+        let app = messages_route(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, "Bearer gateway-key")
+                    // Caller attempts to smuggle a different upstream key.
+                    .header(ANTHROPIC_API_KEY_HEADER, "attacker-key")
+                    .body(json_body(serde_json::json!({"model": "claude-3-5-sonnet"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let captured = mock.captured.lock().unwrap().clone();
+        // Inbound bearer never reaches upstream.
+        assert!(captured.authorization.is_none());
+        // The x-api-key seen upstream is the gateway-injected one, NOT the
+        // inbound caller-supplied value.
+        assert_eq!(captured.x_api_key.as_deref(), Some("upstream-secret"));
+        assert_ne!(captured.x_api_key.as_deref(), Some("attacker-key"));
+    }
+
+    #[tokio::test]
+    async fn messages_empty_upstream_key_omits_x_api_key_header() {
+        // Mirror the chat-completions empty-key invariant: when the resolved
+        // provider has no configured key, omit the outbound auth header
+        // rather than synthesising an empty `x-api-key:` value.
+        let mock = start_mock_upstream(MockResponse::Json {
+            status: StatusCode::OK,
+            body: serde_json::json!({"ok": true}),
+            retry_after: None,
+        })
+        .await;
+        let state = TestState::new_anthropic(
+            Some("gateway-key"),
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: String::new(),
+            }),
+        );
+        let app = messages_route(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, "Bearer gateway-key")
+                    .header(ANTHROPIC_API_KEY_HEADER, "attacker-key")
+                    .body(json_body(serde_json::json!({"model": "claude-3-5-sonnet"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let captured = mock.captured.lock().unwrap().clone();
+        // No outbound bearer.
+        assert!(captured.authorization.is_none());
+        // No outbound x-api-key — the inbound is dropped, and we don't
+        // synthesise an empty replacement.
+        assert!(
+            captured.x_api_key.is_none(),
+            "expected no x-api-key header upstream, got {:?}",
+            captured.x_api_key,
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_anthropic_version_default_applied_when_missing() {
+        let mock = start_mock_upstream(MockResponse::Json {
+            status: StatusCode::OK,
+            body: serde_json::json!({"ok": true}),
+            retry_after: None,
+        })
+        .await;
+        let state = TestState::new_anthropic(
+            None,
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: "k".into(),
+            }),
+        );
+        let app = messages_route(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(json_body(serde_json::json!({"model": "claude-3-5-sonnet"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let captured = mock.captured.lock().unwrap().clone();
+        assert_eq!(
+            captured.anthropic_version.as_deref(),
+            Some(DEFAULT_ANTHROPIC_VERSION)
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_anthropic_version_forwarded_when_provided() {
+        let mock = start_mock_upstream(MockResponse::Json {
+            status: StatusCode::OK,
+            body: serde_json::json!({"ok": true}),
+            retry_after: None,
+        })
+        .await;
+        let state = TestState::new_anthropic(
+            None,
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: "k".into(),
+            }),
+        );
+        let app = messages_route(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(ANTHROPIC_VERSION_HEADER, "2024-01-01")
+                    .body(json_body(serde_json::json!({"model": "claude-3-5-sonnet"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let captured = mock.captured.lock().unwrap().clone();
+        // Client-provided version wins over the default.
+        assert_eq!(captured.anthropic_version.as_deref(), Some("2024-01-01"));
+    }
+
+    #[tokio::test]
+    async fn messages_budget_gate_denial_returns_429_and_skips_upstream() {
+        let mock = start_mock_upstream(MockResponse::Json {
+            status: StatusCode::OK,
+            body: serde_json::json!({"ok": true}),
+            retry_after: None,
+        })
+        .await;
+        let state = TestState::new_anthropic(
+            None,
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: "k".into(),
+            }),
+        );
+        let state = state.with_gate(Arc::new(DenyingGate {
+            reason: "monthly budget exhausted".into(),
+            retry_after: Some(Duration::from_secs(60)),
+        }));
+        let app = messages_route(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(json_body(serde_json::json!({"model": "claude-3-5-sonnet"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry_after = resp
+            .headers()
+            .get(header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .map(String::from);
+        assert_eq!(retry_after.as_deref(), Some("60"));
+
+        // Upstream must not have been called.
+        assert!(mock.captured.lock().unwrap().body.is_empty());
+
+        let events = state.audit.snapshot();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].outcome, ProxyOutcome::BudgetExceeded);
+        assert_eq!(events[0].status, 429);
+    }
+
+    #[tokio::test]
+    async fn messages_upstream_error_does_not_leak_credentials() {
+        let mock = start_mock_upstream(MockResponse::Json {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            body: serde_json::json!({"error": {"message": "boom"}}),
+            retry_after: None,
+        })
+        .await;
+        let state = TestState::new_anthropic(
+            None,
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: "very-secret-anthropic-key".into(),
+            }),
+        );
+        let app = messages_route(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(json_body(serde_json::json!({"model": "claude-3-5-sonnet"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            !body_str.contains("very-secret-anthropic-key"),
+            "upstream key leaked into error body: {body_str}"
+        );
+
+        let events = state.audit.snapshot();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].outcome, ProxyOutcome::ProviderError);
+    }
+
+    #[tokio::test]
+    async fn messages_no_upstream_returns_503() {
+        let state = TestState::new_anthropic(None, None);
+        let app = messages_route(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(json_body(serde_json::json!({"model": "claude-3-5-sonnet"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let events = state.audit.snapshot();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].outcome, ProxyOutcome::NoUpstream);
     }
 }

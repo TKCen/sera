@@ -1403,10 +1403,12 @@ impl WorkflowAppState for AppState {
 // ── sera-7ivj: inference proxy wiring ───────────────────────────────────────
 //
 // Resolves the upstream provider from the loaded manifests. Provider name is
-// chosen by `SERA_INFERENCE_PROXY_PROVIDER` if set, otherwise the first
-// declared provider. The upstream key is read once via
+// chosen by `SERA_INFERENCE_PROXY_PROVIDER` (OpenAI route) or
+// `SERA_INFERENCE_PROXY_ANTHROPIC_PROVIDER` (Anthropic route) if set,
+// otherwise the first declared provider. The upstream key is read once via
 // `resolve_provider_api_key` so it stays in-process — the inbound caller
-// never controls it.
+// never controls it. Operators are responsible for matching the protocol of
+// the resolved provider to the route being called.
 fn proxy_http_client() -> reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT
@@ -1419,29 +1421,37 @@ fn proxy_http_client() -> reqwest::Client {
         .clone()
 }
 
+fn resolve_proxy_upstream(state: &AppState, env_var: &str) -> Option<UpstreamProvider> {
+    let preferred = std::env::var(env_var)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let names: Vec<&str> = state.manifests.providers.iter()
+        .map(|m| m.metadata.name.as_str())
+        .collect();
+    let name = preferred
+        .as_deref()
+        .filter(|n| names.contains(n))
+        .or_else(|| names.first().copied())?;
+    let spec = state.manifests.provider_spec(name).ok().flatten()?;
+    let api_key = resolve_provider_api_key(&spec).unwrap_or_default();
+    Some(UpstreamProvider {
+        base_url: spec.base_url,
+        api_key,
+    })
+}
+
 impl InferenceProxyAppState for AppState {
     fn proxy_api_key(&self) -> &Option<String> {
         &self.api_key
     }
 
     fn proxy_upstream(&self) -> Option<UpstreamProvider> {
-        let preferred = std::env::var("SERA_INFERENCE_PROXY_PROVIDER")
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        let names: Vec<&str> = self.manifests.providers.iter()
-            .map(|m| m.metadata.name.as_str())
-            .collect();
-        let name = preferred
-            .as_deref()
-            .filter(|n| names.contains(n))
-            .or_else(|| names.first().copied())?;
-        let spec = self.manifests.provider_spec(name).ok().flatten()?;
-        let api_key = resolve_provider_api_key(&spec).unwrap_or_default();
-        Some(UpstreamProvider {
-            base_url: spec.base_url,
-            api_key,
-        })
+        resolve_proxy_upstream(self, "SERA_INFERENCE_PROXY_PROVIDER")
+    }
+
+    fn proxy_anthropic_upstream(&self) -> Option<UpstreamProvider> {
+        resolve_proxy_upstream(self, "SERA_INFERENCE_PROXY_ANTHROPIC_PROVIDER")
     }
 
     fn proxy_http_client(&self) -> reqwest::Client {
@@ -4760,6 +4770,11 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/v1/chat/completions",
             post(route_inference_proxy::chat_completions::<AppState>),
+        )
+        // ── sera-7ivj PR 2: Anthropic-compatible inference proxy ─────────────
+        .route(
+            "/v1/messages",
+            post(route_inference_proxy::chat_messages::<AppState>),
         )
         // ── sera-8d1.2-follow: party mode (circles/{id}/party) ───────────────
         .route(

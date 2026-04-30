@@ -87,11 +87,14 @@ pub trait LlmProvider: Send + Sync {
 
     /// Like `chat`, but also forwards the tool-use policy to the provider.
     ///
-    /// The default implementation delegates to `chat` only when the behavior is
-    /// [`ToolUseBehavior::Auto`]. For `None`, `Required`, or `Specific` it
-    /// returns [`ThinkError::UnsupportedToolUseBehavior`] *before* calling the
-    /// LLM, so a provider that cannot translate the policy onto the wire does
-    /// not waste a turn on a free-form request that the runtime backstop in
+    /// The default implementation delegates to `chat` when either the behavior
+    /// is [`ToolUseBehavior::Auto`] *or* the tools slice is empty — with no
+    /// tools on the wire there is no policy for the provider to enforce, so a
+    /// plain no-tool LLM call is exactly what every non-`Auto` mode reduces to.
+    /// For non-`Auto` modes with a non-empty tools slice it returns
+    /// [`ThinkError::UnsupportedToolUseBehavior`] *before* calling the LLM, so
+    /// a provider that cannot translate the policy onto the wire does not
+    /// waste a turn on a free-form request that the runtime backstop in
     /// [`act`] would only catch after the fact (sera-xh3q). Providers that
     /// natively support `tool_choice` (e.g. `LlmClient`) override this method
     /// and translate the policy onto the request body. Runtime-level
@@ -103,7 +106,7 @@ pub trait LlmProvider: Send + Sync {
         tools: &[serde_json::Value],
         tool_use_behavior: &ToolUseBehavior,
     ) -> Result<ThinkResult, ThinkError> {
-        if !matches!(tool_use_behavior, ToolUseBehavior::Auto) {
+        if !matches!(tool_use_behavior, ToolUseBehavior::Auto) && !tools.is_empty() {
             return Err(ThinkError::UnsupportedToolUseBehavior(format!(
                 "{tool_use_behavior:?}"
             )));
@@ -1359,9 +1362,19 @@ mod tests {
     // ── Default LlmProvider::chat_with_behavior — sera-xh3q regression guard ──
     //
     // A provider that does not override `chat_with_behavior` must reject
-    // non-`Auto` ToolUseBehavior *before* any LLM call, instead of silently
-    // discarding the policy and free-forming the request (which the runtime
-    // backstop only catches after a wasted turn).
+    // non-`Auto` ToolUseBehavior with a non-empty tools slice *before* any LLM
+    // call, instead of silently discarding the policy and free-forming the
+    // request (which the runtime backstop only catches after a wasted turn).
+    // With an empty tools slice there is nothing to enforce on the wire, so
+    // any behavior reduces to a plain no-tool chat() and must be allowed
+    // through (sera-xh3q follow-up).
+
+    fn dummy_tool() -> serde_json::Value {
+        serde_json::json!({
+            "type": "function",
+            "function": {"name": "read_file", "parameters": {}},
+        })
+    }
 
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1400,12 +1413,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_chat_with_behavior_rejects_specific_before_llm_call() {
+    async fn default_chat_with_behavior_rejects_specific_with_tools_before_llm_call() {
         let provider = ChatCallCounter::new();
+        let tools = vec![dummy_tool()];
         let result = provider
             .chat_with_behavior(
                 &[],
-                &[],
+                &tools,
                 &ToolUseBehavior::Specific {
                     name: "read_file".to_string(),
                 },
@@ -1428,28 +1442,30 @@ mod tests {
         assert_eq!(
             provider.call_count(),
             0,
-            "default chat_with_behavior must not call chat() when rejecting Specific"
+            "default chat_with_behavior must not call chat() when rejecting Specific with tools present"
         );
     }
 
     #[tokio::test]
-    async fn default_chat_with_behavior_rejects_none_before_llm_call() {
+    async fn default_chat_with_behavior_rejects_none_with_tools_before_llm_call() {
         let provider = ChatCallCounter::new();
+        let tools = vec![dummy_tool()];
         let result = provider
-            .chat_with_behavior(&[], &[], &ToolUseBehavior::None)
+            .chat_with_behavior(&[], &tools, &ToolUseBehavior::None)
             .await;
         assert!(
             matches!(result, Err(ThinkError::UnsupportedToolUseBehavior(_))),
-            "expected UnsupportedToolUseBehavior for None"
+            "expected UnsupportedToolUseBehavior for None with tools"
         );
         assert_eq!(provider.call_count(), 0);
     }
 
     #[tokio::test]
-    async fn default_chat_with_behavior_rejects_required_before_llm_call() {
+    async fn default_chat_with_behavior_rejects_required_with_tools_before_llm_call() {
         let provider = ChatCallCounter::new();
+        let tools = vec![dummy_tool()];
         let result = provider
-            .chat_with_behavior(&[], &[], &ToolUseBehavior::Required)
+            .chat_with_behavior(&[], &tools, &ToolUseBehavior::Required)
             .await;
         assert!(matches!(
             result,
@@ -1473,13 +1489,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn default_chat_with_behavior_passes_none_with_empty_tools_through_to_chat() {
+        // sera-xh3q follow-up: with no tools on the wire there is nothing for
+        // the provider to enforce, so `None` must reduce to a plain no-tool
+        // chat() instead of returning UnsupportedToolUseBehavior.
+        let provider = ChatCallCounter::new();
+        let result = provider
+            .chat_with_behavior(&[], &[], &ToolUseBehavior::None)
+            .await;
+        assert!(
+            result.is_ok(),
+            "None with empty tools must delegate to chat()"
+        );
+        assert_eq!(
+            provider.call_count(),
+            1,
+            "None with empty tools must invoke chat() exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_chat_with_behavior_passes_specific_with_empty_tools_through_to_chat() {
+        let provider = ChatCallCounter::new();
+        let result = provider
+            .chat_with_behavior(
+                &[],
+                &[],
+                &ToolUseBehavior::Specific {
+                    name: "read_file".to_string(),
+                },
+            )
+            .await;
+        assert!(result.is_ok(), "Specific with empty tools must delegate to chat()");
+        assert_eq!(provider.call_count(), 1);
+    }
+
+    #[tokio::test]
     async fn think_handles_unsupported_behavior_via_error_stub_without_llm_call() {
         // think() should surface the unsupported-behavior error as a clean stub
         // response with no tool_calls, without invoking the provider's chat().
         let provider = ChatCallCounter::new();
+        let tools = vec![dummy_tool()];
         let result = think(
             &[],
-            &[],
+            &tools,
             &ReactMode::Default,
             Some(&provider as &dyn LlmProvider),
             &ToolUseBehavior::Specific {

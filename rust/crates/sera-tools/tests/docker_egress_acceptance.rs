@@ -52,13 +52,20 @@ use sera_tools::sandbox::{
 use uuid::Uuid;
 
 /// Harness-side image — busybox `nslookup` + `wget` + `sh` are all we need
-/// to probe the boundary. `alpine:3` is small and ubiquitous on CI runners.
-const HARNESS_IMAGE: &str = "alpine:3";
+/// to probe the boundary. Pinned to an immutable digest so upstream BusyBox
+/// behaviour changes can never silently flip the test outcome; bump
+/// deliberately when a Docker Hub re-tag actually breaks the asserts.
+/// (Tag retained alongside the digest purely for human readability — Docker
+/// resolves by digest when both are present.)
+const HARNESS_IMAGE: &str =
+    "alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11";
 
 /// Gateway-stand-in image — any HTTP server that returns a recognisable
 /// body is sufficient. nginx:alpine's default index ships an HTML body
-/// containing both `<html>` and `nginx`, which we assert on.
-const GATEWAY_IMAGE: &str = "nginx:alpine";
+/// containing both `<html>` and `nginx`, which we assert on. Pinned to an
+/// immutable digest for the same reason as [`HARNESS_IMAGE`].
+const GATEWAY_IMAGE: &str =
+    "nginx:alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de";
 
 /// Tear-down guard for a (network, gateway-stand-in) pair. Runs `docker rm
 /// -f` + `docker network rm` on `Drop` so a panicking test still removes
@@ -198,6 +205,14 @@ fn provision_bridge(test_name: &str) -> Result<(BridgeGuard, EgressBridgeConfig)
         ));
     }
 
+    // IP allocation precedes nginx accepting connections by a variable
+    // window — sub-second on a warm host, multiple seconds on a cold CI
+    // runner. Without this poll, tests 2 and 3's positive control could
+    // flake with ECONNREFUSED for reasons unrelated to egress policy. Run
+    // a disposable probe container on the same bridge that loops
+    // `wget http://<gw-ip>/` until it gets a response or gives up.
+    wait_for_gateway_ready(&network, &gateway_ip)?;
+
     Ok((
         guard,
         EgressBridgeConfig {
@@ -205,6 +220,40 @@ fn provision_bridge(test_name: &str) -> Result<(BridgeGuard, EgressBridgeConfig)
             gateway_target: gateway_ip,
         },
     ))
+}
+
+/// Block until the gateway-stand-in is accepting HTTP connections on its
+/// allocated IP, or up to ~6 s. Uses a one-shot disposable container on
+/// the same bridge so the check is image-agnostic (no nginx-specific log
+/// scraping) and works whatever HTTP server the gateway image runs.
+fn wait_for_gateway_ready(network: &str, gateway_ip: &str) -> Result<(), String> {
+    let probe_cmd = format!(
+        "for i in $(seq 1 30); do \
+            wget -q -O /dev/null --timeout=1 http://{gateway_ip}/ && exit 0; \
+            sleep 0.2; \
+         done; exit 1"
+    );
+    let out = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "--network",
+            network,
+            HARNESS_IMAGE,
+            "sh",
+            "-c",
+            &probe_cmd,
+        ])
+        .output()
+        .map_err(|e| format!("docker run readiness probe spawn: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "gateway readiness probe at http://{gateway_ip}/ on bridge {network} \
+             did not respond within ~6 s; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(())
 }
 
 fn skip(test: &str, reason: impl AsRef<str>) {

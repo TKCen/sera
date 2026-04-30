@@ -221,8 +221,19 @@ fn build_embedded_transport(
 
     // sera-a1u: per-agent DelegationBus, mirroring the runtime binary path.
     let delegation_bus = sera_runtime::delegation_bus::DelegationBus::new();
+    // sera-i4en: AgentToolRegistry backed by the production InProcAgentRouter
+    // so the agent-as-tool layer can reach in-process targets when registered.
+    // The router is per-agent here (no cross-agent registrations); a follow-up
+    // bead threads a shared Arc<InProcAgentRouter> from the gateway boot so
+    // sibling embedded transports can dispatch to one another.
+    let agent_router: Arc<sera_runtime::agent_tool_registry::InProcAgentRouter> =
+        Arc::new(sera_runtime::agent_tool_registry::InProcAgentRouter::new());
+    let agent_registry = Arc::new(
+        sera_runtime::agent_tool_registry::AgentToolRegistry::with_router(agent_router),
+    );
     let registry = TraitToolRegistry::with_builtins_and_authz(runtime_config.tool_authz_enabled)
-        .with_delegation(delegation_bus);
+        .with_delegation(delegation_bus)
+        .with_agent_tools(agent_registry);
     let registry = Arc::new(registry);
 
     let runtime_defs = registry.definitions();
@@ -8545,9 +8556,18 @@ spec:
 
             let cap_registry = Arc::new(sera_config::CapabilityRegistry::empty());
             let delegation_bus = sera_runtime::delegation_bus::DelegationBus::new();
+            // sera-i4en: parity with `build_embedded_transport` — the test
+            // fixture wires the production InProcAgentRouter so the
+            // agent-as-tool entries are present in the registry.
+            let agent_router: Arc<sera_runtime::agent_tool_registry::InProcAgentRouter> =
+                Arc::new(sera_runtime::agent_tool_registry::InProcAgentRouter::new());
+            let agent_registry = Arc::new(
+                sera_runtime::agent_tool_registry::AgentToolRegistry::with_router(agent_router),
+            );
             let registry = Arc::new(
                 TraitToolRegistry::with_builtins_and_authz(runtime_config.tool_authz_enabled)
-                    .with_delegation(delegation_bus),
+                    .with_delegation(delegation_bus)
+                    .with_agent_tools(agent_registry),
             );
             let dispatcher = RegistryDispatcher::new(Arc::clone(&registry))
                 .with_capability_registry(cap_registry, agent_name.to_string());

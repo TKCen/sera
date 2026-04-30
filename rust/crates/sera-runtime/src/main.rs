@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use sera_config::CapabilityRegistry;
+use sera_runtime::agent_tool_registry::{AgentToolRegistry, InProcAgentRouter};
 use sera_runtime::authz_builder;
 use sera_runtime::config::RuntimeConfig;
 use sera_runtime::context_engine::pipeline::ContextPipeline;
@@ -138,8 +139,17 @@ async fn main() -> anyhow::Result<()> {
     // delegation tools (session_spawn / session_yield / session_send) can
     // coordinate over a single subscriber registry.
     let delegation_bus = sera_runtime::delegation_bus::DelegationBus::new();
+    // sera-i4en: production AgentToolRegistry backed by an InProcAgentRouter
+    // so `delegate-task` / `ask-agent` / `background-task` calls reach
+    // registered in-process targets instead of the always-AgentNotFound
+    // placeholder. The runtime binary hosts a single agent process, so the
+    // router starts empty here; the gateway's embedded transport registers
+    // per-agent handlers in its own construction path.
+    let agent_router: Arc<InProcAgentRouter> = Arc::new(InProcAgentRouter::new());
+    let agent_registry = Arc::new(AgentToolRegistry::with_router(agent_router));
     let registry = TraitToolRegistry::with_builtins_and_authz(config.tool_authz_enabled)
-        .with_delegation(delegation_bus);
+        .with_delegation(delegation_bus)
+        .with_agent_tools(agent_registry);
     let registry = Arc::new(registry);
 
     // sera-eo71: load CapabilityRegistry once at startup (no hot-reload in v1

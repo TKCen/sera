@@ -129,17 +129,21 @@ fn wants_pgvector_backend(backend_pref: Option<&str>, database_url: Option<&str>
 ///
 /// `runtime` (default) names the shipped MVS where the `sera-runtime` child
 /// owns the LLM client, tool registry, capability gate, and dispatcher.
-/// `gateway` and `embedded` are the migration targets — see
+/// `gateway` and `embedded` are migration *targets* — see
 /// `docs/plan/decisions/2026-04-29-dispatch-ownership.md`. Unrecognised /
 /// empty values silently fall back to `runtime` so a typo cannot accidentally
 /// claim a security model the code does not implement.
 ///
-/// **Note:** this returns the *configured/requested* mode, not the
-/// *effective* one. This binary always launches `StdioHarness::spawn` for
-/// `sera-runtime`, so the effective mode is always `runtime` until the
-/// migration steps in ADR §4 land. Use [`effective_dispatch_mode_label`] for
-/// the value that describes what the running code actually does.
-fn dispatch_mode_label(raw: Option<&str>) -> &'static str {
+/// **This returns the operator request, not an active mode.** A return of
+/// `"gateway"` or `"embedded"` means the operator *asked for* that target;
+/// it does NOT mean the running binary owns dispatch in that process. This
+/// binary always launches `StdioHarness::spawn` for `sera-runtime`, so the
+/// effective mode is always `runtime` until the migration steps in ADR §4
+/// land. Callers that report what the running code actually does must use
+/// [`effective_dispatch_mode_label`] instead, and the boot log surfaces both
+/// values under distinct field names so an unimplemented target can never be
+/// mistaken for an active dispatch model.
+fn parse_configured_dispatch_mode(raw: Option<&str>) -> &'static str {
     match raw.map(str::trim) {
         Some("gateway") => "gateway",
         Some("embedded") => "embedded",
@@ -150,7 +154,7 @@ fn dispatch_mode_label(raw: Option<&str>) -> &'static str {
 
 fn configured_dispatch_mode_label() -> &'static str {
     let raw = std::env::var("SERA_DISPATCH_MODE").ok();
-    dispatch_mode_label(raw.as_deref())
+    parse_configured_dispatch_mode(raw.as_deref())
 }
 
 /// sera-y45a: the dispatch mode that actually applies to the running code.
@@ -4577,44 +4581,46 @@ mod tests {
         assert!(!wants_pgvector_backend(Some("redis"), Some("postgres://x")));
     }
 
-    // ── sera-y45a: dispatch_mode_label() ────────────────────────────────────
+    // ── sera-y45a: dispatch mode parsing & effective-mode reporting ─────────
     //
-    // The label is declarative: it surfaces which process owns tool dispatch
-    // in boot logs but does not change behaviour. `dispatch_mode_label`
-    // parses the operator-requested (configured) mode; `effective_dispatch_mode_label`
-    // reports what the running binary actually does. They diverge today
-    // because this binary always spawns `sera-runtime` via `StdioHarness`.
-    // Unrecognised configured values fail safe to `runtime` so a typo cannot
-    // accidentally claim a security model the code does not implement.
+    // `parse_configured_dispatch_mode` parses the operator-requested mode
+    // from `SERA_DISPATCH_MODE`; `effective_dispatch_mode_label` reports what
+    // the running binary actually does. They diverge today because this
+    // binary always spawns `sera-runtime` via `StdioHarness`, so the boot log
+    // must record them under distinct fields and never let an unimplemented
+    // target masquerade as an active dispatch model.
     // See docs/plan/decisions/2026-04-29-dispatch-ownership.md.
 
     #[test]
-    fn dispatch_mode_defaults_to_runtime_when_unset() {
-        assert_eq!(dispatch_mode_label(None), "runtime");
-        assert_eq!(dispatch_mode_label(Some("")), "runtime");
-        assert_eq!(dispatch_mode_label(Some("   ")), "runtime");
+    fn parse_configured_dispatch_mode_defaults_to_runtime_when_unset() {
+        assert_eq!(parse_configured_dispatch_mode(None), "runtime");
+        assert_eq!(parse_configured_dispatch_mode(Some("")), "runtime");
+        assert_eq!(parse_configured_dispatch_mode(Some("   ")), "runtime");
     }
 
     #[test]
-    fn dispatch_mode_recognises_canonical_values() {
-        assert_eq!(dispatch_mode_label(Some("runtime")), "runtime");
-        assert_eq!(dispatch_mode_label(Some("gateway")), "gateway");
-        assert_eq!(dispatch_mode_label(Some("embedded")), "embedded");
+    fn parse_configured_dispatch_mode_recognises_canonical_values() {
+        // Canonical *requests* — the parser echoes them back as the
+        // configured request. The boot log surfaces these only under
+        // `dispatch_mode_configured`, never as the active `dispatch_mode`.
+        assert_eq!(parse_configured_dispatch_mode(Some("runtime")), "runtime");
+        assert_eq!(parse_configured_dispatch_mode(Some("gateway")), "gateway");
+        assert_eq!(parse_configured_dispatch_mode(Some("embedded")), "embedded");
     }
 
     #[test]
-    fn dispatch_mode_trims_surrounding_whitespace() {
-        assert_eq!(dispatch_mode_label(Some("  gateway  ")), "gateway");
-        assert_eq!(dispatch_mode_label(Some("\tembedded\n")), "embedded");
+    fn parse_configured_dispatch_mode_trims_surrounding_whitespace() {
+        assert_eq!(parse_configured_dispatch_mode(Some("  gateway  ")), "gateway");
+        assert_eq!(parse_configured_dispatch_mode(Some("\tembedded\n")), "embedded");
     }
 
     #[test]
-    fn dispatch_mode_unknown_falls_back_to_runtime() {
+    fn parse_configured_dispatch_mode_unknown_falls_back_to_runtime() {
         // case-sensitive on purpose: env values are documented lowercase, and
         // accidental uppercase should not silently claim a different model.
-        assert_eq!(dispatch_mode_label(Some("RUNTIME")), "runtime");
-        assert_eq!(dispatch_mode_label(Some("Gateway")), "runtime");
-        assert_eq!(dispatch_mode_label(Some("foo")), "runtime");
+        assert_eq!(parse_configured_dispatch_mode(Some("RUNTIME")), "runtime");
+        assert_eq!(parse_configured_dispatch_mode(Some("Gateway")), "runtime");
+        assert_eq!(parse_configured_dispatch_mode(Some("foo")), "runtime");
     }
 
     #[test]
@@ -4629,16 +4635,38 @@ mod tests {
     }
 
     #[test]
-    fn effective_and_configured_diverge_for_target_modes() {
-        // Even when the operator requests gateway/embedded, the effective
-        // label must not echo the request. Boot logs report effective as
-        // `runtime` and surface the configured request separately.
-        assert_eq!(effective_dispatch_mode_label(), "runtime");
-        assert_ne!(dispatch_mode_label(Some("gateway")), effective_dispatch_mode_label());
-        assert_ne!(dispatch_mode_label(Some("embedded")), effective_dispatch_mode_label());
-        // Default and explicit `runtime` request agree with effective.
-        assert_eq!(dispatch_mode_label(Some("runtime")), effective_dispatch_mode_label());
-        assert_eq!(dispatch_mode_label(None), effective_dispatch_mode_label());
+    fn effective_dispatch_mode_never_echoes_unimplemented_request() {
+        // The boot log path uses `effective_dispatch_mode_label()` for the
+        // `dispatch_mode` field. For every value an operator can put in
+        // SERA_DISPATCH_MODE — including the not-yet-implemented `gateway`
+        // and `embedded` targets — the effective mode must remain `runtime`
+        // so the active label cannot claim a security model the code does
+        // not implement.
+        for requested in [
+            None,
+            Some("runtime"),
+            Some("gateway"),
+            Some("embedded"),
+            Some("Gateway"),
+            Some("foo"),
+            Some(""),
+        ] {
+            let configured = parse_configured_dispatch_mode(requested);
+            let effective = effective_dispatch_mode_label();
+            assert_eq!(
+                effective, "runtime",
+                "effective mode must be `runtime` until ADR §4 lands (request={requested:?})"
+            );
+            // Either the request agrees with the effective mode, or the
+            // boot log is responsible for surfacing the divergence under a
+            // distinct field — never as the active `dispatch_mode`.
+            if configured != effective {
+                assert!(
+                    matches!(configured, "gateway" | "embedded"),
+                    "only known migration targets may diverge; got {configured:?}"
+                );
+            }
+        }
     }
 
     fn test_manifests() -> ManifestSet {

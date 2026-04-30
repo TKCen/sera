@@ -82,24 +82,21 @@ pub const WIMSE_DEFAULT_ACCOUNT_ID: &str = "local";
 /// Tier-1 / pet-mode default project id used in WIMSE URI projection.
 pub const WIMSE_DEFAULT_PROJECT_ID: &str = "default";
 
-/// Percent-encode a single path segment for use in a SPIFFE/WIMSE URI.
+/// Sanitize a single path segment for use in a SPIFFE/WIMSE URI.
 ///
-/// Conservative encoding: characters in the RFC 3986 `unreserved` set
-/// (`A-Z a-z 0-9 - . _ ~`) pass through unchanged; every other byte is
-/// percent-encoded as `%XX` with uppercase hex. This is deterministic and
-/// round-trip-safe for common SERA principal ids like `discord:123` or
-/// `ext:a2a:reviewer-bot`, which contain `:` (a reserved sub-delim).
+/// The SPIFFE-ID specification (`SPIFFE-ID.md`) restricts path components to
+/// ASCII letters, digits, dot (`.`), dash (`-`), and underscore (`_`), and
+/// explicitly forbids percent-encoded characters. Any byte outside that
+/// allow-list is replaced with a single `_`. This is deterministic and
+/// SPIFFE-compliant for SERA principal ids like `discord:123` or
+/// `ext:a2a:reviewer-bot`, which contain `:` (rejected by SPIFFE parsers).
+/// The transform is not invertible by design — `Principal::id` remains the
+/// source of truth; the WIMSE URI is a projection for cross-system audit.
 fn wimse_escape_segment(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for byte in input.bytes() {
-        let is_unreserved = byte.is_ascii_alphanumeric()
-            || matches!(byte, b'-' | b'.' | b'_' | b'~');
-        if is_unreserved {
-            out.push(byte as char);
-        } else {
-            out.push('%');
-            out.push_str(&format!("{:02X}", byte));
-        }
+        let is_safe = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_');
+        out.push(if is_safe { byte as char } else { '_' });
     }
     out
 }
@@ -107,7 +104,8 @@ fn wimse_escape_segment(input: &str) -> String {
 /// Build a deterministic WIMSE/SPIFFE URI projection from principal coordinates.
 ///
 /// Form: `spiffe://{domain}/{account}/{project}/{kind}/{id}` where `id` is
-/// percent-encoded per `wimse_escape_segment`.
+/// sanitized per `wimse_escape_segment` to satisfy the SPIFFE-ID character
+/// allow-list.
 fn build_wimse_uri(
     domain: &str,
     account_id: &str,
@@ -130,6 +128,7 @@ fn build_wimse_uri(
 /// MVS scope: simplified model without groups or external agent identity.
 /// All principals have full access in autonomous mode (Tier 1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "PrincipalDeser")]
 pub struct Principal {
     pub id: PrincipalId,
     pub kind: PrincipalKind,
@@ -141,11 +140,44 @@ pub struct Principal {
     /// Platform source of the external identity (e.g., "discord").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
-    /// Trust level pinned at registration; defaults to `FirstParty` for
-    /// backward-compatible deserialization of records persisted before this
-    /// field existed.
-    #[serde(default)]
+    /// Trust level pinned at registration. When the field is absent in the
+    /// serialized form (legacy records written before this field existed),
+    /// deserialization falls back to `PrincipalKind::default_trust_level`
+    /// — `Unverified` for `ExternalAgent`, `FirstParty` otherwise — so that
+    /// pre-existing external-agent records do not silently upgrade.
     pub trust_level: TrustLevel,
+}
+
+/// Mirror struct used for backward-compatible `Principal` deserialization.
+/// The only behavioral difference is that `trust_level` is optional and,
+/// when missing, is filled from the kind-aware default.
+#[derive(Deserialize)]
+struct PrincipalDeser {
+    id: PrincipalId,
+    kind: PrincipalKind,
+    name: String,
+    #[serde(default)]
+    external_id: Option<String>,
+    #[serde(default)]
+    platform: Option<String>,
+    #[serde(default)]
+    trust_level: Option<TrustLevel>,
+}
+
+impl From<PrincipalDeser> for Principal {
+    fn from(d: PrincipalDeser) -> Self {
+        let trust_level = d
+            .trust_level
+            .unwrap_or_else(|| d.kind.default_trust_level());
+        Self {
+            id: d.id,
+            kind: d.kind,
+            name: d.name,
+            external_id: d.external_id,
+            platform: d.platform,
+            trust_level,
+        }
+    }
 }
 
 impl Principal {
@@ -480,20 +512,21 @@ mod tests {
     }
 
     /// `Principal::id` carries `:` separators (`discord:123`, `ext:a2a:bar`).
-    /// `:` is a reserved sub-delim in RFC 3986; we percent-encode it for a
-    /// conservative, deterministic SPIFFE-URI shape. This test pins that
-    /// choice — adjust intentionally if encoding policy ever changes.
+    /// SPIFFE-ID forbids `:` and percent-encoded characters in path
+    /// components, so disallowed bytes are deterministically replaced with
+    /// `_`. This test pins that choice — adjust intentionally if the
+    /// encoding policy ever changes.
     #[test]
-    fn wimse_uri_percent_encodes_reserved_chars() {
+    fn wimse_uri_replaces_disallowed_chars_with_underscore() {
         let p = Principal::from_discord("123", "user");
         assert_eq!(
             p.wimse_uri("sera.local"),
-            "spiffe://sera.local/local/default/human/discord%3A123",
+            "spiffe://sera.local/local/default/human/discord_123",
         );
         let ext = Principal::external_agent("a2a", "reviewer-bot");
         assert_eq!(
             ext.wimse_uri("sera.local"),
-            "spiffe://sera.local/local/default/external_agent/ext%3Aa2a%3Areviewer-bot",
+            "spiffe://sera.local/local/default/external_agent/ext_a2a_reviewer-bot",
         );
     }
 
@@ -502,7 +535,7 @@ mod tests {
         let p = Principal::for_agent("a-1", "a");
         assert_eq!(
             p.wimse_uri_for("sera.example.com", "acct-7", "proj-9"),
-            "spiffe://sera.example.com/acct-7/proj-9/agent/agent%3Aa-1",
+            "spiffe://sera.example.com/acct-7/proj-9/agent/agent_a-1",
         );
     }
 
@@ -514,16 +547,60 @@ mod tests {
     }
 
     #[test]
-    fn wimse_escape_unreserved_passthrough() {
-        // unreserved set: A-Z a-z 0-9 - . _ ~
-        let s = "Abc-123._~";
+    fn wimse_escape_allowed_passthrough() {
+        // SPIFFE-ID allowed set: A-Z a-z 0-9 - . _
+        let s = "Abc-123._";
         assert_eq!(wimse_escape_segment(s), s);
     }
 
     #[test]
-    fn wimse_escape_reserved_encoded() {
-        assert_eq!(wimse_escape_segment("a:b"), "a%3Ab");
-        assert_eq!(wimse_escape_segment("a/b"), "a%2Fb");
-        assert_eq!(wimse_escape_segment("a b"), "a%20b");
+    fn wimse_escape_disallowed_substituted_with_underscore() {
+        // `:` and `/` and space are all SPIFFE-disallowed; collapse to `_`.
+        assert_eq!(wimse_escape_segment("a:b"), "a_b");
+        assert_eq!(wimse_escape_segment("a/b"), "a_b");
+        assert_eq!(wimse_escape_segment("a b"), "a_b");
+        // `~` is unreserved per RFC 3986 but disallowed by SPIFFE-ID.
+        assert_eq!(wimse_escape_segment("a~b"), "a_b");
+    }
+
+    /// SPIFFE-ID forbids percent-encoded characters in path components,
+    /// so the projection must never emit `%XX` regardless of input.
+    #[test]
+    fn wimse_uri_never_emits_percent_encoding() {
+        let p = Principal::external_agent("a2a", "weird name!");
+        let uri = p.wimse_uri("sera.local");
+        assert!(!uri.contains('%'), "URI should not contain `%`: {uri}");
+    }
+
+    /// Legacy serialized records written before `trust_level` existed must
+    /// deserialize using the kind-aware default — `ExternalAgent` →
+    /// `Unverified` rather than the global `FirstParty`. This prevents a
+    /// silent trust upgrade for pre-existing external-agent rows.
+    #[test]
+    fn principal_serde_legacy_external_agent_defaults_to_unverified() {
+        let legacy = r#"{
+            "id": "ext:a2a:bot",
+            "kind": "external_agent",
+            "name": "bot",
+            "platform": "a2a"
+        }"#;
+        let parsed: Principal = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.kind, PrincipalKind::ExternalAgent);
+        assert_eq!(parsed.trust_level, TrustLevel::Unverified);
+    }
+
+    /// An explicit `trust_level` field always wins over the kind default,
+    /// even when it conflicts (e.g. an external agent marked first-party).
+    #[test]
+    fn principal_serde_explicit_trust_level_overrides_kind_default() {
+        let payload = r#"{
+            "id": "ext:a2a:bot",
+            "kind": "external_agent",
+            "name": "bot",
+            "trust_level": "first_party"
+        }"#;
+        let parsed: Principal = serde_json::from_str(payload).unwrap();
+        assert_eq!(parsed.kind, PrincipalKind::ExternalAgent);
+        assert_eq!(parsed.trust_level, TrustLevel::FirstParty);
     }
 }

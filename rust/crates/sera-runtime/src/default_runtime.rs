@@ -1033,6 +1033,19 @@ mod tests {
                 plan: None,
             })
         }
+
+        // Override the default to simulate a provider that accepts every
+        // ToolUseBehavior on the wire but whose model still emits whatever
+        // tool calls it wants — exactly the case the runtime backstop in
+        // turn::act exists to catch (sera-xh3q regression guard).
+        async fn chat_with_behavior(
+            &self,
+            messages: &[serde_json::Value],
+            tools: &[serde_json::Value],
+            _tool_use_behavior: &sera_types::tool::ToolUseBehavior,
+        ) -> Result<turn::ThinkResult, turn::ThinkError> {
+            self.chat(messages, tools).await
+        }
     }
 
     /// Dispatcher that always returns an error for every call.

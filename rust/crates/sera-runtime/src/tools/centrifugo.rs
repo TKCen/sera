@@ -164,7 +164,13 @@ impl CentrifugoPublisher {
     }
 
     async fn send_request(&self, payload: serde_json::Value) -> anyhow::Result<()> {
-        let client = reqwest::Client::new();
+        // sera-rdg4: pre-flight the configured Centrifugo base URL through
+        // the SSRF validator and pin the resolved addrs.  Loopback /
+        // private / link-local / cloud-metadata overrides of `base_url`
+        // are rejected before any request is sent.
+        let client = crate::tools::safe_client::build_validated_client(&self.base_url)
+            .await
+            .map_err(|e| anyhow::anyhow!("centrifugo: {e}"))?;
         let resp = client
             .post(format!("{}/api/publish", self.base_url))
             .header("Authorization", format!("apikey {}", self.api_key))

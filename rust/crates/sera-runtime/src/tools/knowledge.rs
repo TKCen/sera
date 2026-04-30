@@ -90,7 +90,11 @@ impl Tool for KnowledgeStore {
             .unwrap_or_else(|_| "http://sera-core:3000".to_string());
         let token = std::env::var("SERA_IDENTITY_TOKEN").unwrap_or_default();
 
-        let client = reqwest::Client::new();
+        // sera-rdg4: validate `core_url` against the SSRF blocklist before
+        // sending the write request.
+        let client = crate::tools::safe_client::build_validated_client(&core_url)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         let payload = serde_json::json!({
             "key": key,
             "content": content,
@@ -203,7 +207,11 @@ impl Tool for KnowledgeQuery {
             payload["scope"] = serde_json::Value::String(s.to_string());
         }
 
-        let client = reqwest::Client::new();
+        // sera-rdg4: SSRF-validated client (loopback/private/link-local
+        // override of `SERA_CORE_URL` is rejected before any request).
+        let client = crate::tools::safe_client::build_validated_client(&core_url)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         let resp = client
             .post(format!("{}/api/knowledge/query", core_url))
             .bearer_auth(&token)

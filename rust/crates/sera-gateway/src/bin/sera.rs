@@ -7621,11 +7621,15 @@ spec:
             );
             // Empty allow list — match the manifest's `tools.allow: []`.
             env.insert("SERA_AGENT_TOOLS_ALLOW".to_string(), String::new());
-            let harness = StdioHarness::spawn(runtime_bin.to_string_lossy().as_ref(), env)
-                .await
-                .expect("spawn real sera-runtime");
+            let supervisor = RuntimeChildSupervisor::start(
+                "sera".to_string(),
+                runtime_bin.to_string_lossy().into_owned(),
+                env,
+            )
+            .await
+            .expect("spawn real sera-runtime supervisor");
             let mut harnesses = std::collections::HashMap::new();
-            harnesses.insert("sera".to_string(), Arc::new(harness));
+            harnesses.insert("sera".to_string(), supervisor);
 
             let state = Arc::new(AppState {
                 db: Mutex::new(SqliteDb::open_in_memory().unwrap()),

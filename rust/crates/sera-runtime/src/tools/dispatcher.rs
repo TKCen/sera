@@ -272,6 +272,13 @@ impl ToolDispatcher for RegistryDispatcher {
             Err(e) => Err(e),
         }
     }
+
+    /// Expose the registered tool's declared risk level so `turn::act` can
+    /// drive HITL approval routing per call (sera-gran). Returns `None` for
+    /// unknown names so the caller falls back to its conservative default.
+    fn tool_risk_level(&self, tool_name: &str) -> Option<sera_types::tool::RiskLevel> {
+        self.registry.get(tool_name).map(|t| t.metadata().risk_level)
+    }
 }
 
 #[cfg(test)]

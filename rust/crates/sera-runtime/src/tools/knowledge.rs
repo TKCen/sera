@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
-    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema, ToolScope,
 };
 
 // ── KnowledgeStore ──────────────────────────────────────────────────────────
@@ -30,6 +30,7 @@ impl Tool for KnowledgeStore {
             risk_level: RiskLevel::Write,
             execution_target: ExecutionTarget::Remote("sera-core".to_string()),
             tags: vec!["memory".to_string(), "knowledge".to_string()],
+            scope: ToolScope::Write,
         }
     }
 
@@ -143,6 +144,7 @@ impl Tool for KnowledgeQuery {
             risk_level: RiskLevel::Read,
             execution_target: ExecutionTarget::Remote("sera-core".to_string()),
             tags: vec!["memory".to_string(), "knowledge".to_string()],
+            scope: ToolScope::Read,
         }
     }
 
@@ -247,5 +249,13 @@ mod tests {
     fn metadata_risk_levels() {
         assert_eq!(KnowledgeStore.metadata().risk_level, RiskLevel::Write);
         assert_eq!(KnowledgeQuery.metadata().risk_level, RiskLevel::Read);
+    }
+
+    /// sera-u4gj — `knowledge-store` persists state (`Write`),
+    /// `knowledge-query` reads it (`Read`). Per design report §5.4.
+    #[test]
+    fn metadata_scopes() {
+        assert_eq!(KnowledgeStore.metadata().scope, ToolScope::Write);
+        assert_eq!(KnowledgeQuery.metadata().scope, ToolScope::Read);
     }
 }

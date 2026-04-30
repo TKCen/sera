@@ -10,7 +10,7 @@ use std::path::Path;
 use async_trait::async_trait;
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
-    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema, ToolScope,
 };
 
 pub struct Glob;
@@ -26,6 +26,7 @@ impl Tool for Glob {
             risk_level: RiskLevel::Read,
             execution_target: ExecutionTarget::Local,
             tags: vec!["fs".to_string()],
+            scope: ToolScope::Read,
         }
     }
 
@@ -173,5 +174,11 @@ mod tests {
     fn metadata_risk_level_is_read() {
         assert_eq!(Glob.metadata().risk_level, RiskLevel::Read);
         assert_eq!(Glob.metadata().name, "glob");
+    }
+
+    /// sera-u4gj — glob is pure directory traversal, so `ToolScope::Read`.
+    #[test]
+    fn metadata_scope_is_read() {
+        assert_eq!(Glob.metadata().scope, ToolScope::Read);
     }
 }

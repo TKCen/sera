@@ -139,6 +139,43 @@ pub enum ExecutionTarget {
     External,
 }
 
+/// Coarse capability category for tool authorization (sera-u4gj).
+///
+/// Mirrors the ZeroID vocabulary (zeroid scout report §2.8, §6.5). A
+/// principal's `PrincipalPolicy.allowed_tool_scopes` (sera-fhcr) must
+/// contain a tool's declared scope BEFORE any tool-name allow/deny, PDP,
+/// or escalation check. PR1 only introduces the vocabulary and
+/// per-tool annotations; the dispatcher gate lands in PR3.
+///
+/// `Default` resolves to `Read` so on-disk metadata predating PR1
+/// deserializes as the safest non-empty scope. Built-in tools must
+/// declare their scope explicitly — the
+/// `with_builtins_scopes_are_correct` test in `sera-runtime` enforces
+/// this contract.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ToolScope {
+    /// Read filesystem, fetch local data, list directories. Side-effect-free.
+    #[default]
+    Read,
+    /// Mutate filesystem, write files, edit code, persist memory.
+    Write,
+    /// Spawn processes / shells / arbitrary execution.
+    Execute,
+    /// Outbound network (HTTP, sockets) — separate from Read because
+    /// network egress carries exfiltration risk independent of read scope.
+    Network,
+    /// Spawn or call sub-agents (delegate / ask / background / spawn).
+    Agent,
+    /// Version-control operations (commit, push, branch, tag).
+    Vcs,
+    /// Privileged operations: meta-config change, kill-switch, eviction,
+    /// HITL bypass, hot-reloadable rule catalog edits.
+    Admin,
+}
+
 /// Metadata describing a tool's identity and capabilities.
 /// SPEC-tools: returned by Tool::metadata(), used for progressive disclosure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +189,12 @@ pub struct ToolMetadata {
     pub execution_target: ExecutionTarget,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Coarse capability category consulted by the dispatcher gate
+    /// (sera-u4gj). Defaults to [`ToolScope::Read`] for backward-compatible
+    /// deserialization of pre-PR1 fixtures; built-in tools declare this
+    /// explicitly.
+    #[serde(default)]
+    pub scope: ToolScope,
 }
 
 /// Tool profile — preset allow/deny configurations.
@@ -821,11 +864,79 @@ mod tests {
             risk_level: RiskLevel::Execute,
             execution_target: ExecutionTarget::Sandbox("docker".to_string()),
             tags: vec!["compute".to_string()],
+            scope: ToolScope::Execute,
         };
         let json = serde_json::to_string(&meta).unwrap();
         let parsed: ToolMetadata = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, "shell");
         assert_eq!(parsed.risk_level, RiskLevel::Execute);
+        assert_eq!(parsed.scope, ToolScope::Execute);
+    }
+
+    /// sera-u4gj — every ToolScope variant serializes to its kebab-case
+    /// vocabulary token. The dispatcher gate (PR3) and config schema
+    /// (sera-config follow-up) match against these exact strings, so a
+    /// rename here is a wire-incompatible change.
+    #[test]
+    fn tool_scope_serde_kebab_case() {
+        let cases = [
+            (ToolScope::Read, "\"read\""),
+            (ToolScope::Write, "\"write\""),
+            (ToolScope::Execute, "\"execute\""),
+            (ToolScope::Network, "\"network\""),
+            (ToolScope::Agent, "\"agent\""),
+            (ToolScope::Vcs, "\"vcs\""),
+            (ToolScope::Admin, "\"admin\""),
+        ];
+        for (scope, expected) in cases {
+            let json = serde_json::to_string(&scope).unwrap();
+            assert_eq!(json, expected, "scope {scope:?} serialized as {json}");
+            let parsed: ToolScope = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, scope);
+        }
+    }
+
+    /// sera-u4gj — `Default::default()` resolves to `Read` so missing
+    /// `scope` fields in legacy fixtures deserialize to the safest
+    /// non-empty scope.
+    #[test]
+    fn tool_scope_default_is_read() {
+        assert_eq!(ToolScope::default(), ToolScope::Read);
+    }
+
+    /// sera-u4gj — when a serialized `ToolMetadata` lacks the `scope`
+    /// field (pre-PR1 fixtures, on-disk metadata cached before this PR),
+    /// deserialization fills in `Read`.
+    #[test]
+    fn tool_metadata_scope_default_when_missing() {
+        let json = r#"{
+            "name": "legacy-tool",
+            "description": "no scope field",
+            "version": "1.0.0",
+            "risk_level": "read",
+            "execution_target": "in_process"
+        }"#;
+        let meta: ToolMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.scope, ToolScope::Read);
+    }
+
+    /// sera-u4gj — serializing `ToolMetadata` always emits `scope` so
+    /// downstream consumers (dispatcher gate, audit pipeline) can rely
+    /// on the field being present.
+    #[test]
+    fn tool_metadata_scope_field_serialized() {
+        let meta = ToolMetadata {
+            name: "shell-exec".to_string(),
+            description: "exec".to_string(),
+            version: "1.0.0".to_string(),
+            author: None,
+            risk_level: RiskLevel::Execute,
+            execution_target: ExecutionTarget::Local,
+            tags: vec![],
+            scope: ToolScope::Execute,
+        };
+        let value = serde_json::to_value(&meta).unwrap();
+        assert_eq!(value["scope"], serde_json::Value::String("execute".into()));
     }
 
     #[test]

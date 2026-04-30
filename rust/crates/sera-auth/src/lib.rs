@@ -13,6 +13,7 @@ pub mod casbin_adapter;
 pub mod error;
 pub mod jwt;
 pub mod middleware;
+pub mod scope;
 pub mod types;
 
 // Re-export commonly used types
@@ -30,4 +31,5 @@ pub use casbin_adapter::{CasbinAuthzAdapter, CasbinError};
 pub use error::AuthError;
 pub use jwt::{JwtClaims, JwtService};
 pub use middleware::auth_middleware;
+pub use scope::ToolScope;
 pub use types::{ActingContext, AuthMethod};

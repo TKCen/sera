@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
-    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema, ToolScope,
 };
 
 // ── ToolSearch ──────────────────────────────────────────────────────────────
@@ -29,6 +29,11 @@ impl Tool for ToolSearch {
             risk_level: RiskLevel::Read,
             execution_target: ExecutionTarget::Remote("sera-core".to_string()),
             tags: vec!["discovery".to_string()],
+            // sera-u4gj: catalog discovery is read-only metadata lookup —
+            // no exfiltration risk distinct from other reads, so `Read`
+            // (not `Network`) per design report §5.4. The transport
+            // layer is internal-service-only by `safe_client`.
+            scope: ToolScope::Read,
         }
     }
 
@@ -128,6 +133,9 @@ impl Tool for SkillSearch {
             risk_level: RiskLevel::Read,
             execution_target: ExecutionTarget::Remote("sera-core".to_string()),
             tags: vec!["discovery".to_string()],
+            // sera-u4gj: same rationale as `tool-search` — internal
+            // catalog discovery, `Read` per design report §5.4.
+            scope: ToolScope::Read,
         }
     }
 
@@ -217,5 +225,12 @@ mod tests {
     fn metadata_risk_levels() {
         assert_eq!(ToolSearch.metadata().risk_level, RiskLevel::Read);
         assert_eq!(SkillSearch.metadata().risk_level, RiskLevel::Read);
+    }
+
+    /// sera-u4gj — both discovery tools are `ToolScope::Read`.
+    #[test]
+    fn metadata_scopes() {
+        assert_eq!(ToolSearch.metadata().scope, ToolScope::Read);
+        assert_eq!(SkillSearch.metadata().scope, ToolScope::Read);
     }
 }

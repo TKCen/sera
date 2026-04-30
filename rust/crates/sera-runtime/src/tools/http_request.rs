@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use sera_tools::ssrf::SsrfValidator;
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
-    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema, ToolScope,
 };
 
 pub struct HttpRequest;
@@ -34,6 +34,10 @@ impl Tool for HttpRequest {
             risk_level: RiskLevel::Execute,
             execution_target: ExecutionTarget::External,
             tags: vec!["network".to_string()],
+            // sera-u4gj: outbound HTTP — `Network` scope independent of
+            // `Execute` risk so a `Network`-scoped reviewer can fetch but
+            // not shell out.
+            scope: ToolScope::Network,
         }
     }
 
@@ -185,6 +189,15 @@ mod tests {
     fn metadata_risk_level_is_execute() {
         assert_eq!(HttpRequest.metadata().risk_level, RiskLevel::Execute);
         assert_eq!(HttpRequest.metadata().name, "http-request");
+    }
+
+    /// sera-u4gj — http-request emits outbound traffic, so it carries
+    /// `ToolScope::Network` per design report §5.4. Decoupled from
+    /// `RiskLevel::Execute` so a `Network`-scoped reviewer can use it
+    /// without gaining shell exec.
+    #[test]
+    fn metadata_scope_is_network() {
+        assert_eq!(HttpRequest.metadata().scope, ToolScope::Network);
     }
 
     /// sera-udjf — IP-literal hosts in the SSRF blocklist must be rejected

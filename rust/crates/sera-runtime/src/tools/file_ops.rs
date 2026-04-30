@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use sera_types::tool::{
     ExecutionTarget, FunctionParameters, ParameterSchema, RiskLevel, Tool, ToolContext, ToolError,
-    ToolInput, ToolMetadata, ToolOutput, ToolSchema,
+    ToolInput, ToolMetadata, ToolOutput, ToolSchema, ToolScope,
 };
 
 use crate::tools::file_write::locked_write;
@@ -32,6 +32,7 @@ impl Tool for FileRead {
             risk_level: RiskLevel::Read,
             execution_target: ExecutionTarget::Local,
             tags: vec!["fs".to_string()],
+            scope: ToolScope::Read,
         }
     }
 
@@ -88,6 +89,7 @@ impl Tool for FileWrite {
             risk_level: RiskLevel::Write,
             execution_target: ExecutionTarget::Local,
             tags: vec!["fs".to_string()],
+            scope: ToolScope::Write,
         }
     }
 
@@ -165,6 +167,7 @@ impl Tool for FileList {
             risk_level: RiskLevel::Read,
             execution_target: ExecutionTarget::Local,
             tags: vec!["fs".to_string()],
+            scope: ToolScope::Read,
         }
     }
 
@@ -255,5 +258,13 @@ mod tests {
         assert_eq!(FileRead.metadata().risk_level, RiskLevel::Read);
         assert_eq!(FileWrite.metadata().risk_level, RiskLevel::Write);
         assert_eq!(FileList.metadata().risk_level, RiskLevel::Read);
+    }
+
+    /// sera-u4gj — every file-ops tool declares its `ToolScope` explicitly.
+    #[test]
+    fn metadata_scopes() {
+        assert_eq!(FileRead.metadata().scope, ToolScope::Read);
+        assert_eq!(FileWrite.metadata().scope, ToolScope::Write);
+        assert_eq!(FileList.metadata().scope, ToolScope::Read);
     }
 }

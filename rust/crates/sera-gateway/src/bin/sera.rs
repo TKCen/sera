@@ -7237,11 +7237,12 @@ spec:
         use tokio::net::TcpListener;
         use tokio::sync::oneshot;
 
-        /// Locate the workspace's `target/debug/sera-runtime` binary. Walks
-        /// upward from `CARGO_MANIFEST_DIR` (`.../rust/crates/sera-gateway`)
-        /// looking for a sibling `target/debug/sera-runtime[.exe]` produced by
-        /// the workspace build. Cargo guarantees this binary is built first
-        /// because `sera-runtime` is a regular dependency of `sera-gateway`.
+        /// Locate the workspace's `target/debug/sera-runtime` binary,
+        /// building it on demand if absent. `sera-gateway` depends on
+        /// `sera-runtime` as a library, so a clean `cargo test -p
+        /// sera-gateway` does not build the runtime's binary target — we
+        /// must invoke `cargo build -p sera-runtime --bin sera-runtime`
+        /// ourselves to make the test self-contained.
         fn locate_runtime_bin() -> PathBuf {
             let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             let exe_name = if cfg!(windows) {
@@ -7249,29 +7250,51 @@ spec:
             } else {
                 "sera-runtime"
             };
-            // CARGO_TARGET_DIR overrides; otherwise walk parents looking for
-            // `target/debug/<exe>`.
-            if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
-                let candidate = PathBuf::from(target).join("debug").join(exe_name);
-                if candidate.exists() {
-                    return candidate;
+
+            let find_existing = || -> Option<PathBuf> {
+                if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
+                    let candidate = PathBuf::from(target).join("debug").join(exe_name);
+                    if candidate.exists() {
+                        return Some(candidate);
+                    }
                 }
-            }
-            let mut here: Option<&std::path::Path> = Some(&manifest_dir);
-            while let Some(dir) = here {
-                let candidate = dir.join("target").join("debug").join(exe_name);
-                if candidate.exists() {
-                    return candidate;
+                let mut here: Option<&std::path::Path> = Some(&manifest_dir);
+                while let Some(dir) = here {
+                    let candidate = dir.join("target").join("debug").join(exe_name);
+                    if candidate.exists() {
+                        return Some(candidate);
+                    }
+                    here = dir.parent();
                 }
-                here = dir.parent();
+                None
+            };
+
+            if let Some(found) = find_existing() {
+                return found;
             }
-            panic!(
-                "sera-runtime binary not found via CARGO_TARGET_DIR or any \
-                 ancestor target/debug/{exe_name} from {}. Run `cargo build -p \
-                 sera-runtime` first or `cargo test -p sera-gateway` (which \
-                 builds it transitively).",
-                manifest_dir.display()
+
+            // Build the binary via the same cargo that's running these tests.
+            // Cargo sets CARGO to its own path; fall back to PATH lookup.
+            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+            let status = std::process::Command::new(&cargo)
+                .args(["build", "-p", "sera-runtime", "--bin", "sera-runtime"])
+                .status()
+                .unwrap_or_else(|e| {
+                    panic!("failed to invoke `{cargo} build -p sera-runtime`: {e}")
+                });
+            assert!(
+                status.success(),
+                "`cargo build -p sera-runtime --bin sera-runtime` failed with {status}"
             );
+
+            find_existing().unwrap_or_else(|| {
+                panic!(
+                    "sera-runtime binary still not found after `cargo build -p \
+                     sera-runtime` (searched CARGO_TARGET_DIR and ancestor \
+                     target/debug/{exe_name} from {})",
+                    manifest_dir.display()
+                )
+            })
         }
 
         /// Manifest YAML used by the production-E2E fixture. Differs from

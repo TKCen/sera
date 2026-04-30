@@ -1068,9 +1068,15 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         flag.store(true, Ordering::Relaxed);
 
-        tokio::time::timeout(Duration::from_millis(500), handle)
+        // 3s budget rather than 500ms so the test absorbs CI variance on
+        // the real WSS handshake to `gateway.discord.gg` that
+        // `connect_and_run` performs before it can observe the flag — that
+        // handshake can take 300-1000ms on slower runners. The 100ms
+        // interruptible-sleep tick still bounds the post-flag exit, so a
+        // genuine regression in the wake-up path will still fail.
+        tokio::time::timeout(Duration::from_secs(3), handle)
             .await
-            .expect("run() should exit within 500ms after shutting_down is set")
+            .expect("run() should exit within 3s after shutting_down is set")
             .expect("task should not panic")
             .expect("run() should return Ok");
     }

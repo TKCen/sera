@@ -49,21 +49,16 @@ impl PrincipalKind {
 /// Trust level pinned to a principal at registration.
 /// Mirrors ZeroID's three-level enum (see SPEC-identity-authz §10 open question 3
 /// and the zeroid-agent-identity-scout-2026-04-30 report §2.10).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrustLevel {
     /// SERA-owned or operator-pinned identity.
+    #[default]
     FirstParty,
     /// External harness or service that has been verified by an operator.
     VerifiedThirdParty,
     /// External or community-supplied identity with no verification.
     Unverified,
-}
-
-impl Default for TrustLevel {
-    fn default() -> Self {
-        Self::FirstParty
-    }
 }
 
 /// A unique identifier for a principal.

@@ -179,6 +179,10 @@ impl AgentTurnTransport for EmbeddedRuntimeTransport {
         }
         Ok(())
     }
+
+    fn dispatch_kind(&self) -> &'static str {
+        "embedded"
+    }
 }
 
 /// Project a runtime [`TurnOutcome`] into the gateway's [`TurnEvents`].

@@ -1055,6 +1055,10 @@ impl AgentTurnTransport for RuntimeChildSupervisor {
         }
         Ok(())
     }
+
+    fn dispatch_kind(&self) -> &'static str {
+        "runtime"
+    }
 }
 
 // ── Turn event types ────────────────────────────────────────────────────────
@@ -8757,20 +8761,40 @@ spec:
                 "embedded boot/turn must succeed without spawning a child"
             );
 
-            // Strict zero-delta: under the spawn lock + comm filter, any
-            // increase in `sera-runtime` direct children is attributable
+            // No positive delta: under the spawn lock + comm filter, any
+            // *increase* in `sera-runtime` direct children is attributable
             // to this test and indicates the embedded branch accidentally
-            // took the runtime-supervisor path.
+            // took the runtime-supervisor path. A *decrease* is permitted
+            // because peer runtime-mode tests that began *before* we took
+            // RUNTIME_SPAWN_SAMPLE_LOCK can still reach reap during our
+            // sample window — that signal is fine, it isn't an embedded
+            // spawn.
             if let (Some(before), Some(after)) =
                 (baseline, count_direct_children_with_comm("sera-runtime"))
             {
-                assert_eq!(
-                    after, before,
+                assert!(
+                    after <= before,
                     "embedded path spawned a `sera-runtime` child: \
                      before={before}, after={after}; embedded boot must \
                      not invoke RuntimeChildSupervisor::start"
                 );
             }
+
+            // Belt-and-braces: the wired transport reports its backend
+            // identity directly, so a regression that wires
+            // `RuntimeChildSupervisor` under `DispatchMode::Embedded`
+            // fails this assertion even on platforms without `/proc`.
+            let transport = state
+                .harnesses
+                .get("sera")
+                .cloned()
+                .expect("embedded transport present");
+            assert_eq!(
+                transport.dispatch_kind(),
+                "embedded",
+                "DispatchMode::Embedded must wire EmbeddedRuntimeTransport, \
+                 not the stdio supervisor"
+            );
 
             drop(state);
             drop(mock);
@@ -8875,9 +8899,20 @@ spec:
             let mock = start_mock_llm("hello from mock", 0).await;
             let (state, _counters) =
                 production_e2e_state_with_mode(&mock.base_url, DispatchMode::Embedded).await;
-            assert!(
-                state.harnesses.contains_key("sera"),
-                "embedded production state must wire a transport for `sera`"
+            // P2 fix (Codex review on PR #1131): both runtime and embedded
+            // branches insert the same `"sera"` key into `harnesses`, so a
+            // `contains_key` check is vacuous. Verify backend selection by
+            // querying `dispatch_kind()` on the trait object — fails if the
+            // embedded branch accidentally wires `RuntimeChildSupervisor`.
+            let transport = state
+                .harnesses
+                .get("sera")
+                .cloned()
+                .expect("embedded production state must wire a transport for `sera`");
+            assert_eq!(
+                transport.dispatch_kind(),
+                "embedded",
+                "DispatchMode::Embedded must wire EmbeddedRuntimeTransport"
             );
 
             drop(state);

@@ -88,6 +88,18 @@ pub trait AgentTurnTransport: Send + Sync {
     /// answered a trivial turn (today's stdio path: a non-empty
     /// streaming reply on a `__sera_readiness_probe__` session).
     async fn liveness_probe(&self) -> anyhow::Result<()>;
+
+    /// Diagnostic identifier for this transport backend. Mirrors the
+    /// `dispatch_mode` field the boot log already records per-agent
+    /// (`"runtime"` for `RuntimeChildSupervisor`, `"embedded"` for
+    /// `EmbeddedRuntimeTransport`). Lets fixtures and observability
+    /// code distinguish backends at the trait-object boundary without
+    /// depending on `Any` / downcast machinery. The default `"unknown"`
+    /// keeps existing test transports compiling — production
+    /// implementors override.
+    fn dispatch_kind(&self) -> &'static str {
+        "unknown"
+    }
 }
 
 #[cfg(test)]

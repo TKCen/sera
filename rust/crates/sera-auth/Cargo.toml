@@ -11,6 +11,7 @@ enterprise = []
 
 [dependencies]
 sera-types.workspace = true
+sera-config.workspace = true
 sera-db.workspace = true
 sera-errors.workspace = true
 serde.workspace = true

@@ -7919,6 +7919,19 @@ spec:
             Embedded,
         }
 
+        /// Serialises the runtime-mode child spawn against the embedded
+        /// "no child spawn" sample window. Without this, peer runtime-mode
+        /// production_e2e tests (`discord_path_round_trip`,
+        /// `http_chat_path_round_trip`) can spawn `sera-runtime` children
+        /// during [`embedded_path_no_runtime_child_spawns`]'s before/after
+        /// window and false-positive its assertion. The runtime-mode branch
+        /// of [`production_e2e_state_with_mode`] takes this lock for the
+        /// duration of `RuntimeChildSupervisor::start`; the embedded
+        /// no-spawn test holds it across its entire sample window so a
+        /// strict zero-delta assertion is reliable.
+        static RUNTIME_SPAWN_SAMPLE_LOCK: tokio::sync::Mutex<()> =
+            tokio::sync::Mutex::const_new(());
+
         /// sera-ve9x PR 3: in-process embedded transport for production-E2E
         /// fixtures. Bypasses `build_embedded_transport` so the test does not
         /// have to mutate `SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE` /
@@ -8107,6 +8120,12 @@ spec:
                 std::collections::HashMap::new();
             match mode {
                 DispatchMode::Runtime => {
+                    // Hold RUNTIME_SPAWN_SAMPLE_LOCK across the actual
+                    // `RuntimeChildSupervisor::start` so the embedded
+                    // no-child-spawn test can sample its before/after
+                    // child-count window without racing peer runtime-mode
+                    // tests' spawns.
+                    let _spawn_guard = RUNTIME_SPAWN_SAMPLE_LOCK.lock().await;
                     let runtime_bin = locate_runtime_bin();
                     let mut env = std::collections::HashMap::new();
                     env.insert("LLM_BASE_URL".to_string(), format!("{mock_llm_url}/v1"));
@@ -8633,15 +8652,17 @@ spec:
             drop(mock);
         }
 
-        /// Count direct child processes of the current process by scanning
-        /// `/proc/*/stat` for entries whose parent PID matches us. Used by
-        /// [`embedded_path_no_runtime_child_spawns`] to prove the embedded
-        /// boot path never invokes `Command::new(sera-runtime)`. Returns
-        /// `None` on non-Linux or if `/proc` is unreadable; the caller
-        /// then degrades to the source-level assertion that the embedded
-        /// branch in `production_e2e_state_with_mode` does not call
+        /// Count direct child processes of the current process whose
+        /// `/proc/<pid>/comm` matches `comm_filter` (case-sensitive). Used
+        /// by [`embedded_path_no_runtime_child_spawns`] to count only
+        /// `sera-runtime` children — peer tests in the same binary spawn
+        /// `bash` mocks (`StdioHarness::spawn_mock`) which must not be
+        /// counted here. Returns `None` on non-Linux or if `/proc` is
+        /// unreadable; the caller then degrades to the structural
+        /// assertion that the embedded branch in
+        /// [`production_e2e_state_with_mode`] does not call
         /// `locate_runtime_bin`.
-        fn count_direct_children() -> Option<usize> {
+        fn count_direct_children_with_comm(comm_filter: &str) -> Option<usize> {
             let my_pid = std::process::id();
             let entries = std::fs::read_dir("/proc").ok()?;
             let mut count = 0usize;
@@ -8666,10 +8687,22 @@ spec:
                 };
                 let parts: Vec<&str> = after_comm.split_whitespace().collect();
                 // After the comm field: state (idx 0), ppid (idx 1), ...
-                if let Some(ppid_str) = parts.get(1)
-                    && let Ok(ppid) = ppid_str.parse::<u32>()
-                    && ppid == my_pid
-                {
+                let Some(ppid_str) = parts.get(1) else {
+                    continue;
+                };
+                let Ok(ppid) = ppid_str.parse::<u32>() else {
+                    continue;
+                };
+                if ppid != my_pid {
+                    continue;
+                }
+                // Read /proc/<pid>/comm directly (truncated to ~16 chars
+                // by the kernel; matches "sera-runtime" exactly).
+                let comm = match std::fs::read_to_string(entry.path().join("comm")) {
+                    Ok(c) => c.trim_end().to_string(),
+                    Err(_) => continue,
+                };
+                if comm == comm_filter {
                     count += 1;
                 }
             }
@@ -8678,16 +8711,26 @@ spec:
 
         /// Embedded mode must not spawn a `sera-runtime --ndjson` child.
         /// Asserts (a) the embedded boot/turn round-trips successfully via
-        /// the in-process transport, and (b) the direct-child count of the
-        /// test process does not increase as a result of that round-trip.
+        /// the in-process transport, and (b) the count of direct
+        /// `sera-runtime` children of the test process is *exactly* the
+        /// same before and after the embedded fixture runs — strict zero
+        /// delta, no peer-tolerance fudge.
         ///
-        /// Avoids `SERA_E2E_RUNTIME_BIN` env mutation: cargo test runs
-        /// tests in parallel within the same binary, so per-test env
-        /// rewrites of test-fixture lookup paths leak into peer tests.
-        /// The `/proc`-based child count is process-scoped and parallel-safe.
+        /// Reliability under cargo test parallelism: the runtime-mode
+        /// branch of [`production_e2e_state_with_mode`] takes
+        /// [`RUNTIME_SPAWN_SAMPLE_LOCK`] across `RuntimeChildSupervisor::start`,
+        /// and this test holds the same lock across its sample window. So
+        /// no peer runtime-mode test can spawn a `sera-runtime` child
+        /// while we sample. We further filter by `comm == "sera-runtime"`
+        /// so peer `bash` mocks from `StdioHarness::spawn_mock` are
+        /// ignored. On non-Linux (no `/proc`) the test still asserts the
+        /// embedded round-trip; the structural absence of
+        /// `RuntimeChildSupervisor::start` from the embedded branch in
+        /// `production_e2e_state_with_mode` carries the load there.
         #[tokio::test]
         async fn embedded_path_no_runtime_child_spawns() {
-            let baseline = count_direct_children();
+            let _spawn_guard = RUNTIME_SPAWN_SAMPLE_LOCK.lock().await;
+            let baseline = count_direct_children_with_comm("sera-runtime");
 
             let mock = start_mock_llm("hello from mock", 0).await;
             let (state, _counters) =
@@ -8714,18 +8757,18 @@ spec:
                 "embedded boot/turn must succeed without spawning a child"
             );
 
-            // Child-count delta — should be zero (or negative if peer tests
-            // reaped a child between the two samples). A *positive* delta
-            // attributable to this test would indicate the embedded branch
-            // accidentally took the runtime-supervisor path. Peer tests in
-            // the same binary may also spawn children concurrently, so we
-            // only fail on growth that exceeds a peer-tolerance budget.
-            if let (Some(before), Some(after)) = (baseline, count_direct_children()) {
-                let peer_tolerance = 8usize;
-                assert!(
-                    after <= before.saturating_add(peer_tolerance),
-                    "embedded path appears to have spawned children: \
-                     before={before}, after={after}, peer_tolerance={peer_tolerance}"
+            // Strict zero-delta: under the spawn lock + comm filter, any
+            // increase in `sera-runtime` direct children is attributable
+            // to this test and indicates the embedded branch accidentally
+            // took the runtime-supervisor path.
+            if let (Some(before), Some(after)) =
+                (baseline, count_direct_children_with_comm("sera-runtime"))
+            {
+                assert_eq!(
+                    after, before,
+                    "embedded path spawned a `sera-runtime` child: \
+                     before={before}, after={after}; embedded boot must \
+                     not invoke RuntimeChildSupervisor::start"
                 );
             }
 
@@ -8801,26 +8844,33 @@ spec:
         /// asserted together.
         #[tokio::test]
         async fn dispatch_mode_label_reflects_active_backend_in_embedded_state() {
-            // Scope the std::sync::Mutex guard to the synchronous env
-            // mutation so it is not held across an await (clippy
-            // `await_holding_lock`). The `DispatchModeEnvGuard` returned
-            // from this block lives for the rest of the test and restores
-            // SERA_DISPATCH_MODE on drop. Concurrent env-mutating tests
-            // re-take the lock during their own setup and snapshot the
-            // current value, so the guard chain restores cleanly.
-            let _env_guard = {
+            // P1 fix (Codex review on PR #1131): keep the
+            // `DispatchModeEnvGuard` strictly inside the
+            // `DISPATCH_MODE_ENV_LOCK` critical section so its `Drop`
+            // (which calls unsafe `std::env::set_var/remove_var`) cannot
+            // race with peer tests that mutate `SERA_DISPATCH_MODE`. The
+            // env mutation + label assertion happens synchronously under
+            // the lock; the lock and guard are released together before
+            // any await. After release, the assertion no longer holds —
+            // the env reverts to its prior value — but the production-
+            // state setup below does NOT read `SERA_DISPATCH_MODE`
+            // (`production_e2e_state_with_mode` takes the dispatch mode
+            // as an explicit parameter), so the embedded fixture runs
+            // independently of process env state.
+            {
                 let _lock = DISPATCH_MODE_ENV_LOCK
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let guard = DispatchModeEnvGuard::set("embedded");
+                let _guard = DispatchModeEnvGuard::set("embedded");
                 assert_eq!(
                     effective_dispatch_mode_label(),
                     "embedded",
                     "effective dispatch mode must report `embedded` when \
                      the env requests it"
                 );
-                guard
-            };
+                // _guard drops here (unsafe env restore happens while
+                // _lock is still held), then _lock drops.
+            }
 
             let mock = start_mock_llm("hello from mock", 0).await;
             let (state, _counters) =

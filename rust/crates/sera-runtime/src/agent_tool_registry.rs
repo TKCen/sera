@@ -22,13 +22,24 @@
 //!   delegate dispatches so the workflow coordinator can observe sub-agent
 //!   activity (see `sera_workflow::coordination` for the consumer side).
 //!
-//! No real sub-agent transport exists yet for this bead — the default
-//! [`InMemoryAgentRouter`] returns [`AgentToolError::AgentNotFound`] until a
-//! production router (e.g. the InProcRouter from `sera-a2a`) is wired in.
+//! Two routers ship in this module:
+//!
+//! - [`InMemoryAgentRouter`] — placeholder backing [`AgentToolRegistry::new`].
+//!   Returns [`AgentToolError::AgentNotFound`] for every dispatch. Kept for
+//!   tests that intentionally exercise the no-router path.
+//! - [`InProcAgentRouter`] — production in-process router. Holds a
+//!   `target -> Arc<dyn AgentTargetHandler>` map so the gateway's embedded
+//!   transport (and other in-process orchestrators) register a handler per
+//!   target agent and have delegate / ask / background dispatch reach it
+//!   without an out-of-process hop. An empty router still returns
+//!   [`AgentToolError::AgentNotFound`] — the difference vs. `InMemoryAgentRouter`
+//!   is that successful registrations are observable end-to-end. Production
+//!   construction sites in `sera-runtime` and `sera-gateway` inject this type
+//!   (bead `sera-i4en`).
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use sera_types::agent_tool::{
@@ -146,9 +157,10 @@ pub trait AgentRouter: Send + Sync + 'static {
     ) -> Result<BackgroundTaskOutput, AgentToolError>;
 }
 
-/// Default no-op router: returns [`AgentToolError::AgentNotFound`] for every
-/// dispatch. Wire in a real router (e.g. via `AgentToolRegistry::with_router`)
-/// once cross-agent transport is available.
+/// Placeholder no-op router: returns [`AgentToolError::AgentNotFound`] for
+/// every dispatch. Backs [`AgentToolRegistry::new`] for tests that explicitly
+/// exercise the no-router path; production code injects [`InProcAgentRouter`]
+/// (or another transport) via [`AgentToolRegistry::with_router`].
 #[derive(Debug, Default)]
 pub struct InMemoryAgentRouter;
 
@@ -176,6 +188,122 @@ impl AgentRouter for InMemoryAgentRouter {
         _input: BackgroundTaskInput,
     ) -> Result<BackgroundTaskOutput, AgentToolError> {
         Err(AgentToolError::AgentNotFound(target.to_string()))
+    }
+}
+
+// ── In-process target handler + router ───────────────────────────────────────
+
+/// Per-target handler invoked by [`InProcAgentRouter`].
+///
+/// Implementations route the three kinds of agent-tool dispatch to whatever
+/// transport the embedder provides — typically an in-process `DefaultRuntime`
+/// turn loop, but any object that can answer a delegate / ask / background
+/// request will do. The trait is intentionally minimal: it does not see the
+/// caller, the capability bundle, or the budget tracker (those are enforced
+/// by [`AgentToolRegistry`] before the call reaches the router), and it does
+/// not see its own `target` name.
+#[async_trait]
+pub trait AgentTargetHandler: Send + Sync + 'static {
+    /// Handle a synchronous delegate-task request for this target.
+    async fn handle_delegate(
+        &self,
+        input: DelegateTaskInput,
+    ) -> Result<DelegateTaskOutput, AgentToolError>;
+
+    /// Handle a synchronous ask-agent request for this target.
+    async fn handle_ask(&self, input: AskAgentInput) -> Result<AskAgentOutput, AgentToolError>;
+
+    /// Handle a fire-and-forget background-task request for this target.
+    async fn handle_background(
+        &self,
+        input: BackgroundTaskInput,
+    ) -> Result<BackgroundTaskOutput, AgentToolError>;
+}
+
+/// Production in-process [`AgentRouter`] — looks up `target` in a
+/// `String -> Arc<dyn AgentTargetHandler>` map and delegates the matching
+/// dispatch method.
+///
+/// An empty router returns [`AgentToolError::AgentNotFound`], same as
+/// [`InMemoryAgentRouter`]. The difference is that registrations are
+/// observable: once the gateway's embedded transport (or any other
+/// in-process orchestrator) registers a handler, the agent-as-tool layer can
+/// reach it without an out-of-process hop. Bead `sera-i4en`.
+#[derive(Default)]
+pub struct InProcAgentRouter {
+    handlers: RwLock<HashMap<String, Arc<dyn AgentTargetHandler>>>,
+}
+
+impl std::fmt::Debug for InProcAgentRouter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InProcAgentRouter").finish_non_exhaustive()
+    }
+}
+
+impl InProcAgentRouter {
+    /// Create an empty router. Targets register via [`Self::register`].
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register `handler` under `target`. Replaces any existing handler for
+    /// that target and returns the previous one, if any.
+    pub async fn register(
+        &self,
+        target: impl Into<String>,
+        handler: Arc<dyn AgentTargetHandler>,
+    ) -> Option<Arc<dyn AgentTargetHandler>> {
+        self.handlers.write().await.insert(target.into(), handler)
+    }
+
+    /// Remove the handler registered under `target`, if any.
+    pub async fn unregister(&self, target: &str) -> Option<Arc<dyn AgentTargetHandler>> {
+        self.handlers.write().await.remove(target)
+    }
+
+    /// Return the list of currently registered target names (sorted, for
+    /// stable test assertions).
+    pub async fn registered(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.handlers.read().await.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// Look up a handler by target name.
+    async fn lookup(&self, target: &str) -> Result<Arc<dyn AgentTargetHandler>, AgentToolError> {
+        self.handlers
+            .read()
+            .await
+            .get(target)
+            .cloned()
+            .ok_or_else(|| AgentToolError::AgentNotFound(target.to_string()))
+    }
+}
+
+#[async_trait]
+impl AgentRouter for InProcAgentRouter {
+    async fn dispatch_delegate(
+        &self,
+        target: &str,
+        input: DelegateTaskInput,
+    ) -> Result<DelegateTaskOutput, AgentToolError> {
+        self.lookup(target).await?.handle_delegate(input).await
+    }
+
+    async fn dispatch_ask(
+        &self,
+        target: &str,
+        input: AskAgentInput,
+    ) -> Result<AskAgentOutput, AgentToolError> {
+        self.lookup(target).await?.handle_ask(input).await
+    }
+
+    async fn dispatch_background(
+        &self,
+        target: &str,
+        input: BackgroundTaskInput,
+    ) -> Result<BackgroundTaskOutput, AgentToolError> {
+        self.lookup(target).await?.handle_background(input).await
     }
 }
 
@@ -314,11 +442,7 @@ impl AgentToolRegistry {
     /// does not require pre-registration of the target name; only the
     /// capability allow-list is consulted, matching the spec's
     /// "DO NOT invent a new" capability struct guidance.
-    fn gate_capability(
-        &self,
-        caller: &CallerContext,
-        target: &str,
-    ) -> Result<(), AgentToolError> {
+    fn gate_capability(&self, caller: &CallerContext, target: &str) -> Result<(), AgentToolError> {
         let allowed = caller
             .capabilities
             .subagents_allowed
@@ -345,11 +469,13 @@ impl AgentToolRegistry {
     ) -> Result<serde_json::Value, AgentToolError> {
         match kind {
             AgentToolKind::DelegateTask => {
-                let input: DelegateTaskInput = serde_json::from_value(arguments)
-                    .map_err(|e| AgentToolError::Router(format!("decode delegate-task input: {e}")))?;
+                let input: DelegateTaskInput = serde_json::from_value(arguments).map_err(|e| {
+                    AgentToolError::Router(format!("decode delegate-task input: {e}"))
+                })?;
                 let out = self.dispatch_delegate(caller, target, input).await?;
-                serde_json::to_value(out)
-                    .map_err(|e| AgentToolError::Router(format!("encode delegate-task output: {e}")))
+                serde_json::to_value(out).map_err(|e| {
+                    AgentToolError::Router(format!("encode delegate-task output: {e}"))
+                })
             }
             AgentToolKind::AskAgent => {
                 let input: AskAgentInput = serde_json::from_value(arguments)
@@ -359,9 +485,10 @@ impl AgentToolRegistry {
                     .map_err(|e| AgentToolError::Router(format!("encode ask-agent output: {e}")))
             }
             AgentToolKind::BackgroundTask => {
-                let input: BackgroundTaskInput = serde_json::from_value(arguments).map_err(|e| {
-                    AgentToolError::Router(format!("decode background-task input: {e}"))
-                })?;
+                let input: BackgroundTaskInput =
+                    serde_json::from_value(arguments).map_err(|e| {
+                        AgentToolError::Router(format!("decode background-task input: {e}"))
+                    })?;
                 let out = self.dispatch_background(caller, target, input).await?;
                 serde_json::to_value(out).map_err(|e| {
                     AgentToolError::Router(format!("encode background-task output: {e}"))
@@ -742,5 +869,248 @@ mod tests {
             )
             .await;
         assert_eq!(registry.registered().await, vec!["alpha", "beta"]);
+    }
+
+    // ── InProcAgentRouter ────────────────────────────────────────────────────
+
+    /// Test handler that records every call and returns canned responses.
+    /// Lives next to the InProcAgentRouter tests so the dispatch fixture is
+    /// self-contained.
+    struct RecordingTargetHandler {
+        name: String,
+        delegate_calls: Mutex<Vec<DelegateTaskInput>>,
+        ask_calls: Mutex<Vec<AskAgentInput>>,
+        background_calls: Mutex<Vec<BackgroundTaskInput>>,
+    }
+
+    impl RecordingTargetHandler {
+        fn new(name: impl Into<String>) -> Self {
+            Self {
+                name: name.into(),
+                delegate_calls: Mutex::new(Vec::new()),
+                ask_calls: Mutex::new(Vec::new()),
+                background_calls: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AgentTargetHandler for RecordingTargetHandler {
+        async fn handle_delegate(
+            &self,
+            input: DelegateTaskInput,
+        ) -> Result<DelegateTaskOutput, AgentToolError> {
+            self.delegate_calls.lock().unwrap().push(input.clone());
+            Ok(DelegateTaskOutput {
+                result: serde_json::json!({"target": self.name, "task": input.task}),
+                tokens_used: 11,
+            })
+        }
+
+        async fn handle_ask(&self, input: AskAgentInput) -> Result<AskAgentOutput, AgentToolError> {
+            self.ask_calls.lock().unwrap().push(input.clone());
+            Ok(AskAgentOutput {
+                answer: format!("{}:{}", self.name, input.question),
+                tokens_used: 13,
+            })
+        }
+
+        async fn handle_background(
+            &self,
+            input: BackgroundTaskInput,
+        ) -> Result<BackgroundTaskOutput, AgentToolError> {
+            self.background_calls.lock().unwrap().push(input.clone());
+            Ok(BackgroundTaskOutput {
+                task_id: format!("{}-{}", self.name, input.task),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn inproc_router_empty_returns_not_found() {
+        let router = InProcAgentRouter::new();
+        let err = router
+            .dispatch_delegate(
+                "nobody",
+                DelegateTaskInput {
+                    task: "x".into(),
+                    context: None,
+                },
+            )
+            .await
+            .expect_err("empty router");
+        assert!(matches!(err, AgentToolError::AgentNotFound(t) if t == "nobody"));
+        assert!(router.registered().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn inproc_router_dispatches_each_kind_to_registered_handler() {
+        let router = InProcAgentRouter::new();
+        let handler = Arc::new(RecordingTargetHandler::new("worker"));
+        router
+            .register("worker", handler.clone() as Arc<dyn AgentTargetHandler>)
+            .await;
+
+        let out = router
+            .dispatch_delegate(
+                "worker",
+                DelegateTaskInput {
+                    task: "ship-it".into(),
+                    context: None,
+                },
+            )
+            .await
+            .expect("delegate ok");
+        assert_eq!(out.tokens_used, 11);
+        assert_eq!(out.result["task"], "ship-it");
+        assert_eq!(out.result["target"], "worker");
+
+        let out = router
+            .dispatch_ask(
+                "worker",
+                AskAgentInput {
+                    question: "why".into(),
+                },
+            )
+            .await
+            .expect("ask ok");
+        assert_eq!(out.answer, "worker:why");
+        assert_eq!(out.tokens_used, 13);
+
+        let out = router
+            .dispatch_background(
+                "worker",
+                BackgroundTaskInput {
+                    task: "rebuild".into(),
+                },
+            )
+            .await
+            .expect("background ok");
+        assert_eq!(out.task_id, "worker-rebuild");
+
+        assert_eq!(handler.delegate_calls.lock().unwrap().len(), 1);
+        assert_eq!(handler.ask_calls.lock().unwrap().len(), 1);
+        assert_eq!(handler.background_calls.lock().unwrap().len(), 1);
+        assert_eq!(router.registered().await, vec!["worker".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn inproc_router_unknown_target_returns_not_found_when_other_target_registered() {
+        let router = InProcAgentRouter::new();
+        router
+            .register(
+                "worker",
+                Arc::new(RecordingTargetHandler::new("worker")) as Arc<dyn AgentTargetHandler>,
+            )
+            .await;
+
+        let err = router
+            .dispatch_ask(
+                "stranger",
+                AskAgentInput {
+                    question: "?".into(),
+                },
+            )
+            .await
+            .expect_err("unknown target");
+        assert!(matches!(err, AgentToolError::AgentNotFound(t) if t == "stranger"));
+    }
+
+    #[tokio::test]
+    async fn inproc_router_unregister_returns_handler_and_blocks_future_dispatch() {
+        let router = InProcAgentRouter::new();
+        router
+            .register(
+                "worker",
+                Arc::new(RecordingTargetHandler::new("worker")) as Arc<dyn AgentTargetHandler>,
+            )
+            .await;
+        assert!(router.unregister("worker").await.is_some());
+        assert!(router.unregister("worker").await.is_none());
+        let err = router
+            .dispatch_delegate(
+                "worker",
+                DelegateTaskInput {
+                    task: "x".into(),
+                    context: None,
+                },
+            )
+            .await
+            .expect_err("post-unregister");
+        assert!(matches!(err, AgentToolError::AgentNotFound(_)));
+    }
+
+    /// End-to-end: an [`AgentToolRegistry`] backed by an [`InProcAgentRouter`]
+    /// with a registered target sees every dispatch kind reach the handler,
+    /// credits tokens to the caller, and fires the coordinator hook on
+    /// delegate. This is the contract the production wire-up depends on.
+    #[tokio::test]
+    async fn registry_with_inproc_router_end_to_end() {
+        struct CountingHook(Arc<Mutex<u32>>);
+        impl CoordinatorHook for CountingHook {
+            fn on_delegate(&self, _notice: DelegationNotice) {
+                *self.0.lock().unwrap() += 1;
+            }
+        }
+
+        let router = Arc::new(InProcAgentRouter::new());
+        let handler = Arc::new(RecordingTargetHandler::new("worker"));
+        router
+            .register("worker", handler.clone() as Arc<dyn AgentTargetHandler>)
+            .await;
+
+        let mut registry = AgentToolRegistry::with_router(router.clone());
+        let counter = Arc::new(Mutex::new(0u32));
+        registry.set_coordinator(Arc::new(CountingHook(counter.clone())));
+
+        let caller = caller("parent", Some(vec!["worker"]));
+        assert_eq!(caller.budget.token_used(), 0);
+
+        // delegate
+        let v = registry
+            .dispatch_kind(
+                &caller,
+                AgentToolKind::DelegateTask,
+                "worker",
+                serde_json::json!({"task": "do-it"}),
+            )
+            .await
+            .expect("delegate via registry");
+        assert_eq!(v["tokens_used"], 11);
+        assert_eq!(v["result"]["task"], "do-it");
+
+        // ask
+        let v = registry
+            .dispatch_kind(
+                &caller,
+                AgentToolKind::AskAgent,
+                "worker",
+                serde_json::json!({"question": "why"}),
+            )
+            .await
+            .expect("ask via registry");
+        assert_eq!(v["answer"], "worker:why");
+        assert_eq!(v["tokens_used"], 13);
+
+        // background
+        let v = registry
+            .dispatch_kind(
+                &caller,
+                AgentToolKind::BackgroundTask,
+                "worker",
+                serde_json::json!({"task": "rebuild"}),
+            )
+            .await
+            .expect("background via registry");
+        assert_eq!(v["task_id"], "worker-rebuild");
+
+        // Synchronous dispatches credit tokens (delegate + ask = 11 + 13).
+        // Background must not credit anything.
+        assert_eq!(caller.budget.token_used(), 11 + 13);
+        // Coordinator hook fires only on delegate.
+        assert_eq!(*counter.lock().unwrap(), 1);
+        assert_eq!(handler.delegate_calls.lock().unwrap().len(), 1);
+        assert_eq!(handler.ask_calls.lock().unwrap().len(), 1);
+        assert_eq!(handler.background_calls.lock().unwrap().len(), 1);
     }
 }

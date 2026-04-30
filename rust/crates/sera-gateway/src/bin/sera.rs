@@ -94,11 +94,17 @@ mod route_plugins;
 mod route_hitl;
 #[path = "../routes/workflow.rs"]
 mod route_workflow;
+#[path = "../routes/inference_proxy.rs"]
+mod route_inference_proxy;
 
 use route_a2a::{A2aAppState, A2aPeerRegistry};
 use route_agui::{AguiAppState, AguiHub};
 use route_plugins::PluginsAppState;
 use route_workflow::WorkflowAppState;
+use route_inference_proxy::{
+    InferenceProxyAppState, InferenceProxyAudit, LlmBudgetGate, NoopBudgetGate,
+    TracingProxyAudit, UpstreamProvider,
+};
 
 // Party-mode handler (sera-8d1.2 / GH#145) — generic over PartyAppState trait
 // so the handler lives in the library without depending on the binary's AppState.
@@ -1391,6 +1397,63 @@ impl WorkflowAppState for AppState {
     }
     fn workflow_store(&self) -> Arc<dyn WorkflowTaskStore> {
         Arc::clone(&self.workflow_store)
+    }
+}
+
+// ── sera-7ivj: inference proxy wiring ───────────────────────────────────────
+//
+// Resolves the upstream provider from the loaded manifests. Provider name is
+// chosen by `SERA_INFERENCE_PROXY_PROVIDER` if set, otherwise the first
+// declared provider. The upstream key is read once via
+// `resolve_provider_api_key` so it stays in-process — the inbound caller
+// never controls it.
+fn proxy_http_client() -> reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .expect("build inference proxy reqwest client")
+        })
+        .clone()
+}
+
+impl InferenceProxyAppState for AppState {
+    fn proxy_api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+
+    fn proxy_upstream(&self) -> Option<UpstreamProvider> {
+        let preferred = std::env::var("SERA_INFERENCE_PROXY_PROVIDER")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let names: Vec<&str> = self.manifests.providers.iter()
+            .map(|m| m.metadata.name.as_str())
+            .collect();
+        let name = preferred
+            .as_deref()
+            .filter(|n| names.contains(n))
+            .or_else(|| names.first().copied())?;
+        let spec = self.manifests.provider_spec(name).ok().flatten()?;
+        let api_key = resolve_provider_api_key(&spec).unwrap_or_default();
+        Some(UpstreamProvider {
+            base_url: spec.base_url,
+            api_key,
+        })
+    }
+
+    fn proxy_http_client(&self) -> reqwest::Client {
+        proxy_http_client()
+    }
+
+    fn proxy_budget_gate(&self) -> Arc<dyn LlmBudgetGate> {
+        Arc::new(NoopBudgetGate)
+    }
+
+    fn proxy_audit(&self) -> Arc<dyn InferenceProxyAudit> {
+        Arc::new(TracingProxyAudit)
     }
 }
 
@@ -4692,6 +4755,11 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/workflow/tasks/{id}",
             get(route_workflow::get_task::<AppState>),
+        )
+        // ── sera-7ivj: OpenAI-compatible inference proxy ─────────────────────
+        .route(
+            "/v1/chat/completions",
+            post(route_inference_proxy::chat_completions::<AppState>),
         )
         // ── sera-8d1.2-follow: party mode (circles/{id}/party) ───────────────
         .route(

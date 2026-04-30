@@ -154,6 +154,59 @@ impl InferenceProxyAudit for TracingProxyAudit {
     }
 }
 
+/// Event-type written to `audit_log` for every proxy call. Keeps a single
+/// stable name so operators can filter the trail with one `WHERE event_type`.
+const PROXY_AUDIT_EVENT_TYPE: &str = "inference_proxy_call";
+
+/// Actor-kind tag — distinguishes proxy events from `human` / `agent` actors.
+const PROXY_AUDIT_ACTOR_KIND: &str = "inference_proxy";
+
+/// Durable audit sink — persists one row per proxy call to the gateway's
+/// shared `SqliteDb`. Replaces [`TracingProxyAudit`] in the production
+/// `AppState` so an operator can inspect proxy traffic via `query_audit`
+/// after the fact.
+///
+/// Body content is **not** persisted — only the metadata already present in
+/// [`ProxyAuditEvent`]. Failures are best-effort: on insert error we log a
+/// warning but never fail the proxy response.
+pub struct SqliteInferenceProxyAudit {
+    db: Arc<tokio::sync::Mutex<sera_db::sqlite::SqliteDb>>,
+}
+
+impl SqliteInferenceProxyAudit {
+    pub fn new(db: Arc<tokio::sync::Mutex<sera_db::sqlite::SqliteDb>>) -> Self {
+        Self { db }
+    }
+}
+
+#[async_trait]
+impl InferenceProxyAudit for SqliteInferenceProxyAudit {
+    async fn record(&self, event: ProxyAuditEvent) {
+        let details = serde_json::json!({
+            "provider_base_url": event.provider_base_url,
+            "model_requested": event.model_requested,
+            "stream": event.stream,
+            "status": event.status,
+            "outcome": event.outcome.as_str(),
+        })
+        .to_string();
+        let db = self.db.lock().await;
+        if let Err(e) = db.append_audit(
+            PROXY_AUDIT_EVENT_TYPE,
+            &event.principal,
+            PROXY_AUDIT_ACTOR_KIND,
+            Some(&details),
+        ) {
+            tracing::warn!(
+                error = %e,
+                principal = %event.principal,
+                outcome = event.outcome.as_str(),
+                "inference_proxy: failed to persist audit row"
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AppState abstraction
 // ---------------------------------------------------------------------------
@@ -1679,5 +1732,383 @@ data: {"type":"message_stop"}"#,
         let events = state.audit.snapshot();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].outcome, ProxyOutcome::NoUpstream);
+    }
+
+    // ---------------------------------------------------------------------
+    // SqliteInferenceProxyAudit — sera-7ivj PR3 durable persistence
+    // ---------------------------------------------------------------------
+    //
+    // Goal: prove that the production audit sink writes one row per proxy
+    // call into the gateway's existing `audit_log` table — covering the
+    // five outcomes the previous tracing-only sink could not surface to an
+    // operator. Body content is never persisted; only metadata.
+
+    use sera_db::sqlite::SqliteDb;
+    use tokio::sync::Mutex as TokioMutex;
+
+    fn open_audit_db() -> Arc<TokioMutex<SqliteDb>> {
+        Arc::new(TokioMutex::new(
+            SqliteDb::open_in_memory().expect("in-memory sqlite"),
+        ))
+    }
+
+    /// State variant that carries an `Arc<dyn InferenceProxyAudit>` directly,
+    /// so persistence-focused tests can drive the route with a real
+    /// `SqliteInferenceProxyAudit` (the production sink) instead of the
+    /// in-memory `RecordingAudit` used by the trait-surface tests above.
+    struct PersistentTestState {
+        api_key: Option<String>,
+        upstream: Option<UpstreamProvider>,
+        anthropic_upstream: Option<UpstreamProvider>,
+        client: reqwest::Client,
+        gate: Arc<dyn LlmBudgetGate>,
+        audit: Arc<dyn InferenceProxyAudit>,
+    }
+
+    impl InferenceProxyAppState for PersistentTestState {
+        fn proxy_api_key(&self) -> &Option<String> {
+            &self.api_key
+        }
+        fn proxy_upstream(&self) -> Option<UpstreamProvider> {
+            self.upstream.clone()
+        }
+        fn proxy_anthropic_upstream(&self) -> Option<UpstreamProvider> {
+            self.anthropic_upstream.clone()
+        }
+        fn proxy_http_client(&self) -> reqwest::Client {
+            self.client.clone()
+        }
+        fn proxy_budget_gate(&self) -> Arc<dyn LlmBudgetGate> {
+            Arc::clone(&self.gate)
+        }
+        fn proxy_audit(&self) -> Arc<dyn InferenceProxyAudit> {
+            Arc::clone(&self.audit)
+        }
+    }
+
+    fn make_persistent_state(
+        api_key: Option<&str>,
+        upstream: Option<UpstreamProvider>,
+        anthropic_upstream: Option<UpstreamProvider>,
+        gate: Arc<dyn LlmBudgetGate>,
+        db: Arc<TokioMutex<SqliteDb>>,
+    ) -> Arc<PersistentTestState> {
+        Arc::new(PersistentTestState {
+            api_key: api_key.map(String::from),
+            upstream,
+            anthropic_upstream,
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .expect("client"),
+            gate,
+            audit: Arc::new(SqliteInferenceProxyAudit::new(db)),
+        })
+    }
+
+    fn chat_route_persistent(state: Arc<PersistentTestState>) -> Router {
+        Router::new()
+            .route(
+                "/v1/chat/completions",
+                post(chat_completions::<PersistentTestState>),
+            )
+            .with_state(state)
+    }
+
+    fn messages_route_persistent(state: Arc<PersistentTestState>) -> Router {
+        Router::new()
+            .route("/v1/messages", post(chat_messages::<PersistentTestState>))
+            .with_state(state)
+    }
+
+    /// Read every audit row out of the shared SqliteDb so tests can assert
+    /// on persisted shape without depending on row-id ordering.
+    async fn read_audit_rows(db: &Arc<TokioMutex<SqliteDb>>) -> Vec<sera_db::sqlite::AuditRow> {
+        let guard = db.lock().await;
+        guard.query_audit(50).expect("query audit")
+    }
+
+    fn parse_details(row: &sera_db::sqlite::AuditRow) -> serde_json::Value {
+        let raw = row
+            .details
+            .as_deref()
+            .expect("details json present on proxy audit row");
+        serde_json::from_str(raw).expect("details is valid JSON")
+    }
+
+    #[tokio::test]
+    async fn sqlite_audit_persists_openai_success_row() {
+        let mock = start_mock_upstream(MockResponse::Json {
+            status: StatusCode::OK,
+            body: serde_json::json!({"id": "chatcmpl-1"}),
+            retry_after: None,
+        })
+        .await;
+        let db = open_audit_db();
+        let state = make_persistent_state(
+            None,
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: "upstream-key".into(),
+            }),
+            None,
+            Arc::new(NoopBudgetGate),
+            Arc::clone(&db),
+        );
+        let app = chat_route_persistent(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(json_body(serde_json::json!({"model": "gpt-4"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let rows = read_audit_rows(&db).await;
+        assert_eq!(rows.len(), 1, "expected exactly one persisted audit row");
+        assert_eq!(rows[0].event_type, "inference_proxy_call");
+        assert_eq!(rows[0].actor_kind, "inference_proxy");
+        assert_eq!(rows[0].actor_id, "anonymous");
+        let details = parse_details(&rows[0]);
+        assert_eq!(details["outcome"], "success");
+        assert_eq!(details["status"], 200);
+        assert_eq!(details["model_requested"], "gpt-4");
+        assert_eq!(details["stream"], false);
+        assert_eq!(details["provider_base_url"], mock.base_url);
+    }
+
+    #[tokio::test]
+    async fn sqlite_audit_persists_anthropic_success_row() {
+        let mock = start_mock_upstream(MockResponse::Json {
+            status: StatusCode::OK,
+            body: serde_json::json!({"id": "msg_01"}),
+            retry_after: None,
+        })
+        .await;
+        let db = open_audit_db();
+        let state = make_persistent_state(
+            None,
+            None,
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: "upstream-key".into(),
+            }),
+            Arc::new(NoopBudgetGate),
+            Arc::clone(&db),
+        );
+        let app = messages_route_persistent(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(json_body(serde_json::json!({"model": "claude-3-5-sonnet"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let rows = read_audit_rows(&db).await;
+        assert_eq!(rows.len(), 1);
+        let details = parse_details(&rows[0]);
+        assert_eq!(details["outcome"], "success");
+        assert_eq!(details["model_requested"], "claude-3-5-sonnet");
+    }
+
+    #[tokio::test]
+    async fn sqlite_audit_persists_budget_denied_row_and_skips_upstream() {
+        let mock = start_mock_upstream(MockResponse::Json {
+            status: StatusCode::OK,
+            body: serde_json::json!({"ok": true}),
+            retry_after: None,
+        })
+        .await;
+        let db = open_audit_db();
+        let state = make_persistent_state(
+            None,
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: "k".into(),
+            }),
+            None,
+            Arc::new(DenyingGate {
+                reason: "monthly budget exhausted".into(),
+                retry_after: Some(Duration::from_secs(60)),
+            }),
+            Arc::clone(&db),
+        );
+        let app = chat_route_persistent(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(json_body(serde_json::json!({"model": "gpt-4"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // Upstream must not have been called when the gate denied.
+        assert!(mock.captured.lock().unwrap().body.is_empty());
+
+        let rows = read_audit_rows(&db).await;
+        assert_eq!(rows.len(), 1);
+        let details = parse_details(&rows[0]);
+        assert_eq!(details["outcome"], "budget_exceeded");
+        assert_eq!(details["status"], 429);
+    }
+
+    #[tokio::test]
+    async fn sqlite_audit_persists_no_upstream_row() {
+        let db = open_audit_db();
+        let state =
+            make_persistent_state(None, None, None, Arc::new(NoopBudgetGate), Arc::clone(&db));
+        let app = chat_route_persistent(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(json_body(serde_json::json!({"model": "gpt-4"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let rows = read_audit_rows(&db).await;
+        assert_eq!(rows.len(), 1);
+        let details = parse_details(&rows[0]);
+        assert_eq!(details["outcome"], "no_upstream");
+        assert_eq!(details["status"], 503);
+        // No upstream resolved → empty provider_base_url, not a leak.
+        assert_eq!(details["provider_base_url"], "");
+    }
+
+    #[tokio::test]
+    async fn sqlite_audit_persists_upstream_error_row() {
+        let mock = start_mock_upstream(MockResponse::Json {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            body: serde_json::json!({"error": {"message": "boom"}}),
+            retry_after: None,
+        })
+        .await;
+        let db = open_audit_db();
+        let state = make_persistent_state(
+            None,
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: "k".into(),
+            }),
+            None,
+            Arc::new(NoopBudgetGate),
+            Arc::clone(&db),
+        );
+        let app = chat_route_persistent(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(json_body(serde_json::json!({"model": "gpt-4"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let rows = read_audit_rows(&db).await;
+        assert_eq!(rows.len(), 1);
+        let details = parse_details(&rows[0]);
+        assert_eq!(details["outcome"], "provider_error");
+        assert_eq!(details["status"], 500);
+    }
+
+    #[tokio::test]
+    async fn sqlite_audit_persists_one_row_for_streaming_call() {
+        let mock = start_mock_upstream(MockResponse::SseChunks(vec![
+            r#"{"choices":[{"delta":{"content":"hi"}}]}"#,
+            "[DONE]",
+        ]))
+        .await;
+        let db = open_audit_db();
+        let state = make_persistent_state(
+            None,
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: "k".into(),
+            }),
+            None,
+            Arc::new(NoopBudgetGate),
+            Arc::clone(&db),
+        );
+        let app = chat_route_persistent(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(json_body(
+                        serde_json::json!({"model": "gpt-4", "stream": true}),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        // Drain the SSE body so the upstream future completes; the audit row
+        // is emitted synchronously after the upstream response is converted
+        // to a stream and before the body is returned to the caller.
+        let _ = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let rows = read_audit_rows(&db).await;
+        assert_eq!(rows.len(), 1, "streaming must emit exactly one audit row");
+        let details = parse_details(&rows[0]);
+        assert_eq!(details["outcome"], "success");
+        assert_eq!(details["stream"], true);
+    }
+
+    #[tokio::test]
+    async fn sqlite_audit_does_not_persist_for_unauthenticated_caller() {
+        // Existing 401 path must remain audit-silent — the durable sink
+        // must not change that contract.
+        let db = open_audit_db();
+        let state = make_persistent_state(
+            Some("expected-key"),
+            Some(UpstreamProvider {
+                base_url: "http://127.0.0.1:1/v1".into(),
+                api_key: "u".into(),
+            }),
+            None,
+            Arc::new(NoopBudgetGate),
+            Arc::clone(&db),
+        );
+        let app = chat_route_persistent(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(json_body(serde_json::json!({"model": "gpt-4"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let rows = read_audit_rows(&db).await;
+        assert!(
+            rows.is_empty(),
+            "unauthenticated callers must not produce a persisted audit row"
+        );
     }
 }

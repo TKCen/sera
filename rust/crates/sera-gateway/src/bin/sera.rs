@@ -103,7 +103,7 @@ use route_plugins::PluginsAppState;
 use route_workflow::WorkflowAppState;
 use route_inference_proxy::{
     InferenceProxyAppState, InferenceProxyAudit, LlmBudgetGate, NoopBudgetGate,
-    TracingProxyAudit, UpstreamProvider,
+    SqliteInferenceProxyAudit, UpstreamProvider,
 };
 
 // Party-mode handler (sera-8d1.2 / GH#145) — generic over PartyAppState trait
@@ -1076,7 +1076,7 @@ impl AgentTurnTransport for RuntimeChildSupervisor {
 // ── Shared state ────────────────────────────────────────────────────────────
 
 struct AppState {
-    db: Mutex<SqliteDb>,
+    db: Arc<Mutex<SqliteDb>>,
     manifests: ManifestSet,
     /// Shared Discord connector for sending replies. `None` when no Discord
     /// connector is configured.
@@ -1463,7 +1463,12 @@ impl InferenceProxyAppState for AppState {
     }
 
     fn proxy_audit(&self) -> Arc<dyn InferenceProxyAudit> {
-        Arc::new(TracingProxyAudit)
+        // sera-7ivj PR3: persist one row per proxy call to the gateway's
+        // shared SqliteDb. Replaces the prior tracing-only sink so an
+        // operator can inspect proxy traffic via `query_audit` after the
+        // fact. Body content is never persisted — only the metadata in
+        // ProxyAuditEvent.
+        Arc::new(SqliteInferenceProxyAudit::new(Arc::clone(&self.db)))
     }
 }
 
@@ -4303,7 +4308,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
     let admin_audit = AdminAuditLogger::shared(admin_audit_path);
 
     let state = Arc::new(AppState {
-        db: Mutex::new(db),
+        db: Arc::new(Mutex::new(db)),
         manifests,
         discord: shared_discord,
         api_key,
@@ -4973,7 +4978,7 @@ mod tests {
         let hook_registry = Arc::new(HookRegistry::new());
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         Arc::new(AppState {
-            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: test_manifests(),
             discord: None,
             api_key: None,
@@ -5018,7 +5023,7 @@ mod tests {
         let hook_registry = Arc::new(HookRegistry::new());
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         Arc::new(AppState {
-            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: test_manifests(),
             discord: None,
             api_key: None,
@@ -5063,7 +5068,7 @@ mod tests {
         let hook_registry = Arc::new(HookRegistry::new());
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         Arc::new(AppState {
-            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: test_manifests(),
             discord: None,
             api_key: Some(key.to_owned()),
@@ -5108,7 +5113,7 @@ mod tests {
         let hook_registry = Arc::new(HookRegistry::new());
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         Arc::new(AppState {
-            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: test_manifests(),
             discord: None,
             api_key: Some(key.to_owned()),
@@ -5609,7 +5614,7 @@ spec:
         let hook_registry = Arc::new(HookRegistry::new());
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         Arc::new(AppState {
-            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: parse_manifests(STRICT_AGENT_YAML).unwrap(),
             discord: None,
             api_key: None,
@@ -6114,7 +6119,7 @@ spec:
         let hook_registry = Arc::new(HookRegistry::new());
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         let state = AppState {
-            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: test_manifests(),
             discord: None,
             api_key: None,
@@ -6162,7 +6167,7 @@ spec:
         let hook_registry = Arc::new(HookRegistry::new());
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         let state = AppState {
-            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: test_manifests(),
             discord: None,
             api_key: Some("my-key".to_owned()),
@@ -6211,7 +6216,7 @@ spec:
         let hook_registry = Arc::new(HookRegistry::new());
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         let state = AppState {
-            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: test_manifests(),
             discord: None,
             api_key: Some("my-key".to_owned()),
@@ -6263,7 +6268,7 @@ spec:
         let hook_registry = Arc::new(HookRegistry::new());
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         let state = AppState {
-            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: test_manifests(),
             discord: None,
             api_key: Some("my-key".to_owned()),
@@ -7430,7 +7435,7 @@ spec:
         let hook_registry = Arc::new(registry);
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         let state = Arc::new(AppState {
-            db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+            db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: test_manifests(),
             discord: None,
             api_key: None,
@@ -7517,7 +7522,7 @@ spec:
             let hook_registry = Arc::new(HookRegistry::new());
             let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
             Arc::new(AppState {
-                db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+                db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
                 manifests: test_manifests(),
                 discord: None,
                 api_key: Some("secret".to_owned()),
@@ -8241,7 +8246,7 @@ spec:
             }
 
             let state = Arc::new(AppState {
-                db: Mutex::new(SqliteDb::open_in_memory().unwrap()),
+                db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
                 manifests,
                 discord: None,
                 api_key: None,

@@ -39,6 +39,8 @@ The same crate compiles as an executable for two use cases:
 
 ### What the runtime does and does NOT do
 
+> **MVS deviation — 2026-04-29 (sera-y45a).** The list below describes the **target** architecture (`dispatch_mode={gateway,embedded}`). The shipped MVS runs `dispatch_mode=runtime`: the runtime child process owns the LLM client, tool registry, capability gate, and dispatcher, and holds `LLM_API_KEY`. The gateway audits `tool_call_*` events post-hoc only. See [`docs/plan/decisions/2026-04-29-dispatch-ownership.md`](../decisions/2026-04-29-dispatch-ownership.md) for the migration plan and gate.
+
 The runtime's **only responsibilities** are:
 
 1. Receive session context injected by the gateway (soul/persona, memory, tool schemas)
@@ -232,6 +234,8 @@ pub struct ConversationMessage {
 ---
 
 ## 3. Turn Loop (Default Runtime)
+
+> **MVS applicability — 2026-04-29 (sera-y45a).** The Tool Call Loop in this section assumes the gateway-owned dispatcher (`dispatch_mode={gateway,embedded}`). In today's `dispatch_mode=runtime` MVS, `pre_tool` / `post_tool` and the capability gate run inside the runtime process; the gateway sees `tool_call_*` events only as audit. See [`docs/plan/decisions/2026-04-29-dispatch-ownership.md`](../decisions/2026-04-29-dispatch-ownership.md).
 
 The turn loop follows a **four-method lifecycle** adapted from MetaGPT's Role pattern (SPEC-dependencies §10.15):
 

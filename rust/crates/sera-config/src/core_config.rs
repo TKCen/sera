@@ -22,6 +22,38 @@ pub struct CoreConfig {
     pub oidc_client_secret: Option<String>,
     pub external_url: Option<String>,
     pub web_origin: Option<String>,
+    pub auth: AuthConfig,
+}
+
+/// Auth-related configuration. Currently exposes the WIMSE/SPIFFE trust-domain
+/// used when projecting `Principal` records to URIs (see
+/// `sera-types::principal::Principal::wimse_uri`). Tier-1 / pet-mode default
+/// is `sera.local`; operators override via `SERA_WIMSE_DOMAIN`.
+#[derive(Debug, Clone)]
+pub struct AuthConfig {
+    pub wimse_domain: String,
+}
+
+/// Default WIMSE/SPIFFE trust domain for Tier-1 / pet-mode deployments.
+pub const DEFAULT_WIMSE_DOMAIN: &str = "sera.local";
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            wimse_domain: DEFAULT_WIMSE_DOMAIN.to_string(),
+        }
+    }
+}
+
+impl AuthConfig {
+    /// Load auth config from environment variables. Falls back to
+    /// [`DEFAULT_WIMSE_DOMAIN`] when `SERA_WIMSE_DOMAIN` is unset.
+    pub fn from_env() -> Self {
+        Self {
+            wimse_domain: env::var("SERA_WIMSE_DOMAIN")
+                .unwrap_or_else(|_| DEFAULT_WIMSE_DOMAIN.to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +227,8 @@ impl CoreConfig {
         let external_url = env::var("SERA_EXTERNAL_URL").ok();
         let web_origin = env::var("WEB_ORIGIN").ok();
 
+        let auth = AuthConfig::from_env();
+
         Ok(Self {
             database_url,
             port,
@@ -210,6 +244,7 @@ impl CoreConfig {
             oidc_client_secret,
             external_url,
             web_origin,
+            auth,
         })
     }
 
@@ -299,6 +334,7 @@ mod tests {
             oidc_client_secret: None,
             external_url: None,
             web_origin: None,
+            auth: AuthConfig::default(),
         };
         assert_eq!(config.port, 5000);
     }
@@ -332,6 +368,7 @@ mod tests {
             oidc_client_secret: None,
             external_url: None,
             web_origin: None,
+            auth: AuthConfig::default(),
         };
         assert_eq!(config.api_key, "sera_bootstrap_dev_123");
     }
@@ -402,6 +439,7 @@ mod tests {
             oidc_client_secret: None,
             external_url: None,
             web_origin: None,
+            auth: AuthConfig::default(),
         }
     }
 
@@ -433,6 +471,7 @@ mod tests {
             oidc_client_secret: None,
             external_url: None,
             web_origin: None,
+            auth: AuthConfig::default(),
         }
     }
 
@@ -510,5 +549,69 @@ mod tests {
         assert!(err_msg.contains("centrifugo.api_key"));
         assert!(err_msg.contains("centrifugo.token_secret"));
         assert!(err_msg.contains("secrets_master_key"));
+    }
+
+    // ── AuthConfig (sera.auth.wimse_domain) tests ───────────────────────────
+
+    #[test]
+    fn auth_config_default_uses_sera_local() {
+        let cfg = AuthConfig::default();
+        assert_eq!(cfg.wimse_domain, "sera.local");
+        assert_eq!(DEFAULT_WIMSE_DOMAIN, "sera.local");
+    }
+
+    #[test]
+    fn auth_config_from_env_default_when_unset() {
+        let _guard = SERA_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SERA_WIMSE_DOMAIN").ok();
+        unsafe { env::remove_var("SERA_WIMSE_DOMAIN") };
+
+        let cfg = AuthConfig::from_env();
+
+        match &saved {
+            Some(v) => unsafe { env::set_var("SERA_WIMSE_DOMAIN", v) },
+            None => unsafe { env::remove_var("SERA_WIMSE_DOMAIN") },
+        }
+
+        assert_eq!(cfg.wimse_domain, "sera.local");
+    }
+
+    #[test]
+    fn auth_config_from_env_override() {
+        let _guard = SERA_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SERA_WIMSE_DOMAIN").ok();
+        unsafe { env::set_var("SERA_WIMSE_DOMAIN", "sera.example.com") };
+
+        let cfg = AuthConfig::from_env();
+
+        match &saved {
+            Some(v) => unsafe { env::set_var("SERA_WIMSE_DOMAIN", v) },
+            None => unsafe { env::remove_var("SERA_WIMSE_DOMAIN") },
+        }
+
+        assert_eq!(cfg.wimse_domain, "sera.example.com");
+    }
+
+    #[test]
+    fn core_config_from_env_includes_auth_default() {
+        let _guard = SERA_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved_db = env::var("DATABASE_URL").ok();
+        let saved_domain = env::var("SERA_WIMSE_DOMAIN").ok();
+        unsafe { env::set_var("DATABASE_URL", "postgres://test:test@localhost/sera") };
+        unsafe { env::remove_var("SERA_WIMSE_DOMAIN") };
+
+        let result = CoreConfig::from_env();
+
+        match &saved_db {
+            Some(v) => unsafe { env::set_var("DATABASE_URL", v) },
+            None => unsafe { env::remove_var("DATABASE_URL") },
+        }
+        match &saved_domain {
+            Some(v) => unsafe { env::set_var("SERA_WIMSE_DOMAIN", v) },
+            None => unsafe { env::remove_var("SERA_WIMSE_DOMAIN") },
+        }
+
+        let config = result.unwrap();
+        assert_eq!(config.auth.wimse_domain, "sera.local");
     }
 }

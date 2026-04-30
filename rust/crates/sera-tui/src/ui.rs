@@ -1,18 +1,20 @@
-//! Central render entry point — **chat-dominant** layout (J.0.1).
+//! Central render entry point — **chat-dominant** layout (J.0.1, sera-ckw5).
 //!
 //! The screen is one big transcript canvas with a composer pinned at the
-//! bottom and a single-line status/hint footer.  Agents, HITL queue, and
-//! evolve status are accessed as modal overlays via Ctrl+A/H/E.
+//! bottom.  A single-line status bar sits on top (agent · session · conn)
+//! and a single-line key-hint footer sits at the bottom.  Agents, HITL
+//! queue, and evolve status are accessed as modal overlays via Ctrl+A/H/E.
 //!
-//! Layout:
+//! Layout (matches `docs/plan/SPEC-chat-tui.md`):
 //! ```text
 //! ┌──────────────────────────────────────────────┐
-//! │ main (Min(3))         — Session chat canvas  │
+//! │ status   (Length(1))  — agent/session/conn   │
+//! ├──────────────────────────────────────────────┤
+//! │ main     (Min(3))     — Session chat canvas  │
 //! ├──────────────────────────────────────────────┤
 //! │ composer (Length(5))  — multi-line input     │
 //! ├──────────────────────────────────────────────┤
-//! │ status (Length(1))    — agent/session/conn   │
-//! │ hint   (Length(1))    — contextual keys      │
+//! │ hint     (Length(1))  — contextual keys      │
 //! └──────────────────────────────────────────────┘
 //! ```
 
@@ -31,18 +33,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1), // status bar (top)
             Constraint::Min(3),    // main chat canvas
             Constraint::Length(5), // composer
-            Constraint::Length(1), // status bar
-            Constraint::Length(1), // key hint
+            Constraint::Length(1), // key-hint footer
         ])
         .split(frame.area());
-
-    // Main canvas: Session chat (metadata + transcript + tool log).
-    app.session.render_chat(frame, chunks[0], true);
-
-    // Composer — always visible, regardless of modal state.
-    app.session.render_composer_only(frame, chunks[1]);
 
     // Status bar: agent name + session short-id + connection state.
     let agent = app.active_agent_id.as_deref();
@@ -52,7 +48,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         session_id,
         conn: app.connection,
     }
-    .render(frame, chunks[2]);
+    .render(frame, chunks[0]);
+
+    // Main canvas: Session chat (transcript + tool log).
+    app.session.render_chat(frame, chunks[1], true);
+
+    // Composer — always visible, regardless of modal state.
+    app.session.render_composer_only(frame, chunks[2]);
 
     // Key hint footer — context-sensitive.
     render_hint(frame, chunks[3], app);
@@ -225,6 +227,16 @@ mod tests {
         .unwrap()
     }
 
+    /// Read the rendered text of `row` (0-indexed) from the test backend.
+    fn row_text(term: &Terminal<TestBackend>, row: u16) -> String {
+        let buf = term.backend().buffer();
+        let area = buf.area();
+        (0..area.width)
+            .map(|x| buf[(x, row)].symbol())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
     #[test]
     fn render_chat_canvas_produces_output() {
         let mut app = App::new(client(), TuiKeybindings::defaults());
@@ -238,8 +250,49 @@ mod tests {
             .map(|c| c.symbol())
             .collect::<Vec<_>>()
             .join("");
-        // Chat-dominant canvas shows the Session header text.
-        assert!(rendered.contains("No session selected"));
+        // Chat-dominant transcript area shows its empty-state hint when no
+        // events have arrived.
+        assert!(
+            rendered.contains("no transcript yet"),
+            "expected transcript empty-state, got: {rendered:?}"
+        );
+        // Composer placeholder is visible inside the composer pane.
+        assert!(
+            rendered.contains("Composer"),
+            "expected composer block title to render, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn chat_dominant_layout_pins_status_to_top_and_composer_above_hint() {
+        // sera-ckw5: lock the chat-dominant slot order — status bar at the
+        // top, transcript filling the middle, composer above a one-line
+        // key-hint footer.  If a future change reshuffles `Layout::default`
+        // away from the spec, this test catches it.
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        let backend = TestBackend::new(80, 20);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render(f, &mut app)).unwrap();
+
+        let top = row_text(&term, 0);
+        let composer_title = row_text(&term, 14);
+        let footer = row_text(&term, 19);
+
+        assert!(
+            top.contains("agent=") && top.contains("session="),
+            "status bar must render on row 0, got: {top:?}"
+        );
+        assert!(
+            composer_title.contains("Composer"),
+            "composer block title must render on row 14 (above the footer), got: {composer_title:?}"
+        );
+        // Footer is the key-hint line; when status text is "ready" the hint
+        // payload may be empty for the default state, but the row itself
+        // exists and never overlaps the composer border.
+        assert!(
+            !footer.contains("Composer"),
+            "key-hint footer row must not contain composer chrome, got: {footer:?}"
+        );
     }
 
     #[test]

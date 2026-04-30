@@ -36,6 +36,11 @@ pub enum ConnectionState {
 }
 
 impl ConnectionState {
+    /// Human-readable connection-state label.  Currently only consumed by
+    /// unit tests; `views::status_bar` carries its own coloured rendering.
+    /// Kept as the canonical mapping so downstream code (debug overlays,
+    /// future status banners) has one source of truth.
+    #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
             Self::Connected => "connected",
@@ -123,6 +128,11 @@ impl Agent {
 #[derive(Debug, Clone)]
 pub struct SessionSummary {
     pub id: String,
+    /// Owning agent id from the gateway response.  Not currently rendered
+    /// — the top status bar reads `App::active_agent_id` directly — but
+    /// kept on the parsed struct so the wire format stays honest and the
+    /// session picker / debug overlays can reuse it without a re-fetch.
+    #[allow(dead_code)]
     pub agent_id: String,
     /// ISO-8601 timestamp of session creation.  Not yet rendered in the
     /// TUI but parsed for future "Age" column support — keep the field

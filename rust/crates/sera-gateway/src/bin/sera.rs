@@ -53,6 +53,7 @@ use sera_gateway::admin::{
     AdminAppState, AdminAuditLogger, AdminAuth, AdminSessionInfo, resolve_admin_bind,
     resolve_admin_port, serve_admin,
 };
+use sera_gateway::agent_transport::{AgentTurnTransport, ToolEvent, TurnEvents, UsageInfo};
 use sera_gateway::capability_enforcement::{CapabilityRegistry, PolicyDenial};
 use sera_gateway::hitl_gateway::{
     HitlAppState, InMemoryTicketStore, TicketStore, resolve_approval_routing, resolve_hitl_mode,
@@ -714,19 +715,6 @@ impl RuntimeChildSupervisor {
         }
     }
 
-    /// Send a graceful shutdown command to the current child and stop the
-    /// supervisor from respawning. Best-effort: any I/O failure is logged
-    /// upstream so one stuck child cannot stall the drain phase.
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        self.stopping
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        let state = self.state.lock().await;
-        if let Some(h) = state.harness.as_ref() {
-            h.shutdown().await?;
-        }
-        Ok(())
-    }
-
     async fn respawn_locked(&self, state: &mut SupervisorState) -> anyhow::Result<()> {
         if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
             anyhow::bail!(
@@ -790,31 +778,152 @@ impl RuntimeChildSupervisor {
     }
 }
 
+// ── AgentTurnTransport impl (sera-ve9x) ─────────────────────────────────────
+//
+// The supervisor is the only [`AgentTurnTransport`] implementor in PR 1.
+// `acquire()` and `mark_unhealthy()` move from the gateway call sites
+// (`execute_turn`, `execute_steer`, `probe_runtime_ready`) into these
+// methods so PR 2 can swap in an `EmbeddedRuntimeTransport` without
+// duplicating the supervisor lifecycle handling. Behaviour is unchanged:
+// every `mark_unhealthy` reason string and every error-propagation path
+// is preserved.
+
+#[async_trait::async_trait]
+impl AgentTurnTransport for RuntimeChildSupervisor {
+    async fn send_turn(
+        &self,
+        messages: Vec<serde_json::Value>,
+        session_key: &str,
+    ) -> anyhow::Result<TurnEvents> {
+        let harness = self.acquire().await?;
+        match harness.send_turn(messages, session_key).await {
+            Ok(events) => Ok(events),
+            Err(e) => {
+                let err_msg = e.to_string();
+                self.mark_unhealthy(&format!("send_turn error: {err_msg}"))
+                    .await;
+                Err(e)
+            }
+        }
+    }
+
+    async fn send_steer(
+        &self,
+        items: Vec<serde_json::Value>,
+        session_key: &str,
+    ) -> anyhow::Result<()> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let harness = self.acquire().await?;
+
+        let submission = serde_json::json!({
+            "id": uuid::Uuid::new_v4(),
+            "op": {
+                "type": "steer",
+                "items": items,
+                "session_key": session_key,
+            },
+        });
+
+        let mut json_line = serde_json::to_string(&submission)?;
+        json_line.push('\n');
+
+        let mut stdin = harness.stdin.lock().await;
+        let mut stdout = harness.stdout.lock().await;
+
+        if let Err(e) = stdin.write_all(json_line.as_bytes()).await {
+            let ctx_err = harness.child_exit_context(e).await;
+            // Drop stdin/stdout guards before awaiting on the supervisor
+            // lock — the supervisor's `mark_unhealthy` takes its own lock,
+            // and concurrent `acquire` calls also need access to the same
+            // `Arc<StdioHarness>`'s child mutex.
+            drop(stdin);
+            drop(stdout);
+            self.mark_unhealthy(&format!("steer stdin write: {ctx_err}"))
+                .await;
+            return Err(ctx_err);
+        }
+        if let Err(e) = stdin.flush().await {
+            let ctx_err = harness.child_exit_context(e).await;
+            drop(stdin);
+            drop(stdout);
+            self.mark_unhealthy(&format!("steer stdin flush: {ctx_err}"))
+                .await;
+            return Err(ctx_err);
+        }
+
+        // Drain the steer turn until its terminal `turn_completed` frame.
+        // The runtime emits the event type at `msg.type` (mirroring
+        // `StdioHarness::send_turn`); a stale code path read `type` at the
+        // top level and never matched, so the loop wedged the lane until
+        // `SERA_TURN_TIMEOUT_SECS` (sera-y9f8). We must consume every
+        // frame this steer produces — including intermediate
+        // `streaming_delta`s and the final `turn_completed`. The next
+        // `send_turn` reads from the same harness stdout and exits on the
+        // first `turn_completed` it sees (no `submission_id` correlation),
+        // so any leftover steer event would be misread as the next user
+        // turn's completion and short-circuit it with empty output.
+        let mut line = String::new();
+        loop {
+            match stdout.read_line(&mut line).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) {
+                        let msg_type = event
+                            .get("msg")
+                            .and_then(|m| m.get("type"))
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("");
+                        if msg_type == "turn_completed" {
+                            break;
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+            line.clear();
+        }
+
+        Ok(())
+    }
+
+    /// Send a graceful shutdown command to the current child and stop the
+    /// supervisor from respawning. Best-effort: any I/O failure is logged
+    /// upstream so one stuck child cannot stall the drain phase.
+    async fn shutdown(&self) -> anyhow::Result<()> {
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let state = self.state.lock().await;
+        if let Some(h) = state.harness.as_ref() {
+            h.shutdown().await?;
+        }
+        Ok(())
+    }
+
+    /// Liveness probe used by `/api/health/ready`. The semantics match the
+    /// pre-trait `probe_runtime_ready` body: acquire the current child
+    /// (respawning a dead one transparently — sera-ojp3) and round-trip a
+    /// trivial `ping` turn. A non-empty streaming reply proves both the
+    /// runtime and its LLM provider are reachable.
+    async fn liveness_probe(&self) -> anyhow::Result<()> {
+        let harness = self.acquire().await?;
+        let messages = vec![serde_json::json!({
+            "role": "user",
+            "content": "ping",
+        })];
+        let events = harness.send_turn(messages, "__sera_readiness_probe__").await?;
+        if events.response.trim().is_empty() {
+            anyhow::bail!("liveness probe returned empty response");
+        }
+        Ok(())
+    }
+}
+
 // ── Turn event types ────────────────────────────────────────────────────────
-
-/// A tool call event captured from the runtime's NDJSON output.
-#[derive(Debug, Clone)]
-enum ToolEvent {
-    Begin {
-        call_id: String,
-        tool: String,
-        arguments: serde_json::Value,
-    },
-    End {
-        call_id: String,
-        content: String,
-    },
-}
-
-/// Result from a harness turn — response text, tool call events, and the
-/// provider-reported token usage extracted from the terminal `TurnCompleted`
-/// frame.
-#[derive(Debug, Default)]
-struct TurnEvents {
-    response: String,
-    tool_events: Vec<ToolEvent>,
-    usage: UsageInfo,
-}
+//
+// `ToolEvent`, `TurnEvents`, and `UsageInfo` moved to
+// `sera_gateway::agent_transport` (sera-ve9x) so PR 2 can plug an in-process
+// `EmbeddedRuntimeTransport` against the same shapes.
 
 // ── Shared state ────────────────────────────────────────────────────────────
 
@@ -837,11 +946,15 @@ struct AppState {
     hook_registry: Arc<HookRegistry>,
     /// Chain executor for running hook pipelines.
     chain_executor: Arc<ChainExecutor>,
-    /// Per-agent runtime child supervisors (sera-ojp3) keyed by agent name.
-    /// Each supervisor owns at most one live `StdioHarness` and respawns on
-    /// child exit so a single `sera-runtime --ndjson` panic cannot wedge the
-    /// agent for the lifetime of the gateway pod.
-    harnesses: std::collections::HashMap<String, Arc<RuntimeChildSupervisor>>,
+    /// Per-agent runtime backends keyed by agent name. Today the only
+    /// implementor is `RuntimeChildSupervisor` (sera-ojp3) which owns at
+    /// most one live `StdioHarness` and respawns on child exit so a
+    /// single `sera-runtime --ndjson` panic cannot wedge the agent for
+    /// the lifetime of the gateway pod. Stored as `Arc<dyn
+    /// AgentTurnTransport>` (sera-ve9x) so PR 2 can swap in an
+    /// in-process `EmbeddedRuntimeTransport` without forking the boot
+    /// loop.
+    harnesses: std::collections::HashMap<String, Arc<dyn AgentTurnTransport>>,
     /// Latch that flips to `true` after the first successful runtime probe.
     /// Drives `/api/health/ready` — see `probe_runtime_ready`. Stays `false`
     /// across docker restarts because the gateway process is recreated.
@@ -1259,13 +1372,6 @@ fn extract_missing_field(msg: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
-#[derive(Serialize, Debug, Clone, Copy, Default)]
-struct UsageInfo {
-    prompt_tokens: u64,
-    completion_tokens: u64,
-    total_tokens: u64,
-}
-
 #[derive(Serialize)]
 struct ChatResponse {
     response: String,
@@ -1383,25 +1489,19 @@ async fn probe_runtime_ready(state: &AppState) -> bool {
     }
 
     let timeout = readiness_probe_timeout();
-    for supervisor in state.harnesses.values() {
-        // Acquire the current child from the supervisor (sera-ojp3) — if the
-        // child died between probes, this respawns transparently before we
-        // probe.
-        let harness = match supervisor.acquire().await {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::warn!(error = %e, "readiness probe: failed to acquire harness");
+    for transport in state.harnesses.values() {
+        // sera-ve9x: defer to the transport's `liveness_probe`, which the
+        // stdio impl backs with the same `acquire().send_turn(ping)` round
+        // trip the inline code did before. If the child died between
+        // probes, the supervisor respawns transparently inside that call.
+        let probe = transport.liveness_probe();
+        match tokio::time::timeout(timeout, probe).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "readiness probe: transport reported failure");
                 return false;
             }
-        };
-        let messages = vec![serde_json::json!({
-            "role": "user",
-            "content": "ping",
-        })];
-        let probe = harness.send_turn(messages, "__sera_readiness_probe__");
-        match tokio::time::timeout(timeout, probe).await {
-            Ok(Ok(events)) if !events.response.trim().is_empty() => {}
-            _ => return false,
+            Err(_elapsed) => return false,
         }
     }
 
@@ -1716,7 +1816,7 @@ async fn chat_handler(
                             &agent_spec,
                             &transcript,
                             &message,
-                            &supervisor,
+                            &*supervisor,
                             &session_key,
                             &state.skill_engine,
                             &state.semantic_store,
@@ -1863,7 +1963,7 @@ async fn chat_handler(
             &agent_spec,
             &transcript,
             &req.message,
-            &supervisor,
+            &*supervisor,
             &session_key,
             &state.skill_engine,
             &state.semantic_store,
@@ -2081,7 +2181,7 @@ enum StreamState {
         transcript: Vec<sera_db::sqlite::TranscriptRow>,
         message: String,
         state: Arc<AppState>,
-        supervisor: Arc<RuntimeChildSupervisor>,
+        supervisor: Arc<dyn AgentTurnTransport>,
         session_id: String,
         session_key: String,
         message_id: String,
@@ -2129,19 +2229,20 @@ fn turn_timeout() -> std::time::Duration {
         .unwrap_or(DEFAULT_TURN_TIMEOUT)
 }
 
-/// Execute a turn by dispatching to the agent's runtime supervisor.
+/// Execute a turn by dispatching through the agent's [`AgentTurnTransport`].
 ///
-/// The gateway builds the conversation messages from the transcript, asks
-/// the supervisor for the current child handle (which respawns transparently
-/// if the previous child died — sera-ojp3), and sends the turn down the
-/// NDJSON pipe. The harness (sera-runtime) owns LLM calls and tool
-/// execution; the gateway never touches those.
+/// The gateway builds the conversation messages from the transcript and
+/// hands them to the transport. Today's implementor (`RuntimeChildSupervisor`)
+/// asks the supervisor for the current `sera-runtime --ndjson` child handle
+/// — respawning transparently if the previous child died (sera-ojp3) — and
+/// writes the submission down the NDJSON pipe. The runtime owns LLM calls
+/// and tool execution; the gateway never touches those.
 #[allow(clippy::too_many_arguments)]
 async fn execute_turn(
     agent_spec: &AgentSpec,
     transcript: &[sera_db::sqlite::TranscriptRow],
     user_message: &str,
-    supervisor: &RuntimeChildSupervisor,
+    transport: &dyn AgentTurnTransport,
     session_key: &str,
     skill_engine: &SkillDispatchEngine,
     semantic_store: &Arc<dyn SemanticMemoryStore>,
@@ -2246,43 +2347,21 @@ async fn execute_turn(
         }));
     }
 
-    // sera-ojp3: ask the supervisor for the current child handle. If the
-    // previous child has died, this respawns transparently before we write
-    // the submission. Acquisition failure is rare (only when the supervisor
-    // is shutting down or respawn itself errors); surface it as a clear
-    // unhealthy reply so the caller does not wedge on the lane queue.
-    let harness = match supervisor.acquire().await {
-        Ok(h) => h,
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                agent = %agent_name,
-                session_key = %session_key,
-                event = "harness:unavailable",
-                "Runtime supervisor refused to acquire harness"
-            );
-            return MvsTurnResult {
-                reply: format!("[sera] Runtime unavailable: {e}"),
-                tool_events: vec![],
-                usage: UsageInfo {
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                    total_tokens: 0,
-                },
-            };
-        }
-    };
-
     let timeout = turn_timeout();
-    // sera-bsem: race the harness turn against both the existing timeout and
-    // the KillSwitch-driven cancellation token. Dropping the `send_turn`
-    // future via `select!` returns control to the caller so the lane slot is
-    // released even if the harness subprocess is unresponsive.
+    // sera-bsem: race the transport turn against both the existing timeout
+    // and the KillSwitch-driven cancellation token. Dropping the `send_turn`
+    // future via `select!` returns control to the caller so the lane slot
+    // is released even if the backend is unresponsive.
     // sera-ifjl: on a successful turn, tool events are filtered through
-    // enforce_tool_events before returning — denied tools are rewritten into
-    // explicit denials and an OCSF audit entry is emitted.
-    // sera-ojp3: on a runtime I/O error from `send_turn`, mark the supervisor
-    // unhealthy so the next turn respawns instead of reusing the dead child.
+    // enforce_tool_events before returning — denied tools are rewritten
+    // into explicit denials and an OCSF audit entry is emitted.
+    // sera-ve9x: the trait impl on `RuntimeChildSupervisor` performs the
+    // `acquire()` and (on a backend error) `mark_unhealthy()` internally,
+    // so the call site only has to handle Ok/Err uniformly. The previous
+    // "Runtime unavailable" / "Runtime error" split (acquire failure vs.
+    // send_turn failure) collapses into a single error reply — both
+    // paths had identical lane-release semantics, so observable behaviour
+    // is unchanged.
     tokio::select! {
         biased;
         _ = cancel.cancelled() => {
@@ -2300,7 +2379,7 @@ async fn execute_turn(
                 },
             }
         }
-        res = tokio::time::timeout(timeout, harness.send_turn(messages, session_key)) => match res {
+        res = tokio::time::timeout(timeout, transport.send_turn(messages, session_key)) => match res {
             Ok(Ok(events)) => {
                 let filtered_events = enforce_tool_events(
                     agent_name,
@@ -2323,9 +2402,6 @@ async fn execute_turn(
                     event = "harness:turn_failed",
                     "Runtime harness turn failed"
                 );
-                supervisor
-                    .mark_unhealthy(&format!("send_turn error: {err_msg}"))
-                    .await;
                 MvsTurnResult {
                     reply: format!("[sera] Runtime error: {err_msg}"),
                     tool_events: vec![],
@@ -2466,93 +2542,21 @@ async fn emit_hitl_required_audit(
 
 // ── Steer injection ────────────────────────────────────────────────────────
 
-/// Send a steer operation to the agent's runtime supervisor.
-/// This is used for tool boundary injection of steer messages.
+/// Send a steer operation to the agent's runtime backend.
+/// Used for tool-boundary injection of steer messages.
+///
+/// sera-ve9x: acquire / NDJSON write / drain-until-`turn_completed` /
+/// `mark_unhealthy` all live inside the [`AgentTurnTransport`] impl. The
+/// call site only races the trait future against the existing timeout and
+/// cancellation token (sera-bsem).
 async fn execute_steer(
-    supervisor: &RuntimeChildSupervisor,
+    transport: &dyn AgentTurnTransport,
     steer_messages: &[serde_json::Value],
     session_key: &str,
     cancel: &CancellationToken,
 ) -> MvsTurnResult {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-
-    // sera-ojp3: acquire the current child via the supervisor (respawning
-    // a dead child) instead of binding to a fixed harness for the gateway's
-    // lifetime.
-    let harness = match supervisor.acquire().await {
-        Ok(h) => h,
-        Err(e) => {
-            tracing::error!(error = %e, session_key = %session_key, "Steer: failed to acquire harness");
-            return MvsTurnResult {
-                reply: format!("[sera] Steer injection failed (runtime unavailable): {e}"),
-                tool_events: vec![],
-                usage: UsageInfo {
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                    total_tokens: 0,
-                },
-            };
-        }
-    };
-
-    let submission = serde_json::json!({
-        "id": uuid::Uuid::new_v4(),
-        "op": {
-            "type": "steer",
-            "items": steer_messages,
-            "session_key": session_key,
-        },
-    });
-
-    let mut json_line = serde_json::to_string(&submission).unwrap();
-    json_line.push('\n');
-
-    let mut stdin = harness.stdin.lock().await;
-    let mut stdout = harness.stdout.lock().await;
-
-    if let Err(e) = stdin.write_all(json_line.as_bytes()).await {
-        let ctx_err = harness.child_exit_context(e).await;
-        tracing::error!(error = %ctx_err, session_key = %session_key, "Steer stdin write failed");
-        // Drop stdin/stdout guards before awaiting on supervisor lock to
-        // avoid deadlock with concurrent `acquire` calls that need the same
-        // Arc<StdioHarness>'s child mutex.
-        drop(stdin);
-        drop(stdout);
-        supervisor
-            .mark_unhealthy(&format!("steer stdin write: {ctx_err}"))
-            .await;
-        return MvsTurnResult {
-            reply: format!("[sera] Steer injection failed: {ctx_err}"),
-            tool_events: vec![],
-            usage: UsageInfo {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                total_tokens: 0,
-            },
-        };
-    }
-    if let Err(e) = stdin.flush().await {
-        let ctx_err = harness.child_exit_context(e).await;
-        tracing::error!(error = %ctx_err, session_key = %session_key, "Steer stdin flush failed");
-        drop(stdin);
-        drop(stdout);
-        supervisor
-            .mark_unhealthy(&format!("steer stdin flush: {ctx_err}"))
-            .await;
-        return MvsTurnResult {
-            reply: format!("[sera] Steer injection failed: {ctx_err}"),
-            tool_events: vec![],
-            usage: UsageInfo {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                total_tokens: 0,
-            },
-        };
-    }
-
     let timeout = turn_timeout();
-    // sera-bsem: add a cancellation arm so a KillSwitch ROLLBACK can abort a
-    // steer injection that is otherwise blocked on `turn_completed`.
+    let items = steer_messages.to_vec();
     tokio::select! {
         biased;
         _ = cancel.cancelled() => {
@@ -2570,41 +2574,8 @@ async fn execute_steer(
                 },
             }
         }
-        res = tokio::time::timeout(timeout, async {
-            // Drain the steer turn until its terminal `turn_completed` frame.
-            // The runtime emits the event type at `msg.type` (mirroring
-            // `StdioHarness::send_turn`); a stale code path read `type` at
-            // the top level and never matched, so the loop wedged the lane
-            // until `SERA_TURN_TIMEOUT_SECS` (sera-y9f8).
-            //
-            // We must consume every frame this steer produces — including
-            // intermediate `streaming_delta`s and the final `turn_completed`.
-            // `send_turn` reads from the same harness stdout and exits on the
-            // first `turn_completed` it sees (no `submission_id` correlation),
-            // so any leftover steer event would be misread as the next user
-            // turn's completion and short-circuit it with empty output.
-            let mut line = String::new();
-            loop {
-                match stdout.read_line(&mut line).await {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) {
-                            let msg_type = event
-                                .get("msg")
-                                .and_then(|m| m.get("type"))
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("");
-                            if msg_type == "turn_completed" {
-                                break;
-                            }
-                        }
-                    }
-                    Err(_) => break,
-                }
-                line.clear();
-            }
-        }) => match res {
-            Ok(()) => MvsTurnResult {
+        res = tokio::time::timeout(timeout, transport.send_steer(items, session_key)) => match res {
+            Ok(Ok(())) => MvsTurnResult {
                 reply: "[steer injected]".to_string(),
                 tool_events: vec![],
                 usage: UsageInfo {
@@ -2613,6 +2584,22 @@ async fn execute_steer(
                     total_tokens: 0,
                 },
             },
+            Ok(Err(e)) => {
+                tracing::error!(
+                    error = %e,
+                    session_key = %session_key,
+                    "Steer injection failed",
+                );
+                MvsTurnResult {
+                    reply: format!("[sera] Steer injection failed: {e}"),
+                    tool_events: vec![],
+                    usage: UsageInfo {
+                        prompt_tokens: 0,
+                        completion_tokens: 0,
+                        total_tokens: 0,
+                    },
+                }
+            }
             Err(_elapsed) => {
                 tracing::error!(
                     session_key = %session_key,
@@ -2988,7 +2975,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         &agent_spec,
         &transcript,
         &msg.content,
-        &supervisor,
+        &*supervisor,
         &session_key,
         &state.skill_engine,
         &state.semantic_store,
@@ -3094,7 +3081,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             tracing::info!(session_key = %session_key, "Injecting steer event at tool boundary");
             let cancel = state.register_cancellation_token(&session_key);
             let follow_up =
-                execute_steer(&supervisor, &steer_content, &session_key, &cancel).await;
+                execute_steer(&*supervisor, &steer_content, &session_key, &cancel).await;
             state.deregister_cancellation_token(&session_key);
             // Persist the steer as a user message in transcript.
             {
@@ -3141,7 +3128,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             &agent_spec,
             &transcript,
             &user_content,
-            &supervisor,
+            &*supervisor,
             &session_key,
             &state.skill_engine,
             &state.semantic_store,
@@ -3918,7 +3905,8 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         );
     }
 
-    let mut harnesses = std::collections::HashMap::new();
+    let mut harnesses: std::collections::HashMap<String, Arc<dyn AgentTurnTransport>> =
+        std::collections::HashMap::new();
 
     for agent_name in manifests.agent_names() {
         let agent_spec = match manifests.agent_spec(agent_name).ok().flatten() {
@@ -4673,16 +4661,15 @@ mod tests {
         parse_manifests(TEMPLATE_YAML).unwrap()
     }
 
-    async fn test_harnesses() -> std::collections::HashMap<String, Arc<RuntimeChildSupervisor>> {
-        let mut h = std::collections::HashMap::new();
-        h.insert(
-            "sera".to_string(),
-            RuntimeChildSupervisor::start_with_factory("sera", || async {
-                StdioHarness::spawn_mock().await
-            })
-            .await
-            .unwrap(),
-        );
+    async fn test_harnesses() -> std::collections::HashMap<String, Arc<dyn AgentTurnTransport>> {
+        let mut h: std::collections::HashMap<String, Arc<dyn AgentTurnTransport>> =
+            std::collections::HashMap::new();
+        let supervisor = RuntimeChildSupervisor::start_with_factory("sera", || async {
+            StdioHarness::spawn_mock().await
+        })
+        .await
+        .unwrap();
+        h.insert("sera".to_string(), supervisor);
         h
     }
 
@@ -5191,11 +5178,12 @@ mod tests {
 
         let mut state = test_state_async().await;
         // Replace the always-good supervisor with one wrapping a hanging mock.
-        let hanging_sup = RuntimeChildSupervisor::start_with_factory("sera", || async {
-            StdioHarness::spawn_mock_hang().await
-        })
-        .await
-        .unwrap();
+        let hanging_sup: Arc<dyn AgentTurnTransport> =
+            RuntimeChildSupervisor::start_with_factory("sera", || async {
+                StdioHarness::spawn_mock_hang().await
+            })
+            .await
+            .unwrap();
         Arc::get_mut(&mut state)
             .expect("unique state ref")
             .harnesses
@@ -6530,7 +6518,7 @@ spec:
 
         let start = std::time::Instant::now();
         let result =
-            execute_steer(&supervisor, &steer_messages, "y9f8-test-session", &cancel).await;
+            execute_steer(&*supervisor, &steer_messages, "y9f8-test-session", &cancel).await;
         let elapsed = start.elapsed();
 
         // Follow-up turn on the same harness: must see the mock's normal
@@ -6615,7 +6603,7 @@ spec:
             &agent_spec,
             &[],
             "hello",
-            &supervisor,
+            &*supervisor,
             "bsem-test-session",
             &skill_engine,
             &semantic_store,
@@ -6964,7 +6952,7 @@ spec:
             &agent_spec,
             &[],
             "hello",
-            &supervisor,
+            &*supervisor,
             "ojp3-e2e-cold",
             &skill_engine,
             &semantic_store,
@@ -7038,7 +7026,7 @@ spec:
             &agent_spec,
             &[],
             "hello",
-            &supervisor,
+            &*supervisor,
             "ojp3-during-1",
             &skill_engine,
             &semantic_store,
@@ -7057,7 +7045,7 @@ spec:
             &agent_spec,
             &[],
             "hello again",
-            &supervisor,
+            &*supervisor,
             "ojp3-during-2",
             &skill_engine,
             &semantic_store,
@@ -7070,6 +7058,19 @@ spec:
             r2.reply, "mock response",
             "next turn after mark_unhealthy must succeed against a fresh child"
         );
+    }
+
+    /// sera-ve9x: `RuntimeChildSupervisor` is the sole `AgentTurnTransport`
+    /// implementor in PR 1, and the gateway stores it as
+    /// `Arc<dyn AgentTurnTransport>` in `AppState.harnesses`. This is a
+    /// compile-only check that the trait remains object-safe and that the
+    /// supervisor implements it — any non-object-safe addition or signature
+    /// drift would surface here at build time.
+    #[test]
+    fn supervisor_is_object_safe() {
+        fn _assert_impl<T: AgentTurnTransport>() {}
+        fn _assert_obj_safe(_: Arc<dyn AgentTurnTransport>) {}
+        _assert_impl::<RuntimeChildSupervisor>();
     }
 
     /// `turn_timeout` must fall back to [`DEFAULT_TURN_TIMEOUT`] when the
@@ -7820,7 +7821,8 @@ spec:
             )
             .await
             .expect("spawn real sera-runtime supervisor");
-            let mut harnesses = std::collections::HashMap::new();
+            let mut harnesses: std::collections::HashMap<String, Arc<dyn AgentTurnTransport>> =
+                std::collections::HashMap::new();
             harnesses.insert("sera".to_string(), supervisor);
 
             let state = Arc::new(AppState {

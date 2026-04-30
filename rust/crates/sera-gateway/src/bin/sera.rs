@@ -509,6 +509,240 @@ impl StdioHarness {
     }
 }
 
+// ── Runtime child supervisor (sera-ojp3) ────────────────────────────────────
+//
+// One supervisor per agent owns at most one live `StdioHarness`. It detects
+// `sera-runtime --ndjson` exits (try_wait at the next turn boundary, or an
+// explicit `mark_unhealthy` after a write/read failure) and lazily respawns
+// a fresh child. This narrows the blast radius of a runtime panic from
+// "wedge the agent for the gateway pod's lifetime" (the original failure
+// mode) to "the failing turn returns a clear runtime-crash error and the
+// next turn respawns transparently".
+
+/// Spawn factory used by the supervisor. `Process` is the production path;
+/// `Mock` lets tests inject a closure that returns a fresh mock harness so
+/// respawn paths can be exercised without forking real runtime processes.
+enum SpawnFactory {
+    Process {
+        runtime_bin: String,
+        env: std::collections::HashMap<String, String>,
+    },
+    #[cfg(test)]
+    Mock(
+        Box<
+            dyn Fn() -> futures_util::future::BoxFuture<'static, anyhow::Result<StdioHarness>>
+                + Send
+                + Sync,
+        >,
+    ),
+}
+
+impl SpawnFactory {
+    async fn spawn_one(&self) -> anyhow::Result<StdioHarness> {
+        match self {
+            Self::Process { runtime_bin, env } => {
+                StdioHarness::spawn(runtime_bin, env.clone()).await
+            }
+            #[cfg(test)]
+            Self::Mock(f) => f().await,
+        }
+    }
+}
+
+struct SupervisorState {
+    /// Currently live runtime child, if any. `None` between exit detection
+    /// and the next acquire (which respawns).
+    harness: Option<Arc<StdioHarness>>,
+    /// Monotonic counter incremented on every successful spawn. Surfaces in
+    /// lifecycle log lines so operators can correlate `harness:respawned`
+    /// with the prior `harness:exited` / `harness:unhealthy`.
+    generation: u64,
+    /// Last observed exit reason — exit status from `try_wait` or the
+    /// caller-supplied reason from `mark_unhealthy`. Cleared on respawn.
+    last_exit: Option<String>,
+}
+
+/// Per-agent runtime child supervisor (sera-ojp3).
+///
+/// Owns the `StdioHarness` for one agent. Detects child exit and respawns
+/// without operator intervention; the previous design held a single harness
+/// for the gateway's lifetime, so a single child panic permanently wedged
+/// the agent.
+struct RuntimeChildSupervisor {
+    agent_id: String,
+    factory: SpawnFactory,
+    state: Mutex<SupervisorState>,
+    stopping: std::sync::atomic::AtomicBool,
+}
+
+impl RuntimeChildSupervisor {
+    /// Construct a supervisor for the production agent runtime path. The
+    /// initial spawn must succeed; the bootstrap loop logs and skips the
+    /// agent on error, matching the previous one-shot `StdioHarness::spawn`
+    /// boot semantics.
+    async fn start(
+        agent_id: String,
+        runtime_bin: String,
+        env: std::collections::HashMap<String, String>,
+    ) -> anyhow::Result<Arc<Self>> {
+        let supervisor = Arc::new(Self {
+            agent_id,
+            factory: SpawnFactory::Process { runtime_bin, env },
+            state: Mutex::new(SupervisorState {
+                harness: None,
+                generation: 0,
+                last_exit: None,
+            }),
+            stopping: std::sync::atomic::AtomicBool::new(false),
+        });
+        {
+            let mut state = supervisor.state.lock().await;
+            supervisor.respawn_locked(&mut state).await?;
+        }
+        Ok(supervisor)
+    }
+
+    /// Acquire the current child handle. If the previously-spawned child
+    /// has died (detected via `try_wait`) or was explicitly marked
+    /// unhealthy, the supervisor spawns a fresh one before returning.
+    /// Returns an error only when the supervisor is shutting down or when
+    /// respawn itself fails.
+    async fn acquire(&self) -> anyhow::Result<Arc<StdioHarness>> {
+        if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            anyhow::bail!(
+                "runtime supervisor for {} is shutting down",
+                self.agent_id
+            );
+        }
+
+        let mut state = self.state.lock().await;
+
+        // Lazy exit detection: if the previous turn left a still-registered
+        // harness whose child has since exited, surface and clear it before
+        // the next turn picks it up. `try_wait` is non-blocking.
+        if let Some(h) = state.harness.as_ref() {
+            let exit_status = {
+                let mut child = h.child.lock().await;
+                child.try_wait().ok().flatten()
+            };
+            if let Some(status) = exit_status {
+                tracing::warn!(
+                    agent = %self.agent_id,
+                    generation = state.generation,
+                    %status,
+                    event = "harness:exited",
+                    "runtime child exited (try_wait); will respawn"
+                );
+                state.harness = None;
+                state.last_exit = Some(format!("status={status}"));
+            }
+        }
+
+        if state.harness.is_none() {
+            self.respawn_locked(&mut state).await?;
+        }
+        Ok(state
+            .harness
+            .as_ref()
+            .expect("respawn populated harness")
+            .clone())
+    }
+
+    /// Force-mark the current child as unhealthy so the next `acquire` will
+    /// respawn. Used by callers that observed a write/read failure during a
+    /// turn — cheaper than waiting for `try_wait` to confirm exit on the
+    /// following turn.
+    async fn mark_unhealthy(&self, reason: &str) {
+        let mut state = self.state.lock().await;
+        if state.harness.is_some() {
+            tracing::warn!(
+                agent = %self.agent_id,
+                generation = state.generation,
+                reason = %reason,
+                event = "harness:unhealthy",
+                "runtime child marked unhealthy; next turn will respawn"
+            );
+            state.harness = None;
+            state.last_exit = Some(reason.to_string());
+        }
+    }
+
+    /// Send a graceful shutdown command to the current child and stop the
+    /// supervisor from respawning. Best-effort: any I/O failure is logged
+    /// upstream so one stuck child cannot stall the drain phase.
+    async fn shutdown(&self) -> anyhow::Result<()> {
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let state = self.state.lock().await;
+        if let Some(h) = state.harness.as_ref() {
+            h.shutdown().await?;
+        }
+        Ok(())
+    }
+
+    async fn respawn_locked(&self, state: &mut SupervisorState) -> anyhow::Result<()> {
+        if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            anyhow::bail!(
+                "runtime supervisor for {} is shutting down",
+                self.agent_id
+            );
+        }
+        let next_gen = state.generation + 1;
+        tracing::info!(
+            agent = %self.agent_id,
+            generation = next_gen,
+            event = "harness:spawning",
+            "spawning runtime child"
+        );
+        let harness = self.factory.spawn_one().await?;
+        state.generation = next_gen;
+        state.harness = Some(Arc::new(harness));
+        state.last_exit = None;
+        tracing::info!(
+            agent = %self.agent_id,
+            generation = next_gen,
+            event = "harness:respawned",
+            "runtime child ready"
+        );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+impl RuntimeChildSupervisor {
+    /// Test-only: build a supervisor whose spawn factory is a closure that
+    /// returns fresh mock harnesses (e.g. `StdioHarness::spawn_mock`). The
+    /// initial child is spawned eagerly, mirroring `start`.
+    async fn start_with_factory<F, Fut>(agent_id: &str, factory: F) -> anyhow::Result<Arc<Self>>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = anyhow::Result<StdioHarness>> + Send + 'static,
+    {
+        let factory: SpawnFactory =
+            SpawnFactory::Mock(Box::new(move || Box::pin(factory())));
+        let supervisor = Arc::new(Self {
+            agent_id: agent_id.to_string(),
+            factory,
+            state: Mutex::new(SupervisorState {
+                harness: None,
+                generation: 0,
+                last_exit: None,
+            }),
+            stopping: std::sync::atomic::AtomicBool::new(false),
+        });
+        {
+            let mut state = supervisor.state.lock().await;
+            supervisor.respawn_locked(&mut state).await?;
+        }
+        Ok(supervisor)
+    }
+
+    /// Test introspection: current generation count.
+    async fn current_generation(&self) -> u64 {
+        self.state.lock().await.generation
+    }
+}
+
 // ── Turn event types ────────────────────────────────────────────────────────
 
 /// A tool call event captured from the runtime's NDJSON output.
@@ -556,8 +790,11 @@ struct AppState {
     hook_registry: Arc<HookRegistry>,
     /// Chain executor for running hook pipelines.
     chain_executor: Arc<ChainExecutor>,
-    /// Pre-connected runtime harnesses keyed by agent name.
-    harnesses: std::collections::HashMap<String, Arc<StdioHarness>>,
+    /// Per-agent runtime child supervisors (sera-ojp3) keyed by agent name.
+    /// Each supervisor owns at most one live `StdioHarness` and respawns on
+    /// child exit so a single `sera-runtime --ndjson` panic cannot wedge the
+    /// agent for the lifetime of the gateway pod.
+    harnesses: std::collections::HashMap<String, Arc<RuntimeChildSupervisor>>,
     /// Latch that flips to `true` after the first successful runtime probe.
     /// Drives `/api/health/ready` — see `probe_runtime_ready`. Stays `false`
     /// across docker restarts because the gateway process is recreated.
@@ -1099,7 +1336,17 @@ async fn probe_runtime_ready(state: &AppState) -> bool {
     }
 
     let timeout = readiness_probe_timeout();
-    for harness in state.harnesses.values() {
+    for supervisor in state.harnesses.values() {
+        // Acquire the current child from the supervisor (sera-ojp3) — if the
+        // child died between probes, this respawns transparently before we
+        // probe.
+        let harness = match supervisor.acquire().await {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(error = %e, "readiness probe: failed to acquire harness");
+                return false;
+            }
+        };
         let messages = vec![serde_json::json!({
             "role": "user",
             "content": "ping",
@@ -1165,11 +1412,13 @@ async fn chat_handler(
         Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
     };
 
-    // Look up the pre-connected runtime harness for this agent.
-    let harness = match state.harnesses.get(&agent_name) {
-        Some(h) => Arc::clone(h),
+    // Look up the runtime supervisor for this agent (sera-ojp3). The
+    // supervisor may swap its inner harness underneath us if the child has
+    // died — we re-acquire on each turn rather than holding a fixed handle.
+    let supervisor = match state.harnesses.get(&agent_name) {
+        Some(s) => Arc::clone(s),
         None => {
-            tracing::error!(agent = %agent_name, "No runtime harness registered");
+            tracing::error!(agent = %agent_name, "No runtime supervisor registered");
             return Err(StatusCode::SERVICE_UNAVAILABLE);
         }
     };
@@ -1382,7 +1631,7 @@ async fn chat_handler(
         // SSE streaming mode: spawn turn execution and stream word-by-word.
         let message = req.message.clone();
         let state_clone = Arc::clone(&state);
-        let harness_clone = Arc::clone(&harness);
+        let supervisor_clone = Arc::clone(&supervisor);
         let sid = session_id.clone();
         let skey = session_key.clone();
         let mid = format!("msg_{:08x}", rand::random::<u32>());
@@ -1395,7 +1644,7 @@ async fn chat_handler(
                 transcript,
                 message,
                 state: state_clone,
-                harness: harness_clone,
+                supervisor: supervisor_clone,
                 session_id: sid,
                 session_key: skey,
                 message_id: mid_clone,
@@ -1408,7 +1657,7 @@ async fn chat_handler(
                         transcript,
                         message,
                         state,
-                        harness,
+                        supervisor,
                         session_id,
                         session_key,
                         message_id,
@@ -1420,7 +1669,7 @@ async fn chat_handler(
                             &agent_spec,
                             &transcript,
                             &message,
-                            &harness,
+                            &supervisor,
                             &session_key,
                             &state.skill_engine,
                             &state.semantic_store,
@@ -1567,7 +1816,7 @@ async fn chat_handler(
             &agent_spec,
             &transcript,
             &req.message,
-            &harness,
+            &supervisor,
             &session_key,
             &state.skill_engine,
             &state.semantic_store,
@@ -1785,7 +2034,7 @@ enum StreamState {
         transcript: Vec<sera_db::sqlite::TranscriptRow>,
         message: String,
         state: Arc<AppState>,
-        harness: Arc<StdioHarness>,
+        supervisor: Arc<RuntimeChildSupervisor>,
         session_id: String,
         session_key: String,
         message_id: String,
@@ -1833,17 +2082,19 @@ fn turn_timeout() -> std::time::Duration {
         .unwrap_or(DEFAULT_TURN_TIMEOUT)
 }
 
-/// Execute a turn by dispatching to a pre-connected sera-runtime harness.
+/// Execute a turn by dispatching to the agent's runtime supervisor.
 ///
-/// The gateway builds the conversation messages from the transcript and sends
-/// them to the harness. The harness (sera-runtime) owns LLM calls and tool
-/// execution — the gateway never touches those.
+/// The gateway builds the conversation messages from the transcript, asks
+/// the supervisor for the current child handle (which respawns transparently
+/// if the previous child died — sera-ojp3), and sends the turn down the
+/// NDJSON pipe. The harness (sera-runtime) owns LLM calls and tool
+/// execution; the gateway never touches those.
 #[allow(clippy::too_many_arguments)]
 async fn execute_turn(
     agent_spec: &AgentSpec,
     transcript: &[sera_db::sqlite::TranscriptRow],
     user_message: &str,
-    harness: &StdioHarness,
+    supervisor: &RuntimeChildSupervisor,
     session_key: &str,
     skill_engine: &SkillDispatchEngine,
     semantic_store: &Arc<dyn SemanticMemoryStore>,
@@ -1948,6 +2199,33 @@ async fn execute_turn(
         }));
     }
 
+    // sera-ojp3: ask the supervisor for the current child handle. If the
+    // previous child has died, this respawns transparently before we write
+    // the submission. Acquisition failure is rare (only when the supervisor
+    // is shutting down or respawn itself errors); surface it as a clear
+    // unhealthy reply so the caller does not wedge on the lane queue.
+    let harness = match supervisor.acquire().await {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                agent = %agent_name,
+                session_key = %session_key,
+                event = "harness:unavailable",
+                "Runtime supervisor refused to acquire harness"
+            );
+            return MvsTurnResult {
+                reply: format!("[sera] Runtime unavailable: {e}"),
+                tool_events: vec![],
+                usage: UsageInfo {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    total_tokens: 0,
+                },
+            };
+        }
+    };
+
     let timeout = turn_timeout();
     // sera-bsem: race the harness turn against both the existing timeout and
     // the KillSwitch-driven cancellation token. Dropping the `send_turn`
@@ -1956,6 +2234,8 @@ async fn execute_turn(
     // sera-ifjl: on a successful turn, tool events are filtered through
     // enforce_tool_events before returning — denied tools are rewritten into
     // explicit denials and an OCSF audit entry is emitted.
+    // sera-ojp3: on a runtime I/O error from `send_turn`, mark the supervisor
+    // unhealthy so the next turn respawns instead of reusing the dead child.
     tokio::select! {
         biased;
         _ = cancel.cancelled() => {
@@ -1988,9 +2268,19 @@ async fn execute_turn(
                 }
             }
             Ok(Err(e)) => {
-                tracing::error!(error = %e, "Runtime harness turn failed");
+                let err_msg = e.to_string();
+                tracing::error!(
+                    error = %e,
+                    agent = %agent_name,
+                    session_key = %session_key,
+                    event = "harness:turn_failed",
+                    "Runtime harness turn failed"
+                );
+                supervisor
+                    .mark_unhealthy(&format!("send_turn error: {err_msg}"))
+                    .await;
                 MvsTurnResult {
-                    reply: format!("[sera] Runtime error: {e}"),
+                    reply: format!("[sera] Runtime error: {err_msg}"),
                     tool_events: vec![],
                     usage: UsageInfo {
                         prompt_tokens: 0,
@@ -2129,15 +2419,34 @@ async fn emit_hitl_required_audit(
 
 // ── Steer injection ────────────────────────────────────────────────────────
 
-/// Send a steer operation to the runtime harness.
+/// Send a steer operation to the agent's runtime supervisor.
 /// This is used for tool boundary injection of steer messages.
 async fn execute_steer(
-    harness: &StdioHarness,
+    supervisor: &RuntimeChildSupervisor,
     steer_messages: &[serde_json::Value],
     session_key: &str,
     cancel: &CancellationToken,
 ) -> MvsTurnResult {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    // sera-ojp3: acquire the current child via the supervisor (respawning
+    // a dead child) instead of binding to a fixed harness for the gateway's
+    // lifetime.
+    let harness = match supervisor.acquire().await {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!(error = %e, session_key = %session_key, "Steer: failed to acquire harness");
+            return MvsTurnResult {
+                reply: format!("[sera] Steer injection failed (runtime unavailable): {e}"),
+                tool_events: vec![],
+                usage: UsageInfo {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    total_tokens: 0,
+                },
+            };
+        }
+    };
 
     let submission = serde_json::json!({
         "id": uuid::Uuid::new_v4(),
@@ -2157,6 +2466,14 @@ async fn execute_steer(
     if let Err(e) = stdin.write_all(json_line.as_bytes()).await {
         let ctx_err = harness.child_exit_context(e).await;
         tracing::error!(error = %ctx_err, session_key = %session_key, "Steer stdin write failed");
+        // Drop stdin/stdout guards before awaiting on supervisor lock to
+        // avoid deadlock with concurrent `acquire` calls that need the same
+        // Arc<StdioHarness>'s child mutex.
+        drop(stdin);
+        drop(stdout);
+        supervisor
+            .mark_unhealthy(&format!("steer stdin write: {ctx_err}"))
+            .await;
         return MvsTurnResult {
             reply: format!("[sera] Steer injection failed: {ctx_err}"),
             tool_events: vec![],
@@ -2170,6 +2487,11 @@ async fn execute_steer(
     if let Err(e) = stdin.flush().await {
         let ctx_err = harness.child_exit_context(e).await;
         tracing::error!(error = %ctx_err, session_key = %session_key, "Steer stdin flush failed");
+        drop(stdin);
+        drop(stdout);
+        supervisor
+            .mark_unhealthy(&format!("steer stdin flush: {ctx_err}"))
+            .await;
         return MvsTurnResult {
             reply: format!("[sera] Steer injection failed: {ctx_err}"),
             tool_events: vec![],
@@ -2486,11 +2808,13 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         }
     };
 
-    // Look up the pre-connected runtime harness for this agent.
-    let harness = match state.harnesses.get(&agent_name) {
-        Some(h) => Arc::clone(h),
+    // Look up the runtime supervisor for this agent (sera-ojp3). Each turn
+    // re-acquires through the supervisor so a dead child is respawned
+    // instead of repeatedly hitting the same broken pipe.
+    let supervisor = match state.harnesses.get(&agent_name) {
+        Some(s) => Arc::clone(s),
         None => {
-            let err_msg = format!("No runtime harness for agent '{agent_name}'");
+            let err_msg = format!("No runtime supervisor for agent '{agent_name}'");
             tracing::error!("{err_msg}");
             send_error_to_discord(state, &msg.channel_id, &err_msg).await;
             return Ok(());
@@ -2609,14 +2933,15 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         }
     }
 
-    // Execute the agent turn via the pre-connected harness.
+    // Execute the agent turn via the supervisor (sera-ojp3 — respawns a
+    // dead child instead of permanently wedging the agent).
     let cancel = state.register_cancellation_token(&session_key);
     let cap_reg = state.capability_registry.read().await.clone();
     let result = execute_turn(
         &agent_spec,
         &transcript,
         &msg.content,
-        &harness,
+        &supervisor,
         &session_key,
         &state.skill_engine,
         &state.semantic_store,
@@ -2721,7 +3046,8 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         if has_steer && !steer_content.is_empty() {
             tracing::info!(session_key = %session_key, "Injecting steer event at tool boundary");
             let cancel = state.register_cancellation_token(&session_key);
-            let follow_up = execute_steer(&harness, &steer_content, &session_key, &cancel).await;
+            let follow_up =
+                execute_steer(&supervisor, &steer_content, &session_key, &cancel).await;
             state.deregister_cancellation_token(&session_key);
             // Persist the steer as a user message in transcript.
             {
@@ -2768,7 +3094,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             &agent_spec,
             &transcript,
             &user_content,
-            &harness,
+            &supervisor,
             &session_key,
             &state.skill_engine,
             &state.semantic_store,
@@ -3593,10 +3919,24 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
             env.insert("SERA_AGENT_TOOLS_DENY".to_string(), deny);
         }
 
-        match StdioHarness::spawn(&runtime_bin, env).await {
-            Ok(harness) => {
-                tracing::info!(agent = %agent_name, model = %model, "Spawned runtime harness");
-                harnesses.insert(agent_name.to_string(), Arc::new(harness));
+        // sera-ojp3: wrap the runtime child in a supervisor so a panic does
+        // not permanently wedge the agent. The supervisor performs the
+        // initial spawn eagerly so a startup failure surfaces here just like
+        // the previous `StdioHarness::spawn` call did.
+        match RuntimeChildSupervisor::start(
+            agent_name.to_string(),
+            runtime_bin.clone(),
+            env,
+        )
+        .await
+        {
+            Ok(supervisor) => {
+                tracing::info!(
+                    agent = %agent_name,
+                    model = %model,
+                    "Spawned runtime harness via supervisor (sera-ojp3)"
+                );
+                harnesses.insert(agent_name.to_string(), supervisor);
             }
             Err(e) => {
                 tracing::error!(agent = %agent_name, error = %e, "Failed to spawn runtime harness");
@@ -3783,17 +4123,19 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
     // harmless otherwise.
     drop(discord_tx);
 
-    // Phase B.1 — harness drain. Fire every harness shutdown in parallel so a
-    // slow harness does not serialize the others. Bound by `HARNESS_DRAIN_DEADLINE`.
+    // Phase B.1 — harness drain. Fire every supervisor shutdown in parallel
+    // so a slow harness does not serialize the others. Bound by
+    // `HARNESS_DRAIN_DEADLINE`. Each supervisor flips its `stopping` flag so
+    // no respawn races with drain.
     let harness_drain = tokio::time::timeout(HARNESS_DRAIN_DEADLINE, async {
         let harness_shutdowns: Vec<_> = state
             .harnesses
             .iter()
-            .map(|(name, harness)| {
+            .map(|(name, supervisor)| {
                 let name = name.clone();
-                let harness = Arc::clone(harness);
+                let supervisor = Arc::clone(supervisor);
                 async move {
-                    if let Err(e) = harness.shutdown().await {
+                    if let Err(e) = supervisor.shutdown().await {
                         tracing::warn!(agent = %name, error = %e, "Harness shutdown send failed");
                     }
                 }
@@ -4159,11 +4501,15 @@ mod tests {
         parse_manifests(TEMPLATE_YAML).unwrap()
     }
 
-    async fn test_harnesses() -> std::collections::HashMap<String, Arc<StdioHarness>> {
+    async fn test_harnesses() -> std::collections::HashMap<String, Arc<RuntimeChildSupervisor>> {
         let mut h = std::collections::HashMap::new();
         h.insert(
             "sera".to_string(),
-            Arc::new(StdioHarness::spawn_mock().await.unwrap()),
+            RuntimeChildSupervisor::start_with_factory("sera", || async {
+                StdioHarness::spawn_mock().await
+            })
+            .await
+            .unwrap(),
         );
         h
     }
@@ -4672,12 +5018,16 @@ mod tests {
         }
 
         let mut state = test_state_async().await;
-        // Replace the always-good mock with a hanging mock.
-        let hanging = Arc::new(StdioHarness::spawn_mock_hang().await.unwrap());
+        // Replace the always-good supervisor with one wrapping a hanging mock.
+        let hanging_sup = RuntimeChildSupervisor::start_with_factory("sera", || async {
+            StdioHarness::spawn_mock_hang().await
+        })
+        .await
+        .unwrap();
         Arc::get_mut(&mut state)
             .expect("unique state ref")
             .harnesses
-            .insert("sera".to_string(), hanging);
+            .insert("sera".to_string(), hanging_sup);
         let app = build_router(state);
 
         let started = std::time::Instant::now();
@@ -5998,19 +6348,29 @@ spec:
         // test returns to keep parallel tests hermetic.
         unsafe { std::env::set_var("SERA_TURN_TIMEOUT_SECS", "1") };
 
-        let harness = StdioHarness::spawn_mock().await.unwrap();
+        let supervisor = RuntimeChildSupervisor::start_with_factory("sera", || async {
+            StdioHarness::spawn_mock().await
+        })
+        .await
+        .unwrap();
         let cancel = CancellationToken::new();
         let steer_messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
 
         let start = std::time::Instant::now();
         let result =
-            execute_steer(&harness, &steer_messages, "y9f8-test-session", &cancel).await;
+            execute_steer(&supervisor, &steer_messages, "y9f8-test-session", &cancel).await;
         let elapsed = start.elapsed();
 
         // Follow-up turn on the same harness: must see the mock's normal
         // payload, not stale steer frames. With an early `streaming_delta`
         // break, this would observe an empty response because the steer's
         // `turn_completed` would be the first frame `send_turn` reads.
+        // sera-ojp3: re-acquire the harness through the supervisor so we
+        // verify the same live child still answers (no spurious respawn).
+        let harness = supervisor
+            .acquire()
+            .await
+            .expect("supervisor still healthy after steer");
         let follow_up = harness
             .send_turn(Vec::new(), "y9f8-test-session")
             .await
@@ -6049,7 +6409,11 @@ spec:
     /// runtime even though the kill switch was armed.
     #[tokio::test]
     async fn execute_turn_aborts_when_cancellation_token_fires() {
-        let harness = StdioHarness::spawn_mock_hang().await.unwrap();
+        let supervisor = RuntimeChildSupervisor::start_with_factory("sera", || async {
+            StdioHarness::spawn_mock_hang().await
+        })
+        .await
+        .unwrap();
         let agent_spec = AgentSpec {
             provider: "stub".to_string(),
             model: None,
@@ -6079,7 +6443,7 @@ spec:
             &agent_spec,
             &[],
             "hello",
-            &harness,
+            &supervisor,
             "bsem-test-session",
             &skill_engine,
             &semantic_store,
@@ -6182,6 +6546,358 @@ spec:
         assert_eq!(events.usage.prompt_tokens, 0);
         assert_eq!(events.usage.completion_tokens, 0);
         assert_eq!(events.usage.total_tokens, 0);
+    }
+
+    // ── sera-ojp3: runtime child supervisor regression tests ─────────────────
+    //
+    // These cover the three child-exit windows the supervisor must protect:
+    //   A. before any turn (cold crash)
+    //   B. during a turn (in-flight crash → mark_unhealthy)
+    //   C. after a turn (post-turn exit → try_wait detection on next acquire)
+    // plus shutdown semantics (no respawn after `shutdown`).
+
+    /// The supervisor exposes a fresh, healthy harness for the first acquire
+    /// after a successful initial spawn. Baseline against which the failure
+    /// modes are compared.
+    #[tokio::test]
+    async fn supervisor_initial_spawn_yields_healthy_harness() {
+        let supervisor = RuntimeChildSupervisor::start_with_factory("agent", || async {
+            StdioHarness::spawn_mock().await
+        })
+        .await
+        .expect("initial spawn should succeed");
+
+        assert_eq!(supervisor.current_generation().await, 1);
+
+        let harness = supervisor.acquire().await.expect("acquire after init");
+        let events = harness
+            .send_turn(Vec::new(), "ojp3-init")
+            .await
+            .expect("mock harness answers");
+        assert_eq!(events.response, "mock response");
+        // No spurious respawn — generation must still be 1.
+        assert_eq!(supervisor.current_generation().await, 1);
+    }
+
+    /// Case A — child exits *before* the first user-visible turn (cold crash).
+    /// `acquire` must surface this via `try_wait`, respawn into a healthy
+    /// child, and the next turn must succeed.
+    #[tokio::test]
+    async fn supervisor_respawns_when_child_exits_before_first_turn() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&counter);
+        let supervisor = RuntimeChildSupervisor::start_with_factory("agent", move || {
+            let n = counter_clone.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n == 0 {
+                    // First spawn: a shell that exits immediately.
+                    StdioHarness::spawn_mock_dead().await
+                } else {
+                    StdioHarness::spawn_mock().await
+                }
+            }
+        })
+        .await
+        .expect("initial dead spawn still constructs the harness object");
+
+        // Give the dead shell a moment to actually exit so try_wait sees it.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        // Acquire detects the dead child via try_wait and respawns to the
+        // healthy mock factory branch.
+        let harness = supervisor
+            .acquire()
+            .await
+            .expect("supervisor must respawn after cold-crashed child");
+        let events = harness
+            .send_turn(Vec::new(), "ojp3-cold")
+            .await
+            .expect("respawned harness answers normally");
+        assert_eq!(events.response, "mock response");
+        assert!(
+            supervisor.current_generation().await >= 2,
+            "respawn should bump the generation counter"
+        );
+    }
+
+    /// Case B — child crashes *during* a turn. Caller observes a runtime I/O
+    /// failure and tells the supervisor via `mark_unhealthy`. The next
+    /// `acquire` must respawn rather than hand back the dead child.
+    #[tokio::test]
+    async fn supervisor_respawns_after_mark_unhealthy() {
+        let supervisor = RuntimeChildSupervisor::start_with_factory("agent", || async {
+            StdioHarness::spawn_mock().await
+        })
+        .await
+        .expect("initial spawn");
+
+        let gen0 = supervisor.current_generation().await;
+        let h0 = supervisor.acquire().await.expect("first acquire");
+        let _ = h0
+            .send_turn(Vec::new(), "ojp3-during-pre")
+            .await
+            .expect("first turn ok");
+
+        // Caller saw a "BrokenPipe" mid-turn and notifies the supervisor.
+        supervisor
+            .mark_unhealthy("simulated send_turn BrokenPipe")
+            .await;
+
+        let h1 = supervisor
+            .acquire()
+            .await
+            .expect("acquire after mark_unhealthy must respawn");
+        let gen1 = supervisor.current_generation().await;
+        assert!(
+            gen1 > gen0,
+            "expected a new generation after mark_unhealthy (gen0={gen0} gen1={gen1})"
+        );
+        let events = h1
+            .send_turn(Vec::new(), "ojp3-during-post")
+            .await
+            .expect("respawned harness answers normally");
+        assert_eq!(events.response, "mock response");
+    }
+
+    /// Case C — child exits *after* a successful turn returns. The supervisor
+    /// must detect the dead child on the next `acquire` (via `try_wait`) and
+    /// respawn before the next turn writes anything.
+    #[tokio::test]
+    async fn supervisor_respawns_when_child_exits_after_turn() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&counter);
+        let supervisor = RuntimeChildSupervisor::start_with_factory("agent", move || {
+            let n = counter_clone.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n == 0 {
+                    // Single-shot mock: process exactly one submission, then
+                    // exit. The frames mirror `spawn_mock`'s loop body.
+                    let script = concat!(
+                        r#"IFS= read -r line; "#,
+                        r#"echo '{"id":"00000000-0000-0000-0000-000000000001","submission_id":"00000000-0000-0000-0000-000000000000","msg":{"type":"turn_started","turn_id":"00000000-0000-0000-0000-000000000002"},"timestamp":"2024-01-01T00:00:00Z"}'; "#,
+                        r#"echo '{"id":"00000000-0000-0000-0000-000000000003","submission_id":"00000000-0000-0000-0000-000000000000","msg":{"type":"streaming_delta","delta":"mock response"},"timestamp":"2024-01-01T00:00:00Z"}'; "#,
+                        r#"echo '{"id":"00000000-0000-0000-0000-000000000004","submission_id":"00000000-0000-0000-0000-000000000000","msg":{"type":"turn_completed","turn_id":"00000000-0000-0000-0000-000000000002"},"timestamp":"2024-01-01T00:00:00Z"}'; "#,
+                        r#"exit 0"#,
+                    );
+                    StdioHarness::spawn_with_script(script).await
+                } else {
+                    StdioHarness::spawn_mock().await
+                }
+            }
+        })
+        .await
+        .expect("initial single-shot spawn");
+
+        // First turn succeeds; the single-shot mock then exits.
+        let h0 = supervisor.acquire().await.expect("first acquire");
+        let events = h0
+            .send_turn(Vec::new(), "ojp3-post-1")
+            .await
+            .expect("first turn ok");
+        assert_eq!(events.response, "mock response");
+        drop(h0);
+
+        // Wait for the script to actually exit so try_wait reports the status.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        // Next acquire must detect the post-turn exit and respawn to the
+        // healthy mock factory branch.
+        let h1 = supervisor
+            .acquire()
+            .await
+            .expect("supervisor respawns after post-turn child exit");
+        let events = h1
+            .send_turn(Vec::new(), "ojp3-post-2")
+            .await
+            .expect("respawned harness answers normally");
+        assert_eq!(events.response, "mock response");
+        assert!(supervisor.current_generation().await >= 2);
+    }
+
+    /// `shutdown` must flip the supervisor's stopping flag so subsequent
+    /// `acquire` calls return an error instead of respawning. This is the
+    /// drain-phase contract — once the gateway starts shutting down, a
+    /// late-arriving turn never resurrects a dead child.
+    #[tokio::test]
+    async fn supervisor_shutdown_blocks_further_acquires() {
+        let supervisor = RuntimeChildSupervisor::start_with_factory("agent", || async {
+            StdioHarness::spawn_mock().await
+        })
+        .await
+        .unwrap();
+
+        // Healthy before shutdown.
+        let _ = supervisor.acquire().await.expect("acquire pre-shutdown");
+
+        supervisor.shutdown().await.expect("shutdown send ok");
+
+        // `Result<Arc<StdioHarness>, _>::expect_err` would require
+        // StdioHarness: Debug; instead, match on the result directly.
+        match supervisor.acquire().await {
+            Ok(_) => panic!("acquire after shutdown must fail"),
+            Err(err) => assert!(
+                err.to_string().contains("shutting down"),
+                "expected a shutting-down error, got: {err}"
+            ),
+        }
+    }
+
+    /// End-to-end through `execute_turn`: a cold-crashed initial child must
+    /// not wedge the lane. The first dispatched turn re-acquires through
+    /// the supervisor, sees the dead child, respawns, and answers normally.
+    /// Acceptance criterion: "child exit before a turn is surfaced cleanly
+    /// and does not permanently wedge the lane".
+    #[tokio::test]
+    async fn execute_turn_recovers_from_cold_crashed_runtime_child() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&counter);
+        let supervisor = RuntimeChildSupervisor::start_with_factory("agent", move || {
+            let n = counter_clone.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n == 0 {
+                    StdioHarness::spawn_mock_dead().await
+                } else {
+                    StdioHarness::spawn_mock().await
+                }
+            }
+        })
+        .await
+        .unwrap();
+
+        // Wait so the dead-child shell has actually exited.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        let agent_spec = AgentSpec {
+            provider: "stub".to_string(),
+            model: None,
+            persona: None,
+            tools: None,
+            workspace: None,
+            policy_ref: None,
+            enforcement_mode: None,
+            approval_policy: None,
+        };
+        let skill_engine = SkillDispatchEngine::new();
+        let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
+            SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+        );
+        let cancel = CancellationToken::new();
+        let capability_registry = CapabilityRegistry::empty();
+
+        let start = std::time::Instant::now();
+        let result = execute_turn(
+            &agent_spec,
+            &[],
+            "hello",
+            &supervisor,
+            "ojp3-e2e-cold",
+            &skill_engine,
+            &semantic_store,
+            "agent",
+            &cancel,
+            &capability_registry,
+        )
+        .await;
+
+        // The supervisor's lazy try_wait + respawn ran inside execute_turn
+        // (sera-ojp3) and the second factory call produced a healthy mock.
+        assert_eq!(
+            result.reply, "mock response",
+            "execute_turn should recover via supervisor respawn; got: {}",
+            result.reply
+        );
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "respawn-then-turn should complete quickly; elapsed={:?}",
+            start.elapsed()
+        );
+    }
+
+    /// `execute_turn`'s send_turn-error path must mark the supervisor
+    /// unhealthy so the *next* turn respawns instead of reusing the dead
+    /// child. Acceptance criterion: "child exit during/after a turn is
+    /// detected; next turn can respawn".
+    #[tokio::test]
+    async fn execute_turn_marks_supervisor_unhealthy_on_runtime_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&counter);
+        let supervisor = RuntimeChildSupervisor::start_with_factory("agent", move || {
+            let n = counter_clone.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n == 0 {
+                    // Dead child for the first turn — the send_turn write
+                    // will fail with a broken-pipe + child_exit_context error.
+                    StdioHarness::spawn_mock_dead().await
+                } else {
+                    StdioHarness::spawn_mock().await
+                }
+            }
+        })
+        .await
+        .unwrap();
+
+        // Pre-fetch and wait so try_wait actually fires on first acquire.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        let agent_spec = AgentSpec {
+            provider: "stub".to_string(),
+            model: None,
+            persona: None,
+            tools: None,
+            workspace: None,
+            policy_ref: None,
+            enforcement_mode: None,
+            approval_policy: None,
+        };
+        let skill_engine = SkillDispatchEngine::new();
+        let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
+            SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+        );
+        let cancel = CancellationToken::new();
+        let capability_registry = CapabilityRegistry::empty();
+
+        // First turn — try_wait detects the dead child and respawns to the
+        // healthy mock; the turn succeeds.
+        let r1 = execute_turn(
+            &agent_spec,
+            &[],
+            "hello",
+            &supervisor,
+            "ojp3-during-1",
+            &skill_engine,
+            &semantic_store,
+            "agent",
+            &cancel,
+            &capability_registry,
+        )
+        .await;
+        assert_eq!(r1.reply, "mock response");
+
+        // Simulate an in-flight crash via mark_unhealthy and run another turn.
+        supervisor
+            .mark_unhealthy("simulated in-flight crash")
+            .await;
+        let r2 = execute_turn(
+            &agent_spec,
+            &[],
+            "hello again",
+            &supervisor,
+            "ojp3-during-2",
+            &skill_engine,
+            &semantic_store,
+            "agent",
+            &cancel,
+            &capability_registry,
+        )
+        .await;
+        assert_eq!(
+            r2.reply, "mock response",
+            "next turn after mark_unhealthy must succeed against a fresh child"
+        );
     }
 
     /// `turn_timeout` must fall back to [`DEFAULT_TURN_TIMEOUT`] when the

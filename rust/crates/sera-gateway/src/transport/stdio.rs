@@ -22,6 +22,11 @@ pub struct StdioTransport {
 
 impl StdioTransport {
     /// Spawn a child process for stdio transport.
+    ///
+    /// `kill_on_drop` is enabled so a dropped transport reaps its child even
+    /// on a cancellation path that bypasses [`Transport::close`]. Tighter
+    /// reaping semantics (signal-aware shutdown, drain budgets) live in
+    /// sera-40y3.
     pub async fn spawn(
         command: &str,
         args: &[String],
@@ -30,6 +35,7 @@ impl StdioTransport {
         let mut cmd = Command::new(command);
         cmd.args(args)
             .envs(env.iter())
+            .kill_on_drop(true)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());

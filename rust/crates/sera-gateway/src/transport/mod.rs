@@ -69,6 +69,39 @@ pub trait Transport: Send + Sync {
     async fn close(&self) -> Result<(), TransportError>;
 }
 
+impl AppServerTransport {
+    /// Connect or spawn the underlying transport.
+    ///
+    /// `InProcess` cannot be reached this way — callers needing it must
+    /// construct an [`in_process::InProcessTransport`] directly with paired
+    /// channels, since the runtime end of the channel must be wired up by
+    /// the same process.
+    ///
+    /// `Stdio` requires the `stdio` Cargo feature.
+    pub async fn connect(&self) -> Result<Box<dyn Transport>, TransportError> {
+        match self {
+            #[cfg(feature = "stdio")]
+            Self::Stdio { command, args, env } => {
+                let t = stdio::StdioTransport::spawn(command, args, env).await?;
+                Ok(Box::new(t))
+            }
+            #[cfg(not(feature = "stdio"))]
+            Self::Stdio { .. } => Err(TransportError::ConnectionFailed(
+                "stdio transport not enabled (build with --features stdio)".into(),
+            )),
+            Self::InProcess => Err(TransportError::ConnectionFailed(
+                "in_process transport must be constructed via InProcessTransport::new() with paired channels".into(),
+            )),
+            Self::WebSocket { .. } | Self::Grpc { .. } | Self::WebhookBack { .. } => {
+                Err(TransportError::ConnectionFailed(
+                    "transport variant not yet wired".into(),
+                ))
+            }
+            Self::Off => Err(TransportError::Closed),
+        }
+    }
+}
+
 /// Configuration for transport, deserializable from agent manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransportConfig {

@@ -60,7 +60,13 @@ pub struct EmbeddedRuntimeTransport {
     /// `turn::TurnContext.pending_steer` reads this metadata key in
     /// `DefaultRuntime::execute_turn`, mirroring the stdio backend's
     /// `Steer` Submission semantics.
-    pending_steer: Mutex<Vec<Value>>,
+    ///
+    /// Keyed by `session_key` so concurrent sessions on the same agent
+    /// (and the readiness probe's synthetic session) keep their steer
+    /// queues isolated. The stdio backend gets this scoping for free
+    /// because each `Steer` Submission carries `session_key` and the
+    /// runtime routes by it; embedded mode replicates that contract here.
+    pending_steer: Mutex<HashMap<String, Vec<Value>>>,
 }
 
 impl EmbeddedRuntimeTransport {
@@ -77,7 +83,7 @@ impl EmbeddedRuntimeTransport {
             agent_id: agent_id.into(),
             runtime,
             tool_defs,
-            pending_steer: Mutex::new(Vec::new()),
+            pending_steer: Mutex::new(HashMap::new()),
         }
     }
 
@@ -94,15 +100,24 @@ impl AgentTurnTransport for EmbeddedRuntimeTransport {
         messages: Vec<Value>,
         session_key: &str,
     ) -> anyhow::Result<TurnEvents> {
-        // Drain any staged steer items into the turn metadata. The runtime's
-        // `DefaultRuntime::execute_turn` (and `turn::TurnContext.pending_steer`)
-        // looks for them under `metadata["pending_steer"]` in the same shape
-        // an NDJSON `Steer` submission would surface.
+        // Drain any staged steer items for *this* session into the turn
+        // metadata. The runtime's `DefaultRuntime::execute_turn` (and
+        // `turn::TurnContext.pending_steer`) looks for them under
+        // `metadata["pending_steer"]` in the same shape an NDJSON `Steer`
+        // submission would surface.
+        //
+        // Keying on `session_key` matters: concurrent sessions on the same
+        // agent — including the readiness probe's
+        // `__sera_readiness_probe__` session running between a real user's
+        // steer and their next turn — must not cross-pollinate steer
+        // payloads. The stdio backend gets this for free via per-Submission
+        // `session_key` routing inside the runtime.
         let mut metadata: HashMap<String, Value> = HashMap::new();
         {
             let mut pending = self.pending_steer.lock().await;
-            if !pending.is_empty() {
-                let drained: Vec<Value> = std::mem::take(&mut *pending);
+            if let Some(drained) = pending.remove(session_key)
+                && !drained.is_empty()
+            {
                 metadata.insert("pending_steer".to_string(), Value::Array(drained));
             }
         }
@@ -131,10 +146,16 @@ impl AgentTurnTransport for EmbeddedRuntimeTransport {
     async fn send_steer(
         &self,
         items: Vec<Value>,
-        _session_key: &str,
+        session_key: &str,
     ) -> anyhow::Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
         let mut pending = self.pending_steer.lock().await;
-        pending.extend(items);
+        pending
+            .entry(session_key.to_string())
+            .or_default()
+            .extend(items);
         Ok(())
     }
 
@@ -382,34 +403,121 @@ mod tests {
     async fn send_steer_stages_items_for_next_turn() {
         let runtime = build_runtime("ack");
         let transport = EmbeddedRuntimeTransport::new("agent-1", runtime, vec![]);
+        let session = "session:agent-1:t-1";
 
         transport
             .send_steer(
                 vec![serde_json::json!({"role": "user", "content": "steer"})],
-                "session:agent-1:t-1",
+                session,
             )
             .await
             .expect("steer ok");
 
-        // Pending queue holds exactly the staged item until drained.
+        // Pending queue holds the staged item under the session key until drained.
         {
             let pending = transport.pending_steer.lock().await;
-            assert_eq!(pending.len(), 1);
+            assert_eq!(pending.get(session).map(Vec::len), Some(1));
         }
 
-        // First send_turn drains the staged item.
+        // First send_turn on the same session drains the staged item.
         transport
             .send_turn(
                 vec![serde_json::json!({"role": "user", "content": "next"})],
-                "session:agent-1:t-1",
+                session,
             )
             .await
             .expect("turn ok");
 
         let pending = transport.pending_steer.lock().await;
         assert!(
-            pending.is_empty(),
+            !pending.contains_key(session),
             "pending steer queue should drain into TurnContext.metadata"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_steer_is_scoped_per_session() {
+        // Codex review on PR #1130: a steer staged for session A must not
+        // be drained by an unrelated turn (session B / readiness probe)
+        // running on the same agent. Stdio gets this for free via
+        // per-Submission session_key routing; embedded must replicate it.
+        let runtime = build_runtime("ack");
+        let transport = EmbeddedRuntimeTransport::new("agent-1", runtime, vec![]);
+        let session_a = "session:agent-1:alpha";
+        let session_b = "session:agent-1:beta";
+
+        transport
+            .send_steer(
+                vec![serde_json::json!({"role": "user", "content": "for-A"})],
+                session_a,
+            )
+            .await
+            .expect("steer ok");
+
+        // A turn on session B (or the readiness probe) must NOT drain
+        // session A's steer queue.
+        transport
+            .send_turn(
+                vec![serde_json::json!({"role": "user", "content": "B"})],
+                session_b,
+            )
+            .await
+            .expect("turn ok");
+
+        {
+            let pending = transport.pending_steer.lock().await;
+            assert_eq!(
+                pending.get(session_a).map(Vec::len),
+                Some(1),
+                "session A steer must survive an unrelated session's turn"
+            );
+            assert!(
+                !pending.contains_key(session_b),
+                "session B has no pending steer"
+            );
+        }
+
+        // The next turn on session A drains its own queue.
+        transport
+            .send_turn(
+                vec![serde_json::json!({"role": "user", "content": "A"})],
+                session_a,
+            )
+            .await
+            .expect("turn ok");
+
+        let pending = transport.pending_steer.lock().await;
+        assert!(
+            !pending.contains_key(session_a),
+            "session A's pending queue should drain on its own turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn liveness_probe_does_not_drain_real_session_steer() {
+        // The readiness probe runs `send_turn` against the synthetic
+        // `__sera_readiness_probe__` session. It must not consume steer
+        // staged for a real user session running concurrently on the same
+        // agent.
+        let runtime = build_runtime("pong");
+        let transport = EmbeddedRuntimeTransport::new("agent-1", runtime, vec![]);
+        let user_session = "session:agent-1:user-42";
+
+        transport
+            .send_steer(
+                vec![serde_json::json!({"role": "user", "content": "guidance"})],
+                user_session,
+            )
+            .await
+            .expect("steer ok");
+
+        transport.liveness_probe().await.expect("probe ok");
+
+        let pending = transport.pending_steer.lock().await;
+        assert_eq!(
+            pending.get(user_session).map(Vec::len),
+            Some(1),
+            "readiness probe must not drain a real session's steer queue"
         );
     }
 

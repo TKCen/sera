@@ -67,11 +67,18 @@ impl Status {
 /// main loop drains these from `app_rx` and applies them via
 /// [`apply_app_update`] so network I/O never holds `&mut App` across an
 /// await on the draw path.
+///
+/// Each variant carries the per-resource generation captured when the
+/// task was spawned.  Overlapping refreshes can complete out of order
+/// (e.g. an `OpenHitlModal` `RefreshAll` racing with the `Approve`-
+/// triggered refresh that follows); `apply_app_update` drops any
+/// result whose generation no longer matches `App`'s current value so
+/// an older response cannot overwrite newer state.
 #[derive(Debug)]
 pub enum AppUpdate {
-    Agents(Result<Vec<Agent>, ClientError>),
-    Hitl(Result<Vec<HitlRequest>, ClientError>),
-    Evolve(Result<Vec<EvolveProposal>, ClientError>),
+    Agents(u64, Result<Vec<Agent>, ClientError>),
+    Hitl(u64, Result<Vec<HitlRequest>, ClientError>),
+    Evolve(u64, Result<Vec<EvolveProposal>, ClientError>),
 }
 
 /// Async command emitted by the reducer when a view transition needs
@@ -153,6 +160,14 @@ pub struct App {
 
     /// When true, the help modal is rendered over the session pane.
     pub show_help: bool,
+
+    /// Per-resource generation counters bumped on every refresh spawn.
+    /// `apply_app_update` compares the result's captured generation
+    /// against these to drop stale out-of-order responses (see
+    /// [`AppUpdate`]).
+    pub agents_gen: u64,
+    pub hitl_gen: u64,
+    pub evolve_gen: u64,
 }
 
 impl App {
@@ -178,6 +193,9 @@ impl App {
             show_evolve_modal: false,
             pending: Vec::new(),
             show_help: false,
+            agents_gen: 0,
+            hitl_gen: 0,
+            evolve_gen: 0,
         }
     }
 
@@ -610,27 +628,53 @@ pub fn apply_hitl_update(app: &mut App, list: Vec<HitlRequest>) {
 
 /// Apply a background fetch result to the app.  Called by the main loop
 /// after draining `app_rx`.
+///
+/// Drops any result whose generation no longer matches `App`'s current
+/// per-resource counter — that means a newer refresh has been issued
+/// since this task was spawned, so the in-flight payload would be
+/// stale relative to the operator's most recent intent.
 pub fn apply_app_update(app: &mut App, update: AppUpdate) {
     match update {
-        AppUpdate::Agents(Ok(list)) => {
-            let n = list.len();
-            app.agents.set_agents(list);
-            app.status = Status::info(format!("{n} agent(s) loaded"));
+        AppUpdate::Agents(seq, result) => {
+            if seq != app.agents_gen {
+                return;
+            }
+            match result {
+                Ok(list) => {
+                    let n = list.len();
+                    app.agents.set_agents(list);
+                    app.status = Status::info(format!("{n} agent(s) loaded"));
+                }
+                Err(e) => {
+                    app.status = Status::error(format!("agent list failed: {e}"));
+                }
+            }
         }
-        AppUpdate::Agents(Err(e)) => {
-            app.status = Status::error(format!("agent list failed: {e}"));
+        AppUpdate::Hitl(seq, result) => {
+            if seq != app.hitl_gen {
+                return;
+            }
+            match result {
+                Ok(list) => apply_hitl_update(app, list),
+                Err(e) => {
+                    app.status = Status::warn(format!("HITL list unavailable: {e}"));
+                }
+            }
         }
-        AppUpdate::Hitl(Ok(list)) => apply_hitl_update(app, list),
-        AppUpdate::Hitl(Err(e)) => {
-            app.status = Status::warn(format!("HITL list unavailable: {e}"));
-        }
-        AppUpdate::Evolve(Ok(list)) => {
-            let n = list.len();
-            app.evolve.set_proposals(list);
-            app.status = Status::info(format!("{n} evolve proposal(s)"));
-        }
-        AppUpdate::Evolve(Err(e)) => {
-            app.status = Status::warn(format!("evolve list unavailable: {e}"));
+        AppUpdate::Evolve(seq, result) => {
+            if seq != app.evolve_gen {
+                return;
+            }
+            match result {
+                Ok(list) => {
+                    let n = list.len();
+                    app.evolve.set_proposals(list);
+                    app.status = Status::info(format!("{n} evolve proposal(s)"));
+                }
+                Err(e) => {
+                    app.status = Status::warn(format!("evolve list unavailable: {e}"));
+                }
+            }
         }
     }
 }
@@ -735,13 +779,13 @@ impl Runtime {
 
     /// Spawn fetches for agents + HITL + evolve concurrently; results land
     /// on `app_tx`.
-    fn spawn_refresh_all(&self, app: &App) {
+    fn spawn_refresh_all(&self, app: &mut App) {
         self.spawn_refresh_agents(app);
         self.spawn_refresh_hitl(app);
         self.spawn_refresh_evolve(app);
     }
 
-    fn spawn_refresh_focus(&self, app: &App) {
+    fn spawn_refresh_focus(&self, app: &mut App) {
         match app.focus {
             ViewKind::Agents => self.spawn_refresh_agents(app),
             ViewKind::Session => { /* driven by SSE + explicit load */ }
@@ -750,27 +794,33 @@ impl Runtime {
         }
     }
 
-    fn spawn_refresh_agents(&self, app: &App) {
+    fn spawn_refresh_agents(&self, app: &mut App) {
+        app.agents_gen = app.agents_gen.wrapping_add(1);
+        let seq = app.agents_gen;
         let client = Arc::clone(&app.client);
         let tx = self.app_tx.clone();
         tokio::spawn(async move {
-            let _ = tx.send(AppUpdate::Agents(client.list_agents().await));
+            let _ = tx.send(AppUpdate::Agents(seq, client.list_agents().await));
         });
     }
 
-    fn spawn_refresh_hitl(&self, app: &App) {
+    fn spawn_refresh_hitl(&self, app: &mut App) {
+        app.hitl_gen = app.hitl_gen.wrapping_add(1);
+        let seq = app.hitl_gen;
         let client = Arc::clone(&app.client);
         let tx = self.app_tx.clone();
         tokio::spawn(async move {
-            let _ = tx.send(AppUpdate::Hitl(client.list_hitl().await));
+            let _ = tx.send(AppUpdate::Hitl(seq, client.list_hitl().await));
         });
     }
 
-    fn spawn_refresh_evolve(&self, app: &App) {
+    fn spawn_refresh_evolve(&self, app: &mut App) {
+        app.evolve_gen = app.evolve_gen.wrapping_add(1);
+        let seq = app.evolve_gen;
         let client = Arc::clone(&app.client);
         let tx = self.app_tx.clone();
         tokio::spawn(async move {
-            let _ = tx.send(AppUpdate::Evolve(client.list_evolve_proposals().await));
+            let _ = tx.send(AppUpdate::Evolve(seq, client.list_evolve_proposals().await));
         });
     }
 
@@ -1198,9 +1248,11 @@ mod tests {
     #[test]
     fn apply_app_update_agents_ok_populates_view() {
         let mut app = App::new(client(), TuiKeybindings::defaults());
+        // Simulate a spawn bumping the generation.
+        app.agents_gen = 1;
         apply_app_update(
             &mut app,
-            AppUpdate::Agents(Ok(vec![agent("x"), agent("y")])),
+            AppUpdate::Agents(1, Ok(vec![agent("x"), agent("y")])),
         );
         assert_eq!(app.agents.selected_id().as_deref(), Some("x"));
         assert!(app.status.text.contains("2 agent"));
@@ -1209,9 +1261,10 @@ mod tests {
     #[test]
     fn apply_app_update_agents_err_sets_error_status() {
         let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.agents_gen = 1;
         apply_app_update(
             &mut app,
-            AppUpdate::Agents(Err(ClientError::NotAvailable("/api/agents".into()))),
+            AppUpdate::Agents(1, Err(ClientError::NotAvailable("/api/agents".into()))),
         );
         assert!(matches!(app.status.level, StatusLevel::Error));
         assert!(app.status.text.contains("agent list failed"));
@@ -1250,5 +1303,78 @@ mod tests {
         );
         assert!(app.show_hitl_modal.is_none());
         assert_eq!(app.hitl.selected_id().as_deref(), Some("h1"));
+    }
+
+    /// When two refreshes overlap (e.g. modal-open `RefreshAll` followed
+    /// by an `Approve` post-success refresh), the older response must
+    /// not overwrite the newer one's state.
+    #[test]
+    fn apply_app_update_drops_stale_generation() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+
+        // Two spawns issued in order: gen 1, then gen 2.
+        app.agents_gen = 2;
+
+        // Newer response (gen 2) lands first and applies cleanly.
+        apply_app_update(
+            &mut app,
+            AppUpdate::Agents(2, Ok(vec![agent("new")])),
+        );
+        assert_eq!(app.agents.selected_id().as_deref(), Some("new"));
+        let status_after_new = app.status.text.clone();
+
+        // Older response (gen 1) arrives late — must be dropped.
+        apply_app_update(
+            &mut app,
+            AppUpdate::Agents(1, Ok(vec![agent("stale")])),
+        );
+        assert_eq!(
+            app.agents.selected_id().as_deref(),
+            Some("new"),
+            "stale gen 1 must not overwrite the newer gen 2 payload"
+        );
+        assert_eq!(
+            app.status.text, status_after_new,
+            "stale gen must not touch the status line either"
+        );
+    }
+
+    #[test]
+    fn apply_app_update_drops_stale_hitl_and_evolve() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.hitl_gen = 5;
+        app.evolve_gen = 5;
+
+        // Old HITL response should not pop a modal or touch state.
+        app.active_agent_id = Some("a1".into());
+        apply_app_update(
+            &mut app,
+            AppUpdate::Hitl(
+                4,
+                Ok(vec![HitlRequest {
+                    id: "stale".into(),
+                    agent_id: "a1".into(),
+                    summary: "".into(),
+                    age: "".into(),
+                    status: "pending".into(),
+                }]),
+            ),
+        );
+        assert!(
+            app.show_hitl_modal.is_none(),
+            "stale HITL must not trigger the auto-popup"
+        );
+        assert_eq!(app.hitl.selected_id(), None);
+
+        // Old evolve response should not touch the proposals view.
+        let baseline_status = app.status.text.clone();
+        apply_app_update(
+            &mut app,
+            AppUpdate::Evolve(4, Err(ClientError::NotAvailable("/api/evolve".into()))),
+        );
+        assert_eq!(
+            app.status.text, baseline_status,
+            "stale evolve error must not surface in the status line"
+        );
     }
 }

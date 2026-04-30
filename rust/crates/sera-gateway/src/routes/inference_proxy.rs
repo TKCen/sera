@@ -268,18 +268,24 @@ pub async fn chat_completions<S: InferenceProxyAppState>(
     //    to the outbound request — we build a fresh request with only the
     //    headers the proxy chooses to set. Inbound `Authorization` therefore
     //    cannot leak upstream.
+    //
+    //    When the resolved provider has no configured key (e.g. a local
+    //    LM Studio with auth disabled), the inbound `Authorization` header is
+    //    still stripped — but we also omit the outbound header rather than
+    //    sending `Authorization: Bearer ` (an empty bearer), which some
+    //    upstreams reject as malformed.
     let url = build_chat_url(&upstream.base_url);
-    let upstream_resp = state
+    let mut upstream_req = state
         .proxy_http_client()
         .post(&url)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(
+        .header(header::CONTENT_TYPE, "application/json");
+    if !upstream.api_key.is_empty() {
+        upstream_req = upstream_req.header(
             header::AUTHORIZATION,
             format!("Bearer {}", upstream.api_key),
-        )
-        .body(body.clone())
-        .send()
-        .await;
+        );
+    }
+    let upstream_resp = upstream_req.body(body.clone()).send().await;
 
     let response = match upstream_resp {
         Ok(r) => r,
@@ -813,6 +819,49 @@ mod tests {
         assert_ne!(
             captured.authorization.as_deref(),
             Some("Bearer gateway-key"),
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_upstream_key_omits_authorization_header() {
+        // Codex review #3168181233 (P1): when the resolved provider has no
+        // configured key (e.g. local LM Studio with auth disabled), the
+        // proxy must omit the outbound `Authorization` header rather than
+        // sending an empty `Bearer ` value.
+        let mock = start_mock_upstream(MockResponse::Json {
+            status: StatusCode::OK,
+            body: serde_json::json!({"ok": true}),
+            retry_after: None,
+        })
+        .await;
+        let state = TestState::new(
+            Some("gateway-key"),
+            Some(UpstreamProvider {
+                base_url: mock.base_url.clone(),
+                api_key: String::new(),
+            }),
+        );
+        let app = route(Arc::clone(&state));
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, "Bearer gateway-key")
+                    .body(json_body(serde_json::json!({"model": "x"})))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let captured = mock.captured.lock().unwrap().clone();
+        // No outbound `Authorization` — the inbound bearer is still stripped,
+        // and we don't synthesise a malformed empty bearer to replace it.
+        assert!(
+            captured.authorization.is_none(),
+            "expected no Authorization header upstream, got {:?}",
+            captured.authorization,
         );
     }
 

@@ -23,6 +23,9 @@ pub enum AuthError {
 
     #[error("JWT error: {0}")]
     JwtError(String),
+
+    #[error("SERA_JWT_SECRET is not set or empty")]
+    MissingJwtSecret,
 }
 
 impl From<AuthError> for SeraError {
@@ -34,6 +37,7 @@ impl From<AuthError> for SeraError {
             AuthError::InvalidHeader => SeraErrorCode::InvalidInput,
             AuthError::Unauthorized => SeraErrorCode::Unauthorized,
             AuthError::JwtError(_) => SeraErrorCode::Unauthorized,
+            AuthError::MissingJwtSecret => SeraErrorCode::Configuration,
         };
         SeraError::with_source(code, err.to_string(), err)
     }

@@ -85,27 +85,35 @@ pub const WIMSE_DEFAULT_PROJECT_ID: &str = "default";
 /// Sanitize a single path segment for use in a SPIFFE/WIMSE URI.
 ///
 /// The SPIFFE-ID specification (`SPIFFE-ID.md`) restricts path components to
-/// ASCII letters, digits, dot (`.`), dash (`-`), and underscore (`_`), and
-/// explicitly forbids percent-encoded characters. Any byte outside that
-/// allow-list is replaced with a single `_`. This is deterministic and
-/// SPIFFE-compliant for SERA principal ids like `discord:123` or
-/// `ext:a2a:reviewer-bot`, which contain `:` (rejected by SPIFFE parsers).
-/// The transform is not invertible by design — `Principal::id` remains the
-/// source of truth; the WIMSE URI is a projection for cross-system audit.
+/// ASCII letters, digits, dot (`.`), dash (`-`), and underscore (`_`),
+/// explicitly forbids percent-encoded characters, and forbids empty path
+/// components and the dot-segments `.` and `..`. Any byte outside the
+/// allow-list is replaced with a single `_`; an empty result becomes `_`,
+/// `.` becomes `_`, and `..` becomes `__`. Deterministic and SPIFFE-
+/// compliant for SERA principal ids like `discord:123` or
+/// `ext:a2a:reviewer-bot`. The transform is not invertible by design —
+/// `Principal::id` remains the source of truth; the WIMSE URI is a
+/// projection for cross-system audit.
 fn wimse_escape_segment(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
+    let mut out = String::with_capacity(input.len().max(1));
     for byte in input.bytes() {
         let is_safe = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_');
         out.push(if is_safe { byte as char } else { '_' });
     }
-    out
+    match out.as_str() {
+        "" | "." => "_".to_string(),
+        ".." => "__".to_string(),
+        _ => out,
+    }
 }
 
 /// Build a deterministic WIMSE/SPIFFE URI projection from principal coordinates.
 ///
-/// Form: `spiffe://{domain}/{account}/{project}/{kind}/{id}` where `id` is
-/// sanitized per `wimse_escape_segment` to satisfy the SPIFFE-ID character
-/// allow-list.
+/// Form: `spiffe://{domain}/{account}/{project}/{kind}/{id}`. Every path
+/// segment except `kind` (which is a fixed snake_case keyword) is sanitized
+/// via `wimse_escape_segment` so the resulting URI always satisfies the
+/// SPIFFE-ID character allow-list, even when callers pass `account_id` or
+/// `project_id` containing forbidden characters or empty values.
 fn build_wimse_uri(
     domain: &str,
     account_id: &str,
@@ -116,8 +124,8 @@ fn build_wimse_uri(
     format!(
         "spiffe://{domain}/{account}/{project}/{kind}/{id}",
         domain = domain,
-        account = account_id,
-        project = project_id,
+        account = wimse_escape_segment(account_id),
+        project = wimse_escape_segment(project_id),
         kind = kind.as_path_segment(),
         id = wimse_escape_segment(&id.0),
     )
@@ -561,6 +569,85 @@ mod tests {
         assert_eq!(wimse_escape_segment("a b"), "a_b");
         // `~` is unreserved per RFC 3986 but disallowed by SPIFFE-ID.
         assert_eq!(wimse_escape_segment("a~b"), "a_b");
+    }
+
+    /// SPIFFE-ID forbids empty path components and the dot-segments `.`
+    /// and `..`. The escaper must rewrite each into a non-empty,
+    /// non-dot-segment value deterministically.
+    #[test]
+    fn wimse_escape_empty_segment_substituted() {
+        assert_eq!(wimse_escape_segment(""), "_");
+    }
+
+    #[test]
+    fn wimse_escape_dot_segment_substituted() {
+        assert_eq!(wimse_escape_segment("."), "_");
+    }
+
+    #[test]
+    fn wimse_escape_dotdot_segment_substituted() {
+        assert_eq!(wimse_escape_segment(".."), "__");
+    }
+
+    /// Embedded dots inside a longer segment are SPIFFE-allowed and must
+    /// pass through unchanged — only bare `.` / `..` segments are rejected.
+    #[test]
+    fn wimse_escape_embedded_dot_passthrough() {
+        assert_eq!(wimse_escape_segment("a.b"), "a.b");
+        assert_eq!(wimse_escape_segment(".foo"), ".foo");
+        assert_eq!(wimse_escape_segment("..foo"), "..foo");
+    }
+
+    /// `Principal::id` of `.` or `..` (constructable via `PrincipalId::new`
+    /// or deserialization) must still project to a SPIFFE-conformant URI.
+    #[test]
+    fn wimse_uri_principal_id_dot_segments_are_safe() {
+        let p = Principal {
+            id: PrincipalId::new("."),
+            kind: PrincipalKind::Agent,
+            name: "dot".to_string(),
+            external_id: None,
+            platform: None,
+            trust_level: TrustLevel::FirstParty,
+        };
+        assert_eq!(
+            p.wimse_uri("sera.local"),
+            "spiffe://sera.local/local/default/agent/_",
+        );
+
+        let pp = Principal {
+            id: PrincipalId::new(".."),
+            kind: PrincipalKind::Agent,
+            name: "dotdot".to_string(),
+            external_id: None,
+            platform: None,
+            trust_level: TrustLevel::FirstParty,
+        };
+        assert_eq!(
+            pp.wimse_uri("sera.local"),
+            "spiffe://sera.local/local/default/agent/__",
+        );
+    }
+
+    /// `account_id` and `project_id` are caller-supplied and may contain
+    /// SPIFFE-invalid characters or be empty. `build_wimse_uri` must
+    /// sanitize them too — not just `id`.
+    #[test]
+    fn wimse_uri_sanitizes_account_and_project_segments() {
+        let p = Principal::for_agent("a-1", "a");
+        assert_eq!(
+            p.wimse_uri_for("sera.local", "acct:1", "proj/2"),
+            "spiffe://sera.local/acct_1/proj_2/agent/agent_a-1",
+        );
+        assert_eq!(
+            p.wimse_uri_for("sera.local", "with space", ""),
+            "spiffe://sera.local/with_space/_/agent/agent_a-1",
+        );
+        // Dot-segment account/project must also be substituted.
+        assert_eq!(
+            p.wimse_uri_for("sera.local", ".", ".."),
+            "spiffe://sera.local/_/__/agent/agent_a-1",
+        );
     }
 
     /// SPIFFE-ID forbids percent-encoded characters in path components,

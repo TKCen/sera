@@ -62,6 +62,15 @@ pub enum ThinkError {
     Llm(String),
     #[error("type conversion error: {0}")]
     Conversion(String),
+    /// The provider does not support the requested non-`Auto` [`ToolUseBehavior`].
+    ///
+    /// Returned by the default [`LlmProvider::chat_with_behavior`] when a caller
+    /// asks for `None`, `Required`, or `Specific` against a provider that did
+    /// not override the method. Surfacing this error before the LLM call avoids
+    /// wasting a turn on a free-form request the runtime backstop in [`act`]
+    /// would only catch after the fact.
+    #[error("provider does not support tool_use_behavior={0}; override chat_with_behavior to enforce or translate the policy")]
+    UnsupportedToolUseBehavior(String),
 }
 
 /// Trait for calling an LLM from the think step.
@@ -78,17 +87,27 @@ pub trait LlmProvider: Send + Sync {
 
     /// Like `chat`, but also forwards the tool-use policy to the provider.
     ///
-    /// The default implementation delegates to `chat`, intentionally discarding
-    /// the behavior — it is for providers that don't support a `tool_choice`
-    /// wire field. Providers that do support it (e.g. `LlmClient`) override
-    /// this method. Runtime-level enforcement against a non-compliant model
-    /// response happens later in [`act`] regardless of which path ran here.
+    /// The default implementation delegates to `chat` only when the behavior is
+    /// [`ToolUseBehavior::Auto`]. For `None`, `Required`, or `Specific` it
+    /// returns [`ThinkError::UnsupportedToolUseBehavior`] *before* calling the
+    /// LLM, so a provider that cannot translate the policy onto the wire does
+    /// not waste a turn on a free-form request that the runtime backstop in
+    /// [`act`] would only catch after the fact (sera-xh3q). Providers that
+    /// natively support `tool_choice` (e.g. `LlmClient`) override this method
+    /// and translate the policy onto the request body. Runtime-level
+    /// enforcement in [`act`] still runs as defence-in-depth against models
+    /// that ignore the wire-level field.
     async fn chat_with_behavior(
         &self,
         messages: &[serde_json::Value],
         tools: &[serde_json::Value],
-        _tool_use_behavior: &ToolUseBehavior,
+        tool_use_behavior: &ToolUseBehavior,
     ) -> Result<ThinkResult, ThinkError> {
+        if !matches!(tool_use_behavior, ToolUseBehavior::Auto) {
+            return Err(ThinkError::UnsupportedToolUseBehavior(format!(
+                "{tool_use_behavior:?}"
+            )));
+        }
         self.chat(messages, tools).await
     }
 }
@@ -1335,6 +1354,153 @@ mod tests {
                 other
             ),
         }
+    }
+
+    // ── Default LlmProvider::chat_with_behavior — sera-xh3q regression guard ──
+    //
+    // A provider that does not override `chat_with_behavior` must reject
+    // non-`Auto` ToolUseBehavior *before* any LLM call, instead of silently
+    // discarding the policy and free-forming the request (which the runtime
+    // backstop only catches after a wasted turn).
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Test provider that records whether `chat()` was called and never
+    /// overrides `chat_with_behavior` — exercising the trait default.
+    struct ChatCallCounter {
+        calls: AtomicUsize,
+    }
+
+    impl ChatCallCounter {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+            }
+        }
+        fn call_count(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for ChatCallCounter {
+        async fn chat(
+            &self,
+            _messages: &[serde_json::Value],
+            _tools: &[serde_json::Value],
+        ) -> Result<ThinkResult, ThinkError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ThinkResult {
+                response: serde_json::json!({"role": "assistant", "content": "ok"}),
+                tool_calls: vec![],
+                tokens: TokenUsage::default(),
+                plan: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn default_chat_with_behavior_rejects_specific_before_llm_call() {
+        let provider = ChatCallCounter::new();
+        let result = provider
+            .chat_with_behavior(
+                &[],
+                &[],
+                &ToolUseBehavior::Specific {
+                    name: "read_file".to_string(),
+                },
+            )
+            .await;
+        match result {
+            Err(ThinkError::UnsupportedToolUseBehavior(detail)) => {
+                assert!(
+                    detail.contains("Specific") && detail.contains("read_file"),
+                    "error must surface the rejected behavior: {detail}"
+                );
+            }
+            Err(other) => panic!(
+                "expected UnsupportedToolUseBehavior for Specific, got Err({other:?})"
+            ),
+            Ok(_) => panic!(
+                "expected UnsupportedToolUseBehavior for Specific, got Ok(_) — provider must reject before calling chat()"
+            ),
+        }
+        assert_eq!(
+            provider.call_count(),
+            0,
+            "default chat_with_behavior must not call chat() when rejecting Specific"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_chat_with_behavior_rejects_none_before_llm_call() {
+        let provider = ChatCallCounter::new();
+        let result = provider
+            .chat_with_behavior(&[], &[], &ToolUseBehavior::None)
+            .await;
+        assert!(
+            matches!(result, Err(ThinkError::UnsupportedToolUseBehavior(_))),
+            "expected UnsupportedToolUseBehavior for None"
+        );
+        assert_eq!(provider.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn default_chat_with_behavior_rejects_required_before_llm_call() {
+        let provider = ChatCallCounter::new();
+        let result = provider
+            .chat_with_behavior(&[], &[], &ToolUseBehavior::Required)
+            .await;
+        assert!(matches!(
+            result,
+            Err(ThinkError::UnsupportedToolUseBehavior(_))
+        ));
+        assert_eq!(provider.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn default_chat_with_behavior_passes_auto_through_to_chat() {
+        let provider = ChatCallCounter::new();
+        let result = provider
+            .chat_with_behavior(&[], &[], &ToolUseBehavior::Auto)
+            .await;
+        assert!(result.is_ok(), "Auto must delegate to chat()");
+        assert_eq!(
+            provider.call_count(),
+            1,
+            "Auto must invoke chat() exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn think_handles_unsupported_behavior_via_error_stub_without_llm_call() {
+        // think() should surface the unsupported-behavior error as a clean stub
+        // response with no tool_calls, without invoking the provider's chat().
+        let provider = ChatCallCounter::new();
+        let result = think(
+            &[],
+            &[],
+            &ReactMode::Default,
+            Some(&provider as &dyn LlmProvider),
+            &ToolUseBehavior::Specific {
+                name: "x".to_string(),
+            },
+        )
+        .await;
+        assert_eq!(provider.call_count(), 0, "chat() must not be invoked");
+        assert!(
+            result.tool_calls.is_empty(),
+            "stub response must not invent tool calls"
+        );
+        let content = result
+            .response
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        assert!(
+            content.contains("LLM error") && content.contains("tool_use_behavior"),
+            "expected error stub mentioning unsupported tool_use_behavior, got: {content}"
+        );
     }
 
     #[tokio::test]

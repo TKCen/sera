@@ -114,23 +114,29 @@ impl JwtService {
             .map(|data| data.claims)
             .map_err(AuthError::from)
     }
-}
 
-impl Default for JwtService {
-    fn default() -> Self {
-        let secret = match std::env::var("SERA_JWT_SECRET") {
-            Ok(s) if !s.is_empty() => s,
-            _ => {
-                tracing::warn!(
-                    "SERA_JWT_SECRET is not set — generating a random ephemeral JWT secret. \
-                     Tokens will not survive process restarts. Set SERA_JWT_SECRET in production."
-                );
-                let mut bytes = [0u8; 32];
-                rand::thread_rng().fill_bytes(&mut bytes);
-                hex::encode(bytes)
-            }
-        };
-        Self::new(secret)
+    /// Build a service from the `SERA_JWT_SECRET` environment variable.
+    ///
+    /// Returns [`AuthError::MissingJwtSecret`] when the variable is unset or
+    /// empty. Production startup paths must propagate this error rather than
+    /// fall back to an ephemeral key, since each restart and each pod would
+    /// otherwise hold a different secret and silently invalidate tokens.
+    pub fn from_env() -> Result<Self, AuthError> {
+        let secret = std::env::var("SERA_JWT_SECRET")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .ok_or(AuthError::MissingJwtSecret)?;
+        Ok(Self::new(secret))
+    }
+
+    /// Build a service with an ephemeral random HS256 secret. Tokens issued by
+    /// this service do not survive process restarts and cannot be verified by
+    /// any sibling instance — for tests only.
+    #[doc(hidden)]
+    pub fn for_tests() -> Self {
+        let mut bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        Self::new(hex::encode(bytes))
     }
 }
 
@@ -218,13 +224,97 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn default_provider_reads_env_or_generates() {
-        let claims = base_claims(3600);
+    /// Serialises tests that mutate `SERA_JWT_SECRET` so cargo test parallelism
+    /// does not interleave them with each other or with concurrent reads of
+    /// the same variable elsewhere in the suite.
+    static JWT_SECRET_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-        let service = JwtService::default();
-        let token = service.issue(claims).expect("Failed to issue token via default service");
-        let verified = service.verify(&token).expect("Failed to verify token via default service");
+    /// Acquire the env-mutation lock, recovering through any prior poisoning so
+    /// a single test panic does not cascade across peers.
+    fn lock_jwt_secret_env() -> std::sync::MutexGuard<'static, ()> {
+        JWT_SECRET_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Restores `SERA_JWT_SECRET` to its prior state when dropped. Used by the
+    /// `from_env` tests so a failure on one test does not leak the env mutation
+    /// into peer tests.
+    struct JwtSecretEnvGuard {
+        prior: Option<String>,
+    }
+
+    impl JwtSecretEnvGuard {
+        fn set(value: Option<&str>) -> Self {
+            let prior = std::env::var("SERA_JWT_SECRET").ok();
+            match value {
+                Some(v) => unsafe { std::env::set_var("SERA_JWT_SECRET", v) },
+                None => unsafe { std::env::remove_var("SERA_JWT_SECRET") },
+            }
+            Self { prior }
+        }
+    }
+
+    impl Drop for JwtSecretEnvGuard {
+        fn drop(&mut self) {
+            match &self.prior {
+                Some(v) => unsafe { std::env::set_var("SERA_JWT_SECRET", v) },
+                None => unsafe { std::env::remove_var("SERA_JWT_SECRET") },
+            }
+        }
+    }
+
+    /// `from_env()` must error when `SERA_JWT_SECRET` is unset, rather than
+    /// silently mint an ephemeral random secret. This is the central
+    /// foot-gun fix from sera-c7ji.
+    #[test]
+    fn from_env_errors_when_secret_unset() {
+        let _lock = lock_jwt_secret_env();
+        let _guard = JwtSecretEnvGuard::set(None);
+
+        let result = JwtService::from_env();
+        assert!(
+            matches!(result, Err(AuthError::MissingJwtSecret)),
+            "missing SERA_JWT_SECRET must surface as AuthError::MissingJwtSecret, got {:?}",
+            result.as_ref().err()
+        );
+    }
+
+    /// An empty `SERA_JWT_SECRET` is treated identically to "unset" — the
+    /// previous Default impl made the same equivalence (`Ok(s) if !s.is_empty()`),
+    /// and we preserve it because an empty key would yield a deterministic
+    /// HMAC secret across every restart.
+    #[test]
+    fn from_env_errors_when_secret_empty() {
+        let _lock = lock_jwt_secret_env();
+        let _guard = JwtSecretEnvGuard::set(Some(""));
+
+        let result = JwtService::from_env();
+        assert!(
+            matches!(result, Err(AuthError::MissingJwtSecret)),
+            "empty SERA_JWT_SECRET must surface as AuthError::MissingJwtSecret, got {:?}",
+            result.as_ref().err()
+        );
+    }
+
+    /// `from_env()` returns a working service when the secret is present.
+    #[test]
+    fn from_env_returns_service_when_secret_set() {
+        let _lock = lock_jwt_secret_env();
+        let _guard = JwtSecretEnvGuard::set(Some("from-env-test-secret"));
+
+        let service = JwtService::from_env().expect("from_env must succeed when secret is set");
+        let token = service.issue(base_claims(3600)).expect("issue");
+        let verified = service.verify(&token).expect("verify");
+        assert_eq!(verified.sub, "operator-123");
+    }
+
+    /// `for_tests()` mints an ephemeral service that round-trips tokens. This
+    /// is the explicit replacement for the old `Default` impl's silent fallback
+    /// — tests that need an ad-hoc service must opt in by name.
+    #[test]
+    fn for_tests_constructor_round_trips() {
+        let service = JwtService::for_tests();
+        let token = service.issue(base_claims(3600)).expect("issue");
+        let verified = service.verify(&token).expect("verify");
         assert_eq!(verified.sub, "operator-123");
     }
 

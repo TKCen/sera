@@ -6,8 +6,9 @@
 //! a clear [`EscalationError::Denied`].
 //!
 //! This module defines the **state machine + API surface** for escalation.
-//! The real HITL wire-up (`HitlEscalationAuthority`) is a stub in this bead —
-//! see its doc comment for the TODO and follow-up bead.
+//! [`HitlEscalationAuthority`] is the production seam; until the
+//! `sera-hitl::ApprovalRouter` integration lands it is a fail-closed
+//! placeholder (sera-ytgx) — see its doc comment.
 
 use std::time::Duration;
 
@@ -161,10 +162,11 @@ pub enum EscalationError {
 
 /// Trait for requesting a permission escalation.
 ///
-/// The default [`StubEscalationAuthority`] auto-approves every request and is
-/// intended for tests + early integration. [`HitlEscalationAuthority`] is the
-/// production seam that delegates to `sera-hitl`; see its doc comment for the
-/// current stub status.
+/// [`StubEscalationAuthority`] auto-approves every request and is intended
+/// for tests + early integration only. [`HitlEscalationAuthority`] is the
+/// production seam; until the `sera-hitl::ApprovalRouter` wire-up lands it
+/// is fail-closed (returns [`EscalationError::Unavailable`]) rather than
+/// delegating to the stub.
 ///
 /// Chosen shape:
 /// - **async** — matches `sera-hitl::ApprovalRouter::needs_approval` callers,
@@ -212,25 +214,32 @@ impl EscalationAuthority for StubEscalationAuthority {
     }
 }
 
-// ── HITL authority (stub) ───────────────────────────────────────────────────
+// ── HITL authority (fail-closed placeholder) ───────────────────────────────
 
-/// Production seam that will delegate to `sera-hitl`.
+/// Fail-closed placeholder for the production HITL escalation seam.
 ///
-/// **Status (sera-ddz):** this authority currently behaves identically to
-/// [`StubEscalationAuthority`]. Wiring it through `sera-hitl::ApprovalRouter`
-/// requires:
+/// **Status (sera-ytgx):** this authority is intentionally a fail-closed
+/// placeholder. The real `sera-hitl::ApprovalRouter` integration (mapping
+/// [`EscalationRequest`] to an `ApprovalSpec`, submitting it to a shared
+/// `ApprovalRouter`, and awaiting its terminal state) has not landed yet,
+/// so until it does, [`HitlEscalationAuthority::request_escalation`] always
+/// returns [`EscalationError::Unavailable`] rather than delegating to
+/// [`StubEscalationAuthority`].
 ///
-/// 1. Mapping [`EscalationRequest`] to a `sera_hitl::ApprovalSpec` with scope
-///    `ApprovalScope::SessionAction { action: "permission_escalation" }`.
-/// 2. Submitting the spec to an `ApprovalRouter` instance owned by the
-///    runtime (not yet exposed as a shared singleton — see follow-up bead).
-/// 3. Awaiting the ticket's terminal state (`Approved` / `Rejected` /
-///    `Expired`) and mapping back to [`EscalationDecision`].
+/// Why fail-closed instead of delegating to the stub: under strict HITL the
+/// stub auto-approves every request, which would silently turn a "requires
+/// HITL approval" gate into "approved" — exactly the silent bypass this
+/// authority must not allow in production. Returning `Unavailable` keeps
+/// the gate honest; the dispatcher maps it to a permission denial.
 ///
-/// TODO(sera-ddz-followup): track a dedicated bead for the full wire-up once
-/// `ApprovalRouter` exposes an async "submit and await" surface. Until then,
-/// callers that need deterministic approve/deny behaviour should construct
-/// a custom authority backed by their test fixtures.
+/// Tests and early integration that want auto-approval should construct
+/// [`StubEscalationAuthority`] directly, or a custom authority backed by
+/// their test fixtures.
+///
+/// Follow-up: replace this with an adapter over
+/// `sera-hitl::ApprovalRouter` once it exposes an async "submit and await"
+/// surface. See sera-z6ql / sera-93h4 for the routing/suspend-resume
+/// integration.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct HitlEscalationAuthority;
 
@@ -238,10 +247,14 @@ pub struct HitlEscalationAuthority;
 impl EscalationAuthority for HitlEscalationAuthority {
     async fn request_escalation(
         &self,
-        req: EscalationRequest,
+        _req: EscalationRequest,
     ) -> Result<EscalationDecision, EscalationError> {
-        // TODO(sera-ddz-followup): delegate to sera-hitl::ApprovalRouter.
-        StubEscalationAuthority.request_escalation(req).await
+        Err(EscalationError::Unavailable(
+            "HitlEscalationAuthority is a fail-closed placeholder until the \
+             sera-hitl ApprovalRouter integration lands; no auto-approval \
+             via stub is permitted in production"
+                .to_string(),
+        ))
     }
 }
 
@@ -356,22 +369,52 @@ mod tests {
         assert_eq!(deny.denial_reason.as_deref(), Some("always-deny"));
     }
 
+    /// Regression (sera-ytgx): `HitlEscalationAuthority` must not delegate
+    /// to [`StubEscalationAuthority`]. Until the real `sera-hitl::ApprovalRouter`
+    /// integration lands, it is a fail-closed placeholder; otherwise strict
+    /// HITL would silently auto-approve through the stub in production.
     #[tokio::test]
-    async fn hitl_stub_matches_stub_behavior() {
-        // HitlEscalationAuthority currently delegates to Stub — make sure the
-        // guarantee holds so the follow-up bead can swap implementations
-        // without changing caller expectations.
+    async fn hitl_authority_is_fail_closed_not_stub_delegate() {
         let req = EscalationRequest::single_call(
             PermissionMode::Standard,
             PermissionMode::Elevated,
-            "test",
+            "regression",
         );
-        let decision = HitlEscalationAuthority
+
+        let stub_decision = StubEscalationAuthority
+            .request_escalation(req.clone())
+            .await
+            .expect("stub auto-approves");
+        assert!(stub_decision.granted, "stub baseline must auto-approve");
+
+        let hitl_err = HitlEscalationAuthority
             .request_escalation(req)
             .await
-            .unwrap();
-        assert!(decision.granted);
-        assert_eq!(decision.granted_mode, Some(PermissionMode::Elevated));
+            .expect_err("HITL authority must not auto-approve via stub");
+        assert!(
+            matches!(hitl_err, EscalationError::Unavailable(_)),
+            "expected Unavailable, got {hitl_err:?}"
+        );
+    }
+
+    /// Regression (sera-ytgx): even with a permissive scope and a non-trivial
+    /// caller mode, `HitlEscalationAuthority` must refuse rather than fall
+    /// through to stub auto-approval.
+    #[tokio::test]
+    async fn hitl_authority_refuses_bounded_scope_request() {
+        let req = EscalationRequest {
+            from: PermissionMode::Standard,
+            to: PermissionMode::Admin,
+            reason: "regression".to_string(),
+            scope: EscalationScope::Bounded {
+                duration: Duration::from_secs(60),
+            },
+        };
+        let err = HitlEscalationAuthority
+            .request_escalation(req)
+            .await
+            .expect_err("HITL authority must refuse, not auto-approve");
+        assert!(matches!(err, EscalationError::Unavailable(_)));
     }
 
     #[test]

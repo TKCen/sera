@@ -68,25 +68,47 @@ struct StoredConfig {
 /// Translate an [`EgressManifest`] into the Docker argv that enforces it.
 ///
 /// Returns:
-/// - `Ok(vec![])` when egress is `Disabled`, or when `AuditOnly` is requested
-///   without a bridge (fail-open ramp; emits a warn log).
+/// - `Ok(vec![])` when egress is `Disabled` or `AuditOnly` (regardless of
+///   whether a bridge is configured). Per the [`EgressMode::AuditOnly`]
+///   contract — *log violations but do not block* — the Docker provider
+///   never attaches the sandbox to the egress bridge in audit mode; doing
+///   so would silently restrict outbound traffic via Docker's network
+///   isolation and contradict the migration-ramp semantics. Audit logging
+///   is the gateway proxy's responsibility.
 /// - `Err(SandboxError::PolicyViolation)` when `Strict` is requested without a
 ///   bridge — fail-closed.
-/// - On Strict/AuditOnly with a bridge: `--network=<name>`,
+/// - On `Strict` with a bridge: `--network=<name>`,
 ///   `--add-host=inference.local:<gateway>`, `--cap-drop=ALL`,
 ///   `--security-opt=no-new-privileges:true` in that order.
 ///
 /// `Domain` / `Cidr` entries in `egress.allowed` are not yet enforced by the
-/// Docker provider; they emit a warn log and fall through to strict bridge
-/// flags (so unlisted hosts remain unreachable — the safer failure mode).
+/// Docker provider; under `Strict` they emit a warn log and fall through to
+/// the strict bridge (so unlisted hosts remain unreachable — the safer
+/// failure mode).
 fn build_egress_args(
     egress: &EgressManifest,
     bridge: Option<&EgressBridgeConfig>,
 ) -> Result<Vec<String>, SandboxError> {
-    if egress.mode == EgressMode::Disabled {
-        return Ok(vec![]);
+    match egress.mode {
+        EgressMode::Disabled => Ok(vec![]),
+        EgressMode::AuditOnly => {
+            tracing::info!(
+                target: "sera_tools::sandbox::egress",
+                bridge_configured = bridge.is_some(),
+                "egress audit-only: no enforcement applied at the Docker \
+                 provider; gateway proxy is responsible for recording \
+                 would-have-blocked calls",
+            );
+            Ok(vec![])
+        }
+        EgressMode::Strict => build_strict_egress_args(egress, bridge),
     }
+}
 
+fn build_strict_egress_args(
+    egress: &EgressManifest,
+    bridge: Option<&EgressBridgeConfig>,
+) -> Result<Vec<String>, SandboxError> {
     for endpoint in &egress.allowed {
         match endpoint {
             EgressEndpoint::InferenceLocal => {}
@@ -109,27 +131,14 @@ fn build_egress_args(
         }
     }
 
-    let bridge = match bridge {
-        Some(b) => b,
-        None => {
-            if egress.mode == EgressMode::AuditOnly {
-                tracing::warn!(
-                    target: "sera_tools::sandbox::egress",
-                    "egress audit-only requested but no bridge configured; \
-                     sandbox will run on default bridge",
-                );
-                return Ok(vec![]);
-            }
-            return Err(SandboxError::PolicyViolation {
-                reason: "egress mode 'strict' requires an egress_bridge but \
-                         none was provisioned. To run this sandboxed agent: \
-                         (1) provision the sera-egress bridge before launching \
-                         this sandbox, or (2) set spec.egress.mode = 'disabled' \
-                         in the agent template (compliance opt-out)."
-                    .to_string(),
-            });
-        }
-    };
+    let bridge = bridge.ok_or_else(|| SandboxError::PolicyViolation {
+        reason: "egress mode 'strict' requires an egress_bridge but none \
+                 was provisioned. To run this sandboxed agent: (1) provision \
+                 the sera-egress bridge before launching this sandbox, or \
+                 (2) set spec.egress.mode = 'disabled' in the agent template \
+                 (compliance opt-out)."
+            .to_string(),
+    })?;
 
     Ok(vec![
         format!("--network={}", bridge.network_name),
@@ -609,21 +618,20 @@ mod tests {
     }
 
     #[test]
-    fn build_egress_args_audit_only_with_bridge_returns_strict_argv() {
+    fn build_egress_args_audit_only_with_bridge_does_not_enforce() {
+        // AuditOnly contract: "Log violations but do not block." Even when a
+        // bridge is provisioned, the Docker provider must not attach the
+        // sandbox to it — doing so would silently block outbound traffic via
+        // network isolation. Audit logging is the gateway proxy's job.
         let manifest = EgressManifest {
             allowed: vec![EgressEndpoint::InferenceLocal],
             mode: EgressMode::AuditOnly,
         };
         let bridge = sample_bridge();
         let args = build_egress_args(&manifest, Some(&bridge)).expect("audit-only + bridge");
-        assert_eq!(
-            args,
-            vec![
-                "--network=sera-egress".to_string(),
-                "--add-host=inference.local:172.18.0.2".to_string(),
-                "--cap-drop=ALL".to_string(),
-                "--security-opt=no-new-privileges:true".to_string(),
-            ]
+        assert!(
+            args.is_empty(),
+            "AuditOnly must not emit enforcement argv even with a bridge; got: {args:?}"
         );
     }
 

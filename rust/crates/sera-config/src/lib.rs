@@ -10,6 +10,7 @@ pub mod config_root;
 pub mod core_config;
 pub mod data_root;
 pub mod manifest_loader;
+pub mod principal_policy;
 pub mod provider_registry;
 pub mod provider_wizard;
 pub mod providers;
@@ -21,6 +22,7 @@ pub use capability_registry::{
 };
 pub use config_root::{ConfigRoot, CONFIG_ROOT_ENV};
 pub use data_root::{DataRoot, DATA_ROOT_ENV};
+pub use principal_policy::{PrincipalPoliciesConfig, PrincipalPolicySpec};
 
 pub mod config_store;
 pub mod env_override;

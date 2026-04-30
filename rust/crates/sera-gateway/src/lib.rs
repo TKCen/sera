@@ -14,6 +14,7 @@ pub mod hitl_gateway;
 pub mod kill_switch;
 pub mod party;
 pub mod plugin;
+pub mod policy_resolution;
 pub mod process_manager;
 pub mod scheduler;
 pub mod session_persist;

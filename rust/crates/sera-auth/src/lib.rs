@@ -13,6 +13,7 @@ pub mod casbin_adapter;
 pub mod error;
 pub mod jwt;
 pub mod middleware;
+pub mod policy;
 pub mod scope;
 pub mod types;
 
@@ -31,5 +32,8 @@ pub use casbin_adapter::{CasbinAuthzAdapter, CasbinError};
 pub use error::AuthError;
 pub use jwt::{JwtClaims, JwtService};
 pub use middleware::auth_middleware;
+pub use policy::{
+    narrow_for_subagent, InMemoryPrincipalPolicyStore, PrincipalPolicy, PrincipalPolicyStore,
+};
 pub use scope::ToolScope;
 pub use types::{ActingContext, AuthMethod};

@@ -4956,6 +4956,7 @@ dependencies = [
  "hex",
  "jsonwebtoken",
  "rand 0.8.5",
+ "sera-config",
  "sera-db",
  "sera-errors",
  "sera-secrets",

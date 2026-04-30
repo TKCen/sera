@@ -209,18 +209,20 @@ impl Condenser for BrowserOutputCondenser {
             let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
             if role == "tool"
                 && let Some(content) = msg.get("content").and_then(|c| c.as_str())
-                && content.len() > self.max_chars
             {
-                let truncated = format!(
-                    "{}... [truncated, {} chars total]",
-                    &content[..self.max_chars],
-                    content.len()
-                );
-                if let Some(obj) = msg.as_object_mut() {
-                    obj.insert(
-                        "content".to_string(),
-                        serde_json::Value::String(truncated),
+                let total_chars = content.chars().count();
+                if total_chars > self.max_chars {
+                    let head: String = content.chars().take(self.max_chars).collect();
+                    let truncated = format!(
+                        "{}... [truncated, {} chars total]",
+                        head, total_chars
                     );
+                    if let Some(obj) = msg.as_object_mut() {
+                        obj.insert(
+                            "content".to_string(),
+                            serde_json::Value::String(truncated),
+                        );
+                    }
                 }
             }
         }
@@ -930,6 +932,30 @@ mod tests {
     #[tokio::test]
     async fn browser_output_name() {
         assert_eq!(BrowserOutputCondenser::new(100).name(), "browser_output");
+    }
+
+    #[tokio::test]
+    async fn browser_output_multibyte_utf8_boundary_no_panic() {
+        // Regression for sera-5n6p: the previous implementation sliced
+        // `&content[..max_chars]` by byte offset. When `max_chars` landed
+        // inside a multi-byte UTF-8 character, this panicked with
+        // "byte index N is not a char boundary" and could fail the whole turn.
+        //
+        // Here `"ab你cd"` is 5 chars / 7 bytes — '你' occupies bytes 2..5.
+        // With max_chars = 3, the old code sliced `&content[..3]`, splitting
+        // '你' in the middle and panicking.
+        let c = BrowserOutputCondenser::new(3);
+        let msgs = vec![tool_msg("ab你cd")];
+        let result = c.condense(msgs).await;
+        let truncated = result[0]["content"].as_str().unwrap();
+        assert!(
+            truncated.starts_with("ab你"),
+            "expected truncated content to start with 'ab你', got {truncated:?}"
+        );
+        assert!(
+            truncated.contains("[truncated, 5 chars total]"),
+            "expected '[truncated, 5 chars total]' suffix, got {truncated:?}"
+        );
     }
 
     // ── LlmSummarizingCondenser ───────────────────────────────────────────────

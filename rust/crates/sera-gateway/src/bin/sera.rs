@@ -8656,28 +8656,36 @@ spec:
             drop(mock);
         }
 
-        /// Count direct child processes of the current process whose
-        /// `/proc/<pid>/comm` matches `comm_filter` (case-sensitive). Used
-        /// by [`embedded_path_no_runtime_child_spawns`] to count only
-        /// `sera-runtime` children — peer tests in the same binary spawn
-        /// `bash` mocks (`StdioHarness::spawn_mock`) which must not be
-        /// counted here. Returns `None` on non-Linux or if `/proc` is
-        /// unreadable; the caller then degrades to the structural
-        /// assertion that the embedded branch in
-        /// [`production_e2e_state_with_mode`] does not call
-        /// `locate_runtime_bin`.
-        fn count_direct_children_with_comm(comm_filter: &str) -> Option<usize> {
+        /// Snapshot the *set* of direct child PIDs of the current process
+        /// whose `/proc/<pid>/comm` matches `comm_filter` (case-sensitive).
+        /// Used by [`embedded_path_no_runtime_child_spawns`] for set-
+        /// difference detection: any PID present in the post-window snapshot
+        /// but absent from the pre-window snapshot is a fresh spawn.
+        ///
+        /// A pure count delta is unreliable because reaps and spawns can
+        /// cancel out — e.g. a peer runtime-mode test reaps its
+        /// `sera-runtime` child during our window while the embedded path
+        /// (regressed) spawns a new one, leaving the count unchanged.
+        /// PID-set comparison cannot be defeated by such cancellation.
+        ///
+        /// Returns `None` on non-Linux or if `/proc` is unreadable; the
+        /// caller then degrades to the structural assertion that the
+        /// embedded branch in [`production_e2e_state_with_mode`] does not
+        /// call `locate_runtime_bin`.
+        fn list_direct_children_with_comm(
+            comm_filter: &str,
+        ) -> Option<std::collections::HashSet<u32>> {
             let my_pid = std::process::id();
             let entries = std::fs::read_dir("/proc").ok()?;
-            let mut count = 0usize;
+            let mut pids: std::collections::HashSet<u32> = std::collections::HashSet::new();
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let Some(name_str) = name.to_str() else {
                     continue;
                 };
-                if name_str.parse::<u32>().is_err() {
+                let Ok(child_pid) = name_str.parse::<u32>() else {
                     continue;
-                }
+                };
                 let stat = match std::fs::read_to_string(entry.path().join("stat")) {
                     Ok(s) => s,
                     Err(_) => continue,
@@ -8707,18 +8715,24 @@ spec:
                     Err(_) => continue,
                 };
                 if comm == comm_filter {
-                    count += 1;
+                    pids.insert(child_pid);
                 }
             }
-            Some(count)
+            Some(pids)
         }
 
         /// Embedded mode must not spawn a `sera-runtime --ndjson` child.
         /// Asserts (a) the embedded boot/turn round-trips successfully via
-        /// the in-process transport, and (b) the count of direct
-        /// `sera-runtime` children of the test process is *exactly* the
-        /// same before and after the embedded fixture runs — strict zero
-        /// delta, no peer-tolerance fudge.
+        /// the in-process transport, and (b) no *new* `sera-runtime` PID
+        /// appears as a direct child of the test process during the
+        /// embedded fixture's run.
+        ///
+        /// PID-set difference rather than count delta: a pure count check
+        /// can be defeated when a peer runtime-mode test's child reaps
+        /// during the same window as a regressed embedded spawn (count
+        /// stays equal, regression slips through). Comparing the
+        /// pre-window and post-window PID sets and asserting `after \\
+        /// before` is empty makes the check robust against cancellation.
         ///
         /// Reliability under cargo test parallelism: the runtime-mode
         /// branch of [`production_e2e_state_with_mode`] takes
@@ -8728,13 +8742,14 @@ spec:
         /// while we sample. We further filter by `comm == "sera-runtime"`
         /// so peer `bash` mocks from `StdioHarness::spawn_mock` are
         /// ignored. On non-Linux (no `/proc`) the test still asserts the
-        /// embedded round-trip; the structural absence of
-        /// `RuntimeChildSupervisor::start` from the embedded branch in
-        /// `production_e2e_state_with_mode` carries the load there.
+        /// embedded round-trip and the `dispatch_kind()` belt-and-braces
+        /// assertion; the structural absence of `RuntimeChildSupervisor::start`
+        /// from the embedded branch in `production_e2e_state_with_mode`
+        /// carries the load there.
         #[tokio::test]
         async fn embedded_path_no_runtime_child_spawns() {
             let _spawn_guard = RUNTIME_SPAWN_SAMPLE_LOCK.lock().await;
-            let baseline = count_direct_children_with_comm("sera-runtime");
+            let baseline = list_direct_children_with_comm("sera-runtime");
 
             let mock = start_mock_llm("hello from mock", 0).await;
             let (state, _counters) =
@@ -8761,22 +8776,24 @@ spec:
                 "embedded boot/turn must succeed without spawning a child"
             );
 
-            // No positive delta: under the spawn lock + comm filter, any
-            // *increase* in `sera-runtime` direct children is attributable
-            // to this test and indicates the embedded branch accidentally
-            // took the runtime-supervisor path. A *decrease* is permitted
-            // because peer runtime-mode tests that began *before* we took
-            // RUNTIME_SPAWN_SAMPLE_LOCK can still reach reap during our
-            // sample window — that signal is fine, it isn't an embedded
-            // spawn.
+            // PID-set difference: any PID present in `after` but absent from
+            // `before` is a fresh `sera-runtime` spawn that occurred during
+            // our sample window. Under RUNTIME_SPAWN_SAMPLE_LOCK, no peer
+            // runtime-mode test could have spawned during this window — so
+            // a non-empty difference is attributable to this test and means
+            // the embedded branch accidentally took the runtime-supervisor
+            // path. PID disappearances (peer reaps) do NOT affect the
+            // difference, so reap/spawn cancellation cannot mask a
+            // regression.
             if let (Some(before), Some(after)) =
-                (baseline, count_direct_children_with_comm("sera-runtime"))
+                (baseline, list_direct_children_with_comm("sera-runtime"))
             {
+                let new_pids: Vec<u32> = after.difference(&before).copied().collect();
                 assert!(
-                    after <= before,
-                    "embedded path spawned a `sera-runtime` child: \
-                     before={before}, after={after}; embedded boot must \
-                     not invoke RuntimeChildSupervisor::start"
+                    new_pids.is_empty(),
+                    "embedded path spawned `sera-runtime` child PIDs {new_pids:?} \
+                     during the sample window; embedded boot must not invoke \
+                     RuntimeChildSupervisor::start"
                 );
             }
 

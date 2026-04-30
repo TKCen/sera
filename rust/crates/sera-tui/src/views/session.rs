@@ -4,7 +4,7 @@ use crossterm::event::KeyEvent;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem};
 use ratatui::Frame;
 use tui_textarea::TextArea;
 
@@ -217,23 +217,24 @@ impl SessionView {
         }
     }
 
-    /// **J.0.1**: render the chat canvas (metadata + transcript + tool log)
-    /// without the composer.  The chat-dominant layout draws the composer
-    /// in a dedicated strip of the root layout, so the Session view must
-    /// skip it to avoid double rendering.
+    /// **J.0.1 (sera-ckw5)**: render the chat canvas — transcript filling
+    /// the dominant area with a small tool-log strip pinned at the bottom.
+    /// Composer is owned by the root layout, and the agent/session
+    /// metadata previously rendered as a header is now carried by the
+    /// top-of-screen status bar in `ui::render`.  The tool log is retained
+    /// here as a transitional pane; J.0.3 will fold tool calls into inline
+    /// collapsible blocks within the transcript itself.
     pub fn render_chat(&self, frame: &mut Frame, area: Rect, focused: bool) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // metadata header
                 Constraint::Min(3),    // transcript
-                Constraint::Length(7), // tool log
+                Constraint::Length(7), // tool log (transitional)
             ])
             .split(area);
 
-        self.render_metadata(frame, chunks[0], focused);
-        self.render_transcript(frame, chunks[1], focused);
-        self.render_tool_log(frame, chunks[2], focused);
+        self.render_transcript(frame, chunks[0], focused);
+        self.render_tool_log(frame, chunks[1], focused);
     }
 
     /// **J.0.1**: render only the composer into `area`.  Paired with
@@ -241,23 +242,6 @@ impl SessionView {
     /// its own slot in the root layout.
     pub fn render_composer_only(&self, frame: &mut Frame, area: Rect) {
         self.render_composer(frame, area);
-    }
-
-    fn render_metadata(&self, frame: &mut Frame, area: Rect, focused: bool) {
-        let text = match &self.session {
-            Some(s) => format!(
-                "session={}  agent={}  state={}  conn={}",
-                truncate_or_dash(&s.id, 12),
-                truncate_or_dash(&s.agent_id, 12),
-                s.state,
-                self.conn.label()
-            ),
-            None => "No session selected — choose an agent and press Enter".to_owned(),
-        };
-        let p = Paragraph::new(text)
-            .style(Style::default().fg(Color::White))
-            .block(make_block("Session", focused));
-        frame.render_widget(p, area);
     }
 
     fn render_transcript(&self, frame: &mut Frame, area: Rect, focused: bool) {
@@ -356,17 +340,6 @@ impl SessionView {
 impl Default for SessionView {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-fn truncate_or_dash(s: &str, max: usize) -> String {
-    if s.is_empty() {
-        "—".to_owned()
-    } else if s.chars().count() <= max {
-        s.to_owned()
-    } else {
-        let head: String = s.chars().take(max.saturating_sub(1)).collect();
-        format!("{head}…")
     }
 }
 
@@ -472,13 +445,6 @@ mod tests {
         });
         assert!(!updated);
         assert!(v.transcript.is_empty());
-    }
-
-    #[test]
-    fn truncate_or_dash_behaves() {
-        assert_eq!(truncate_or_dash("", 5), "—");
-        assert_eq!(truncate_or_dash("abc", 5), "abc");
-        assert_eq!(truncate_or_dash("abcdefgh", 5), "abcd…");
     }
 
     // --- Composer-specific tests (G.0.1) ---

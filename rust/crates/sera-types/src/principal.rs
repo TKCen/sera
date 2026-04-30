@@ -82,29 +82,40 @@ pub const WIMSE_DEFAULT_ACCOUNT_ID: &str = "local";
 /// Tier-1 / pet-mode default project id used in WIMSE URI projection.
 pub const WIMSE_DEFAULT_PROJECT_ID: &str = "default";
 
-/// Sanitize a single path segment for use in a SPIFFE/WIMSE URI.
+/// Inject a single path segment into a SPIFFE/WIMSE URI using a
+/// collision-free, SPIFFE-safe byte-hex encoding.
 ///
-/// The SPIFFE-ID specification (`SPIFFE-ID.md`) restricts path components to
-/// ASCII letters, digits, dot (`.`), dash (`-`), and underscore (`_`),
-/// explicitly forbids percent-encoded characters, and forbids empty path
-/// components and the dot-segments `.` and `..`. Any byte outside the
-/// allow-list is replaced with a single `_`; an empty result becomes `_`,
-/// `.` becomes `_`, and `..` becomes `__`. Deterministic and SPIFFE-
-/// compliant for SERA principal ids like `discord:123` or
-/// `ext:a2a:reviewer-bot`. The transform is not invertible by design —
-/// `Principal::id` remains the source of truth; the WIMSE URI is a
-/// projection for cross-system audit.
+/// Each UTF-8 byte of the input is emitted as `_HH` (a literal underscore
+/// followed by two uppercase hex digits). Empty input is encoded as the
+/// sentinel `_empty`. The output set is `{_, 0-9, A-F}` — entirely within
+/// the SPIFFE-ID path-component allow-list (`SPIFFE-ID.md`: ASCII letters,
+/// digits, `.`, `-`, `_`; no percent-encoding; no empty / `.` / `..`
+/// segments).
+///
+/// Injectivity. Every non-empty input encodes to a string that is exactly
+/// `3 * len` bytes long whose every triplet is `_HH` with `H ∈ [0-9A-F]`.
+/// `_empty` is 6 bytes whose `_` is followed by `em` — `m` is not a hex
+/// digit, so `_empty` cannot be the encoded form of any non-empty input.
+/// Therefore the function is injective over all `&str` inputs, including
+/// `""`, `"_empty"` (which encodes to `_5F_65_6D_70_74_79`), and any
+/// inputs differing only in disallowed bytes (`a:b` → `_61_3A_62`,
+/// `a/b` → `_61_2F_62`).
+///
+/// The transform is intentionally non-invertible from a *meaning*
+/// perspective — `Principal::id` remains the source of truth. The WIMSE
+/// URI is a derived projection for cross-system audit and federation;
+/// the byte-level injectivity above is what guarantees no two distinct
+/// principals collapse to the same SPIFFE ID.
 fn wimse_escape_segment(input: &str) -> String {
-    let mut out = String::with_capacity(input.len().max(1));
+    if input.is_empty() {
+        return "_empty".to_string();
+    }
+    let mut out = String::with_capacity(input.len() * 3);
     for byte in input.bytes() {
-        let is_safe = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_');
-        out.push(if is_safe { byte as char } else { '_' });
+        out.push('_');
+        out.push_str(&format!("{byte:02X}"));
     }
-    match out.as_str() {
-        "" | "." => "_".to_string(),
-        ".." => "__".to_string(),
-        _ => out,
-    }
+    out
 }
 
 /// Sanitize the trust-domain component of a SPIFFE/WIMSE URI.
@@ -512,9 +523,12 @@ mod tests {
     #[test]
     fn wimse_uri_default_admin() {
         let p = Principal::default_admin();
+        // `local` → `_6C_6F_63_61_6C`, `default` → `_64_65_66_61_75_6C_74`,
+        // `admin` → `_61_64_6D_69_6E`. Kind segment stays as the snake_case
+        // enum keyword (fixed, not caller-controlled).
         assert_eq!(
             p.wimse_uri("sera.local"),
-            "spiffe://sera.local/local/default/human/admin"
+            "spiffe://sera.local/_6C_6F_63_61_6C/_64_65_66_61_75_6C_74/human/_61_64_6D_69_6E"
         );
     }
 
@@ -546,30 +560,35 @@ mod tests {
     }
 
     /// `Principal::id` carries `:` separators (`discord:123`, `ext:a2a:bar`).
-    /// SPIFFE-ID forbids `:` and percent-encoded characters in path
-    /// components, so disallowed bytes are deterministically replaced with
-    /// `_`. This test pins that choice — adjust intentionally if the
-    /// encoding policy ever changes.
+    /// SPIFFE-ID forbids `:` in path components, so the segment encoding
+    /// emits each byte as `_HH`. This test pins the exact encoded form —
+    /// adjust intentionally if the encoding policy ever changes.
     #[test]
-    fn wimse_uri_replaces_disallowed_chars_with_underscore() {
+    fn wimse_uri_encodes_id_as_byte_hex() {
         let p = Principal::from_discord("123", "user");
+        // `discord:123` → `_64_69_73_63_6F_72_64_3A_31_32_33`
         assert_eq!(
             p.wimse_uri("sera.local"),
-            "spiffe://sera.local/local/default/human/discord_123",
+            "spiffe://sera.local/_6C_6F_63_61_6C/_64_65_66_61_75_6C_74/human/_64_69_73_63_6F_72_64_3A_31_32_33",
         );
+        // `ext:a2a:reviewer-bot` →
+        // `_65_78_74_3A_61_32_61_3A_72_65_76_69_65_77_65_72_2D_62_6F_74`
         let ext = Principal::external_agent("a2a", "reviewer-bot");
         assert_eq!(
             ext.wimse_uri("sera.local"),
-            "spiffe://sera.local/local/default/external_agent/ext_a2a_reviewer-bot",
+            "spiffe://sera.local/_6C_6F_63_61_6C/_64_65_66_61_75_6C_74/external_agent/_65_78_74_3A_61_32_61_3A_72_65_76_69_65_77_65_72_2D_62_6F_74",
         );
     }
 
     #[test]
     fn wimse_uri_explicit_account_project() {
         let p = Principal::for_agent("a-1", "a");
+        // `acct-7` → `_61_63_63_74_2D_37`,
+        // `proj-9` → `_70_72_6F_6A_2D_39`,
+        // `agent:a-1` → `_61_67_65_6E_74_3A_61_2D_31`.
         assert_eq!(
             p.wimse_uri_for("sera.example.com", "acct-7", "proj-9"),
-            "spiffe://sera.example.com/acct-7/proj-9/agent/agent_a-1",
+            "spiffe://sera.example.com/_61_63_63_74_2D_37/_70_72_6F_6A_2D_39/agent/_61_67_65_6E_74_3A_61_2D_31",
         );
     }
 
@@ -580,52 +599,83 @@ mod tests {
         assert_eq!(r.wimse_uri("sera.local"), p.wimse_uri("sera.local"));
     }
 
+    /// Every byte is encoded as `_HH` — even alphanumerics — so the
+    /// encoding is uniform and trivially injective.
     #[test]
-    fn wimse_escape_allowed_passthrough() {
-        // SPIFFE-ID allowed set: A-Z a-z 0-9 - . _
-        let s = "Abc-123._";
-        assert_eq!(wimse_escape_segment(s), s);
+    fn wimse_escape_segment_encodes_alphanumerics_as_byte_hex() {
+        // 'a' = 0x61, 'b' = 0x62, 'c' = 0x63, '1' = 0x31
+        assert_eq!(wimse_escape_segment("abc1"), "_61_62_63_31");
     }
 
     #[test]
-    fn wimse_escape_disallowed_substituted_with_underscore() {
-        // `:` and `/` and space are all SPIFFE-disallowed; collapse to `_`.
-        assert_eq!(wimse_escape_segment("a:b"), "a_b");
-        assert_eq!(wimse_escape_segment("a/b"), "a_b");
-        assert_eq!(wimse_escape_segment("a b"), "a_b");
-        // `~` is unreserved per RFC 3986 but disallowed by SPIFFE-ID.
-        assert_eq!(wimse_escape_segment("a~b"), "a_b");
+    fn wimse_escape_segment_disallowed_bytes_are_distinct() {
+        // P1: distinct disallowed bytes must encode to distinct outputs so
+        // `a:b` and `a/b` cannot collide.
+        assert_eq!(wimse_escape_segment("a:b"), "_61_3A_62");
+        assert_eq!(wimse_escape_segment("a/b"), "_61_2F_62");
+        assert_ne!(
+            wimse_escape_segment("a:b"),
+            wimse_escape_segment("a/b"),
+            "previously-lossy substitution would collide here",
+        );
+        assert_eq!(wimse_escape_segment("a b"), "_61_20_62");
+        assert_eq!(wimse_escape_segment("a~b"), "_61_7E_62");
     }
 
-    /// SPIFFE-ID forbids empty path components and the dot-segments `.`
-    /// and `..`. The escaper must rewrite each into a non-empty,
-    /// non-dot-segment value deterministically.
+    /// `discord:123` is a representative principal id. The encoding must
+    /// be deterministic, contain no characters that downstream SPIFFE
+    /// parsers reject (`%`, `/`, `:`, whitespace), and stay inside the
+    /// SPIFFE-ID character allow-list.
     #[test]
-    fn wimse_escape_empty_segment_substituted() {
-        assert_eq!(wimse_escape_segment(""), "_");
+    fn wimse_escape_segment_discord_is_deterministic_and_spiffe_safe() {
+        let a = wimse_escape_segment("discord:123");
+        let b = wimse_escape_segment("discord:123");
+        assert_eq!(a, b, "encoding must be deterministic");
+        assert_eq!(a, "_64_69_73_63_6F_72_64_3A_31_32_33");
+        assert!(!a.contains('%'), "must not emit percent-encoding");
+        assert!(!a.contains('/'), "must not emit `/`");
+        assert!(!a.contains(':'), "must not emit `:`");
+        assert!(
+            !a.chars().any(|c| c.is_whitespace()),
+            "must not emit whitespace",
+        );
+        // SPIFFE-ID allow-list: ASCII letters, digits, `.`, `-`, `_`.
+        assert!(
+            a.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')),
+            "encoded form must stay inside SPIFFE allow-list",
+        );
     }
 
+    /// SPIFFE-ID forbids empty path components. Empty input maps to the
+    /// `_empty` sentinel, which is collision-free with every non-empty
+    /// encoded form (every non-empty encoding has length divisible by 3
+    /// with each triplet `_HH` where `H ∈ [0-9A-F]`; `m` in `_empty` is
+    /// not a hex digit, so no non-empty input encodes to `_empty`).
     #[test]
-    fn wimse_escape_dot_segment_substituted() {
-        assert_eq!(wimse_escape_segment("."), "_");
+    fn wimse_escape_empty_uses_sentinel_and_does_not_collide() {
+        assert_eq!(wimse_escape_segment(""), "_empty");
+        // The string `_empty` as an *input* is itself encoded byte-by-byte
+        // and must not collide with the empty-sentinel output.
+        let encoded_literal = wimse_escape_segment("_empty");
+        assert_eq!(encoded_literal, "_5F_65_6D_70_74_79");
+        assert_ne!(encoded_literal, "_empty");
     }
 
+    /// SPIFFE-ID forbids the dot-segments `.` and `..` as path components.
+    /// Under `_HH` encoding, neither input projects to a dot-segment.
     #[test]
-    fn wimse_escape_dotdot_segment_substituted() {
-        assert_eq!(wimse_escape_segment(".."), "__");
-    }
-
-    /// Embedded dots inside a longer segment are SPIFFE-allowed and must
-    /// pass through unchanged — only bare `.` / `..` segments are rejected.
-    #[test]
-    fn wimse_escape_embedded_dot_passthrough() {
-        assert_eq!(wimse_escape_segment("a.b"), "a.b");
-        assert_eq!(wimse_escape_segment(".foo"), ".foo");
-        assert_eq!(wimse_escape_segment("..foo"), "..foo");
+    fn wimse_escape_dot_segments_are_not_dot_segments_after_encoding() {
+        let dot = wimse_escape_segment(".");
+        let dotdot = wimse_escape_segment("..");
+        assert_eq!(dot, "_2E");
+        assert_eq!(dotdot, "_2E_2E");
+        assert_ne!(dot, ".");
+        assert_ne!(dotdot, "..");
     }
 
     /// `Principal::id` of `.` or `..` (constructable via `PrincipalId::new`
-    /// or deserialization) must still project to a SPIFFE-conformant URI.
+    /// or deserialization) must still project to a SPIFFE-conformant URI
+    /// — the encoded id segment is never a dot-segment.
     #[test]
     fn wimse_uri_principal_id_dot_segments_are_safe() {
         let p = Principal {
@@ -638,7 +688,7 @@ mod tests {
         };
         assert_eq!(
             p.wimse_uri("sera.local"),
-            "spiffe://sera.local/local/default/agent/_",
+            "spiffe://sera.local/_6C_6F_63_61_6C/_64_65_66_61_75_6C_74/agent/_2E",
         );
 
         let pp = Principal {
@@ -651,7 +701,21 @@ mod tests {
         };
         assert_eq!(
             pp.wimse_uri("sera.local"),
-            "spiffe://sera.local/local/default/agent/__",
+            "spiffe://sera.local/_6C_6F_63_61_6C/_64_65_66_61_75_6C_74/agent/_2E_2E",
+        );
+    }
+
+    /// Account, project, and id segments all use the same encoding —
+    /// no caller-controlled segment is treated specially.
+    #[test]
+    fn wimse_uri_account_project_id_use_same_encoding() {
+        let p = Principal::for_agent("x", "x");
+        let uri = p.wimse_uri_for("sera.local", "x", "x");
+        // All three caller-controlled segments encode `x` (0x78) → `_78`,
+        // and `agent:x` → `_61_67_65_6E_74_3A_78`.
+        assert_eq!(
+            uri,
+            "spiffe://sera.local/_78/_78/agent/_61_67_65_6E_74_3A_78",
         );
     }
 
@@ -685,41 +749,47 @@ mod tests {
 
     /// End-to-end: an invalid `SERA_WIMSE_DOMAIN` value reaching
     /// `Principal::wimse_uri` must still produce a SPIFFE-conformant URI.
+    /// Domain sanitization is intentionally separate from segment encoding
+    /// (the trust domain has its own SPIFFE rules — lowercase only,
+    /// limited symbol set), so disallowed bytes in the *domain* still
+    /// collapse to `_` while *segments* use injective `_HH` encoding.
     #[test]
     fn wimse_uri_sanitizes_invalid_domain() {
         let p = Principal::default_admin();
+        // Encoded id portion = `/_6C_6F_63_61_6C/_64_65_66_61_75_6C_74/human/_61_64_6D_69_6E`.
+        let suffix = "/_6C_6F_63_61_6C/_64_65_66_61_75_6C_74/human/_61_64_6D_69_6E";
         assert_eq!(
             p.wimse_uri("EXAMPLE.COM:443"),
-            "spiffe://example.com_443/local/default/human/admin",
+            format!("spiffe://example.com_443{suffix}"),
         );
-        assert_eq!(
-            p.wimse_uri(""),
-            "spiffe://_/local/default/human/admin",
-        );
+        assert_eq!(p.wimse_uri(""), format!("spiffe://_{suffix}"));
         assert_eq!(
             p.wimse_uri("bad/path"),
-            "spiffe://bad_path/local/default/human/admin",
+            format!("spiffe://bad_path{suffix}"),
         );
     }
 
-    /// `account_id` and `project_id` are caller-supplied and may contain
-    /// SPIFFE-invalid characters or be empty. `build_wimse_uri` must
-    /// sanitize them too — not just `id`.
+    /// `account_id` and `project_id` are caller-supplied and use the same
+    /// injective `_HH` encoding as `id` — they are no longer allowed to be
+    /// interpolated raw, regardless of their content.
     #[test]
     fn wimse_uri_sanitizes_account_and_project_segments() {
         let p = Principal::for_agent("a-1", "a");
+        // `acct:1` → `_61_63_63_74_3A_31`, `proj/2` → `_70_72_6F_6A_2F_32`,
+        // `agent:a-1` → `_61_67_65_6E_74_3A_61_2D_31`.
         assert_eq!(
             p.wimse_uri_for("sera.local", "acct:1", "proj/2"),
-            "spiffe://sera.local/acct_1/proj_2/agent/agent_a-1",
+            "spiffe://sera.local/_61_63_63_74_3A_31/_70_72_6F_6A_2F_32/agent/_61_67_65_6E_74_3A_61_2D_31",
         );
+        // `with space` → `_77_69_74_68_20_73_70_61_63_65`, empty → `_empty`.
         assert_eq!(
             p.wimse_uri_for("sera.local", "with space", ""),
-            "spiffe://sera.local/with_space/_/agent/agent_a-1",
+            "spiffe://sera.local/_77_69_74_68_20_73_70_61_63_65/_empty/agent/_61_67_65_6E_74_3A_61_2D_31",
         );
-        // Dot-segment account/project must also be substituted.
+        // `.` → `_2E`, `..` → `_2E_2E` — never bare dot-segments.
         assert_eq!(
             p.wimse_uri_for("sera.local", ".", ".."),
-            "spiffe://sera.local/_/__/agent/agent_a-1",
+            "spiffe://sera.local/_2E/_2E_2E/agent/_61_67_65_6E_74_3A_61_2D_31",
         );
     }
 

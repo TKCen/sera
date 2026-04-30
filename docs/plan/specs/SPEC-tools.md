@@ -328,6 +328,8 @@ Deny always wins over allow. The authorization system (`sera-auth`) is checked *
 ## 6. Tool Execution Flow
 
 > **Design decision — 2026-04-13.** Tool dispatch, AuthZ, and execution are **gateway responsibilities**, not harness responsibilities. The harness forwards tool call requests to the gateway and waits for results. It never executes tools directly.
+>
+> **MVS deviation — 2026-04-29 (sera-y45a).** The shipped MVS runs `dispatch_mode=runtime`: the diagram below describes the **target** flow for `dispatch_mode={gateway,embedded}`. Today the runtime process owns dispatch and the capability gate; the gateway sees `tool_call_*` events only as audit. See [`docs/plan/decisions/2026-04-29-dispatch-ownership.md`](../decisions/2026-04-29-dispatch-ownership.md) for the migration plan and gate.
 
 ```
 Harness              Gateway                         Tool Executor

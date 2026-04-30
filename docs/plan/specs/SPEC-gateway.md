@@ -40,6 +40,8 @@ The SERA gateway is a **Manufacturing Execution System for AI agents**. The MES 
 ## 1b. Tool Dispatch Ownership
 
 > **Design decision — 2026-04-13.** Tool dispatch belongs entirely to the gateway. This is not a performance consideration — it is a security and architectural boundary.
+>
+> **MVS deviation — 2026-04-29 (sera-y45a).** The shipped MVS runs in `dispatch_mode=runtime`: the `sera-runtime` child process owns the LLM client, tool registry, and capability gate, and the gateway only audits `tool_call_*` events post-hoc. This section describes the **target** architecture (`dispatch_mode=gateway` and `dispatch_mode=embedded`); see [`docs/plan/decisions/2026-04-29-dispatch-ownership.md`](../decisions/2026-04-29-dispatch-ownership.md) for the migration plan and gate.
 
 The tool execution pipeline lives at the gateway, not the harness:
 
@@ -68,6 +70,8 @@ See SPEC-tools §6 for the complete dispatch flow.
 ---
 
 ## 1c. Context Injection Responsibility
+
+> **MVS applicability — 2026-04-29 (sera-y45a).** Cattle-mode injection assumes `dispatch_mode={gateway,embedded}`. In today's `dispatch_mode=runtime` MVS the runtime child process loads its own context as a binary-mode implementation detail; see [`docs/plan/decisions/2026-04-29-dispatch-ownership.md`](../decisions/2026-04-29-dispatch-ownership.md).
 
 In **enterprise/cattle mode**, the gateway is responsible for assembling and injecting all session context into the runtime before the turn begins. The runtime does not know the source of the context it receives:
 
@@ -701,6 +705,8 @@ sera:
 ## 13a. LLM Proxy Surface
 
 > **Design decision — 2026-04-13.** The gateway CAN act as a universal LLM proxy for any connected harness.
+>
+> **MVS deviation — 2026-04-29 (sera-y45a).** In today's `dispatch_mode=runtime` MVS the `sera-runtime` child process holds `LLM_API_KEY` and dials the provider directly; the universal-proxy contract below is unreachable until step 3 of the migration plan in [`docs/plan/decisions/2026-04-29-dispatch-ownership.md`](../decisions/2026-04-29-dispatch-ownership.md) lands.
 
 When a BYOH harness (Claude Code, Codex, Hermes, external agent) connects to the gateway, all LLM calls from that harness can be routed through the gateway's LLM proxy surface. This is optional but recommended for regulated environments.
 

@@ -124,6 +124,29 @@ fn wants_pgvector_backend(backend_pref: Option<&str>, database_url: Option<&str>
     matches!(backend_pref, Some("pgvector")) || (backend_pref.is_none() && database_url.is_some())
 }
 
+/// sera-y45a: declares which process owns tool dispatch for the running gateway.
+///
+/// `runtime` (default) = the `sera-runtime` child owns the LLM client, tool
+/// registry, capability gate, and dispatcher; the gateway audits `tool_call_*`
+/// events post-hoc. `gateway` and `embedded` are the migration targets — see
+/// `docs/plan/decisions/2026-04-29-dispatch-ownership.md`. This is a
+/// **declarative** marker only: the value is logged at boot so operators can
+/// see the active model. Changing it does not yet change which process
+/// dispatches tools.
+fn dispatch_mode_label(raw: Option<&str>) -> &'static str {
+    match raw.map(str::trim) {
+        Some("gateway") => "gateway",
+        Some("embedded") => "embedded",
+        // default + unrecognised + empty → fail safe to the shipped MVS mode.
+        _ => "runtime",
+    }
+}
+
+fn current_dispatch_mode_label() -> &'static str {
+    let raw = std::env::var("SERA_DISPATCH_MODE").ok();
+    dispatch_mode_label(raw.as_deref())
+}
+
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
@@ -3844,6 +3867,17 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         exe_dir.join("sera-runtime").to_string_lossy().to_string()
     });
 
+    // sera-y45a: surface the active dispatch model in the boot log so
+    // operators can read which process owns tool dispatch without diving
+    // into source. The current MVS ships `runtime`; `gateway` and
+    // `embedded` are migration targets. See
+    // docs/plan/decisions/2026-04-29-dispatch-ownership.md.
+    let dispatch_mode = current_dispatch_mode_label();
+    tracing::info!(
+        dispatch_mode = dispatch_mode,
+        "Tool dispatch ownership (sera-y45a)"
+    );
+
     let mut harnesses = std::collections::HashMap::new();
 
     for agent_name in manifests.agent_names() {
@@ -3931,9 +3965,14 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         .await
         {
             Ok(supervisor) => {
+                // sera-y45a: include the dispatch_mode marker so per-agent
+                // boot logs answer "which process owns tool dispatch for
+                // this agent?" without operators correlating against the
+                // process-level line above.
                 tracing::info!(
                     agent = %agent_name,
                     model = %model,
+                    dispatch_mode = dispatch_mode,
                     "Spawned runtime harness via supervisor (sera-ojp3)"
                 );
                 harnesses.insert(agent_name.to_string(), supervisor);
@@ -4495,6 +4534,44 @@ mod tests {
     #[test]
     fn unknown_backend_pref_falls_back_to_sqlite() {
         assert!(!wants_pgvector_backend(Some("redis"), Some("postgres://x")));
+    }
+
+    // ── sera-y45a: dispatch_mode_label() ────────────────────────────────────
+    //
+    // The label is declarative: it surfaces which process owns tool dispatch
+    // in boot logs but does not change behaviour. The default is `runtime`
+    // (the shipped MVS); `gateway` and `embedded` are migration targets.
+    // Unrecognised values fail safe to `runtime` so a typo cannot accidentally
+    // claim a security model the code does not implement.
+    // See docs/plan/decisions/2026-04-29-dispatch-ownership.md.
+
+    #[test]
+    fn dispatch_mode_defaults_to_runtime_when_unset() {
+        assert_eq!(dispatch_mode_label(None), "runtime");
+        assert_eq!(dispatch_mode_label(Some("")), "runtime");
+        assert_eq!(dispatch_mode_label(Some("   ")), "runtime");
+    }
+
+    #[test]
+    fn dispatch_mode_recognises_canonical_values() {
+        assert_eq!(dispatch_mode_label(Some("runtime")), "runtime");
+        assert_eq!(dispatch_mode_label(Some("gateway")), "gateway");
+        assert_eq!(dispatch_mode_label(Some("embedded")), "embedded");
+    }
+
+    #[test]
+    fn dispatch_mode_trims_surrounding_whitespace() {
+        assert_eq!(dispatch_mode_label(Some("  gateway  ")), "gateway");
+        assert_eq!(dispatch_mode_label(Some("\tembedded\n")), "embedded");
+    }
+
+    #[test]
+    fn dispatch_mode_unknown_falls_back_to_runtime() {
+        // case-sensitive on purpose: env values are documented lowercase, and
+        // accidental uppercase should not silently claim a different model.
+        assert_eq!(dispatch_mode_label(Some("RUNTIME")), "runtime");
+        assert_eq!(dispatch_mode_label(Some("Gateway")), "runtime");
+        assert_eq!(dispatch_mode_label(Some("foo")), "runtime");
     }
 
     fn test_manifests() -> ManifestSet {

@@ -7276,12 +7276,25 @@ spec:
             // Build the binary via the same cargo that's running these tests.
             // Cargo sets CARGO to its own path; fall back to PATH lookup.
             let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-            let status = std::process::Command::new(&cargo)
-                .args(["build", "-p", "sera-runtime", "--bin", "sera-runtime"])
-                .status()
-                .unwrap_or_else(|e| {
-                    panic!("failed to invoke `{cargo} build -p sera-runtime`: {e}")
-                });
+            let mut cmd = std::process::Command::new(&cargo);
+            cmd.args(["build", "-p", "sera-runtime", "--bin", "sera-runtime"]);
+            // Propagate the outer cargo invocation's network/lockfile mode so a
+            // `cargo test --offline`/`--locked`/`--frozen` doesn't trigger
+            // registry or lockfile mutations from this nested build. Only
+            // `CARGO_NET_OFFLINE` is officially set by cargo; `CARGO_LOCKED`
+            // and `CARGO_FROZEN` are honored as opt-ins for CI/local use.
+            for (env_var, flag) in [
+                ("CARGO_NET_OFFLINE", "--offline"),
+                ("CARGO_LOCKED", "--locked"),
+                ("CARGO_FROZEN", "--frozen"),
+            ] {
+                if std::env::var(env_var).as_deref() == Ok("true") {
+                    cmd.arg(flag);
+                }
+            }
+            let status = cmd.status().unwrap_or_else(|e| {
+                panic!("failed to invoke `{cargo} build -p sera-runtime`: {e}")
+            });
             assert!(
                 status.success(),
                 "`cargo build -p sera-runtime --bin sera-runtime` failed with {status}"

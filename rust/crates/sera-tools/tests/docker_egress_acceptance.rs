@@ -227,14 +227,18 @@ fn ensure_images() -> Result<(), String> {
     Ok(())
 }
 
-/// Pull the stdout `exit=N` marker we append to every probe command. The
-/// `docker run` exit code itself is unreliable as a denial signal (the
-/// outer `sh -c` always exits 0 because of the trailing `echo`), so the
-/// test contract is "did the inner probe report a non-zero exit?"
-fn parse_inner_exit(stdout: &str) -> Option<i32> {
+/// Pull a `<marker>N` line out of the captured stdout. The `docker run`
+/// exit code itself is unreliable as a denial signal (the outer `sh -c`
+/// always exits 0 because of the trailing `echo`), so the test contract is
+/// "did the inner probe report a non-zero exit under this named marker?"
+///
+/// Tests use distinct prefixes (e.g. `anthropic_exit=`, `inference_exit=`)
+/// when a single sandbox run probes more than one destination, so the
+/// individual results can be asserted on independently.
+fn parse_marker(stdout: &str, marker: &str) -> Option<i32> {
     stdout
         .lines()
-        .filter_map(|l| l.strip_prefix("exit="))
+        .filter_map(|l| l.strip_prefix(marker))
         .next()
         .and_then(|v| v.trim().parse::<i32>().ok())
 }
@@ -287,7 +291,7 @@ async fn eq0m_test1_strict_blocks_direct_anthropic_dial() {
         .expect("execute");
     provider.destroy(&handle).await.expect("destroy");
 
-    let inner_exit = parse_inner_exit(&result.stdout).unwrap_or_else(|| {
+    let inner_exit = parse_marker(&result.stdout, "exit=").unwrap_or_else(|| {
         panic!(
             "stdout must contain `exit=N` marker; got stdout: {:?}, stderr: {:?}",
             result.stdout, result.stderr
@@ -349,7 +353,7 @@ async fn eq0m_test2_strict_allows_inference_local_to_gateway() {
         .expect("execute");
     provider.destroy(&handle).await.expect("destroy");
 
-    let inner_exit = parse_inner_exit(&result.stdout).unwrap_or_else(|| {
+    let inner_exit = parse_marker(&result.stdout, "exit=").unwrap_or_else(|| {
         panic!(
             "stdout must contain `exit=N` marker; got stdout: {:?}, stderr: {:?}",
             result.stdout, result.stderr
@@ -371,12 +375,25 @@ async fn eq0m_test2_strict_allows_inference_local_to_gateway() {
 
 // ── Test 3 — stale ANTHROPIC_API_KEY does not bypass denial ────────────────
 //
-// Sets `ANTHROPIC_API_KEY=sk-leaked-...` in the sandbox env, then probes
-// api.anthropic.com using that key. The boundary holds because connect(2)
-// fails before any auth bytes leave the sandbox. The test additionally
-// asserts the env var was actually visible inside the container, so the
-// "stale key cannot bypass" claim is meaningful (rather than vacuously
-// true because the key was missing).
+// Sets `ANTHROPIC_API_KEY=sk-leaked-...` in the sandbox env, then runs two
+// probes inside one sandbox:
+//
+//   * `nslookup api.anthropic.com` — would resolve to a real public IP on
+//     an unrestricted Docker bridge (exit=0) and SERVFAIL on `--internal`
+//     (exit≠0). This is the *denial* assertion: a regression that removed
+//     strict-mode enforcement would observably succeed here, where the
+//     earlier wget-against-application-endpoint probe could falsely pass
+//     for application-layer reasons (HTTPS-only host, 401 auth, busybox
+//     wget without TLS).
+//   * `wget http://inference.local/` — *positive control*. Proves the
+//     bridge is wired and the sandbox is not simply offline; an
+//     accidentally-isolated harness with no networking at all would fail
+//     this probe too, which would obscure the meaning of the first
+//     assertion.
+//
+// The env-var visibility check (`echo key=$ANTHROPIC_API_KEY`) confirms
+// the leak was actually present, so the "stale key cannot bypass" claim
+// is meaningful rather than vacuously true.
 
 #[tokio::test]
 async fn eq0m_test3_strict_ignores_stale_anthropic_api_key_env() {
@@ -416,9 +433,10 @@ async fn eq0m_test3_strict_ignores_stale_anthropic_api_key_env() {
         .execute(
             &handle,
             "echo \"key=$ANTHROPIC_API_KEY\"; \
-             wget -q -T 3 -O- --header=\"x-api-key: $ANTHROPIC_API_KEY\" \
-             http://api.anthropic.com/v1/messages 2>&1; \
-             echo \"exit=$?\"",
+             nslookup api.anthropic.com 2>&1; \
+             echo \"anthropic_exit=$?\"; \
+             wget -q -O- --timeout=5 http://inference.local/ 2>&1; \
+             echo \"inference_exit=$?\"",
             &HashMap::new(),
         )
         .await
@@ -431,17 +449,40 @@ async fn eq0m_test3_strict_ignores_stale_anthropic_api_key_env() {
          var was actually present, so the denial is meaningful) — stdout: {:?}",
         result.stdout
     );
-    let inner_exit = parse_inner_exit(&result.stdout).unwrap_or_else(|| {
+
+    let anthropic_exit = parse_marker(&result.stdout, "anthropic_exit=").unwrap_or_else(|| {
         panic!(
-            "stdout must contain `exit=N` marker; got stdout: {:?}, stderr: {:?}",
+            "stdout must contain `anthropic_exit=N` marker; got stdout: {:?}, stderr: {:?}",
             result.stdout, result.stderr
         )
     });
     assert_ne!(
-        inner_exit, 0,
-        "wget of api.anthropic.com on --internal bridge must fail even with a \
-         stale ANTHROPIC_API_KEY in env; stdout: {:?}, stderr: {:?}",
+        anthropic_exit, 0,
+        "nslookup of api.anthropic.com on --internal bridge must fail even with a \
+         stale ANTHROPIC_API_KEY in env; would succeed on a normal bridge so this \
+         is the denial signal — stdout: {:?}, stderr: {:?}",
         result.stdout, result.stderr
+    );
+
+    let inference_exit = parse_marker(&result.stdout, "inference_exit=").unwrap_or_else(|| {
+        panic!(
+            "stdout must contain `inference_exit=N` marker; got stdout: {:?}, stderr: {:?}",
+            result.stdout, result.stderr
+        )
+    });
+    assert_eq!(
+        inference_exit, 0,
+        "positive control: inference.local must remain reachable (proves the \
+         sandbox is not vacuously offline; without this, the anthropic-denied \
+         assertion could pass for the wrong reason) — stdout: {:?}, stderr: {:?}",
+        result.stdout, result.stderr
+    );
+    let body = result.stdout.to_ascii_lowercase();
+    assert!(
+        body.contains("html") || body.contains("nginx"),
+        "positive control body must come from the nginx gateway-stand-in; \
+         stdout: {:?}",
+        result.stdout
     );
 }
 

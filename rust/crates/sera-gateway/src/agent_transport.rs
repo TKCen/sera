@@ -18,7 +18,7 @@
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::Value;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 
 /// A tool call event captured from the runtime's NDJSON output (today's
 /// stdio backend) or projected from the runtime transcript (future
@@ -81,18 +81,23 @@ pub trait AgentTurnTransport: Send + Sync {
     /// Production stdio (`RuntimeChildSupervisor`) overrides this to emit
     /// deltas as the runtime's `streaming_delta` NDJSON frames arrive.
     ///
-    /// `delta_tx` is unbounded; sends after the receiver is dropped (e.g.
-    /// SSE client disconnect) are silently ignored — cancellation is the
-    /// caller's responsibility via the existing token registry.
+    /// `delta_tx` is a bounded channel — implementors must `.await` the
+    /// send so a slow SSE consumer applies backpressure to the runtime
+    /// read loop instead of accumulating unbounded deltas in memory
+    /// (Codex review on PR #1153). A send error means the receiver is
+    /// gone (SSE client disconnect); the gateway's cancellation token
+    /// will fire shortly via `CancelOnDrop`, so implementors should
+    /// either continue to read-and-accumulate (for clean turn
+    /// completion) or break early — both are correct.
     async fn send_turn_streaming(
         &self,
         messages: Vec<Value>,
         session_key: &str,
-        delta_tx: UnboundedSender<String>,
+        delta_tx: Sender<String>,
     ) -> anyhow::Result<TurnEvents> {
         let events = self.send_turn(messages, session_key).await?;
         if !events.response.is_empty() {
-            let _ = delta_tx.send(events.response.clone());
+            let _ = delta_tx.send(events.response.clone()).await;
         }
         Ok(events)
     }

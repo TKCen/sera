@@ -449,6 +449,40 @@ impl StdioHarness {
         messages: Vec<serde_json::Value>,
         session_key: &str,
     ) -> anyhow::Result<TurnEvents> {
+        self.send_turn_inner(messages, session_key, None).await
+    }
+
+    /// Streaming variant (sera-k8do): forwards each `streaming_delta` NDJSON
+    /// frame through `delta_tx` as it is read off the runtime's stdout, then
+    /// returns the assembled `TurnEvents` once the terminal `turn_completed`
+    /// frame arrives. Cancellation of the underlying read still happens via
+    /// the gateway's `tokio::select!` on the cancellation token, so a dropped
+    /// receiver does not stall the harness.
+    ///
+    /// `delta_tx` is bounded (Codex review on PR #1153) — `.send().await`
+    /// applies backpressure to the runtime read loop when a slow SSE
+    /// consumer is not draining frames, instead of accumulating
+    /// unbounded deltas. If the receiver has been dropped (SSE
+    /// disconnect), `send` returns `Err`; we keep reading the
+    /// runtime stream so the turn still completes cleanly, while the
+    /// gateway's `CancelOnDrop` guard fires the cancellation token to
+    /// abort the harness via the existing `select!` arm.
+    async fn send_turn_with_deltas(
+        &self,
+        messages: Vec<serde_json::Value>,
+        session_key: &str,
+        delta_tx: tokio::sync::mpsc::Sender<String>,
+    ) -> anyhow::Result<TurnEvents> {
+        self.send_turn_inner(messages, session_key, Some(delta_tx))
+            .await
+    }
+
+    async fn send_turn_inner(
+        &self,
+        messages: Vec<serde_json::Value>,
+        session_key: &str,
+        delta_tx: Option<tokio::sync::mpsc::Sender<String>>,
+    ) -> anyhow::Result<TurnEvents> {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
         let submission = serde_json::json!({
@@ -516,6 +550,20 @@ impl StdioHarness {
                         .and_then(|d| d.as_str())
                     {
                         result.response.push_str(delta);
+                        // sera-k8do: forward the delta to the SSE pump
+                        // if a streaming consumer is attached. The
+                        // channel is bounded (Codex review on PR #1153),
+                        // so `.send().await` applies backpressure when
+                        // the SSE client is slow. A `SendError` means
+                        // the receiver was dropped (SSE disconnect):
+                        // we keep reading the runtime stream so the
+                        // turn completes cleanly, while the gateway's
+                        // `CancelOnDrop` guard will fire the
+                        // cancellation token and abort us via the
+                        // existing `select!` arm shortly after.
+                        if let Some(tx) = delta_tx.as_ref() {
+                            let _ = tx.send(delta.to_string()).await;
+                        }
                     }
                 }
                 "tool_call_begin" => {
@@ -956,6 +1004,32 @@ impl AgentTurnTransport for RuntimeChildSupervisor {
             Err(e) => {
                 let err_msg = e.to_string();
                 self.mark_unhealthy(&format!("send_turn error: {err_msg}"))
+                    .await;
+                Err(e)
+            }
+        }
+    }
+
+    /// sera-k8do: streaming dispatch. Each `streaming_delta` NDJSON frame
+    /// the runtime emits is forwarded through `delta_tx` as it lands, so
+    /// the SSE chat handler can yield real first-token frames while the
+    /// turn is still in flight. The terminal `TurnEvents` (full reply,
+    /// usage, tool events) is still returned for transcript persistence.
+    async fn send_turn_streaming(
+        &self,
+        messages: Vec<serde_json::Value>,
+        session_key: &str,
+        delta_tx: tokio::sync::mpsc::Sender<String>,
+    ) -> anyhow::Result<TurnEvents> {
+        let harness = self.acquire().await?;
+        match harness
+            .send_turn_with_deltas(messages, session_key, delta_tx)
+            .await
+        {
+            Ok(events) => Ok(events),
+            Err(e) => {
+                let err_msg = e.to_string();
+                self.mark_unhealthy(&format!("send_turn_streaming error: {err_msg}"))
                     .await;
                 Err(e)
             }
@@ -1727,6 +1801,17 @@ struct MvsTurnResult {
     /// can return a real cancelled outcome instead of persisting the
     /// `[sera] Runtime turn aborted` sentinel as transcript content.
     cancelled: bool,
+    /// `Some(reason)` when the transport failed (backend error or timeout)
+    /// rather than producing a real LLM reply. Used by the streaming SSE
+    /// path (sera-k8do) to detect a mid-stream runtime failure after some
+    /// `streaming_delta` frames have already been forwarded to the client:
+    /// in that case we must surface a structured `error` SSE event and
+    /// skip persisting the synthetic `[sera] Runtime error: …` reply as
+    /// the assistant transcript row, otherwise the visible stream and the
+    /// persisted history disagree (Codex review on PR #1153). `None` for
+    /// successful turns and for cancellation arms (`cancelled` already
+    /// covers the cancel case).
+    failure: Option<String>,
 }
 
 // ── Authentication ──────────────────────────────────────────────────────────
@@ -2081,12 +2166,19 @@ async fn chat_handler(
     drop(db); // Release lock before dispatching to harness.
 
     if req.stream {
-        // SSE streaming mode (sera-7mc1): the turn runs in a dedicated tokio
-        // task so that a client disconnect (which drops the SSE body and
-        // therefore the unfold's state) cancels the in-flight turn rather
-        // than silently letting it run to completion server-side. The
-        // spawned task owns its own cleanup (deregister + lane release) so
-        // those run regardless of whether the unfold ever sees the result.
+        // SSE streaming mode (sera-7mc1 + sera-k8do): the turn runs in a
+        // dedicated tokio task so that a client disconnect (which drops
+        // the SSE body and therefore the unfold's state) cancels the
+        // in-flight turn rather than silently letting it run to
+        // completion server-side. The spawned task owns its own cleanup
+        // (deregister + lane release) so those run regardless of whether
+        // the unfold ever sees the result.
+        //
+        // sera-k8do: deltas now flow through an unbounded mpsc as the
+        // runtime emits them, instead of being post-hoc word-split off
+        // the assembled reply. The unfold pulls from the receiver until
+        // the sender is dropped (turn task returned), then awaits the
+        // join handle for the final usage / persistence step.
         let message = req.message.clone();
         let state_clone = Arc::clone(&state);
         let supervisor_clone = Arc::clone(&supervisor);
@@ -2112,6 +2204,13 @@ async fn chat_handler(
         let task_transcript = transcript.clone();
         let task_agent_spec = agent_spec.clone();
 
+        // sera-k8do (Codex review on PR #1153): bounded channel applies
+        // backpressure to the runtime read loop when a slow SSE client is
+        // not draining frames. See `STREAMING_DELTA_CHANNEL_CAPACITY` for
+        // the rationale on the chosen capacity.
+        let (delta_tx, delta_rx) =
+            tokio::sync::mpsc::channel::<String>(STREAMING_DELTA_CHANNEL_CAPACITY);
+
         let turn_handle: tokio::task::JoinHandle<(MvsTurnResult, bool)> =
             tokio::spawn(async move {
                 let cap_reg = task_state.capability_registry.read().await.clone();
@@ -2126,6 +2225,7 @@ async fn chat_handler(
                     &task_agent_name,
                     &cancel_for_task,
                     &cap_reg,
+                    Some(delta_tx),
                 )
                 .await;
 
@@ -2144,7 +2244,8 @@ async fn chat_handler(
         let cancel_guard = CancelOnDrop::new(cancel);
 
         let sse_stream = stream::unfold(
-            StreamState::Pending {
+            StreamState::Streaming {
+                rx: delta_rx,
                 turn_handle,
                 cancel_guard,
                 state: state_clone,
@@ -2155,7 +2256,8 @@ async fn chat_handler(
             },
             |fold_state| async move {
                 match fold_state {
-                    StreamState::Pending {
+                    StreamState::Streaming {
+                        mut rx,
                         turn_handle,
                         mut cancel_guard,
                         state,
@@ -2164,182 +2266,229 @@ async fn chat_handler(
                         message_id,
                         agent_name,
                     } => {
-                        let (result, user_cancelled) = match turn_handle.await {
-                            Ok(pair) => pair,
-                            Err(join_err) => {
-                                // Task panicked or was aborted out-of-band, so
-                                // its in-task cleanup never ran. Without the
-                                // calls below the cancellation registry entry
-                                // and the lane slot would leak for this
-                                // session and block any future `/api/chat`
-                                // turn until process restart. Disarm the
-                                // guard first — firing the token here would
-                                // be a no-op (the task is already gone) and
-                                // would race with the deregister we're about
-                                // to do.
-                                cancel_guard.disarm();
-                                let _ = state.deregister_cancellation_token(&session_key);
-                                {
-                                    let mut lq = state.lane_queue.lock().await;
-                                    lq.complete_run(&session_key);
-                                }
-                                tracing::error!(
-                                    error = %join_err,
-                                    session_id = %session_id,
-                                    session_key = %session_key,
-                                    agent = %agent_name,
-                                    "SSE turn task failed to join; cleaned up registry + lane"
-                                );
+                        // Pull the next live delta. `recv()` resolves to
+                        // `None` when every Sender is dropped — that
+                        // happens after the spawned turn task returns,
+                        // which is our cue to finalise (await the
+                        // JoinHandle, persist, emit `done`).
+                        match rx.recv().await {
+                            Some(delta) => {
                                 let payload = serde_json::json!({
-                                    "error": "turn task failed",
+                                    "delta": delta,
                                     "session_id": session_id,
                                     "message_id": message_id,
                                 });
                                 let event = Event::default()
-                                    .event("error")
+                                    .event("message")
                                     .data(payload.to_string());
-                                return Some((Some(Ok(event)), StreamState::Done));
+                                Some((
+                                    Some(Ok::<_, std::convert::Infallible>(event)),
+                                    StreamState::Streaming {
+                                        rx,
+                                        turn_handle,
+                                        cancel_guard,
+                                        state,
+                                        session_key,
+                                        session_id,
+                                        message_id,
+                                        agent_name,
+                                    },
+                                ))
                             }
-                        };
+                            None => {
+                                let (result, user_cancelled) = match turn_handle.await {
+                                    Ok(pair) => pair,
+                                    Err(join_err) => {
+                                        // Task panicked or was aborted out-of-band, so
+                                        // its in-task cleanup never ran. Without the
+                                        // calls below the cancellation registry entry
+                                        // and the lane slot would leak for this
+                                        // session and block any future `/api/chat`
+                                        // turn until process restart. Disarm the
+                                        // guard first — firing the token here would
+                                        // be a no-op (the task is already gone) and
+                                        // would race with the deregister we're about
+                                        // to do.
+                                        cancel_guard.disarm();
+                                        let _ = state
+                                            .deregister_cancellation_token(&session_key);
+                                        {
+                                            let mut lq = state.lane_queue.lock().await;
+                                            lq.complete_run(&session_key);
+                                        }
+                                        tracing::error!(
+                                            error = %join_err,
+                                            session_id = %session_id,
+                                            session_key = %session_key,
+                                            agent = %agent_name,
+                                            "SSE turn task failed to join; cleaned up registry + lane"
+                                        );
+                                        let payload = serde_json::json!({
+                                            "error": "turn task failed",
+                                            "session_id": session_id,
+                                            "message_id": message_id,
+                                        });
+                                        let event = Event::default()
+                                            .event("error")
+                                            .data(payload.to_string());
+                                        return Some((Some(Ok(event)), StreamState::Done));
+                                    }
+                                };
 
-                        // The turn task has finished successfully (with or
-                        // without cancellation). The token is already
-                        // deregistered and the lane slot released, so no
-                        // further work would be cancellable — disarm the
-                        // guard before we transition to Streaming/Done.
-                        cancel_guard.disarm();
+                                // The turn task has finished successfully (with or
+                                // without cancellation). The token is already
+                                // deregistered and the lane slot released, so no
+                                // further work would be cancellable — disarm the
+                                // guard before we transition to Done.
+                                cancel_guard.disarm();
 
-                        // sera-mplr: a `POST /api/chat/cancel` for this
-                        // session set `client_cancelled` and fired the cancel
-                        // arm. Emit a `cancelled` SSE event and end the stream
-                        // without persisting the synthetic "[sera] turn
-                        // aborted" reply as transcript content.
-                        if user_cancelled && result.cancelled {
-                            tracing::info!(
-                                session_id = %session_id,
-                                agent = %agent_name,
-                                "Chat stream cancelled by client (POST /api/chat/cancel)"
-                            );
-                            let payload = serde_json::json!({
-                                "cancelled": true,
-                                "reason": "client_cancel",
-                                "session_id": session_id,
-                                "message_id": message_id,
-                            });
-                            let event = Event::default()
-                                .event("cancelled")
-                                .data(payload.to_string());
-                            return Some((Some(Ok(event)), StreamState::Done));
-                        }
-
-                        // sera-aepj: empty-reply guard mirrors the sync branch
-                        // (line ~1561). Without this, the SSE stream emits zero
-                        // `message` frames followed by `done` with usage=0/0/0,
-                        // which the web client renders as a stuck "thinking…"
-                        // spinner. Surface a structured `error` event instead
-                        // so clients can show the failure.
-                        if result.reply.is_empty() {
-                            tracing::error!(
-                                session_id = %session_id,
-                                agent = %agent_name,
-                                prompt_tokens = result.usage.prompt_tokens,
-                                completion_tokens = result.usage.completion_tokens,
-                                total_tokens = result.usage.total_tokens,
-                                tool_events_count = result.tool_events.len(),
-                                tools_ran = !result.tool_events.is_empty(),
-                                "execute_turn returned empty reply (stream); runtime produced no text"
-                            );
-                            let payload = serde_json::json!({
-                                "error": "runtime returned empty reply",
-                                "session_id": session_id,
-                                "message_id": message_id,
-                            });
-                            let event = Event::default()
-                                .event("error")
-                                .data(payload.to_string());
-                            return Some((Some(Ok(event)), StreamState::Done));
-                        }
-
-                        // Save tool events and assistant response.
-                        {
-                            let db = state.db.lock().await;
-                            persist_tool_events(&db, &session_id, &result.tool_events);
-                            let _ = db.append_transcript(
-                                &session_id,
-                                "assistant",
-                                Some(&result.reply),
-                                None,
-                                None,
-                            );
-                            let _ = db.append_audit(
-                                "response_sent",
-                                "agent:sera",
-                                "agent",
-                                Some(
-                                    &serde_json::json!({
+                                // sera-k8do (Codex review on PR #1153): a runtime
+                                // backend error (or per-turn timeout) after some
+                                // `streaming_delta` frames have already been
+                                // forwarded to the client must surface a
+                                // structured `error` SSE event. Emitting `done`
+                                // here would tell the client the turn completed
+                                // successfully, while persisting the synthetic
+                                // `[sera] Runtime error: …` reply as the
+                                // assistant transcript row would mismatch the
+                                // partial text the user already saw streamed.
+                                // We skip persistence entirely so the next turn
+                                // does not see a misleading assistant slot.
+                                if let Some(reason) = result.failure.as_ref() {
+                                    tracing::error!(
+                                        session_id = %session_id,
+                                        agent = %agent_name,
+                                        reason = %reason,
+                                        "SSE stream interrupted by runtime failure after partial deltas; \
+                                         emitting `error` event and skipping transcript persist"
+                                    );
+                                    let payload = serde_json::json!({
+                                        "error": "runtime stream interrupted",
+                                        "reason": reason,
                                         "session_id": session_id,
-                                        "response_len": result.reply.len(),
-                                    })
-                                    .to_string(),
-                                ),
-                            );
-                        }
-
-                        // Split reply into word-sized chunks for streaming.
-                        let chunks: Vec<String> = result
-                            .reply
-                            .split_inclusive(' ')
-                            .map(|s| s.to_owned())
-                            .collect();
-                        let usage = result.usage;
-
-                        Some((
-                            None,
-                            StreamState::Streaming {
-                                chunks,
-                                index: 0,
-                                session_id,
-                                message_id,
-                                usage,
-                            },
-                        ))
-                    }
-                    StreamState::Streaming {
-                        chunks,
-                        index,
-                        session_id,
-                        message_id,
-                        usage,
-                    } => {
-                        if index < chunks.len() {
-                            let payload = serde_json::json!({
-                                "delta": chunks[index],
-                                "session_id": session_id,
-                                "message_id": message_id,
-                            });
-                            let event = Event::default().event("message").data(payload.to_string());
-                            Some((
-                                Some(Ok::<_, std::convert::Infallible>(event)),
-                                StreamState::Streaming {
-                                    chunks,
-                                    index: index + 1,
-                                    session_id,
-                                    message_id,
-                                    usage,
-                                },
-                            ))
-                        } else {
-                            // Send done event with usage.
-                            let payload = serde_json::json!({
-                                "status": "complete",
-                                "usage": {
-                                    "prompt_tokens": usage.prompt_tokens,
-                                    "completion_tokens": usage.completion_tokens,
-                                    "total_tokens": usage.total_tokens,
+                                        "message_id": message_id,
+                                    });
+                                    let event = Event::default()
+                                        .event("error")
+                                        .data(payload.to_string());
+                                    return Some((Some(Ok(event)), StreamState::Done));
                                 }
-                            });
-                            let event = Event::default().event("done").data(payload.to_string());
-                            Some((Some(Ok(event)), StreamState::Done))
+
+                                // sera-k8do (Codex review on PR #1153): the
+                                // streaming cancellation gate must fire on
+                                // `result.cancelled` alone, not `user_cancelled
+                                // && result.cancelled`. Operator/admin paths
+                                // (`AppState::cancel_all_in_flight`, KillSwitch
+                                // ROLLBACK) cancel the runtime turn without
+                                // flipping `client_cancelled`, so the spawned
+                                // task's `deregister_cancellation_token` returns
+                                // `false` (the entry was already drained or the
+                                // flag was never set). Without this gate, those
+                                // paths would persist the synthetic
+                                // `[sera] Runtime turn aborted by KillSwitch
+                                // ROLLBACK` reply as the assistant transcript
+                                // row and emit a `done` event after the live
+                                // deltas — visible stream and persisted
+                                // history would disagree.
+                                //
+                                // sera-mplr semantics are preserved: the SSE
+                                // `cancelled` payload still carries
+                                // `reason: client_cancel` for user-driven
+                                // `POST /api/chat/cancel`, and now reports
+                                // `reason: operator_cancel` for rollback /
+                                // admin / KillSwitch paths.
+                                if result.cancelled {
+                                    let reason = if user_cancelled {
+                                        "client_cancel"
+                                    } else {
+                                        "operator_cancel"
+                                    };
+                                    tracing::info!(
+                                        session_id = %session_id,
+                                        agent = %agent_name,
+                                        reason = %reason,
+                                        "Chat stream cancelled mid-flight; \
+                                         skipping transcript persist"
+                                    );
+                                    let payload = serde_json::json!({
+                                        "cancelled": true,
+                                        "reason": reason,
+                                        "session_id": session_id,
+                                        "message_id": message_id,
+                                    });
+                                    let event = Event::default()
+                                        .event("cancelled")
+                                        .data(payload.to_string());
+                                    return Some((Some(Ok(event)), StreamState::Done));
+                                }
+
+                                // sera-aepj: empty-reply guard mirrors the sync branch.
+                                // Without this, the SSE stream emits zero `message`
+                                // frames followed by `done` with usage=0/0/0, which
+                                // the web client renders as a stuck "thinking…"
+                                // spinner. Surface a structured `error` event instead
+                                // so clients can show the failure.
+                                if result.reply.is_empty() {
+                                    tracing::error!(
+                                        session_id = %session_id,
+                                        agent = %agent_name,
+                                        prompt_tokens = result.usage.prompt_tokens,
+                                        completion_tokens = result.usage.completion_tokens,
+                                        total_tokens = result.usage.total_tokens,
+                                        tool_events_count = result.tool_events.len(),
+                                        tools_ran = !result.tool_events.is_empty(),
+                                        "execute_turn returned empty reply (stream); runtime produced no text"
+                                    );
+                                    let payload = serde_json::json!({
+                                        "error": "runtime returned empty reply",
+                                        "session_id": session_id,
+                                        "message_id": message_id,
+                                    });
+                                    let event = Event::default()
+                                        .event("error")
+                                        .data(payload.to_string());
+                                    return Some((Some(Ok(event)), StreamState::Done));
+                                }
+
+                                // Save tool events and assistant response.
+                                {
+                                    let db = state.db.lock().await;
+                                    persist_tool_events(&db, &session_id, &result.tool_events);
+                                    let _ = db.append_transcript(
+                                        &session_id,
+                                        "assistant",
+                                        Some(&result.reply),
+                                        None,
+                                        None,
+                                    );
+                                    let _ = db.append_audit(
+                                        "response_sent",
+                                        "agent:sera",
+                                        "agent",
+                                        Some(
+                                            &serde_json::json!({
+                                                "session_id": session_id,
+                                                "response_len": result.reply.len(),
+                                            })
+                                            .to_string(),
+                                        ),
+                                    );
+                                }
+
+                                let usage = result.usage;
+                                let payload = serde_json::json!({
+                                    "status": "complete",
+                                    "usage": {
+                                        "prompt_tokens": usage.prompt_tokens,
+                                        "completion_tokens": usage.completion_tokens,
+                                        "total_tokens": usage.total_tokens,
+                                    }
+                                });
+                                let event = Event::default()
+                                    .event("done")
+                                    .data(payload.to_string());
+                                Some((Some(Ok(event)), StreamState::Done))
+                            }
                         }
                     }
                     StreamState::Done => None,
@@ -2366,6 +2515,7 @@ async fn chat_handler(
             &agent_name,
             &cancel,
             &cap_reg,
+            None,
         )
         .await;
         let user_cancelled = state.deregister_cancellation_token(&session_key);
@@ -2628,17 +2778,21 @@ async fn agent_by_id_handler(
     Ok(Json(info))
 }
 
-/// Internal state machine for SSE streaming.
+/// Internal state machine for SSE streaming (sera-7mc1 + sera-k8do).
 ///
-/// `Pending` waits on a `tokio::spawn`-ed `execute_turn` task — this lets the
-/// turn outlive the SSE stream so cleanup (lane release, token deregister)
-/// always runs even when the client disconnects mid-flight (sera-7mc1).
-/// The embedded `cancel_guard` fires the cancellation token on drop unless
-/// `disarm`-ed when we hand control to `Streaming`/`Done`, so a dropped SSE
-/// body cancels the spawned turn within tokio's next scheduling tick.
+/// The unfold pulls live deltas from `rx` until the spawned `execute_turn`
+/// task drops its sender (the turn finished, succeeded or cancelled). The
+/// task owns its own cleanup so a client disconnect — which drops the
+/// unfold's state, including the receiver and the `CancelOnDrop` guard —
+/// cancels the in-flight turn rather than leaking the lane slot.
+///
+/// `cancel_guard` fires the cancellation token on drop unless `disarm`-ed
+/// when we transition to `Done`, so a dropped SSE body cancels the
+/// spawned turn within tokio's next scheduling tick.
 #[allow(clippy::large_enum_variant)]
 enum StreamState {
-    Pending {
+    Streaming {
+        rx: tokio::sync::mpsc::Receiver<String>,
         turn_handle: tokio::task::JoinHandle<(MvsTurnResult, bool)>,
         cancel_guard: CancelOnDrop,
         state: Arc<AppState>,
@@ -2649,13 +2803,6 @@ enum StreamState {
         session_id: String,
         message_id: String,
         agent_name: String,
-    },
-    Streaming {
-        chunks: Vec<String>,
-        index: usize,
-        session_id: String,
-        message_id: String,
-        usage: UsageInfo,
     },
     Done,
 }
@@ -2713,6 +2860,24 @@ const DEFAULT_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// wasted round-trips without forcing long waits on fast turns.
 const LANE_BUSY_RETRY_AFTER_SECS: u64 = 15;
 
+/// Capacity of the bounded mpsc channel that carries `streaming_delta`
+/// frames from the runtime read loop to the SSE pump (sera-k8do, Codex
+/// review on PR #1153).
+///
+/// The chat handler creates `tokio::sync::mpsc::channel::<String>(N)` so
+/// that a slow SSE consumer applies backpressure to the runtime: once
+/// `N` frames are queued, the harness's per-frame `tx.send().await`
+/// suspends until the unfold drains one. This bounds the worst-case
+/// gateway-side memory accumulation per session — without it, a stalled
+/// SSE client could let the runtime push tokens into memory indefinitely.
+///
+/// 256 covers typical multi-token bursts (provider-side packing where
+/// several tokens arrive in one SSE frame from upstream) without
+/// throttling steady-state streams. Operators who want a tighter bound
+/// can lower this; clients only ever see the bound as a slight delay
+/// before the next delta lands when their TCP socket is paused.
+const STREAMING_DELTA_CHANNEL_CAPACITY: usize = 256;
+
 fn turn_timeout() -> std::time::Duration {
     std::env::var("SERA_TURN_TIMEOUT_SECS")
         .ok()
@@ -2742,6 +2907,13 @@ async fn execute_turn(
     agent_name: &str,
     cancel: &CancellationToken,
     capability_registry: &CapabilityRegistry,
+    // sera-k8do: when `Some`, the transport's streaming variant is used
+    // and each LLM-emitted text delta is forwarded through this channel
+    // for live SSE delivery. The channel is bounded (Codex review on
+    // PR #1153) so a slow SSE consumer applies backpressure to the
+    // runtime read loop instead of growing memory unboundedly. `None`
+    // keeps the synchronous behaviour.
+    delta_tx: Option<tokio::sync::mpsc::Sender<String>>,
 ) -> MvsTurnResult {
     let mut messages: Vec<serde_json::Value> = Vec::new();
 
@@ -2855,6 +3027,16 @@ async fn execute_turn(
     // send_turn failure) collapses into a single error reply — both
     // paths had identical lane-release semantics, so observable behaviour
     // is unchanged.
+    //
+    // sera-k8do: when `delta_tx` is `Some`, dispatch through the streaming
+    // variant so the transport can forward per-token deltas to the SSE
+    // pump while the turn is still in flight.
+    let send_fut: std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<TurnEvents>> + Send>,
+    > = match delta_tx {
+        Some(tx) => Box::pin(transport.send_turn_streaming(messages, session_key, tx)),
+        None => Box::pin(transport.send_turn(messages, session_key)),
+    };
     tokio::select! {
         biased;
         _ = cancel.cancelled() => {
@@ -2871,9 +3053,10 @@ async fn execute_turn(
                     total_tokens: 0,
                 },
                 cancelled: true,
+                failure: None,
             }
         }
-        res = tokio::time::timeout(timeout, transport.send_turn(messages, session_key)) => match res {
+        res = tokio::time::timeout(timeout, send_fut) => match res {
             Ok(Ok(events)) => {
                 let filtered_events = enforce_tool_events(
                     agent_name,
@@ -2886,6 +3069,7 @@ async fn execute_turn(
                     tool_events: filtered_events,
                     usage: events.usage,
                     cancelled: false,
+                    failure: None,
                 }
             }
             Ok(Err(e)) => {
@@ -2906,6 +3090,7 @@ async fn execute_turn(
                         total_tokens: 0,
                     },
                     cancelled: false,
+                    failure: Some(err_msg),
                 }
             }
             Err(_elapsed) => {
@@ -2914,6 +3099,8 @@ async fn execute_turn(
                     timeout_secs = timeout.as_secs(),
                     "Runtime harness turn timed out; releasing lane"
                 );
+                let timeout_msg =
+                    format!("runtime turn timed out after {}s", timeout.as_secs());
                 MvsTurnResult {
                     reply: format!("[sera] Runtime timed out after {}s", timeout.as_secs()),
                     tool_events: vec![],
@@ -2923,6 +3110,7 @@ async fn execute_turn(
                         total_tokens: 0,
                     },
                     cancelled: false,
+                    failure: Some(timeout_msg),
                 }
             }
         }
@@ -3070,6 +3258,7 @@ async fn execute_steer(
                     total_tokens: 0,
                 },
                 cancelled: true,
+                failure: None,
             }
         }
         res = tokio::time::timeout(timeout, transport.send_steer(items, session_key)) => match res {
@@ -3082,6 +3271,7 @@ async fn execute_steer(
                     total_tokens: 0,
                 },
                 cancelled: false,
+                failure: None,
             },
             Ok(Err(e)) => {
                 tracing::error!(
@@ -3098,6 +3288,7 @@ async fn execute_steer(
                         total_tokens: 0,
                     },
                     cancelled: false,
+                    failure: None,
                 }
             }
             Err(_elapsed) => {
@@ -3115,6 +3306,7 @@ async fn execute_steer(
                         total_tokens: 0,
                     },
                     cancelled: false,
+                    failure: None,
                 }
             }
         }
@@ -3483,6 +3675,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         &agent_name,
         &cancel,
         &cap_reg,
+        None,
     )
     .await;
     state.deregister_cancellation_token(&session_key);
@@ -3636,6 +3829,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             &agent_name,
             &cancel,
             &cap_reg,
+            None,
         )
         .await;
         state.deregister_cancellation_token(&session_key);
@@ -6609,70 +6803,44 @@ spec:
         assert_eq!(expected, "text/event-stream");
     }
 
-    /// Verify StreamState::Streaming produces the correct SSE event shape.
+    /// sera-k8do: documents the SSE `message` payload shape the streaming
+    /// pump emits when a delta lands. The web client's `parseChatSseEvent`
+    /// matches on the same `delta` / `session_id` / `message_id` keys.
+    #[test]
+    fn stream_message_event_payload_shape() {
+        let session_id = "sess-1";
+        let message_id = "msg_00000001";
+        let payload = serde_json::json!({
+            "delta": "Hello ",
+            "session_id": session_id,
+            "message_id": message_id,
+        });
+        let parsed: serde_json::Value =
+            serde_json::from_str(&payload.to_string()).expect("payload re-parses");
+        assert_eq!(parsed["delta"], "Hello ");
+        assert_eq!(parsed["session_id"], session_id);
+        assert_eq!(parsed["message_id"], message_id);
+    }
+
+    /// Trivial structural test: feeding `Done` into the unfold immediately
+    /// terminates the stream. Mirrors the previous `stream_state_done_yields_nothing`
+    /// shape but no longer references the removed `Streaming { chunks }` variant.
     #[tokio::test]
     async fn stream_state_streaming_yields_message_events() {
         use futures_util::StreamExt as _;
 
-        let chunks = vec!["Hello ".to_owned(), "world!".to_owned()];
-        let usage = UsageInfo {
-            prompt_tokens: 10,
-            completion_tokens: 5,
-            total_tokens: 15,
-        };
-        let state = StreamState::Streaming {
-            chunks,
-            index: 0,
-            session_id: "sess-1".to_owned(),
-            message_id: "msg_00000001".to_owned(),
-            usage,
-        };
-
-        let stream = futures_util::stream::unfold(state, |fold_state| async move {
+        let stream = futures_util::stream::unfold(StreamState::Done, |fold_state| async move {
             match fold_state {
-                StreamState::Streaming {
-                    chunks,
-                    index,
-                    session_id,
-                    message_id,
-                    usage,
-                } => {
-                    if index < chunks.len() {
-                        let event = axum::response::sse::Event::default().event("message").data(
-                            serde_json::json!({
-                                "delta": chunks[index],
-                                "session_id": session_id,
-                                "message_id": message_id,
-                            })
-                            .to_string(),
-                        );
-                        Some((
-                            Some(Ok::<_, std::convert::Infallible>(event)),
-                            StreamState::Streaming {
-                                chunks,
-                                index: index + 1,
-                                session_id,
-                                message_id,
-                                usage,
-                            },
-                        ))
-                    } else {
-                        let event = axum::response::sse::Event::default()
-                            .event("done")
-                            .data(serde_json::json!({ "status": "complete" }).to_string());
-                        Some((Some(Ok(event)), StreamState::Done))
-                    }
+                StreamState::Done => {
+                    None::<(Option<Result<axum::response::sse::Event, std::convert::Infallible>>, StreamState)>
                 }
-                StreamState::Done => None,
-                // Pending variant should never be fed into this sub-stream.
-                StreamState::Pending { .. } => None,
+                StreamState::Streaming { .. } => unreachable!(),
             }
         })
         .filter_map(|item| async move { item });
 
         let events: Vec<_> = stream.collect().await;
-        // 2 chunks + 1 done event = 3 total
-        assert_eq!(events.len(), 3);
+        assert!(events.is_empty());
     }
 
     /// sera-aepj: documents the SSE shape the streaming branch emits when
@@ -7195,6 +7363,7 @@ spec:
             "sera",
             &cancel,
             &capability_registry,
+            None,
         )
         .await;
 
@@ -7532,14 +7701,545 @@ spec:
         );
     }
 
+    /// sera-k8do: real-streaming acceptance test.
+    ///
+    /// Asserts the first SSE `message` event arrives <500ms after the
+    /// `/api/chat` request even though the underlying turn takes >1.5s
+    /// in total. With the pre-fix `split_inclusive(' ')` path, no SSE
+    /// frame is emitted until `execute_turn` returns the full reply, so
+    /// the first message would land >2s after the request — failing this
+    /// bound.
+    ///
+    /// Uses an in-test `AgentTurnTransport` whose `send_turn_streaming`
+    /// pushes the first delta after a tiny delay, then sleeps >2s before
+    /// emitting the rest. The test reads the response body chunk-by-chunk
+    /// and times the first `event: message` frame.
+    #[tokio::test]
+    async fn sse_first_delta_arrives_before_turn_completes() {
+        use async_trait::async_trait;
+        use serde_json::Value;
+        use std::time::{Duration, Instant};
+        use tokio::sync::mpsc::Sender;
+
+        struct SlowStreamingTransport;
+
+        #[async_trait]
+        impl AgentTurnTransport for SlowStreamingTransport {
+            async fn send_turn(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                // Synchronous fallback path is unused in this test, but
+                // keep the timing realistic in case the SSE branch ever
+                // regresses to calling send_turn directly.
+                tokio::time::sleep(Duration::from_millis(2050)).await;
+                Ok(TurnEvents {
+                    response: "Hello world!".to_string(),
+                    tool_events: vec![],
+                    usage: UsageInfo::default(),
+                })
+            }
+
+            async fn send_turn_streaming(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+                delta_tx: Sender<String>,
+            ) -> anyhow::Result<TurnEvents> {
+                // Quick first delta — proves real streaming is plumbed.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                let _ = delta_tx.send("Hello ".to_string()).await;
+                // Long tail — proves the unfold doesn't wait for the
+                // full reply before emitting the first frame.
+                tokio::time::sleep(Duration::from_millis(2000)).await;
+                let _ = delta_tx.send("world!".to_string()).await;
+                Ok(TurnEvents {
+                    response: "Hello world!".to_string(),
+                    tool_events: vec![],
+                    usage: UsageInfo::default(),
+                })
+            }
+
+            async fn send_steer(
+                &self,
+                _items: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut state = test_state_async().await;
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert(
+                "sera".to_string(),
+                Arc::new(SlowStreamingTransport) as Arc<dyn AgentTurnTransport>,
+            );
+        let app = build_router(Arc::clone(&state));
+
+        let started = Instant::now();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "hi", "stream": true })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut body_stream = response.into_body().into_data_stream();
+        let mut buffer = Vec::<u8>::new();
+        let mut first_message_at: Option<Duration> = None;
+
+        // Read until we observe the first complete `event: message` frame.
+        // 1.5s upper bound generously covers the 50ms emit + scheduler jitter
+        // while still failing the buggy >2s post-hoc-split behaviour.
+        let read_deadline = Instant::now() + Duration::from_millis(1500);
+        while first_message_at.is_none() && Instant::now() < read_deadline {
+            let remaining = read_deadline.saturating_duration_since(Instant::now());
+            let chunk =
+                match tokio::time::timeout(remaining, body_stream.next()).await {
+                    Ok(Some(Ok(b))) => b,
+                    Ok(Some(Err(e))) => panic!("SSE body errored: {e}"),
+                    Ok(None) => panic!("SSE body ended before first message"),
+                    Err(_) => break,
+                };
+            buffer.extend_from_slice(&chunk);
+            let so_far = std::str::from_utf8(&buffer).unwrap_or("");
+            if so_far.contains("event: message\n") {
+                first_message_at = Some(started.elapsed());
+            }
+        }
+
+        let elapsed = first_message_at.unwrap_or_else(|| {
+            panic!(
+                "first SSE `message` event must arrive within 1.5s; \
+                 buffered so far: {}",
+                String::from_utf8_lossy(&buffer)
+            )
+        });
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "first delta must arrive <500ms after request, got {elapsed:?}"
+        );
+
+        // Drain the rest so we can verify the turn really did take >1.5s
+        // and that a terminating `done` frame closes the stream.
+        let drain_deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let remaining = drain_deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remaining, body_stream.next()).await {
+                Ok(Some(Ok(b))) => buffer.extend_from_slice(&b),
+                Ok(Some(Err(e))) => panic!("SSE body errored mid-drain: {e}"),
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+        let total_elapsed = started.elapsed();
+        let body_str = std::str::from_utf8(&buffer).unwrap_or("");
+        assert!(
+            body_str.matches("event: message").count() >= 2,
+            "expected ≥2 message events; body: {body_str}"
+        );
+        assert!(
+            body_str.contains("event: done"),
+            "expected terminating `done` event; body: {body_str}"
+        );
+        assert!(
+            total_elapsed > Duration::from_millis(1500),
+            "full turn must take >1.5s for the timing assertion to be \
+             meaningful; got {total_elapsed:?}"
+        );
+    }
+
+    /// sera-k8do (Codex review on PR #1153): mid-stream runtime error
+    /// regression test.
+    ///
+    /// Asserts that when the runtime emits one or more `streaming_delta`
+    /// frames and then errors out (e.g. an upstream provider failure or
+    /// the runtime "error" NDJSON frame), the SSE client sees the
+    /// already-streamed deltas followed by a structured `event: error`
+    /// frame, **not** a `done`. The transcript must not record an
+    /// assistant row — neither the partial text nor the synthetic
+    /// `[sera] Runtime error: …` placeholder — so a follow-up turn does
+    /// not see a misleading assistant slot in history.
+    ///
+    /// Without the fix, `execute_turn` returns a non-empty synthetic
+    /// reply, the empty-reply guard does not trip, the unfold persists
+    /// the synthetic string as the assistant transcript row and emits
+    /// `done` — visible stream output and persisted transcript disagree.
+    #[tokio::test]
+    async fn sse_runtime_error_after_partial_deltas_emits_error_event_and_skips_transcript_persist()
+    {
+        use async_trait::async_trait;
+        use serde_json::Value;
+        use std::time::Duration;
+        use tokio::sync::mpsc::Sender;
+
+        struct FailingMidStreamTransport;
+
+        #[async_trait]
+        impl AgentTurnTransport for FailingMidStreamTransport {
+            async fn send_turn(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                anyhow::bail!("simulated upstream provider error")
+            }
+
+            async fn send_turn_streaming(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+                delta_tx: Sender<String>,
+            ) -> anyhow::Result<TurnEvents> {
+                // Forward one real delta first — proves the failure
+                // path runs *after* visible streaming has begun.
+                let _ = delta_tx.send("Hello ".to_string()).await;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                anyhow::bail!("simulated upstream provider error")
+            }
+
+            async fn send_steer(
+                &self,
+                _items: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut state = test_state_async().await;
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert(
+                "sera".to_string(),
+                Arc::new(FailingMidStreamTransport) as Arc<dyn AgentTurnTransport>,
+            );
+
+        // Capture the session id up front; `get_or_create_session` is
+        // idempotent so the chat handler will dispatch the turn against
+        // the same row we inspect afterwards.
+        let session_id = {
+            let db = state.db.lock().await;
+            db.get_or_create_session("sera")
+                .expect("get_or_create_session ok")
+                .id
+        };
+
+        let app = build_router(Arc::clone(&state));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "hi", "stream": true })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Drain the body with a 5s ceiling. The stream must end on its own.
+        let body_bytes = tokio::time::timeout(
+            Duration::from_secs(5),
+            axum::body::to_bytes(response.into_body(), 64 * 1024),
+        )
+        .await
+        .expect("SSE body must terminate after mid-stream runtime error")
+        .expect("body bytes");
+        let body_str = std::str::from_utf8(&body_bytes).unwrap_or("");
+
+        // Visible stream: one `message` (the "Hello " delta) and exactly
+        // one `error` event; no `done`.
+        assert_eq!(
+            body_str.matches("event: message").count(),
+            1,
+            "expected exactly one streamed delta before the failure; body: {body_str}"
+        );
+        assert!(
+            body_str.contains("\"delta\":\"Hello \""),
+            "the streamed delta must be the real partial text; body: {body_str}"
+        );
+        assert!(
+            body_str.contains("event: error"),
+            "expected a structured `error` SSE event; body: {body_str}"
+        );
+        assert!(
+            body_str.contains("runtime stream interrupted"),
+            "error payload must surface the failure reason; body: {body_str}"
+        );
+        assert!(
+            !body_str.contains("event: done"),
+            "must NOT emit `done` after a mid-stream runtime failure; body: {body_str}"
+        );
+
+        // Transcript: the user message must persist, but no assistant
+        // row may exist — neither the partial "Hello " nor the synthetic
+        // "[sera] Runtime error: …" placeholder.
+        let rows = {
+            let db = state.db.lock().await;
+            db.get_transcript(&session_id).expect("get transcript")
+        };
+        let assistant_rows: Vec<_> =
+            rows.iter().filter(|r| r.role == "assistant").collect();
+        assert!(
+            assistant_rows.is_empty(),
+            "no assistant transcript row should be persisted on mid-stream \
+             runtime failure; got: {assistant_rows:?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.role == "user"),
+            "the user message must still be persisted; got rows: {rows:?}"
+        );
+    }
+
+    /// sera-k8do (Codex review on PR #1153): operator-cancel after live
+    /// deltas must not persist the synthetic
+    /// `[sera] Runtime turn aborted by KillSwitch ROLLBACK` reply as the
+    /// assistant transcript row, and must surface a structured
+    /// `cancelled` SSE event with `reason=operator_cancel` (not `done`).
+    ///
+    /// Pre-fix the streaming finalizer gated on `user_cancelled &&
+    /// result.cancelled`. Operator paths
+    /// (`AppState::cancel_all_in_flight`, KillSwitch ROLLBACK) cancel the
+    /// runtime turn without flipping `client_cancelled`, so
+    /// `user_cancelled` was `false` and the cancelled branch did not
+    /// fire — execute_turn's synthetic abort string was persisted as
+    /// assistant content and the client saw `done` after the partial
+    /// deltas. Visible stream and persisted history disagreed.
+    #[tokio::test]
+    async fn sse_operator_cancel_after_partial_deltas_skips_transcript_persist() {
+        use async_trait::async_trait;
+        use serde_json::Value;
+        use std::sync::Arc;
+        use std::time::Duration;
+        use tokio::sync::Notify;
+        use tokio::sync::mpsc::Sender;
+
+        struct HangAfterDeltaTransport {
+            emitted: Arc<Notify>,
+        }
+
+        #[async_trait]
+        impl AgentTurnTransport for HangAfterDeltaTransport {
+            async fn send_turn(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                std::future::pending::<()>().await;
+                unreachable!()
+            }
+
+            async fn send_turn_streaming(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+                delta_tx: Sender<String>,
+            ) -> anyhow::Result<TurnEvents> {
+                // Forward one real delta so the SSE client observes
+                // live streaming, then hang. The gateway's cancel arm
+                // is what aborts us when the test fires
+                // `cancel_all_in_flight`.
+                let _ = delta_tx.send("Hello ".to_string()).await;
+                self.emitted.notify_one();
+                std::future::pending::<()>().await;
+                unreachable!()
+            }
+
+            async fn send_steer(
+                &self,
+                _items: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let emitted = Arc::new(Notify::new());
+        let transport = Arc::new(HangAfterDeltaTransport {
+            emitted: Arc::clone(&emitted),
+        }) as Arc<dyn AgentTurnTransport>;
+
+        let mut state = test_state_async().await;
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert("sera".to_string(), transport);
+
+        // Capture the session id up front; chat_handler reuses it via
+        // `get_or_create_session`.
+        let session_id = {
+            let db = state.db.lock().await;
+            db.get_or_create_session("sera")
+                .expect("session ok")
+                .id
+        };
+
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "hi", "stream": true })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Drive the body in a separate task so we can fire the cancel
+        // mid-stream from the test task.
+        let body_handle = tokio::spawn(async move {
+            axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .expect("body bytes")
+        });
+
+        // Wait for the transport to confirm the first delta has been
+        // forwarded, then give axum a tick to write the corresponding
+        // SSE frame to the body buffer.
+        tokio::time::timeout(Duration::from_secs(2), emitted.notified())
+            .await
+            .expect("first delta must be emitted within 2s");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Operator cancel: drains the registry and fires every active
+        // token without flipping `client_cancelled`.
+        let n = state.cancel_all_in_flight();
+        assert!(
+            n >= 1,
+            "cancel_all_in_flight should have cancelled the in-flight \
+             HTTP turn; got count={n}"
+        );
+
+        let body_bytes = tokio::time::timeout(Duration::from_secs(5), body_handle)
+            .await
+            .expect("SSE body must terminate after operator cancel")
+            .expect("body task joined");
+        let body_str = std::str::from_utf8(&body_bytes).unwrap_or("");
+
+        // Visible stream: exactly one delta + one cancelled event with
+        // the operator reason; no `done`.
+        assert_eq!(
+            body_str.matches("event: message").count(),
+            1,
+            "expected exactly one streamed delta before operator cancel; \
+             body: {body_str}"
+        );
+        assert!(
+            body_str.contains("\"delta\":\"Hello \""),
+            "streamed delta must be the real partial text; body: {body_str}"
+        );
+        assert!(
+            body_str.contains("event: cancelled"),
+            "expected `cancelled` SSE event for operator cancel; body: {body_str}"
+        );
+        assert!(
+            body_str.contains("\"reason\":\"operator_cancel\""),
+            "operator cancel must surface as reason=operator_cancel; body: {body_str}"
+        );
+        assert!(
+            !body_str.contains("event: done"),
+            "must NOT emit `done` after operator cancel; body: {body_str}"
+        );
+
+        // Transcript: no assistant row from the synthetic
+        // `[sera] Runtime turn aborted by KillSwitch ROLLBACK` reply.
+        let rows = {
+            let db = state.db.lock().await;
+            db.get_transcript(&session_id).expect("get transcript")
+        };
+        let assistant_rows: Vec<_> =
+            rows.iter().filter(|r| r.role == "assistant").collect();
+        assert!(
+            assistant_rows.is_empty(),
+            "no assistant transcript row should be persisted on operator \
+             cancel; got: {assistant_rows:?}"
+        );
+    }
+
+    /// sera-k8do (Codex review on PR #1153): the streaming delta channel
+    /// must be bounded so a slow SSE consumer cannot let the runtime
+    /// read loop accumulate unlimited deltas in memory. The chat
+    /// handler creates the channel via
+    /// `tokio::sync::mpsc::channel::<String>(STREAMING_DELTA_CHANNEL_CAPACITY)`,
+    /// so we mirror that construction here and verify a `try_send` past
+    /// the capacity is rejected with `Full` rather than silently growing
+    /// the queue.
+    #[tokio::test]
+    async fn streaming_delta_channel_is_bounded() {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<String>(
+            STREAMING_DELTA_CHANNEL_CAPACITY,
+        );
+        for i in 0..STREAMING_DELTA_CHANNEL_CAPACITY {
+            tx.try_send(format!("delta-{i}"))
+                .unwrap_or_else(|e| panic!("delta {i} must fit in capacity: {e}"));
+        }
+        let result = tx.try_send("overflow".to_string());
+        assert!(
+            matches!(
+                result,
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_))
+            ),
+            "channel must be bounded at STREAMING_DELTA_CHANNEL_CAPACITY={}; \
+             got: {result:?}",
+            STREAMING_DELTA_CHANNEL_CAPACITY,
+        );
+    }
+
     /// sera-7mc1: when the SSE client disconnects mid-turn, the
-    /// `CancelOnDrop` guard inside `StreamState::Pending` must fire the
+    /// `CancelOnDrop` guard inside `StreamState::Streaming` must fire the
     /// session's cancellation token within ~2s so the runtime turn aborts
     /// instead of running to completion server-side.
     ///
     /// Pattern: open `/api/chat` with `stream: true` against a hanging mock
     /// runtime, drain enough of the response body to drive the unfold into
-    /// its `Pending` state, capture the token clone from the active
+    /// its `Streaming` state, capture the token clone from the active
     /// registry, drop the body to simulate disconnect, then assert the
     /// token's `cancelled()` future resolves within 2s. The deregister +
     /// lane release happens inside the spawned turn task, so we also
@@ -7577,10 +8277,12 @@ spec:
         assert_eq!(response.status(), StatusCode::OK);
 
         let mut body_stream = response.into_body().into_data_stream();
-        // Poll once to drive the unfold into `Pending` so the spawned task
-        // is created and the cancellation token is registered. The mock
-        // runtime hangs, so the unfold never produces a frame — the
-        // timeout simply means we're sitting inside `Pending`.
+        // Poll once to drive the body stream forward — the chat handler
+        // already spawned the turn task and registered the cancellation
+        // token before returning the SSE response, so the registry should
+        // populate quickly. The mock runtime hangs, so the unfold never
+        // produces a frame — the timeout simply means we're sitting
+        // inside `Streaming` waiting on `rx.recv()`.
         let _ = tokio::time::timeout(
             std::time::Duration::from_millis(500),
             body_stream.next(),
@@ -8099,6 +8801,7 @@ spec:
             "agent",
             &cancel,
             &capability_registry,
+            None,
         )
         .await;
 
@@ -8173,6 +8876,7 @@ spec:
             "agent",
             &cancel,
             &capability_registry,
+            None,
         )
         .await;
         assert_eq!(r1.reply, "mock response");
@@ -8192,6 +8896,7 @@ spec:
             "agent",
             &cancel,
             &capability_registry,
+            None,
         )
         .await;
         assert_eq!(

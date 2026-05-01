@@ -18,6 +18,7 @@
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::Value;
+use tokio::sync::mpsc::Sender;
 
 /// A tool call event captured from the runtime's NDJSON output (today's
 /// stdio backend) or projected from the runtime transcript (future
@@ -67,6 +68,39 @@ pub trait AgentTurnTransport: Send + Sync {
         messages: Vec<Value>,
         session_key: &str,
     ) -> anyhow::Result<TurnEvents>;
+
+    /// Dispatch a single user turn and forward each LLM-emitted text delta
+    /// through `delta_tx` as it is observed (sera-k8do). The final
+    /// `TurnEvents.response` still contains the full concatenated reply for
+    /// transcript persistence.
+    ///
+    /// The default implementation delegates to [`send_turn`] and forwards
+    /// the full reply as a single delta at the end — preserving historical
+    /// non-streaming behaviour for backends that do not yet expose a
+    /// per-token hook (today: `EmbeddedRuntimeTransport`, test doubles).
+    /// Production stdio (`RuntimeChildSupervisor`) overrides this to emit
+    /// deltas as the runtime's `streaming_delta` NDJSON frames arrive.
+    ///
+    /// `delta_tx` is a bounded channel — implementors must `.await` the
+    /// send so a slow SSE consumer applies backpressure to the runtime
+    /// read loop instead of accumulating unbounded deltas in memory
+    /// (Codex review on PR #1153). A send error means the receiver is
+    /// gone (SSE client disconnect); the gateway's cancellation token
+    /// will fire shortly via `CancelOnDrop`, so implementors should
+    /// either continue to read-and-accumulate (for clean turn
+    /// completion) or break early — both are correct.
+    async fn send_turn_streaming(
+        &self,
+        messages: Vec<Value>,
+        session_key: &str,
+        delta_tx: Sender<String>,
+    ) -> anyhow::Result<TurnEvents> {
+        let events = self.send_turn(messages, session_key).await?;
+        if !events.response.is_empty() {
+            let _ = delta_tx.send(events.response.clone()).await;
+        }
+        Ok(events)
+    }
 
     /// Inject a steer (mid-turn user content) at the next tool boundary.
     /// The stdio backend writes a `Steer` Submission down the NDJSON pipe

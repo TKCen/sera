@@ -361,6 +361,10 @@ pub enum EvolveTokenError {
     /// The signer secret is empty — configuration error.
     #[error("signer secret is empty")]
     EmptySecret,
+    /// The token's `instance_id` (or an ancestor in its delegation chain) has
+    /// been recorded in the cascade-revocation store (sera-2q6w).
+    #[error("token revoked: {0}")]
+    Revoked(String),
 }
 
 #[derive(Clone)]

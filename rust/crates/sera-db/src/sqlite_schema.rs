@@ -14,6 +14,7 @@ use rusqlite::Connection;
 
 use crate::agents::SqliteAgentStore;
 use crate::audit::SqliteAuditStore;
+use crate::capability_revocation::SqliteRevocationStore;
 use crate::metering::SqliteMeteringStore;
 use crate::schedules::SqliteScheduleStore;
 use crate::secrets::SqliteSecretsStore;
@@ -29,6 +30,7 @@ pub fn init_all(conn: &Connection) -> rusqlite::Result<()> {
     SqliteScheduleStore::init_schema(conn)?;
     SqliteSecretsStore::init_schema(conn)?;
     SqliteSignalStore::init_schema(conn)?;
+    SqliteRevocationStore::init_schema(conn)?;
     Ok(())
 }
 
@@ -52,6 +54,7 @@ mod tests {
             "schedules",
             "secrets",
             "agent_signals",
+            "capability_token_revocations",
         ] {
             let count: i64 = conn
                 .query_row(

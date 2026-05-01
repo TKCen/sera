@@ -389,6 +389,20 @@ CREATE INDEX IF NOT EXISTS idx_capability_token_revocations_parent_id
     ON capability_token_revocations (tenant_id, parent_id);
 "#;
 
+const POSTGRES_CASCADE_DESCENDANTS_SQL: &str = r#"
+WITH RECURSIVE descendants AS (
+    SELECT instance_id, parent_id, 1 AS depth
+    FROM capability_token_revocations
+    WHERE tenant_id = $1 AND instance_id = $2
+  UNION ALL
+    SELECT c.instance_id, c.parent_id, d.depth + 1
+    FROM capability_token_revocations c
+    JOIN descendants d ON c.parent_id = d.instance_id
+    WHERE c.tenant_id = $1 AND d.depth <= $3
+) CYCLE instance_id SET is_cycle USING path
+SELECT COUNT(DISTINCT instance_id)::bigint FROM descendants
+"#;
+
 /// Postgres-backed revocation store. Cascade walks via `WITH RECURSIVE …
 /// CYCLE` so a malformed parent_id graph is structurally cycle-safe.
 #[derive(Debug, Clone)]
@@ -463,21 +477,7 @@ impl RevocationStore for PostgresRevocationStore {
 
         // Recursive CTE walk down the parent_id graph. CYCLE guards against
         // malformed cycles; the depth cap is the second mechanism.
-        let row: (i64,) = sqlx::query_as(
-            r#"
-            WITH RECURSIVE descendants AS (
-                SELECT instance_id, parent_id, 1 AS depth
-                FROM capability_token_revocations
-                WHERE tenant_id = $1 AND instance_id = $2
-              UNION ALL
-                SELECT c.instance_id, c.parent_id, d.depth + 1
-                FROM capability_token_revocations c
-                JOIN descendants d ON c.parent_id = d.instance_id
-                WHERE c.tenant_id = $1 AND d.depth < $3
-            ) CYCLE instance_id SET is_cycle USING path
-            SELECT COUNT(DISTINCT instance_id)::bigint FROM descendants
-            "#,
-        )
+        let row: (i64,) = sqlx::query_as(POSTGRES_CASCADE_DESCENDANTS_SQL)
         .bind(tenant_id)
         .bind(instance_id)
         .bind(i64::from(CASCADE_MAX_DEPTH))
@@ -722,6 +722,14 @@ mod tests {
             "PK must be (tenant_id, instance_id) for cross-tenant isolation"
         );
         assert!(POSTGRES_DDL.contains("CREATE TABLE IF NOT EXISTS capability_token_revocations"));
+    }
+
+    #[test]
+    fn postgres_cascade_walk_uses_full_edge_depth_budget() {
+        assert!(
+            POSTGRES_CASCADE_DESCENDANTS_SQL.contains("d.depth <= $3"),
+            "Postgres cascade must include children at the configured max-hop boundary"
+        );
     }
 
     #[test]

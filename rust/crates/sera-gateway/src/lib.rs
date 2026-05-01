@@ -16,6 +16,7 @@ pub mod party;
 pub mod plugin;
 pub mod policy_resolution;
 pub mod process_manager;
+pub mod routes;
 pub mod scheduler;
 pub mod session_persist;
 pub mod session_store;

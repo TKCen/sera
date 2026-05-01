@@ -97,14 +97,17 @@ sera-types (leaf)
 - Incremental compilation is on by default in dev profile
 - First build downloads + compiles all deps (~30s); subsequent checks are ~1-3s
 
-### sccache Compiler Cache
+### sccache Compiler Cache + Debug Artifact Control
 
-**Problem:** `rust/target/debug` grows to 52GB+ and `cargo clean` frees it but it rebuilds immediately on next compile.
+**Problem:** `rust/target/debug` can grow past 50GB because dependency debuginfo and incremental artifacts dominate `target/debug/deps` and `target/debug/incremental`. A plain `cargo clean` frees space but rebuilds the same bloated artifacts on the next compile.
 
-**Solution:** sccache + selective incremental clean:
+**Solution:** sccache + selective incremental clean + reduced dependency debuginfo:
 - `rust/.cargo/config.toml` sets `RUSTC_WRAPPER=sccache` for all workspace builds
+- `rust/Cargo.toml` sets `[profile.dev] debug = 1` and `[profile.dev.package."*"] debug = false` so SERA crates keep useful line tables while dependencies do not emit huge debug sections
+- `rust/Cargo.toml` also keeps release artifacts stripped with `debug = false` and `incremental = false`
 - `rust/build.sh` cleans `incremental/` only when >1GB, keeps `deps/` warm
 - `rust/docker-compose.sera.yml` mounts named volumes for cargo-registry, cargo-cache, sccache-cache
+- After changing profile/debug settings, delete the old `target/` or at least stale `target/debug/{deps,incremental}` artifacts; old bloated files stay on disk until removed
 
 **Setup:**
 ```bash

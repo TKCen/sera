@@ -2148,6 +2148,7 @@ async fn chat_handler(
                 turn_handle,
                 cancel_guard,
                 state: state_clone,
+                session_key: skey.clone(),
                 session_id: sid,
                 message_id: mid_clone,
                 agent_name: aname,
@@ -2158,6 +2159,7 @@ async fn chat_handler(
                         turn_handle,
                         mut cancel_guard,
                         state,
+                        session_key,
                         session_id,
                         message_id,
                         agent_name,
@@ -2165,20 +2167,28 @@ async fn chat_handler(
                         let (result, user_cancelled) = match turn_handle.await {
                             Ok(pair) => pair,
                             Err(join_err) => {
-                                // Task either panicked or was aborted out-of-
-                                // band. Cleanup ran inside the task on the Ok
-                                // path; on JoinError we have no result, so
-                                // surface a structured `error` event to the
-                                // client and drop the stream. Disarming the
-                                // guard here avoids re-firing a token that
-                                // either already fired or no longer maps to
-                                // any in-flight work.
+                                // Task panicked or was aborted out-of-band, so
+                                // its in-task cleanup never ran. Without the
+                                // calls below the cancellation registry entry
+                                // and the lane slot would leak for this
+                                // session and block any future `/api/chat`
+                                // turn until process restart. Disarm the
+                                // guard first — firing the token here would
+                                // be a no-op (the task is already gone) and
+                                // would race with the deregister we're about
+                                // to do.
                                 cancel_guard.disarm();
+                                let _ = state.deregister_cancellation_token(&session_key);
+                                {
+                                    let mut lq = state.lane_queue.lock().await;
+                                    lq.complete_run(&session_key);
+                                }
                                 tracing::error!(
                                     error = %join_err,
                                     session_id = %session_id,
+                                    session_key = %session_key,
                                     agent = %agent_name,
-                                    "SSE turn task failed to join"
+                                    "SSE turn task failed to join; cleaned up registry + lane"
                                 );
                                 let payload = serde_json::json!({
                                     "error": "turn task failed",
@@ -2632,6 +2642,10 @@ enum StreamState {
         turn_handle: tokio::task::JoinHandle<(MvsTurnResult, bool)>,
         cancel_guard: CancelOnDrop,
         state: Arc<AppState>,
+        /// Retained even though the spawned task owns the success-path
+        /// cleanup, because a `JoinError` (panic/abort) skips that path
+        /// and the unfold has to deregister + release the lane itself.
+        session_key: String,
         session_id: String,
         message_id: String,
         agent_name: String,
@@ -7628,6 +7642,124 @@ spec:
             }
             if std::time::Instant::now() > drained_within {
                 panic!("cancellation registry entry must be deregistered after SSE disconnect");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    /// sera-7mc1 / Codex review (PR #1150): when the spawned SSE turn task
+    /// panics or is aborted, `turn_handle.await` returns `JoinError`. The
+    /// task's in-task cleanup (deregister + lane release) never ran, so the
+    /// JoinError arm in the unfold has to call them itself — otherwise the
+    /// cancellation registry entry and the lane slot leak for that session
+    /// and any subsequent `/api/chat` for the same session is wedged.
+    #[tokio::test]
+    async fn sse_turn_task_panic_runs_cleanup_and_releases_lane() {
+        use async_trait::async_trait;
+        use serde_json::Value;
+
+        struct PanickingTransport;
+
+        #[async_trait]
+        impl AgentTurnTransport for PanickingTransport {
+            async fn send_turn(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                panic!("sera-7mc1 test: simulated transport panic");
+            }
+            async fn send_steer(
+                &self,
+                _items: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut state = test_state_async().await;
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert(
+                "sera".to_string(),
+                Arc::new(PanickingTransport) as Arc<dyn AgentTurnTransport>,
+            );
+        let app = build_router(Arc::clone(&state));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "hi", "stream": true })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Drain the body — the unfold's JoinError arm will produce a
+        // single `error` SSE event, then end. Bound the read so a
+        // regression that fails to terminate the stream still fails the
+        // test instead of hanging.
+        let body_bytes = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            axum::body::to_bytes(response.into_body(), 64 * 1024),
+        )
+        .await
+        .expect("SSE body must terminate after JoinError")
+        .expect("body bytes");
+        let body_str = std::str::from_utf8(&body_bytes).unwrap_or("");
+        assert!(
+            body_str.contains("event: error")
+                && body_str.contains("turn task failed"),
+            "JoinError must surface a structured error event; got: {body_str:?}"
+        );
+
+        // The cleanup branch must drain the cancellation registry and
+        // release the lane slot. Poll briefly to allow any final task
+        // scheduling to settle, then assert.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let registry_empty = !state
+                .active_cancellation_tokens
+                .lock()
+                .unwrap()
+                .keys()
+                .any(|k| k.starts_with("http:sera:"));
+            let lane_free = {
+                let lq = state.lane_queue.lock().await;
+                lq.active_runs() == 0
+            };
+            if registry_empty && lane_free {
+                break;
+            }
+            if std::time::Instant::now() > deadline {
+                let entries: Vec<String> = state
+                    .active_cancellation_tokens
+                    .lock()
+                    .unwrap()
+                    .keys()
+                    .cloned()
+                    .collect();
+                let active = state.lane_queue.lock().await.active_runs();
+                panic!(
+                    "JoinError cleanup must drain registry and release lane within 2s; \
+                     registry_empty={registry_empty}, lane_free={lane_free}, \
+                     active_runs={active}, remaining_registry_keys={entries:?}"
+                );
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }

@@ -478,12 +478,12 @@ impl RevocationStore for PostgresRevocationStore {
         // Recursive CTE walk down the parent_id graph. CYCLE guards against
         // malformed cycles; the depth cap is the second mechanism.
         let row: (i64,) = sqlx::query_as(POSTGRES_CASCADE_DESCENDANTS_SQL)
-        .bind(tenant_id)
-        .bind(instance_id)
-        .bind(i64::from(CASCADE_MAX_DEPTH))
-        .fetch_one(&self.pool)
-        .await
-        .map_err(DbError::Sqlx)?;
+            .bind(tenant_id)
+            .bind(instance_id)
+            .bind(i64::from(CASCADE_MAX_DEPTH))
+            .fetch_one(&self.pool)
+            .await
+            .map_err(DbError::Sqlx)?;
 
         let count = row.0.max(0) as u32;
         emit_cascade_event(tenant_id, instance_id, revoked_by, reason, count);

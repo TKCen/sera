@@ -365,6 +365,11 @@ pub enum EvolveTokenError {
     /// been recorded in the cascade-revocation store (sera-2q6w).
     #[error("token revoked: {0}")]
     Revoked(String),
+    /// The revocation store could not be queried. This is operationally
+    /// distinct from a positive revocation hit: callers should not report a
+    /// transient DB/store outage as a security revocation decision.
+    #[error("revocation lookup failed: {0}")]
+    RevocationLookupFailed(String),
 }
 
 #[derive(Clone)]

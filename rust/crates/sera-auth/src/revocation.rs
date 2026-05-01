@@ -41,7 +41,7 @@ pub async fn verify_revocable<S: RevocationStore + ?Sized>(
         && revocations
             .is_revoked(tenant_id, instance_id)
             .await
-            .map_err(|e| EvolveTokenError::Revoked(format!("revocation lookup failed: {e}")))?
+            .map_err(|e| EvolveTokenError::RevocationLookupFailed(e.to_string()))?
     {
         return Err(EvolveTokenError::Revoked(instance_id.to_string()));
     }
@@ -50,7 +50,7 @@ pub async fn verify_revocable<S: RevocationStore + ?Sized>(
         && revocations
             .is_revoked(tenant_id, parent_id)
             .await
-            .map_err(|e| EvolveTokenError::Revoked(format!("revocation lookup failed: {e}")))?
+            .map_err(|e| EvolveTokenError::RevocationLookupFailed(e.to_string()))?
     {
         return Err(EvolveTokenError::Revoked(format!(
             "ancestor {parent_id} revoked"
@@ -64,10 +64,44 @@ pub async fn verify_revocable<S: RevocationStore + ?Sized>(
 mod tests {
     use super::*;
     use crate::capability::{CapabilityToken, DefaultCapabilityTokenIssuer, EvolveTokenSigner};
+    use async_trait::async_trait;
     use sera_db::capability_revocation::{InMemoryRevocationStore, RevocationStore};
+    use sera_db::DbError;
     use sera_types::evolution::BlastRadius;
     use sera_types::principal::Principal;
     use std::collections::HashSet;
+
+    #[derive(Debug)]
+    struct FailingRevocationStore;
+
+    #[async_trait]
+    impl RevocationStore for FailingRevocationStore {
+        async fn record(
+            &self,
+            _tenant_id: &str,
+            _instance_id: &str,
+            _parent_id: Option<&str>,
+            _reason: &str,
+            _revoked_by: &str,
+        ) -> Result<bool, DbError> {
+            Err(DbError::Integrity("revocation store unavailable".to_string()))
+        }
+
+        async fn revoke_cascade(
+            &self,
+            _tenant_id: &str,
+            _instance_id: &str,
+            _parent_id: Option<&str>,
+            _reason: &str,
+            _revoked_by: &str,
+        ) -> Result<u32, DbError> {
+            Err(DbError::Integrity("revocation store unavailable".to_string()))
+        }
+
+        async fn is_revoked(&self, _tenant_id: &str, _instance_id: &str) -> Result<bool, DbError> {
+            Err(DbError::Integrity("revocation store unavailable".to_string()))
+        }
+    }
 
     fn signer_for_test() -> EvolveTokenSigner {
         EvolveTokenSigner::new(b"sera-2q6w-test-secret".to_vec())
@@ -190,5 +224,21 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, EvolveTokenError::InvalidSignature);
+    }
+
+    #[tokio::test]
+    async fn revocation_lookup_failure_is_not_reported_as_revoked() {
+        let signer = signer_for_test();
+        let tok = issue_root();
+        let store = FailingRevocationStore;
+
+        let err = verify_revocable(&signer, &tok, BlastRadius::AgentMemory, &store, "tenant-a")
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, EvolveTokenError::RevocationLookupFailed(ref msg) if msg.contains("revocation store unavailable")),
+            "expected lookup failure, got {err:?}"
+        );
     }
 }

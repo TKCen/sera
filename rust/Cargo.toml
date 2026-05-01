@@ -226,7 +226,19 @@ oci-distribution = { version = "0.11", default-features = false, features = ["ru
 # HTTP mocking (dev-only — mock OCI registry in tests)
 wiremock = "0.6"
 
+# Keep dev/test artifacts from ballooning on large dependency graphs.
+# Workspace crates retain line-table debug info; dependencies are built without
+# debuginfo, which avoids multi-GB target/deps growth while preserving useful
+# local stack traces for SERA code.
+[profile.dev]
+debug = 1
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = true
 codegen-units = 1
 strip = true
+debug = false
+incremental = false

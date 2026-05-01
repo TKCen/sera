@@ -321,6 +321,7 @@ mod tests {
                 expires_at: chrono::Utc::now(),
                 max_proposals: 10,
                 signature: [0u8; 64],
+                instance_id: None,
                 parent_id: None,
                 delegated_by: None,
                 delegation_depth: 0,

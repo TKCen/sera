@@ -34,6 +34,7 @@ use sha2::{Digest, Sha512};
 
 use sera_types::evolution::BlastRadius;
 use sera_types::principal::Principal;
+use uuid::Uuid;
 
 mod bytes64 {
     use super::*;
@@ -95,9 +96,28 @@ pub struct CapabilityToken {
     /// signature.
     #[serde(with = "bytes64")]
     pub signature: [u8; 64],
-    /// Identifier of the parent token in the delegation chain. `None` for
+    /// Unique-per-instance identifier minted at issuance and at every
+    /// `narrow` hop. Distinct from [`CapabilityToken::id`] (which is the
+    /// proposal-usage anchor and stays stable across narrow hops): two
+    /// siblings narrowed from the same parent share `id` but carry
+    /// distinct `instance_id`s, so [`CapabilityToken::parent_id`] can
+    /// point unambiguously at one specific parent for cascade-revocation
+    /// tree walks (sera-2q6w).
+    ///
+    /// `None` for tokens deserialised from the legacy chain-less wire
+    /// format that predates this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    /// Chain pointer at the parent token in the delegation tree. `None` for
     /// root tokens issued directly by [`CapabilityTokenIssuer`]; `Some` for
     /// tokens produced by [`CapabilityToken::narrow`].
+    ///
+    /// Points at the parent's [`CapabilityToken::instance_id`] when the
+    /// parent has one (the post-PR shape), and falls back to the parent's
+    /// [`CapabilityToken::id`] when the parent is a legacy token without
+    /// `instance_id`. The `instance_id` form is what makes branchy
+    /// delegation trees walkable for cascade revocation — siblings share
+    /// the parent's `id` but get distinct `instance_id`s.
     ///
     /// Legacy serialised tokens that predate this field deserialise with
     /// `parent_id = None`; the canonical bytes used for signing also remain
@@ -158,9 +178,11 @@ impl CapabilityToken {
     ///   (`sera_db::proposal_usage::ProposalUsageStore` keys counters by
     ///   `token_id`), so a delegated token must keep sharing the parent's
     ///   counter to avoid resetting the quota on every hop;
-    /// - `parent_id = Some(self.id.clone())` so the v2 canonical bytes
-    ///   carry "this token has been narrowed at least once" alongside the
-    ///   delegation_depth even when the chain stays under one anchor;
+    /// - a fresh UUID `instance_id` so siblings narrowed from the same
+    ///   parent are unambiguously distinct in cascade-revocation walks;
+    /// - `parent_id = Some(self.instance_id)` when the parent carries one
+    ///   (the post-PR root shape), falling back to `Some(self.id.clone())`
+    ///   for legacy parent tokens without an `instance_id`;
     /// - `delegated_by = Some(issuer.id.0.clone())`;
     /// - `delegation_depth = self.delegation_depth + 1`;
     /// - an all-zero signature slot — callers must re-sign before the gateway
@@ -189,6 +211,8 @@ impl CapabilityToken {
             });
         }
 
+        let parent_pointer = self.instance_id.clone().unwrap_or_else(|| self.id.clone());
+
         Ok(CapabilityToken {
             id: self.id.clone(),
             scopes,
@@ -196,18 +220,21 @@ impl CapabilityToken {
             max_proposals: self.max_proposals,
             // Narrowing invalidates the MAC — caller must re-sign.
             signature: [0u8; 64],
-            parent_id: Some(self.id.clone()),
+            instance_id: Some(Uuid::new_v4().to_string()),
+            parent_id: Some(parent_pointer),
             delegated_by: Some(issuer.id.0.clone()),
             delegation_depth: new_depth,
         })
     }
 
-    /// Whether this token participates in a delegation chain — i.e. any of
-    /// `parent_id`, `delegated_by`, or `delegation_depth` is populated. Used
-    /// by [`EvolveTokenSigner`] to decide whether to compute v1 (legacy) or
-    /// v2 (chain-aware) canonical bytes.
+    /// Whether this token has any of the v2-only fields populated — used
+    /// by [`EvolveTokenSigner`] to decide whether to compute v1 (legacy)
+    /// or v2 (chain-aware) canonical bytes. A token with only an
+    /// `instance_id` (root tokens minted post-PR) is still v2 because the
+    /// MAC must cover the instance id.
     pub fn has_chain(&self) -> bool {
-        self.parent_id.is_some()
+        self.instance_id.is_some()
+            || self.parent_id.is_some()
             || self.delegated_by.is_some()
             || self.delegation_depth != 0
     }
@@ -290,6 +317,7 @@ impl CapabilityTokenIssuer for DefaultCapabilityTokenIssuer {
             expires_at: chrono::Utc::now() + ttl_chrono,
             max_proposals,
             signature: [0u8; 64],
+            instance_id: Some(Uuid::new_v4().to_string()),
             parent_id: None,
             delegated_by: None,
             delegation_depth: 0,
@@ -582,6 +610,10 @@ impl EvolveTokenSigner {
         let mut out = Self::canonical_bytes_v1(token);
         out.extend_from_slice(Self::V2_MAGIC);
 
+        // Order is: instance_id, parent_id, delegated_by, delegation_depth.
+        // Each Option carries an explicit presence byte so None and
+        // Some("") hash distinctly (see `write_optional_str`).
+        write_optional_str(&mut out, token.instance_id.as_deref());
         write_optional_str(&mut out, token.parent_id.as_deref());
         write_optional_str(&mut out, token.delegated_by.as_deref());
 
@@ -776,6 +808,7 @@ mod tests {
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             max_proposals: 10,
             signature: [0u8; 64],
+            instance_id: None,
             parent_id: None,
             delegated_by: None,
             delegation_depth: 0,
@@ -862,8 +895,16 @@ mod tests {
     #[test]
     fn narrow_accumulates_chain_across_hops() {
         // Two consecutive narrows by two distinct issuers must record the
-        // full chain so cascade revocation can walk it.
-        let root = make_token([BlastRadius::AgentMemory]);
+        // full chain so cascade revocation can walk it. Parent pointers
+        // resolve through `instance_id`, which is unique per hop, so the
+        // chain stays unambiguous even when the (stable) `id` repeats.
+        let issuer = DefaultCapabilityTokenIssuer::new();
+        let root = issuer.issue(
+            "tok-test".to_string(),
+            [BlastRadius::AgentMemory].into_iter().collect(),
+            10,
+            std::time::Duration::from_secs(3600),
+        );
         let alice = Principal::for_agent("alice", "alice");
         let bob = Principal::for_agent("bob", "bob");
 
@@ -884,14 +925,64 @@ mod tests {
 
         assert!(root.parent_id.is_none());
         assert_eq!(root.delegation_depth, 0);
+        assert!(root.instance_id.is_some(), "issued root must mint instance_id");
 
-        assert_eq!(hop1.parent_id.as_deref(), Some(root.id.as_str()));
+        // hop1 chain pointer must resolve to the root's *instance_id*, not
+        // its `id` — siblings would otherwise be indistinguishable.
+        assert_eq!(hop1.parent_id, root.instance_id);
         assert_eq!(hop1.delegated_by.as_deref(), Some(alice.id.0.as_str()));
         assert_eq!(hop1.delegation_depth, 1);
+        assert!(hop1.instance_id.is_some());
+        assert_ne!(hop1.instance_id, root.instance_id);
 
-        assert_eq!(hop2.parent_id.as_deref(), Some(hop1.id.as_str()));
+        assert_eq!(hop2.parent_id, hop1.instance_id);
         assert_eq!(hop2.delegated_by.as_deref(), Some(bob.id.0.as_str()));
         assert_eq!(hop2.delegation_depth, 2);
+        assert!(hop2.instance_id.is_some());
+        assert_ne!(hop2.instance_id, hop1.instance_id);
+
+        // Quota anchor stays stable regardless of chain depth.
+        assert_eq!(root.id, hop1.id);
+        assert_eq!(hop1.id, hop2.id);
+    }
+
+    /// Branchy delegation tree: two siblings narrowed from the same parent
+    /// must carry distinct `instance_id`s and identical `parent_id`s, so a
+    /// cascade-revocation walker can deterministically distinguish them
+    /// even though they share the (stable) quota-anchor `id`.
+    #[test]
+    fn narrow_branchy_tree_yields_distinct_instance_ids() {
+        let issuer = DefaultCapabilityTokenIssuer::new();
+        let root = issuer.issue(
+            "tok-root".to_string(),
+            [BlastRadius::AgentMemory].into_iter().collect(),
+            10,
+            std::time::Duration::from_secs(3600),
+        );
+        let alice = Principal::for_agent("alice", "alice");
+
+        let scopes_a: HashSet<BlastRadius> =
+            [BlastRadius::AgentMemory].into_iter().collect();
+        let sibling_a = root
+            .narrow(scopes_a.clone(), &alice, 5)
+            .expect("sibling A");
+        let sibling_b = root
+            .narrow(scopes_a, &alice, 5)
+            .expect("sibling B");
+
+        // Quota anchor + parent pointer are identical between siblings…
+        assert_eq!(sibling_a.id, sibling_b.id);
+        assert_eq!(sibling_a.parent_id, sibling_b.parent_id);
+        assert_eq!(sibling_a.parent_id, root.instance_id);
+
+        // …but instance_ids are distinct, so a tree walk that follows
+        // `instance_id ← parent_id` distinguishes them.
+        assert_ne!(
+            sibling_a.instance_id, sibling_b.instance_id,
+            "siblings must be distinguishable by instance_id"
+        );
+        assert!(sibling_a.instance_id.is_some());
+        assert!(sibling_b.instance_id.is_some());
     }
 
     #[test]
@@ -998,6 +1089,12 @@ mod tests {
         );
         // Issuer leaves the signature zeroed for the gateway signer.
         assert_eq!(token.signature, [0u8; 64]);
+        // Issuer mints a fresh instance_id so the chain pointer in any
+        // future narrow hop resolves to a unique parent reference.
+        assert!(
+            token.instance_id.is_some(),
+            "issuer must mint a fresh instance_id for chain audit"
+        );
     }
 
     #[test]
@@ -1048,6 +1145,7 @@ mod tests {
             expires_at: chrono::Utc::now(),
             max_proposals: 7,
             signature: [0xABu8; 64],
+            instance_id: None,
             parent_id: None,
             delegated_by: None,
             delegation_depth: 0,
@@ -1070,6 +1168,7 @@ mod tests {
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             max_proposals: 5,
             signature: [0u8; 64],
+            instance_id: None,
             parent_id: None,
             delegated_by: None,
             delegation_depth: 0,
@@ -1359,6 +1458,7 @@ mod tests {
                     .unwrap(),
                 max_proposals: 5,
                 signature: [0u8; 64],
+                instance_id: None,
                 parent_id: parent.map(|s| s.to_string()),
                 delegated_by: by.map(|s| s.to_string()),
                 delegation_depth: 1,

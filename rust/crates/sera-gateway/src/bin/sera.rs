@@ -1786,6 +1786,17 @@ struct MvsTurnResult {
     /// can return a real cancelled outcome instead of persisting the
     /// `[sera] Runtime turn aborted` sentinel as transcript content.
     cancelled: bool,
+    /// `Some(reason)` when the transport failed (backend error or timeout)
+    /// rather than producing a real LLM reply. Used by the streaming SSE
+    /// path (sera-k8do) to detect a mid-stream runtime failure after some
+    /// `streaming_delta` frames have already been forwarded to the client:
+    /// in that case we must surface a structured `error` SSE event and
+    /// skip persisting the synthetic `[sera] Runtime error: …` reply as
+    /// the assistant transcript row, otherwise the visible stream and the
+    /// persisted history disagree (Codex review on PR #1153). `None` for
+    /// successful turns and for cancellation arms (`cancelled` already
+    /// covers the cancel case).
+    failure: Option<String>,
 }
 
 // ── Authentication ──────────────────────────────────────────────────────────
@@ -2310,6 +2321,38 @@ async fn chat_handler(
                                 // further work would be cancellable — disarm the
                                 // guard before we transition to Done.
                                 cancel_guard.disarm();
+
+                                // sera-k8do (Codex review on PR #1153): a runtime
+                                // backend error (or per-turn timeout) after some
+                                // `streaming_delta` frames have already been
+                                // forwarded to the client must surface a
+                                // structured `error` SSE event. Emitting `done`
+                                // here would tell the client the turn completed
+                                // successfully, while persisting the synthetic
+                                // `[sera] Runtime error: …` reply as the
+                                // assistant transcript row would mismatch the
+                                // partial text the user already saw streamed.
+                                // We skip persistence entirely so the next turn
+                                // does not see a misleading assistant slot.
+                                if let Some(reason) = result.failure.as_ref() {
+                                    tracing::error!(
+                                        session_id = %session_id,
+                                        agent = %agent_name,
+                                        reason = %reason,
+                                        "SSE stream interrupted by runtime failure after partial deltas; \
+                                         emitting `error` event and skipping transcript persist"
+                                    );
+                                    let payload = serde_json::json!({
+                                        "error": "runtime stream interrupted",
+                                        "reason": reason,
+                                        "session_id": session_id,
+                                        "message_id": message_id,
+                                    });
+                                    let event = Event::default()
+                                        .event("error")
+                                        .data(payload.to_string());
+                                    return Some((Some(Ok(event)), StreamState::Done));
+                                }
 
                                 // sera-mplr: a `POST /api/chat/cancel` for this
                                 // session set `client_cancelled` and fired the cancel
@@ -2944,6 +2987,7 @@ async fn execute_turn(
                     total_tokens: 0,
                 },
                 cancelled: true,
+                failure: None,
             }
         }
         res = tokio::time::timeout(timeout, send_fut) => match res {
@@ -2959,6 +3003,7 @@ async fn execute_turn(
                     tool_events: filtered_events,
                     usage: events.usage,
                     cancelled: false,
+                    failure: None,
                 }
             }
             Ok(Err(e)) => {
@@ -2979,6 +3024,7 @@ async fn execute_turn(
                         total_tokens: 0,
                     },
                     cancelled: false,
+                    failure: Some(err_msg),
                 }
             }
             Err(_elapsed) => {
@@ -2987,6 +3033,8 @@ async fn execute_turn(
                     timeout_secs = timeout.as_secs(),
                     "Runtime harness turn timed out; releasing lane"
                 );
+                let timeout_msg =
+                    format!("runtime turn timed out after {}s", timeout.as_secs());
                 MvsTurnResult {
                     reply: format!("[sera] Runtime timed out after {}s", timeout.as_secs()),
                     tool_events: vec![],
@@ -2996,6 +3044,7 @@ async fn execute_turn(
                         total_tokens: 0,
                     },
                     cancelled: false,
+                    failure: Some(timeout_msg),
                 }
             }
         }
@@ -3143,6 +3192,7 @@ async fn execute_steer(
                     total_tokens: 0,
                 },
                 cancelled: true,
+                failure: None,
             }
         }
         res = tokio::time::timeout(timeout, transport.send_steer(items, session_key)) => match res {
@@ -3155,6 +3205,7 @@ async fn execute_steer(
                     total_tokens: 0,
                 },
                 cancelled: false,
+                failure: None,
             },
             Ok(Err(e)) => {
                 tracing::error!(
@@ -3171,6 +3222,7 @@ async fn execute_steer(
                         total_tokens: 0,
                     },
                     cancelled: false,
+                    failure: None,
                 }
             }
             Err(_elapsed) => {
@@ -3188,6 +3240,7 @@ async fn execute_steer(
                         total_tokens: 0,
                     },
                     cancelled: false,
+                    failure: None,
                 }
             }
         }
@@ -7749,6 +7802,161 @@ spec:
             total_elapsed > Duration::from_millis(1500),
             "full turn must take >1.5s for the timing assertion to be \
              meaningful; got {total_elapsed:?}"
+        );
+    }
+
+    /// sera-k8do (Codex review on PR #1153): mid-stream runtime error
+    /// regression test.
+    ///
+    /// Asserts that when the runtime emits one or more `streaming_delta`
+    /// frames and then errors out (e.g. an upstream provider failure or
+    /// the runtime "error" NDJSON frame), the SSE client sees the
+    /// already-streamed deltas followed by a structured `event: error`
+    /// frame, **not** a `done`. The transcript must not record an
+    /// assistant row — neither the partial text nor the synthetic
+    /// `[sera] Runtime error: …` placeholder — so a follow-up turn does
+    /// not see a misleading assistant slot in history.
+    ///
+    /// Without the fix, `execute_turn` returns a non-empty synthetic
+    /// reply, the empty-reply guard does not trip, the unfold persists
+    /// the synthetic string as the assistant transcript row and emits
+    /// `done` — visible stream output and persisted transcript disagree.
+    #[tokio::test]
+    async fn sse_runtime_error_after_partial_deltas_emits_error_event_and_skips_transcript_persist()
+    {
+        use async_trait::async_trait;
+        use serde_json::Value;
+        use std::time::Duration;
+        use tokio::sync::mpsc::UnboundedSender;
+
+        struct FailingMidStreamTransport;
+
+        #[async_trait]
+        impl AgentTurnTransport for FailingMidStreamTransport {
+            async fn send_turn(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                anyhow::bail!("simulated upstream provider error")
+            }
+
+            async fn send_turn_streaming(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+                delta_tx: UnboundedSender<String>,
+            ) -> anyhow::Result<TurnEvents> {
+                // Forward one real delta first — proves the failure
+                // path runs *after* visible streaming has begun.
+                let _ = delta_tx.send("Hello ".to_string());
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                anyhow::bail!("simulated upstream provider error")
+            }
+
+            async fn send_steer(
+                &self,
+                _items: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut state = test_state_async().await;
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert(
+                "sera".to_string(),
+                Arc::new(FailingMidStreamTransport) as Arc<dyn AgentTurnTransport>,
+            );
+
+        // Capture the session id up front; `get_or_create_session` is
+        // idempotent so the chat handler will dispatch the turn against
+        // the same row we inspect afterwards.
+        let session_id = {
+            let db = state.db.lock().await;
+            db.get_or_create_session("sera")
+                .expect("get_or_create_session ok")
+                .id
+        };
+
+        let app = build_router(Arc::clone(&state));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "hi", "stream": true })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Drain the body with a 5s ceiling. The stream must end on its own.
+        let body_bytes = tokio::time::timeout(
+            Duration::from_secs(5),
+            axum::body::to_bytes(response.into_body(), 64 * 1024),
+        )
+        .await
+        .expect("SSE body must terminate after mid-stream runtime error")
+        .expect("body bytes");
+        let body_str = std::str::from_utf8(&body_bytes).unwrap_or("");
+
+        // Visible stream: one `message` (the "Hello " delta) and exactly
+        // one `error` event; no `done`.
+        assert_eq!(
+            body_str.matches("event: message").count(),
+            1,
+            "expected exactly one streamed delta before the failure; body: {body_str}"
+        );
+        assert!(
+            body_str.contains("\"delta\":\"Hello \""),
+            "the streamed delta must be the real partial text; body: {body_str}"
+        );
+        assert!(
+            body_str.contains("event: error"),
+            "expected a structured `error` SSE event; body: {body_str}"
+        );
+        assert!(
+            body_str.contains("runtime stream interrupted"),
+            "error payload must surface the failure reason; body: {body_str}"
+        );
+        assert!(
+            !body_str.contains("event: done"),
+            "must NOT emit `done` after a mid-stream runtime failure; body: {body_str}"
+        );
+
+        // Transcript: the user message must persist, but no assistant
+        // row may exist — neither the partial "Hello " nor the synthetic
+        // "[sera] Runtime error: …" placeholder.
+        let rows = {
+            let db = state.db.lock().await;
+            db.get_transcript(&session_id).expect("get transcript")
+        };
+        let assistant_rows: Vec<_> =
+            rows.iter().filter(|r| r.role == "assistant").collect();
+        assert!(
+            assistant_rows.is_empty(),
+            "no assistant transcript row should be persisted on mid-stream \
+             runtime failure; got: {assistant_rows:?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.role == "user"),
+            "the user message must still be persisted; got rows: {rows:?}"
         );
     }
 

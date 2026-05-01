@@ -262,6 +262,9 @@ mod tests {
                 expires_at: chrono::Utc::now(),
                 max_proposals: 10,
                 signature: [0u8; 64],
+                parent_id: None,
+                delegated_by: None,
+                delegation_depth: 0,
             },
         };
         let mut artifact = ChangeArtifact::new(
@@ -289,6 +292,9 @@ mod tests {
                 expires_at: chrono::Utc::now(),
                 max_proposals: 10,
                 signature: [0u8; 64],
+                parent_id: None,
+                delegated_by: None,
+                delegation_depth: 0,
             },
         };
         let mut artifact = ChangeArtifact::new(

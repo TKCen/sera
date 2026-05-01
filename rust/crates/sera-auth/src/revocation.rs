@@ -65,8 +65,8 @@ mod tests {
     use super::*;
     use crate::capability::{CapabilityToken, DefaultCapabilityTokenIssuer, EvolveTokenSigner};
     use async_trait::async_trait;
-    use sera_db::capability_revocation::{InMemoryRevocationStore, RevocationStore};
     use sera_db::DbError;
+    use sera_db::capability_revocation::{InMemoryRevocationStore, RevocationStore};
     use sera_types::evolution::BlastRadius;
     use sera_types::principal::Principal;
     use std::collections::HashSet;
@@ -84,7 +84,9 @@ mod tests {
             _reason: &str,
             _revoked_by: &str,
         ) -> Result<bool, DbError> {
-            Err(DbError::Integrity("revocation store unavailable".to_string()))
+            Err(DbError::Integrity(
+                "revocation store unavailable".to_string(),
+            ))
         }
 
         async fn revoke_cascade(
@@ -95,11 +97,15 @@ mod tests {
             _reason: &str,
             _revoked_by: &str,
         ) -> Result<u32, DbError> {
-            Err(DbError::Integrity("revocation store unavailable".to_string()))
+            Err(DbError::Integrity(
+                "revocation store unavailable".to_string(),
+            ))
         }
 
         async fn is_revoked(&self, _tenant_id: &str, _instance_id: &str) -> Result<bool, DbError> {
-            Err(DbError::Integrity("revocation store unavailable".to_string()))
+            Err(DbError::Integrity(
+                "revocation store unavailable".to_string(),
+            ))
         }
     }
 
@@ -135,8 +141,8 @@ mod tests {
         let signer = signer_for_test();
         let tok = issue_root();
         let store = InMemoryRevocationStore::new();
-        let result = verify_revocable(&signer, &tok, BlastRadius::AgentMemory, &store, "tenant-a")
-            .await;
+        let result =
+            verify_revocable(&signer, &tok, BlastRadius::AgentMemory, &store, "tenant-a").await;
         assert!(result.is_ok(), "unrevoked token must verify: {result:?}");
     }
 
@@ -145,7 +151,10 @@ mod tests {
         let signer = signer_for_test();
         let tok = issue_root();
         let store = InMemoryRevocationStore::new();
-        let instance = tok.instance_id.clone().expect("issued tokens carry instance_id");
+        let instance = tok
+            .instance_id
+            .clone()
+            .expect("issued tokens carry instance_id");
         store
             .revoke_cascade("tenant-a", &instance, None, "operator request", "admin")
             .await
@@ -193,6 +202,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cascade_persistence_rejects_grandchild_by_instance_id() {
+        let signer = signer_for_test();
+        let root = issue_root();
+        let alice = Principal::for_agent("alice", "alice");
+        let bob = Principal::for_agent("bob", "bob");
+        let child = narrow_signed(&root, &alice);
+        let grandchild = narrow_signed(&child, &bob);
+
+        let root_instance = root.instance_id.clone().unwrap();
+        let child_instance = child.instance_id.clone().unwrap();
+        let grandchild_instance = grandchild.instance_id.clone().unwrap();
+
+        let store = InMemoryRevocationStore::new();
+        store
+            .record(
+                "tenant-a",
+                &child_instance,
+                Some(&root_instance),
+                "chain metadata",
+                "issuer",
+            )
+            .await
+            .unwrap();
+        store
+            .record(
+                "tenant-a",
+                &grandchild_instance,
+                Some(&child_instance),
+                "chain metadata",
+                "issuer",
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            !store
+                .is_revoked("tenant-a", &grandchild_instance)
+                .await
+                .unwrap()
+        );
+
+        store
+            .revoke_cascade("tenant-a", &root_instance, None, "compromise", "admin")
+            .await
+            .unwrap();
+
+        let err = verify_revocable(
+            &signer,
+            &grandchild,
+            BlastRadius::AgentMemory,
+            &store,
+            "tenant-a",
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err, EvolveTokenError::Revoked(grandchild_instance));
+    }
+
+    #[tokio::test]
     async fn revocation_in_other_tenant_does_not_reject() {
         let signer = signer_for_test();
         let tok = issue_root();
@@ -202,8 +271,8 @@ mod tests {
             .revoke_cascade("tenant-other", &instance, None, "admin", "op")
             .await
             .unwrap();
-        let result = verify_revocable(&signer, &tok, BlastRadius::AgentMemory, &store, "tenant-a")
-            .await;
+        let result =
+            verify_revocable(&signer, &tok, BlastRadius::AgentMemory, &store, "tenant-a").await;
         assert!(result.is_ok(), "cross-tenant revocations must not bleed");
     }
 

@@ -33,6 +33,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha512};
 
 use sera_types::evolution::BlastRadius;
+use sera_types::principal::Principal;
+use uuid::Uuid;
 
 mod bytes64 {
     use super::*;
@@ -94,6 +96,49 @@ pub struct CapabilityToken {
     /// signature.
     #[serde(with = "bytes64")]
     pub signature: [u8; 64],
+    /// Unique-per-instance identifier minted at issuance and at every
+    /// `narrow` hop. Distinct from [`CapabilityToken::id`] (which is the
+    /// proposal-usage anchor and stays stable across narrow hops): two
+    /// siblings narrowed from the same parent share `id` but carry
+    /// distinct `instance_id`s, so [`CapabilityToken::parent_id`] can
+    /// point unambiguously at one specific parent for cascade-revocation
+    /// tree walks (sera-2q6w).
+    ///
+    /// `None` for tokens deserialised from the legacy chain-less wire
+    /// format that predates this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    /// Chain pointer at the parent token in the delegation tree. `None` for
+    /// root tokens issued directly by [`CapabilityTokenIssuer`]; `Some` for
+    /// tokens produced by [`CapabilityToken::narrow`].
+    ///
+    /// Points at the parent's [`CapabilityToken::instance_id`] when the
+    /// parent has one (the post-PR shape), and falls back to the parent's
+    /// [`CapabilityToken::id`] when the parent is a legacy token without
+    /// `instance_id`. The `instance_id` form is what makes branchy
+    /// delegation trees walkable for cascade revocation — siblings share
+    /// the parent's `id` but get distinct `instance_id`s.
+    ///
+    /// Legacy serialised tokens that predate this field deserialise with
+    /// `parent_id = None`; the canonical bytes used for signing also remain
+    /// the v1 layout when no chain field is set, so previously-signed tokens
+    /// keep verifying.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// Principal id (`Principal::id.0`) of the issuer that performed the
+    /// most recent narrow. Captures **who** delegated authority through this
+    /// hop. `None` for root tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_by: Option<String>,
+    /// Hop count along the delegation chain. `0` for root tokens; each
+    /// `narrow` increments by one and is bounded by the configured policy
+    /// limit (see [`CapabilityToken::narrow`]).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub delegation_depth: u32,
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 /// Errors that can occur when using or narrowing a CapabilityToken.
@@ -107,26 +152,66 @@ pub enum CapabilityTokenError {
     Expired,
     #[error("proposal limit exhausted: limit={limit}")]
     ProposalLimitExhausted { limit: u32 },
+    /// The narrow would push the chain past the policy's
+    /// `max_delegation_depth`. `attempted` is the depth the new token would
+    /// have carried; `max` is the policy ceiling.
+    #[error("delegation depth exceeded: max={max}, attempted={attempted}")]
+    DepthExceeded { max: u32, attempted: u32 },
 }
 
 impl CapabilityToken {
-    /// Narrow this token to a smaller set of scopes.
+    /// Narrow this token to a smaller set of scopes and stamp the next hop
+    /// of the delegation chain.
+    ///
+    /// `issuer` is the principal performing the narrow — recorded as
+    /// `delegated_by` on the new token. `max_depth` is the configured
+    /// `PrincipalPolicy::max_delegation_depth` for the issuer; the new
+    /// token's `delegation_depth = self.delegation_depth + 1` and the
+    /// operation is rejected with [`CapabilityTokenError::DepthExceeded`]
+    /// when that increment would exceed the cap.
     ///
     /// Every requested scope must already be in `self.scopes`; any scope not
     /// already held results in [`CapabilityTokenError::WideningAttempt`].
     ///
-    /// Returns a new token with the narrowed scope and a fresh signature slot
-    /// (all-zero — callers must re-sign before the gateway will accept it).
-    /// The original is unchanged.
+    /// The returned token carries:
+    /// - the parent's `id` verbatim — `id` is the proposal-usage anchor
+    ///   (`sera_db::proposal_usage::ProposalUsageStore` keys counters by
+    ///   `token_id`), so a delegated token must keep sharing the parent's
+    ///   counter to avoid resetting the quota on every hop;
+    /// - a fresh UUID `instance_id` so siblings narrowed from the same
+    ///   parent are unambiguously distinct in cascade-revocation walks;
+    /// - `parent_id = Some(self.instance_id)` when the parent carries one
+    ///   (the post-PR root shape), falling back to `Some(self.id.clone())`
+    ///   for legacy parent tokens without an `instance_id`;
+    /// - `delegated_by = Some(issuer.id.0.clone())`;
+    /// - `delegation_depth = self.delegation_depth + 1`;
+    /// - an all-zero signature slot — callers must re-sign before the gateway
+    ///   will accept it. The signer's canonical bytes automatically switch to
+    ///   the v2 layout (which covers the chain fields) when any chain field
+    ///   is populated.
+    ///
+    /// The original token is unchanged.
     pub fn narrow(
         &self,
         scopes: HashSet<BlastRadius>,
+        issuer: &Principal,
+        max_depth: u32,
     ) -> Result<CapabilityToken, CapabilityTokenError> {
         for scope in &scopes {
             if !self.scopes.contains(scope) {
                 return Err(CapabilityTokenError::WideningAttempt);
             }
         }
+
+        let new_depth = self.delegation_depth.saturating_add(1);
+        if new_depth > max_depth {
+            return Err(CapabilityTokenError::DepthExceeded {
+                max: max_depth,
+                attempted: new_depth,
+            });
+        }
+
+        let parent_pointer = self.instance_id.clone().unwrap_or_else(|| self.id.clone());
 
         Ok(CapabilityToken {
             id: self.id.clone(),
@@ -135,7 +220,23 @@ impl CapabilityToken {
             max_proposals: self.max_proposals,
             // Narrowing invalidates the MAC — caller must re-sign.
             signature: [0u8; 64],
+            instance_id: Some(Uuid::new_v4().to_string()),
+            parent_id: Some(parent_pointer),
+            delegated_by: Some(issuer.id.0.clone()),
+            delegation_depth: new_depth,
         })
+    }
+
+    /// Whether this token has any of the v2-only fields populated — used
+    /// by [`EvolveTokenSigner`] to decide whether to compute v1 (legacy)
+    /// or v2 (chain-aware) canonical bytes. A token with only an
+    /// `instance_id` (root tokens minted post-PR) is still v2 because the
+    /// MAC must cover the instance id.
+    pub fn has_chain(&self) -> bool {
+        self.instance_id.is_some()
+            || self.parent_id.is_some()
+            || self.delegated_by.is_some()
+            || self.delegation_depth != 0
     }
 
     /// Check whether this token holds the given scope.
@@ -216,6 +317,10 @@ impl CapabilityTokenIssuer for DefaultCapabilityTokenIssuer {
             expires_at: chrono::Utc::now() + ttl_chrono,
             max_proposals,
             signature: [0u8; 64],
+            instance_id: Some(Uuid::new_v4().to_string()),
+            parent_id: None,
+            delegated_by: None,
+            delegation_depth: 0,
         }
     }
 }
@@ -453,7 +558,28 @@ impl EvolveTokenSigner {
 
     /// Compute the canonical bytes for a token (everything except the
     /// signature field itself).
+    ///
+    /// Dispatches between two layouts so legacy tokens keep verifying:
+    /// - **v1** — the byte-identical layout shipped before the delegation
+    ///   chain fields existed. Used when [`CapabilityToken::has_chain`] is
+    ///   `false` (no chain fields populated). Already-signed tokens in the
+    ///   wild were signed over these bytes; this branch keeps them
+    ///   verifiable indefinitely.
+    /// - **v2** — v1 bytes followed by a magic separator and the
+    ///   length-prefixed chain fields. Used when any of `parent_id`,
+    ///   `delegated_by`, or `delegation_depth` is populated. The separator
+    ///   is byte-disjoint from a v1 trailer (which always ends with a
+    ///   `u32 max_proposals`), so a v1-signed token cannot be silently
+    ///   re-interpreted as v2.
     fn canonical_bytes(token: &CapabilityToken) -> Vec<u8> {
+        if token.has_chain() {
+            Self::canonical_bytes_v2(token)
+        } else {
+            Self::canonical_bytes_v1(token)
+        }
+    }
+
+    fn canonical_bytes_v1(token: &CapabilityToken) -> Vec<u8> {
         let mut out = Vec::with_capacity(64 + token.id.len());
 
         let id_bytes = token.id.as_bytes();
@@ -471,6 +597,27 @@ impl EvolveTokenSigner {
 
         out.extend_from_slice(&token.expires_at.timestamp_millis().to_le_bytes());
         out.extend_from_slice(&token.max_proposals.to_le_bytes());
+
+        out
+    }
+
+    /// Magic separator pinning the v2 canonical-bytes layout. Lives outside
+    /// the v1 payload so a hand-crafted v1 token whose `max_proposals`
+    /// happens to look like the chain trailer cannot impersonate v2.
+    const V2_MAGIC: &'static [u8] = b"sera-cap-v2";
+
+    fn canonical_bytes_v2(token: &CapabilityToken) -> Vec<u8> {
+        let mut out = Self::canonical_bytes_v1(token);
+        out.extend_from_slice(Self::V2_MAGIC);
+
+        // Order is: instance_id, parent_id, delegated_by, delegation_depth.
+        // Each Option carries an explicit presence byte so None and
+        // Some("") hash distinctly (see `write_optional_str`).
+        write_optional_str(&mut out, token.instance_id.as_deref());
+        write_optional_str(&mut out, token.parent_id.as_deref());
+        write_optional_str(&mut out, token.delegated_by.as_deref());
+
+        out.extend_from_slice(&token.delegation_depth.to_le_bytes());
 
         out
     }
@@ -589,6 +736,23 @@ impl EvolveTokenSigner {
     }
 }
 
+/// Injective encoding of an optional string into MAC bytes.
+///
+/// Emits a 1-byte presence tag (`0x00` for `None`, `0x01` for `Some`) followed
+/// — only for `Some` — by a `u32` LE length prefix and the UTF-8 body. This
+/// keeps `None` and `Some("")` byte-distinct so a v2-signed token cannot have
+/// its chain-pointer optionality flipped without invalidating the MAC.
+fn write_optional_str(out: &mut Vec<u8>, value: Option<&str>) {
+    match value {
+        None => out.push(0x00),
+        Some(s) => {
+            out.push(0x01);
+            out.extend_from_slice(&(s.len() as u32).to_le_bytes());
+            out.extend_from_slice(s.as_bytes());
+        }
+    }
+}
+
 fn constant_time_eq_64(a: &[u8; 64], b: &[u8; 64]) -> bool {
     let mut acc: u8 = 0;
     for i in 0..64 {
@@ -644,19 +808,75 @@ mod tests {
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             max_proposals: 10,
             signature: [0u8; 64],
+            instance_id: None,
+            parent_id: None,
+            delegated_by: None,
+            delegation_depth: 0,
         }
+    }
+
+    fn test_issuer() -> Principal {
+        Principal::for_agent("alice", "alice")
     }
 
     #[test]
     fn narrow_subset_succeeds() {
         let token = make_token([BlastRadius::AgentMemory, BlastRadius::SingleHookConfig]);
         let narrowed = token
-            .narrow([BlastRadius::AgentMemory].into_iter().collect())
+            .narrow(
+                [BlastRadius::AgentMemory].into_iter().collect(),
+                &test_issuer(),
+                5,
+            )
             .expect("narrow should succeed");
         assert!(narrowed.has(BlastRadius::AgentMemory));
         assert!(!narrowed.has(BlastRadius::SingleHookConfig));
         // Narrowing must reset the signature so the gateway re-signs.
         assert_eq!(narrowed.signature, [0u8; 64]);
+        // Chain stamping.
+        assert_eq!(narrowed.parent_id.as_deref(), Some("tok-test"));
+        assert_eq!(
+            narrowed.delegated_by.as_deref(),
+            Some(test_issuer().id.0.as_str())
+        );
+        assert_eq!(narrowed.delegation_depth, 1);
+        // `id` is the proposal-usage anchor and MUST stay stable across
+        // narrow — minting a fresh id would let a caller reset the quota
+        // counter (`sera_db::proposal_usage::ProposalUsageStore` keys by
+        // `token_id`) on every delegation hop.
+        assert_eq!(narrowed.id, token.id, "narrow must preserve the quota anchor id");
+    }
+
+    #[test]
+    fn narrow_preserves_proposal_usage_anchor_across_hops() {
+        // Quota counters live in `proposal_usage` keyed by `token_id`. A
+        // root token and every descendant produced by repeated narrow must
+        // share the same `id` so they share the counter — otherwise a
+        // caller could narrow once per call and bypass `max_proposals`.
+        let root = make_token([BlastRadius::AgentMemory]);
+        let alice = Principal::for_agent("alice", "alice");
+        let bob = Principal::for_agent("bob", "bob");
+
+        let hop1 = root
+            .narrow(
+                [BlastRadius::AgentMemory].into_iter().collect(),
+                &alice,
+                5,
+            )
+            .expect("hop1");
+        let hop2 = hop1
+            .narrow(
+                [BlastRadius::AgentMemory].into_iter().collect(),
+                &bob,
+                5,
+            )
+            .expect("hop2");
+
+        assert_eq!(root.id, hop1.id, "hop1 must share the root's quota id");
+        assert_eq!(hop1.id, hop2.id, "hop2 must share the root's quota id");
+        // max_proposals also carries forward unchanged so the budget is
+        // shared, not re-granted.
+        assert_eq!(root.max_proposals, hop2.max_proposals);
     }
 
     #[test]
@@ -666,8 +886,152 @@ mod tests {
             [BlastRadius::AgentMemory, BlastRadius::SingleHookConfig]
                 .into_iter()
                 .collect(),
+            &test_issuer(),
+            5,
         );
         assert_eq!(result.unwrap_err(), CapabilityTokenError::WideningAttempt);
+    }
+
+    #[test]
+    fn narrow_accumulates_chain_across_hops() {
+        // Two consecutive narrows by two distinct issuers must record the
+        // full chain so cascade revocation can walk it. Parent pointers
+        // resolve through `instance_id`, which is unique per hop, so the
+        // chain stays unambiguous even when the (stable) `id` repeats.
+        let issuer = DefaultCapabilityTokenIssuer::new();
+        let root = issuer.issue(
+            "tok-test".to_string(),
+            [BlastRadius::AgentMemory].into_iter().collect(),
+            10,
+            std::time::Duration::from_secs(3600),
+        );
+        let alice = Principal::for_agent("alice", "alice");
+        let bob = Principal::for_agent("bob", "bob");
+
+        let hop1 = root
+            .narrow(
+                [BlastRadius::AgentMemory].into_iter().collect(),
+                &alice,
+                5,
+            )
+            .expect("hop1 should succeed");
+        let hop2 = hop1
+            .narrow(
+                [BlastRadius::AgentMemory].into_iter().collect(),
+                &bob,
+                5,
+            )
+            .expect("hop2 should succeed");
+
+        assert!(root.parent_id.is_none());
+        assert_eq!(root.delegation_depth, 0);
+        assert!(root.instance_id.is_some(), "issued root must mint instance_id");
+
+        // hop1 chain pointer must resolve to the root's *instance_id*, not
+        // its `id` — siblings would otherwise be indistinguishable.
+        assert_eq!(hop1.parent_id, root.instance_id);
+        assert_eq!(hop1.delegated_by.as_deref(), Some(alice.id.0.as_str()));
+        assert_eq!(hop1.delegation_depth, 1);
+        assert!(hop1.instance_id.is_some());
+        assert_ne!(hop1.instance_id, root.instance_id);
+
+        assert_eq!(hop2.parent_id, hop1.instance_id);
+        assert_eq!(hop2.delegated_by.as_deref(), Some(bob.id.0.as_str()));
+        assert_eq!(hop2.delegation_depth, 2);
+        assert!(hop2.instance_id.is_some());
+        assert_ne!(hop2.instance_id, hop1.instance_id);
+
+        // Quota anchor stays stable regardless of chain depth.
+        assert_eq!(root.id, hop1.id);
+        assert_eq!(hop1.id, hop2.id);
+    }
+
+    /// Branchy delegation tree: two siblings narrowed from the same parent
+    /// must carry distinct `instance_id`s and identical `parent_id`s, so a
+    /// cascade-revocation walker can deterministically distinguish them
+    /// even though they share the (stable) quota-anchor `id`.
+    #[test]
+    fn narrow_branchy_tree_yields_distinct_instance_ids() {
+        let issuer = DefaultCapabilityTokenIssuer::new();
+        let root = issuer.issue(
+            "tok-root".to_string(),
+            [BlastRadius::AgentMemory].into_iter().collect(),
+            10,
+            std::time::Duration::from_secs(3600),
+        );
+        let alice = Principal::for_agent("alice", "alice");
+
+        let scopes_a: HashSet<BlastRadius> =
+            [BlastRadius::AgentMemory].into_iter().collect();
+        let sibling_a = root
+            .narrow(scopes_a.clone(), &alice, 5)
+            .expect("sibling A");
+        let sibling_b = root
+            .narrow(scopes_a, &alice, 5)
+            .expect("sibling B");
+
+        // Quota anchor + parent pointer are identical between siblings…
+        assert_eq!(sibling_a.id, sibling_b.id);
+        assert_eq!(sibling_a.parent_id, sibling_b.parent_id);
+        assert_eq!(sibling_a.parent_id, root.instance_id);
+
+        // …but instance_ids are distinct, so a tree walk that follows
+        // `instance_id ← parent_id` distinguishes them.
+        assert_ne!(
+            sibling_a.instance_id, sibling_b.instance_id,
+            "siblings must be distinguishable by instance_id"
+        );
+        assert!(sibling_a.instance_id.is_some());
+        assert!(sibling_b.instance_id.is_some());
+    }
+
+    #[test]
+    fn narrow_rejects_when_depth_would_exceed_policy() {
+        // depth=1 already; max_depth=1 → next hop would be depth=2 → reject.
+        let mut token = make_token([BlastRadius::AgentMemory]);
+        token.delegation_depth = 1;
+        token.parent_id = Some("root".to_string());
+        token.delegated_by = Some("agent:root-issuer".to_string());
+
+        let err = token
+            .narrow(
+                [BlastRadius::AgentMemory].into_iter().collect(),
+                &test_issuer(),
+                1,
+            )
+            .expect_err("must reject narrow past max_depth");
+        assert_eq!(
+            err,
+            CapabilityTokenError::DepthExceeded { max: 1, attempted: 2 }
+        );
+
+        // Bumping the cap to 2 must let the same narrow through.
+        let next = token
+            .narrow(
+                [BlastRadius::AgentMemory].into_iter().collect(),
+                &test_issuer(),
+                2,
+            )
+            .expect("narrow at the cap must succeed");
+        assert_eq!(next.delegation_depth, 2);
+    }
+
+    #[test]
+    fn narrow_rejects_when_root_max_depth_is_zero() {
+        // Default-deny policies (ExternalAgent / Service) carry depth 0;
+        // no hop is allowed at all.
+        let token = make_token([BlastRadius::AgentMemory]);
+        let err = token
+            .narrow(
+                [BlastRadius::AgentMemory].into_iter().collect(),
+                &test_issuer(),
+                0,
+            )
+            .expect_err("max_depth=0 must forbid all narrows");
+        assert_eq!(
+            err,
+            CapabilityTokenError::DepthExceeded { max: 0, attempted: 1 }
+        );
     }
 
     #[test]
@@ -725,6 +1089,12 @@ mod tests {
         );
         // Issuer leaves the signature zeroed for the gateway signer.
         assert_eq!(token.signature, [0u8; 64]);
+        // Issuer mints a fresh instance_id so the chain pointer in any
+        // future narrow hop resolves to a unique parent reference.
+        assert!(
+            token.instance_id.is_some(),
+            "issuer must mint a fresh instance_id for chain audit"
+        );
     }
 
     #[test]
@@ -775,6 +1145,10 @@ mod tests {
             expires_at: chrono::Utc::now(),
             max_proposals: 7,
             signature: [0xABu8; 64],
+            instance_id: None,
+            parent_id: None,
+            delegated_by: None,
+            delegation_depth: 0,
         };
 
         let json = serde_json::to_string(&token).expect("serialize");
@@ -794,6 +1168,10 @@ mod tests {
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             max_proposals: 5,
             signature: [0u8; 64],
+            instance_id: None,
+            parent_id: None,
+            delegated_by: None,
+            delegation_depth: 0,
         }
     }
 
@@ -935,5 +1313,229 @@ mod tests {
         tok_b.id = "file-tok-b".to_string();
         signer.sign(&mut tok_b);
         assert_eq!(signer.verify(&tok_b, BlastRadius::GatewayCore), Ok(()));
+    }
+
+    // ── v1 / v2 canonical-bytes coexistence (sera-s64j) ──────────────────
+
+    /// A chain-less token signs / verifies under the v1 canonical-bytes
+    /// layout — bit-identical to what was shipped before the chain fields
+    /// existed, so already-signed tokens keep working.
+    #[test]
+    fn signer_v1_canonical_bytes_used_for_chainless_tokens() {
+        let signer = EvolveTokenSigner::new(b"k".to_vec());
+        let mut tok = signer_token(&[BlastRadius::AgentMemory]);
+        // Sanity: nothing on the chain.
+        assert!(!tok.has_chain());
+
+        signer.sign(&mut tok);
+        assert_eq!(signer.verify(&tok, BlastRadius::AgentMemory), Ok(()));
+
+        // The bytes the signer fed into HMAC must equal the v1 layout
+        // exactly (no v2 magic, no chain trailer).
+        let bytes = EvolveTokenSigner::canonical_bytes(&tok);
+        let v1 = EvolveTokenSigner::canonical_bytes_v1(&tok);
+        assert_eq!(bytes, v1);
+        assert!(
+            !bytes.windows(EvolveTokenSigner::V2_MAGIC.len())
+                .any(|w| w == EvolveTokenSigner::V2_MAGIC),
+            "v1 bytes must not carry the v2 magic"
+        );
+    }
+
+    /// A chained token signs / verifies under the v2 canonical-bytes
+    /// layout — the chain fields are MAC-covered so any post-hoc tamper
+    /// fails verification.
+    #[test]
+    fn signer_v2_canonical_bytes_cover_chain_fields() {
+        let signer = EvolveTokenSigner::new(b"k".to_vec());
+        let root = signer_token(&[BlastRadius::AgentMemory]);
+        let issuer = Principal::for_agent("alice", "alice");
+        let mut narrowed = root
+            .narrow(
+                [BlastRadius::AgentMemory].into_iter().collect(),
+                &issuer,
+                3,
+            )
+            .expect("narrow");
+
+        assert!(narrowed.has_chain(), "narrowed token must report a chain");
+
+        signer.sign(&mut narrowed);
+        assert_eq!(signer.verify(&narrowed, BlastRadius::AgentMemory), Ok(()));
+
+        // v2 bytes must include the magic separator and the chain fields.
+        let bytes = EvolveTokenSigner::canonical_bytes(&narrowed);
+        assert!(
+            bytes.windows(EvolveTokenSigner::V2_MAGIC.len())
+                .any(|w| w == EvolveTokenSigner::V2_MAGIC),
+            "v2 bytes must carry the magic separator"
+        );
+
+        // Tampering with delegation_depth post-signature must invalidate
+        // the MAC — the chain field is part of canonical bytes.
+        let mut tampered = narrowed.clone();
+        tampered.delegation_depth = tampered.delegation_depth.saturating_add(1);
+        assert_eq!(
+            signer.verify(&tampered, BlastRadius::AgentMemory),
+            Err(EvolveTokenError::InvalidSignature),
+            "depth tamper must invalidate v2 MAC"
+        );
+
+        // Tampering with delegated_by similarly fails.
+        let mut tampered2 = narrowed.clone();
+        tampered2.delegated_by = Some("agent:eve".to_string());
+        assert_eq!(
+            signer.verify(&tampered2, BlastRadius::AgentMemory),
+            Err(EvolveTokenError::InvalidSignature),
+            "delegated_by tamper must invalidate v2 MAC"
+        );
+    }
+
+    /// Chain-less and chained tokens coexist under the same signer key.
+    /// A v1 (chain-less) token signed before the chain fields existed
+    /// keeps verifying alongside freshly-issued v2 tokens. This is the
+    /// load-bearing backwards-compat property for sera-s64j.
+    #[test]
+    fn signer_v1_v2_coexist_under_same_key() {
+        let signer = EvolveTokenSigner::new(b"shared".to_vec());
+
+        // v1 token: legacy shape, no chain.
+        let mut v1_tok = signer_token(&[BlastRadius::AgentMemory]);
+        signer.sign(&mut v1_tok);
+        let v1_sig = v1_tok.signature;
+
+        // v2 token: chain-equipped.
+        let issuer = Principal::for_agent("alice", "alice");
+        let mut v2_tok = v1_tok
+            .narrow(
+                [BlastRadius::AgentMemory].into_iter().collect(),
+                &issuer,
+                5,
+            )
+            .expect("narrow");
+        signer.sign(&mut v2_tok);
+        let v2_sig = v2_tok.signature;
+
+        // Both verify.
+        assert_eq!(signer.verify(&v1_tok, BlastRadius::AgentMemory), Ok(()));
+        assert_eq!(signer.verify(&v2_tok, BlastRadius::AgentMemory), Ok(()));
+
+        // The signatures are distinct — different canonical bytes.
+        assert_ne!(v1_sig, v2_sig);
+
+        // Cross-promotion is rejected: copying the v1 signature onto a token
+        // that has chain fields populated must fail (the verifier sees the
+        // chain, computes v2 bytes, and the v1 MAC won't match).
+        let mut promoted = v1_tok.clone();
+        promoted.parent_id = Some("forged-parent".to_string());
+        promoted.delegation_depth = 1;
+        assert_eq!(
+            signer.verify(&promoted, BlastRadius::AgentMemory),
+            Err(EvolveTokenError::InvalidSignature),
+            "v1-signed token cannot be promoted to v2 by adding chain fields"
+        );
+    }
+
+    /// `None` and `Some("")` for an optional chain field must produce
+    /// distinct MAC bytes. `CapabilityToken::id` and `Principal::id` are
+    /// unconstrained strings, so empty values are representable; without
+    /// an injective Option encoding, a v2-signed token could have its
+    /// chain-pointer optionality flipped between missing and empty without
+    /// invalidating the MAC, undermining cascade-revocation traversal.
+    #[test]
+    fn signer_v2_distinguishes_none_from_empty_chain_fields() {
+        let signer = EvolveTokenSigner::new(b"shared".to_vec());
+
+        // Build a token with delegation_depth=1 so has_chain() is true even
+        // when both Optionals are None — that lets us isolate the encoding
+        // of the Option discriminant from the depth field.
+        let base_scopes: HashSet<BlastRadius> = [BlastRadius::AgentMemory].into_iter().collect();
+        let mk = |parent: Option<&str>, by: Option<&str>| -> CapabilityToken {
+            CapabilityToken {
+                id: "id-test".to_string(),
+                scopes: base_scopes.clone(),
+                expires_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
+                    .unwrap(),
+                max_proposals: 5,
+                signature: [0u8; 64],
+                instance_id: None,
+                parent_id: parent.map(|s| s.to_string()),
+                delegated_by: by.map(|s| s.to_string()),
+                delegation_depth: 1,
+            }
+        };
+
+        let none_none = mk(None, None);
+        let empty_none = mk(Some(""), None);
+        let none_empty = mk(None, Some(""));
+        let empty_empty = mk(Some(""), Some(""));
+
+        // Recompute canonical bytes for each — they must all differ.
+        let cb_nn = EvolveTokenSigner::canonical_bytes(&none_none);
+        let cb_en = EvolveTokenSigner::canonical_bytes(&empty_none);
+        let cb_ne = EvolveTokenSigner::canonical_bytes(&none_empty);
+        let cb_ee = EvolveTokenSigner::canonical_bytes(&empty_empty);
+        assert_ne!(cb_nn, cb_en, "None vs Some(\"\") for parent_id must differ");
+        assert_ne!(cb_nn, cb_ne, "None vs Some(\"\") for delegated_by must differ");
+        assert_ne!(cb_en, cb_ee, "delegated_by Option must distinguish");
+        assert_ne!(cb_ne, cb_ee, "parent_id Option must distinguish");
+
+        // Sign each and confirm a signature minted for one variant fails
+        // verify against another — proves the MAC actually covers the
+        // Option discriminant, not just the body bytes.
+        let mut a = none_none.clone();
+        signer.sign(&mut a);
+
+        let mut b = empty_none.clone();
+        b.signature = a.signature;
+        assert_eq!(
+            signer.verify(&b, BlastRadius::AgentMemory),
+            Err(EvolveTokenError::InvalidSignature),
+            "flipping parent_id None→Some(\"\") with the original MAC must fail verify",
+        );
+
+        let mut c = none_empty.clone();
+        c.signature = a.signature;
+        assert_eq!(
+            signer.verify(&c, BlastRadius::AgentMemory),
+            Err(EvolveTokenError::InvalidSignature),
+            "flipping delegated_by None→Some(\"\") with the original MAC must fail verify",
+        );
+    }
+
+    /// Legacy serialised tokens (no chain fields in JSON) deserialise into
+    /// chain-less `CapabilityToken`s and continue to verify under v1
+    /// canonical bytes — an external caller persisting tokens written
+    /// before this PR must not see them rejected.
+    #[test]
+    fn signer_verifies_legacy_serialised_token_without_chain_fields() {
+        let signer = EvolveTokenSigner::new(b"shared".to_vec());
+
+        // Build, sign, then serialise — this matches a token persisted
+        // before the chain fields existed: its serialised form skips the
+        // optional chain fields entirely (they default to None / 0).
+        let mut tok = signer_token(&[BlastRadius::AgentMemory]);
+        signer.sign(&mut tok);
+        let json = serde_json::to_string(&tok).expect("serialize");
+
+        // The serialised form must omit the chain fields when they're at
+        // their defaults — this is the on-disk shape we have to keep.
+        assert!(
+            !json.contains("parent_id")
+                && !json.contains("delegated_by")
+                && !json.contains("delegation_depth"),
+            "chain fields must not be emitted when at defaults; got {json}",
+        );
+
+        // Round-trip back to a struct (simulating loading from storage)
+        // and verify under the same key.
+        let reloaded: CapabilityToken =
+            serde_json::from_str(&json).expect("deserialize");
+        assert!(!reloaded.has_chain());
+        assert_eq!(
+            signer.verify(&reloaded, BlastRadius::AgentMemory),
+            Ok(()),
+            "legacy chain-less token must verify"
+        );
     }
 }

@@ -8,6 +8,7 @@ use sera_auth::{
 };
 use sera_types::AgentCapability;
 use sera_types::evolution::{BlastRadius, ChangeArtifactId};
+use sera_types::principal::Principal;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -23,7 +24,15 @@ fn make_token(
         expires_at: Utc::now() + chrono::Duration::hours(1),
         max_proposals,
         signature: [0u8; 64],
+        instance_id: None,
+        parent_id: None,
+        delegated_by: None,
+        delegation_depth: 0,
     }
+}
+
+fn test_issuer() -> Principal {
+    Principal::for_agent("issuer", "issuer")
 }
 
 const BASIC_MODEL: &str = r#"[request_definition]
@@ -50,7 +59,11 @@ fn capability_token_narrowing_removes_capability() {
         10,
     );
     let narrowed = token
-        .narrow([BlastRadius::SingleHookConfig].into_iter().collect())
+        .narrow(
+            [BlastRadius::SingleHookConfig].into_iter().collect(),
+            &test_issuer(),
+            5,
+        )
         .expect("narrow to SingleHookConfig only should succeed");
 
     assert!(narrowed.has(BlastRadius::SingleHookConfig));
@@ -68,6 +81,8 @@ fn capability_token_narrowing_widening_denied() {
         [BlastRadius::AgentMemory, BlastRadius::SingleHookConfig]
             .into_iter()
             .collect(),
+        &test_issuer(),
+        5,
     );
     assert!(
         matches!(result, Err(CapabilityTokenError::WideningAttempt)),
@@ -246,6 +261,10 @@ fn capability_token_serde_roundtrip() {
         expires_at: Utc::now() + chrono::Duration::minutes(15),
         max_proposals: 10,
         signature: [0xABu8; 64],
+        instance_id: None,
+        parent_id: None,
+        delegated_by: None,
+        delegation_depth: 0,
     };
 
     let json = serde_json::to_string(&token).expect("serialize CapabilityToken");

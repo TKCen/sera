@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod agent_transport;
 pub mod byoh_catalog;
+pub mod byoh_registration;
 pub mod capability_enforcement;
 pub mod embedded_transport;
 pub mod connector;

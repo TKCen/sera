@@ -579,13 +579,8 @@ impl EvolveTokenSigner {
         let mut out = Self::canonical_bytes_v1(token);
         out.extend_from_slice(Self::V2_MAGIC);
 
-        let parent = token.parent_id.as_deref().unwrap_or("");
-        out.extend_from_slice(&(parent.len() as u32).to_le_bytes());
-        out.extend_from_slice(parent.as_bytes());
-
-        let by = token.delegated_by.as_deref().unwrap_or("");
-        out.extend_from_slice(&(by.len() as u32).to_le_bytes());
-        out.extend_from_slice(by.as_bytes());
+        write_optional_str(&mut out, token.parent_id.as_deref());
+        write_optional_str(&mut out, token.delegated_by.as_deref());
 
         out.extend_from_slice(&token.delegation_depth.to_le_bytes());
 
@@ -703,6 +698,23 @@ impl EvolveTokenSigner {
         }
 
         Ok(())
+    }
+}
+
+/// Injective encoding of an optional string into MAC bytes.
+///
+/// Emits a 1-byte presence tag (`0x00` for `None`, `0x01` for `Some`) followed
+/// — only for `Some` — by a `u32` LE length prefix and the UTF-8 body. This
+/// keeps `None` and `Some("")` byte-distinct so a v2-signed token cannot have
+/// its chain-pointer optionality flipped without invalidating the MAC.
+fn write_optional_str(out: &mut Vec<u8>, value: Option<&str>) {
+    match value {
+        None => out.push(0x00),
+        Some(s) => {
+            out.push(0x01);
+            out.extend_from_slice(&(s.len() as u32).to_le_bytes());
+            out.extend_from_slice(s.as_bytes());
+        }
     }
 }
 
@@ -1283,6 +1295,72 @@ mod tests {
             signer.verify(&promoted, BlastRadius::AgentMemory),
             Err(EvolveTokenError::InvalidSignature),
             "v1-signed token cannot be promoted to v2 by adding chain fields"
+        );
+    }
+
+    /// `None` and `Some("")` for an optional chain field must produce
+    /// distinct MAC bytes. `CapabilityToken::id` and `Principal::id` are
+    /// unconstrained strings, so empty values are representable; without
+    /// an injective Option encoding, a v2-signed token could have its
+    /// chain-pointer optionality flipped between missing and empty without
+    /// invalidating the MAC, undermining cascade-revocation traversal.
+    #[test]
+    fn signer_v2_distinguishes_none_from_empty_chain_fields() {
+        let signer = EvolveTokenSigner::new(b"shared".to_vec());
+
+        // Build a token with delegation_depth=1 so has_chain() is true even
+        // when both Optionals are None — that lets us isolate the encoding
+        // of the Option discriminant from the depth field.
+        let base_scopes: HashSet<BlastRadius> = [BlastRadius::AgentMemory].into_iter().collect();
+        let mk = |parent: Option<&str>, by: Option<&str>| -> CapabilityToken {
+            CapabilityToken {
+                id: "id-test".to_string(),
+                scopes: base_scopes.clone(),
+                expires_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0)
+                    .unwrap(),
+                max_proposals: 5,
+                signature: [0u8; 64],
+                parent_id: parent.map(|s| s.to_string()),
+                delegated_by: by.map(|s| s.to_string()),
+                delegation_depth: 1,
+            }
+        };
+
+        let none_none = mk(None, None);
+        let empty_none = mk(Some(""), None);
+        let none_empty = mk(None, Some(""));
+        let empty_empty = mk(Some(""), Some(""));
+
+        // Recompute canonical bytes for each — they must all differ.
+        let cb_nn = EvolveTokenSigner::canonical_bytes(&none_none);
+        let cb_en = EvolveTokenSigner::canonical_bytes(&empty_none);
+        let cb_ne = EvolveTokenSigner::canonical_bytes(&none_empty);
+        let cb_ee = EvolveTokenSigner::canonical_bytes(&empty_empty);
+        assert_ne!(cb_nn, cb_en, "None vs Some(\"\") for parent_id must differ");
+        assert_ne!(cb_nn, cb_ne, "None vs Some(\"\") for delegated_by must differ");
+        assert_ne!(cb_en, cb_ee, "delegated_by Option must distinguish");
+        assert_ne!(cb_ne, cb_ee, "parent_id Option must distinguish");
+
+        // Sign each and confirm a signature minted for one variant fails
+        // verify against another — proves the MAC actually covers the
+        // Option discriminant, not just the body bytes.
+        let mut a = none_none.clone();
+        signer.sign(&mut a);
+
+        let mut b = empty_none.clone();
+        b.signature = a.signature;
+        assert_eq!(
+            signer.verify(&b, BlastRadius::AgentMemory),
+            Err(EvolveTokenError::InvalidSignature),
+            "flipping parent_id None→Some(\"\") with the original MAC must fail verify",
+        );
+
+        let mut c = none_empty.clone();
+        c.signature = a.signature;
+        assert_eq!(
+            signer.verify(&c, BlastRadius::AgentMemory),
+            Err(EvolveTokenError::InvalidSignature),
+            "flipping delegated_by None→Some(\"\") with the original MAC must fail verify",
         );
     }
 

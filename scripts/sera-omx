@@ -39,8 +39,9 @@ else
 fi
 
 PROXY_MODE="${SERA_INFERENCE_PROXY_MODE:-soft}"
+PROXY_RC=0
 inference_proxy_build_argv "${PROXY_MODE}" || PROXY_RC=$?
-if [[ -n "${PROXY_RC:-}" ]] && [[ "${PROXY_RC}" -ne 0 ]]; then
+if [[ "${PROXY_RC}" -ne 0 ]]; then
   exit "${PROXY_RC}"
 fi
 

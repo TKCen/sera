@@ -200,6 +200,55 @@ assert_contains "child sees SERA-injected OPENAI_BASE_URL" \
   "$child_env" "OPENAI_BASE_URL=http://localhost:42540/v1"
 
 echo
+echo "── launcher integration: inherited PROXY_RC must not abort ─────────────"
+# Regression for PR #1152 codex review (P2): a non-zero PROXY_RC inherited
+# from the parent environment must not leak through `|| PROXY_RC=$?` and
+# cause the launcher to exit with that stale code on a successful proxy
+# build. We invoke each launcher with PROXY_RC=7 in the env and assert the
+# script completes (exit 0) after invoking the stubbed clawhip.
+SCRIPTS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+launcher_stub_dir="$(mktemp -d)"
+cat > "${launcher_stub_dir}/clawhip" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "${launcher_stub_dir}/clawhip"
+
+run_launcher() {
+  local launcher="$1" mode="$2"
+  PATH="${launcher_stub_dir}:$PATH" \
+    PROXY_RC=7 \
+    SERA_INFERENCE_PROXY_MODE="${mode}" \
+    SERA_GATEWAY_ENDPOINT="http://127.0.0.1:1" \
+    bash "${SCRIPTS_DIR}/${launcher}" </dev/null >/dev/null 2>&1
+}
+
+run_launcher sera-omc off
+assert_eq "sera-omc off mode ignores inherited PROXY_RC=7" "0" "$?"
+run_launcher sera-omx off
+assert_eq "sera-omx off mode ignores inherited PROXY_RC=7" "0" "$?"
+run_launcher sera-omc soft
+assert_eq "sera-omc soft mode ignores inherited PROXY_RC=7 (degraded)" "0" "$?"
+run_launcher sera-omx soft
+assert_eq "sera-omx soft mode ignores inherited PROXY_RC=7 (degraded)" "0" "$?"
+
+# Strict mode + unreachable must still exit 2, not the inherited 7.
+PATH="${launcher_stub_dir}:$PATH" \
+  PROXY_RC=7 \
+  SERA_INFERENCE_PROXY_MODE=strict \
+  SERA_GATEWAY_ENDPOINT="http://127.0.0.1:1" \
+  bash "${SCRIPTS_DIR}/sera-omc" </dev/null >/dev/null 2>&1
+assert_eq "sera-omc strict-fail returns own rc=2 (not inherited 7)" "2" "$?"
+PATH="${launcher_stub_dir}:$PATH" \
+  PROXY_RC=7 \
+  SERA_INFERENCE_PROXY_MODE=strict \
+  SERA_GATEWAY_ENDPOINT="http://127.0.0.1:1" \
+  bash "${SCRIPTS_DIR}/sera-omx" </dev/null >/dev/null 2>&1
+assert_eq "sera-omx strict-fail returns own rc=2 (not inherited 7)" "2" "$?"
+
+rm -rf "${launcher_stub_dir}"
+
+echo
 echo "──────────────────────────────────────────────────────────────────"
 echo "  Passed: $PASS"
 echo "  Failed: $FAIL"

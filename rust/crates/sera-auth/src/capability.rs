@@ -34,7 +34,6 @@ use sha2::{Digest, Sha512};
 
 use sera_types::evolution::BlastRadius;
 use sera_types::principal::Principal;
-use uuid::Uuid;
 
 mod bytes64 {
     use super::*;
@@ -155,9 +154,13 @@ impl CapabilityToken {
     /// already held results in [`CapabilityTokenError::WideningAttempt`].
     ///
     /// The returned token carries:
-    /// - a fresh UUID `id` so it is independently identifiable for cascade
-    ///   revocation (sera-2q6w);
-    /// - `parent_id = Some(self.id.clone())` (chain pointer);
+    /// - the parent's `id` verbatim — `id` is the proposal-usage anchor
+    ///   (`sera_db::proposal_usage::ProposalUsageStore` keys counters by
+    ///   `token_id`), so a delegated token must keep sharing the parent's
+    ///   counter to avoid resetting the quota on every hop;
+    /// - `parent_id = Some(self.id.clone())` so the v2 canonical bytes
+    ///   carry "this token has been narrowed at least once" alongside the
+    ///   delegation_depth even when the chain stays under one anchor;
     /// - `delegated_by = Some(issuer.id.0.clone())`;
     /// - `delegation_depth = self.delegation_depth + 1`;
     /// - an all-zero signature slot — callers must re-sign before the gateway
@@ -187,7 +190,7 @@ impl CapabilityToken {
         }
 
         Ok(CapabilityToken {
-            id: Uuid::new_v4().to_string(),
+            id: self.id.clone(),
             scopes,
             expires_at: self.expires_at,
             max_proposals: self.max_proposals,
@@ -804,7 +807,43 @@ mod tests {
             Some(test_issuer().id.0.as_str())
         );
         assert_eq!(narrowed.delegation_depth, 1);
-        assert_ne!(narrowed.id, token.id, "narrowed token must get a fresh id");
+        // `id` is the proposal-usage anchor and MUST stay stable across
+        // narrow — minting a fresh id would let a caller reset the quota
+        // counter (`sera_db::proposal_usage::ProposalUsageStore` keys by
+        // `token_id`) on every delegation hop.
+        assert_eq!(narrowed.id, token.id, "narrow must preserve the quota anchor id");
+    }
+
+    #[test]
+    fn narrow_preserves_proposal_usage_anchor_across_hops() {
+        // Quota counters live in `proposal_usage` keyed by `token_id`. A
+        // root token and every descendant produced by repeated narrow must
+        // share the same `id` so they share the counter — otherwise a
+        // caller could narrow once per call and bypass `max_proposals`.
+        let root = make_token([BlastRadius::AgentMemory]);
+        let alice = Principal::for_agent("alice", "alice");
+        let bob = Principal::for_agent("bob", "bob");
+
+        let hop1 = root
+            .narrow(
+                [BlastRadius::AgentMemory].into_iter().collect(),
+                &alice,
+                5,
+            )
+            .expect("hop1");
+        let hop2 = hop1
+            .narrow(
+                [BlastRadius::AgentMemory].into_iter().collect(),
+                &bob,
+                5,
+            )
+            .expect("hop2");
+
+        assert_eq!(root.id, hop1.id, "hop1 must share the root's quota id");
+        assert_eq!(hop1.id, hop2.id, "hop2 must share the root's quota id");
+        // max_proposals also carries forward unchanged so the budget is
+        // shared, not re-granted.
+        assert_eq!(root.max_proposals, hop2.max_proposals);
     }
 
     #[test]

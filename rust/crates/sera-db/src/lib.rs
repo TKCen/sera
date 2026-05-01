@@ -17,6 +17,7 @@ pub mod schedules;
 pub mod sessions;
 pub mod skills;
 pub mod api_keys;
+pub mod capability_revocation;
 pub mod delegations;
 pub mod memory;
 pub mod notifications;

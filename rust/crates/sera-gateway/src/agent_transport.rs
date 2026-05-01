@@ -18,6 +18,7 @@
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::Value;
+use tokio::sync::mpsc::UnboundedSender;
 
 /// A tool call event captured from the runtime's NDJSON output (today's
 /// stdio backend) or projected from the runtime transcript (future
@@ -67,6 +68,34 @@ pub trait AgentTurnTransport: Send + Sync {
         messages: Vec<Value>,
         session_key: &str,
     ) -> anyhow::Result<TurnEvents>;
+
+    /// Dispatch a single user turn and forward each LLM-emitted text delta
+    /// through `delta_tx` as it is observed (sera-k8do). The final
+    /// `TurnEvents.response` still contains the full concatenated reply for
+    /// transcript persistence.
+    ///
+    /// The default implementation delegates to [`send_turn`] and forwards
+    /// the full reply as a single delta at the end — preserving historical
+    /// non-streaming behaviour for backends that do not yet expose a
+    /// per-token hook (today: `EmbeddedRuntimeTransport`, test doubles).
+    /// Production stdio (`RuntimeChildSupervisor`) overrides this to emit
+    /// deltas as the runtime's `streaming_delta` NDJSON frames arrive.
+    ///
+    /// `delta_tx` is unbounded; sends after the receiver is dropped (e.g.
+    /// SSE client disconnect) are silently ignored — cancellation is the
+    /// caller's responsibility via the existing token registry.
+    async fn send_turn_streaming(
+        &self,
+        messages: Vec<Value>,
+        session_key: &str,
+        delta_tx: UnboundedSender<String>,
+    ) -> anyhow::Result<TurnEvents> {
+        let events = self.send_turn(messages, session_key).await?;
+        if !events.response.is_empty() {
+            let _ = delta_tx.send(events.response.clone());
+        }
+        Ok(events)
+    }
 
     /// Inject a steer (mid-turn user content) at the next tool boundary.
     /// The stdio backend writes a `Steer` Submission down the NDJSON pipe

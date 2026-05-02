@@ -4868,6 +4868,16 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         if let Ok(deny) = std::env::var("SERA_AGENT_TOOLS_DENY") {
             env.insert("SERA_AGENT_TOOLS_DENY".to_string(), deny);
         }
+        // sera-q9i5: forward the agent's `subagents_allowed` list as a
+        // comma-separated string so the runtime can populate ctx.handoffs
+        // and surface `handoff_to_<id>` tools to the LLM. Always set the
+        // var (empty = no handoffs) to prevent stale parent-process values
+        // from leaking into a freshly-restricted agent.
+        let subagents_csv = agent_spec.subagents_allowed.join(",");
+        env.insert(
+            "SERA_AGENT_SUBAGENTS_ALLOWED".to_string(),
+            subagents_csv,
+        );
 
         // sera-ve9x: branch on the effective dispatch mode. `runtime` (default)
         // spawns the existing supervised stdio child; `embedded` builds an
@@ -7749,6 +7759,7 @@ spec:
             policy_ref: None,
             enforcement_mode: None,
             approval_policy: None,
+            subagents_allowed: Vec::new(),
         };
         let skill_engine = SkillDispatchEngine::new();
         let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
@@ -9292,6 +9303,7 @@ spec:
             policy_ref: None,
             enforcement_mode: None,
             approval_policy: None,
+            subagents_allowed: Vec::new(),
         };
         let skill_engine = SkillDispatchEngine::new();
         let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
@@ -9366,6 +9378,7 @@ spec:
             policy_ref: None,
             enforcement_mode: None,
             approval_policy: None,
+            subagents_allowed: Vec::new(),
         };
         let skill_engine = SkillDispatchEngine::new();
         let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(

@@ -372,6 +372,7 @@ mod tests {
             policy_ref: None,
             enforcement_mode: None,
             approval_policy: None,
+            subagents_allowed: Vec::new(),
         };
         assert_eq!(resolve_hitl_mode(&spec), HitlMode::Autonomous);
     }
@@ -387,6 +388,7 @@ mod tests {
             policy_ref: None,
             enforcement_mode: Some("strict".into()),
             approval_policy: None,
+            subagents_allowed: Vec::new(),
         };
         assert_eq!(resolve_hitl_mode(&spec), HitlMode::Strict);
     }
@@ -402,6 +404,7 @@ mod tests {
             policy_ref: None,
             enforcement_mode: Some("bogus".into()),
             approval_policy: None,
+            subagents_allowed: Vec::new(),
         };
         assert_eq!(resolve_hitl_mode(&spec), HitlMode::Autonomous);
     }
@@ -417,6 +420,7 @@ mod tests {
             policy_ref: None,
             enforcement_mode: None,
             approval_policy: None,
+            subagents_allowed: Vec::new(),
         };
         assert!(matches!(
             resolve_approval_routing(&spec),
@@ -439,6 +443,7 @@ mod tests {
             policy_ref: None,
             enforcement_mode: None,
             approval_policy: Some(json),
+            subagents_allowed: Vec::new(),
         };
         let routing = resolve_approval_routing(&spec);
         match routing {

@@ -134,7 +134,13 @@ async fn process_submission(
     )
     .await?;
 
-    let turn_ctx = submission_to_turn_context(&submission, &config.agent_id, turn_id, tool_defs);
+    let turn_ctx = submission_to_turn_context(
+        &submission,
+        &config.agent_id,
+        turn_id,
+        tool_defs,
+        &config.subagents_allowed,
+    );
     let outcome = runtime.execute_turn(turn_ctx).await;
 
     // Extract tokens_used for the terminal TurnCompleted frame. `Interruption`
@@ -415,11 +421,17 @@ async fn emit(stdout: &mut tokio::io::Stdout, event: Event) -> anyhow::Result<()
 ///
 /// `session_key` / `parent_session_key` are envelope-level fields (sera-zx5w);
 /// only the `items` list is pulled from the [`Op`] variant.
+///
+/// `subagents_allowed` (sera-q9i5) is injected into
+/// `metadata["subagents_allowed"]` so
+/// [`crate::default_runtime::DefaultRuntime`] builds `handoff_to_<id>` tool
+/// definitions for the LLM. Empty list means no handoff tools are exposed.
 fn submission_to_turn_context(
     submission: &Submission,
     agent_id: &str,
     turn_id: uuid::Uuid,
     tool_defs: &[sera_types::tool::ToolDefinition],
+    subagents_allowed: &[String],
 ) -> TurnContext {
     let messages = match &submission.op {
         Op::UserTurn { items, .. } => items.clone(),
@@ -436,13 +448,26 @@ fn submission_to_turn_context(
         .clone()
         .unwrap_or_else(|| format!("session:{agent_id}:{}", submission.id));
 
+    let mut metadata = HashMap::new();
+    if !subagents_allowed.is_empty() {
+        metadata.insert(
+            "subagents_allowed".to_string(),
+            serde_json::Value::Array(
+                subagents_allowed
+                    .iter()
+                    .map(|id| serde_json::Value::String(id.clone()))
+                    .collect(),
+            ),
+        );
+    }
+
     TurnContext {
         event_id: turn_id.to_string(),
         agent_id: agent_id.to_string(),
         session_key,
         messages,
         available_tools: tool_defs.to_vec(),
-        metadata: HashMap::new(),
+        metadata,
         // Envelope-level `change_artifact` is a string tag for audit persistence;
         // TurnContext carries a typed `ChangeArtifactId` that only sera-meta
         // populates. Leave as None until wired through.
@@ -496,6 +521,66 @@ mod tests {
         }"#;
         let sub: Submission = serde_json::from_str(json).unwrap();
         assert!(matches!(sub.op, Op::System(SystemOp::Shutdown)));
+    }
+
+    // sera-q9i5: verify that submission_to_turn_context injects
+    // subagents_allowed into TurnContext.metadata so default_runtime can
+    // build handoff_to_<id> tool definitions.
+    #[test]
+    fn submission_to_turn_context_injects_subagents_allowed_metadata() {
+        let sub = Submission {
+            id: uuid::Uuid::nil(),
+            op: Op::UserTurn {
+                items: vec![],
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model_override: None,
+                effort: None,
+                final_output_schema: None,
+            },
+            trace: Default::default(),
+            change_artifact: None,
+            session_key: Some("session:test-agent:abc".to_string()),
+            parent_session_key: None,
+            parent_task_id: None,
+        };
+        let allowed = vec!["researcher".to_string(), "coder".to_string()];
+        let ctx =
+            submission_to_turn_context(&sub, "test-agent", uuid::Uuid::nil(), &[], &allowed);
+        let value = ctx
+            .metadata
+            .get("subagents_allowed")
+            .expect("subagents_allowed should be in metadata");
+        let arr = value.as_array().expect("subagents_allowed should be an array");
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0].as_str(), Some("researcher"));
+        assert_eq!(arr[1].as_str(), Some("coder"));
+    }
+
+    // sera-q9i5: empty subagents_allowed must not insert the key, so
+    // default_runtime falls back to its no-handoff branch.
+    #[test]
+    fn submission_to_turn_context_omits_subagents_allowed_when_empty() {
+        let sub = Submission {
+            id: uuid::Uuid::nil(),
+            op: Op::UserTurn {
+                items: vec![],
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model_override: None,
+                effort: None,
+                final_output_schema: None,
+            },
+            trace: Default::default(),
+            change_artifact: None,
+            session_key: None,
+            parent_session_key: None,
+            parent_task_id: None,
+        };
+        let ctx = submission_to_turn_context(&sub, "test-agent", uuid::Uuid::nil(), &[], &[]);
+        assert!(ctx.metadata.get("subagents_allowed").is_none());
     }
 
     #[test]

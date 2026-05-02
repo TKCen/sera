@@ -279,6 +279,15 @@ where
 mod tests {
     use super::*;
 
+    /// Serialises all tests that read or write `SERA_ADMIN_SOCK` or
+    /// `XDG_RUNTIME_DIR` so they don't race each other when `cargo test`
+    /// runs them in parallel.
+    fn admin_sock_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::{Mutex, OnceLock};
+        static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_MUTEX.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn initial_state_is_disarmed() {
         let ks = KillSwitch::new();
@@ -372,7 +381,9 @@ mod tests {
     /// Socket path resolves to env var when set.
     #[test]
     fn sock_path_from_env() {
-        // SAFETY: test-only; single-threaded test context.
+        let _lock = admin_sock_env_lock();
+        // SAFETY: callers hold admin_sock_env_lock so no concurrent reader can
+        // observe a torn value.
         unsafe { std::env::set_var("SERA_ADMIN_SOCK", "/tmp/test-admin.sock") };
         assert_eq!(admin_sock_path(), "/tmp/test-admin.sock");
         unsafe { std::env::remove_var("SERA_ADMIN_SOCK") };
@@ -381,6 +392,9 @@ mod tests {
     /// Socket path falls back to default when env var not set and /var/lib/sera exists.
     #[test]
     fn sock_path_default_when_prod_dir_exists() {
+        let _lock = admin_sock_env_lock();
+        // SAFETY: callers hold admin_sock_env_lock so no concurrent reader can
+        // observe a torn value.
         unsafe { std::env::remove_var("SERA_ADMIN_SOCK") };
         // Only verify the constant value; existence of /var/lib/sera varies by host.
         assert_eq!(DEFAULT_ADMIN_SOCK, "/var/lib/sera/admin.sock");
@@ -390,6 +404,9 @@ mod tests {
     /// or the tmpdir cascade rather than returning the prod default.
     #[test]
     fn sock_path_cascade_when_prod_dir_absent() {
+        let _lock = admin_sock_env_lock();
+        // SAFETY: callers hold admin_sock_env_lock so no concurrent reader can
+        // observe a torn value.
         unsafe { std::env::remove_var("SERA_ADMIN_SOCK") };
 
         // Use a tempdir to simulate an existing XDG_RUNTIME_DIR.
@@ -422,6 +439,9 @@ mod tests {
     /// When neither prod dir nor XDG_RUNTIME_DIR is available, falls through to tmpdir.
     #[test]
     fn sock_path_cascade_to_tmpdir() {
+        let _lock = admin_sock_env_lock();
+        // SAFETY: callers hold admin_sock_env_lock so no concurrent reader can
+        // observe a torn value.
         unsafe { std::env::remove_var("SERA_ADMIN_SOCK") };
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
 

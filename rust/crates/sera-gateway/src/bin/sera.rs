@@ -5585,6 +5585,12 @@ mod tests {
     // serialises them past the cargo-test default of parallel execution.
     static DISPATCH_MODE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    // Serialises tests that read or write `SERA_READINESS_PROBE_TIMEOUT_SECS`.
+    static READINESS_TIMEOUT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    // Serialises tests that read or write `SERA_TURN_TIMEOUT_SECS`.
+    static TURN_TIMEOUT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// RAII guard that sets/unsets `SERA_DISPATCH_MODE` and restores the
     /// prior value on drop. Use under `DISPATCH_MODE_ENV_LOCK` only.
     struct DispatchModeEnvGuard {
@@ -6189,9 +6195,11 @@ mod tests {
     /// does not stall the suite for the default 5s.
     #[tokio::test]
     async fn readiness_returns_503_when_harness_does_not_respond() {
+        let _lock = READINESS_TIMEOUT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Tight bound — the hung harness will sit forever, so the probe must
         // give up quickly. Env var must be set BEFORE the handler runs.
-        // SAFETY: tests in this binary do not read this var concurrently.
+        // SAFETY: callers hold READINESS_TIMEOUT_ENV_LOCK so no concurrent
+        // reader can observe a torn value.
         unsafe {
             std::env::set_var("SERA_READINESS_PROBE_TIMEOUT_SECS", "1");
         }
@@ -7516,10 +7524,10 @@ spec:
     ///    frames leaked past the steer call.
     #[tokio::test]
     async fn execute_steer_drains_until_turn_completed() {
+        let _lock = TURN_TIMEOUT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prior = std::env::var("SERA_TURN_TIMEOUT_SECS").ok();
-        // SAFETY: test-only env mutation; `turn_timeout()` reads the var
-        // each call, so the value is observed inline. Restored before the
-        // test returns to keep parallel tests hermetic.
+        // SAFETY: callers hold TURN_TIMEOUT_ENV_LOCK so no concurrent reader
+        // can observe a torn value.
         unsafe { std::env::set_var("SERA_TURN_TIMEOUT_SECS", "1") };
 
         let supervisor = RuntimeChildSupervisor::start_with_factory("sera", || async {
@@ -7550,7 +7558,7 @@ spec:
             .await
             .expect("follow-up send_turn must succeed against a fresh harness state");
 
-        // SAFETY: restoring the pre-test value; same caveat as above.
+        // SAFETY: callers hold TURN_TIMEOUT_ENV_LOCK; restoring the pre-test value.
         unsafe {
             match prior {
                 Some(v) => std::env::set_var("SERA_TURN_TIMEOUT_SECS", v),
@@ -9281,15 +9289,16 @@ spec:
     /// `SERA_TURN_TIMEOUT_SECS` env var is absent or unparseable.
     #[test]
     fn turn_timeout_defaults_when_env_unset() {
+        let _lock = TURN_TIMEOUT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Snapshot, clear, restore — keep this test hermetic so parallel
         // invocations do not observe each other's environment.
         let prior = std::env::var("SERA_TURN_TIMEOUT_SECS").ok();
-        // SAFETY: test-only env mutation; no threads observe the transient
-        // unset state because the value is read inside `turn_timeout` below.
+        // SAFETY: callers hold TURN_TIMEOUT_ENV_LOCK so no concurrent reader
+        // can observe a torn value.
         unsafe { std::env::remove_var("SERA_TURN_TIMEOUT_SECS") };
         assert_eq!(turn_timeout(), DEFAULT_TURN_TIMEOUT);
         if let Some(v) = prior {
-            // SAFETY: restoring the pre-test value; same caveat as above.
+            // SAFETY: callers hold TURN_TIMEOUT_ENV_LOCK; restoring the pre-test value.
             unsafe { std::env::set_var("SERA_TURN_TIMEOUT_SECS", v) };
         }
     }

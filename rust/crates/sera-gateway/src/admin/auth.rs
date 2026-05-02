@@ -115,6 +115,14 @@ pub async fn require_admin_token(
 mod tests {
     use super::*;
 
+    /// Serialises all tests that read or write `SERA_ADMIN_TOKEN` so they
+    /// don't race each other when `cargo test` runs them in parallel.
+    fn admin_token_lock() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::{Mutex, OnceLock};
+        static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_MUTEX.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn matches_is_true_for_equal_tokens() {
         let auth = AdminAuth::new("token-abc");
@@ -141,8 +149,10 @@ mod tests {
 
     #[test]
     fn resolve_errors_when_unset_and_not_local() {
+        let _lock = admin_token_lock();
         let saved = std::env::var("SERA_ADMIN_TOKEN").ok();
-        // SAFETY: single-threaded test scope.
+        // SAFETY: callers hold admin_token_lock so no concurrent reader can
+        // observe a torn value.
         unsafe { std::env::remove_var("SERA_ADMIN_TOKEN") };
         let result = AdminAuth::resolve(false);
         if let Some(v) = saved {
@@ -153,7 +163,10 @@ mod tests {
 
     #[test]
     fn resolve_uses_env_var_when_set() {
+        let _lock = admin_token_lock();
         let saved = std::env::var("SERA_ADMIN_TOKEN").ok();
+        // SAFETY: callers hold admin_token_lock so no concurrent reader can
+        // observe a torn value.
         unsafe { std::env::set_var("SERA_ADMIN_TOKEN", "explicit-token") };
         let auth = AdminAuth::resolve(false).unwrap();
         match saved {

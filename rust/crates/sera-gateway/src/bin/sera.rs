@@ -75,7 +75,10 @@ use sera_mail::{
     CorrelationOutcome, HeaderMailCorrelator, InMemoryEnvelopeIndex, InMemoryMailLookup,
     MailCorrelator, parse_raw_message,
 };
-use sera_types::config_manifest::{AgentSpec, ConnectorSpec, ProviderSpec};
+use sera_types::config_manifest::{
+    AgentSpec, ApiVersion, ConfigManifest, ConnectorSpec, ProviderSpec,
+    ResourceKind, ResourceMetadata, CONFIG_VERSION,
+};
 use sera_types::event::IncomingEvent as DomainEvent;
 use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
 use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
@@ -1224,7 +1227,7 @@ struct CancelHandle {
 
 struct AppState {
     db: Arc<Mutex<SqliteDb>>,
-    manifests: ManifestSet,
+    manifests: Arc<std::sync::RwLock<ManifestSet>>,
     /// Shared Discord connector for sending replies. `None` when no Discord
     /// connector is configured.
     discord: Option<Arc<DiscordConnector>>,
@@ -1556,9 +1559,10 @@ impl AdminAppState for AppState {
     }
 
     fn agent_metadata(&self, id: &str) -> Option<serde_json::Value> {
-        let agent_names = self.manifests.agent_names();
-        let name = agent_names.iter().copied().find(|n| *n == id)?;
-        let spec = self.manifests.agent_spec(name).ok().flatten();
+        let manifests = self.manifests.read().unwrap();
+        let agent_names = manifests.agent_names();
+        let name = agent_names.iter().copied().find(|n| *n == id)?.to_owned();
+        let spec = manifests.agent_spec(&name).ok().flatten();
         Some(serde_json::json!({
             "name": name,
             "provider": spec.as_ref().map(|s| s.provider.as_str()).unwrap_or(""),
@@ -1694,14 +1698,16 @@ fn resolve_proxy_upstream(state: &AppState, env_var: &str) -> Option<UpstreamPro
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    let names: Vec<&str> = state.manifests.providers.iter()
-        .map(|m| m.metadata.name.as_str())
+    let manifests = state.manifests.read().unwrap();
+    let names: Vec<String> = manifests.providers.iter()
+        .map(|m| m.metadata.name.clone())
         .collect();
     let name = preferred
         .as_deref()
-        .filter(|n| names.contains(n))
-        .or_else(|| names.first().copied())?;
-    let spec = state.manifests.provider_spec(name).ok().flatten()?;
+        .filter(|n| names.iter().any(|x| x == n))
+        .map(|s| s.to_owned())
+        .or_else(|| names.into_iter().next())?;
+    let spec = manifests.provider_spec(&name).ok().flatten()?;
     let api_key = resolve_provider_api_key(&spec).unwrap_or_default();
     Some(UpstreamProvider {
         base_url: spec.base_url,
@@ -1883,6 +1889,28 @@ struct AgentInfo {
     has_tools: bool,
 }
 
+/// Request body for `POST /api/agents` (register a single agent at runtime).
+#[derive(Deserialize)]
+struct RegisterAgentRequest {
+    name: String,
+    #[serde(flatten)]
+    spec: AgentSpec,
+}
+
+/// Request body for `POST /api/agents/batch` (register many agents at once).
+#[derive(Deserialize)]
+struct RegisterAgentsBatchRequest {
+    agents: Vec<RegisterAgentRequest>,
+}
+
+/// Response for a single register/upsert operation.
+#[derive(Serialize)]
+struct RegisterAgentResponse {
+    name: String,
+    /// `true` when an existing agent was replaced, `false` when newly created.
+    replaced: bool,
+}
+
 // ── /api/sessions response types ────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -2059,18 +2087,22 @@ async fn chat_handler(
     validate_api_key(&state, &headers)?;
 
     // Determine which agent to use.
-    let agent_name = req
-        .agent
-        .as_deref()
-        .or_else(|| state.manifests.agent_names().into_iter().next())
-        .unwrap_or("sera")
-        .to_owned();
-
-    let agent_spec: AgentSpec = match state.manifests.agent_spec(&agent_name) {
-        Ok(Some(s)) => s,
-        Ok(None) => return Err(StatusCode::NOT_FOUND),
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    let (agent_name, agent_spec) = {
+        let manifests = state.manifests.read().unwrap();
+        let name = req
+            .agent
+            .as_deref()
+            .map(|s| s.to_owned())
+            .or_else(|| manifests.agent_names().into_iter().next().map(|s| s.to_owned()))
+            .unwrap_or_else(|| "sera".to_owned());
+        let spec: AgentSpec = match manifests.agent_spec(&name) {
+            Ok(Some(s)) => s,
+            Ok(None) => return Err(StatusCode::NOT_FOUND),
+            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        };
+        (name, spec)
     };
+    let agent_spec: AgentSpec = agent_spec;
 
     // Look up the runtime supervisor for this agent (sera-ojp3). The
     // supervisor may swap its inner harness underneath us if the child has
@@ -2811,23 +2843,25 @@ async fn agents_handler(
 ) -> Result<Json<Vec<AgentInfo>>, StatusCode> {
     validate_api_key(&state, &headers)?;
 
-    let agents: Vec<AgentInfo> = state
-        .manifests
-        .agent_names()
-        .iter()
-        .map(|name| {
-            let spec = state.manifests.agent_spec(name).ok().flatten();
-            AgentInfo {
-                name: name.to_string(),
-                provider: spec
-                    .as_ref()
-                    .map(|s| s.provider.clone())
-                    .unwrap_or_default(),
-                model: spec.as_ref().and_then(|s| s.model.clone()),
-                has_tools: spec.as_ref().and_then(|s| s.tools.as_ref()).is_some(),
-            }
-        })
-        .collect();
+    let agents: Vec<AgentInfo> = {
+        let manifests = state.manifests.read().unwrap();
+        manifests
+            .agent_names()
+            .iter()
+            .map(|name| {
+                let spec = manifests.agent_spec(name).ok().flatten();
+                AgentInfo {
+                    name: name.to_string(),
+                    provider: spec
+                        .as_ref()
+                        .map(|s| s.provider.clone())
+                        .unwrap_or_default(),
+                    model: spec.as_ref().and_then(|s| s.model.clone()),
+                    has_tools: spec.as_ref().and_then(|s| s.tools.as_ref()).is_some(),
+                }
+            })
+            .collect()
+    };
 
     Ok(Json(agents))
 }
@@ -2921,22 +2955,103 @@ async fn agent_by_id_handler(
     validate_api_key(&state, &headers)?;
 
     // `id` may be a name (autonomous mode has no UUIDs).
-    let agent_names = state.manifests.agent_names();
-    let name: &str = agent_names
-        .iter()
-        .copied()
-        .find(|n| *n == id)
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let spec = state.manifests.agent_spec(name).ok().flatten();
-    let info = serde_json::json!({
-        "name": name,
-        "provider": spec.as_ref().map(|s| s.provider.as_str()).unwrap_or(""),
-        "model": spec.as_ref().and_then(|s| s.model.as_deref()),
-        "has_tools": spec.as_ref().and_then(|s| s.tools.as_ref()).is_some(),
-    });
+    let info = {
+        let manifests = state.manifests.read().unwrap();
+        let agent_names = manifests.agent_names();
+        let name = agent_names
+            .iter()
+            .copied()
+            .find(|n| *n == id)
+            .ok_or(StatusCode::NOT_FOUND)?
+            .to_owned();
+        let spec = manifests.agent_spec(&name).ok().flatten();
+        serde_json::json!({
+            "name": name,
+            "provider": spec.as_ref().map(|s| s.provider.as_str()).unwrap_or(""),
+            "model": spec.as_ref().and_then(|s| s.model.as_deref()),
+            "has_tools": spec.as_ref().and_then(|s| s.tools.as_ref()).is_some(),
+        })
+    };
 
     Ok(Json(info))
+}
+
+// ── /api/agents write endpoints (sera-glsc) ──────────────────────────────────
+
+/// Build a `ConfigManifest` for a runtime-registered agent from a request body.
+fn agent_manifest_from_request(req: RegisterAgentRequest) -> ConfigManifest {
+    ConfigManifest {
+        api_version: ApiVersion {
+            group: "sera.dev".to_owned(),
+            version: "v1".to_owned(),
+        },
+        kind: ResourceKind::Agent,
+        metadata: ResourceMetadata {
+            name: req.name,
+            labels: std::collections::HashMap::new(),
+            annotations: std::collections::HashMap::new(),
+            change_artifact: None,
+            shadow: false,
+        },
+        config_version: CONFIG_VERSION,
+        spec: serde_json::to_value(&req.spec).unwrap_or(serde_json::Value::Null),
+    }
+}
+
+/// `POST /api/agents` — register (or replace) a single agent at runtime.
+///
+/// The agent is added to the in-memory `ManifestSet`; it persists only for the
+/// lifetime of the gateway process. Returns 200 on replace, 201 on create.
+async fn register_agent_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<RegisterAgentRequest>,
+) -> Result<impl IntoResponse, StatusCode> {
+    validate_api_key(&state, &headers)?;
+    let name = req.name.clone();
+    let manifest = agent_manifest_from_request(req);
+    let replaced = state.manifests.write().unwrap().upsert_agent(manifest);
+    let status = if replaced { StatusCode::OK } else { StatusCode::CREATED };
+    Ok((status, Json(RegisterAgentResponse { name, replaced })))
+}
+
+/// `POST /api/agents/batch` — register (or replace) multiple agents at once.
+///
+/// Each entry is upserted independently. Returns 200 with a summary array.
+async fn register_agents_batch_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<RegisterAgentsBatchRequest>,
+) -> Result<Json<Vec<RegisterAgentResponse>>, StatusCode> {
+    validate_api_key(&state, &headers)?;
+    let mut results = Vec::with_capacity(body.agents.len());
+    {
+        let mut manifests = state.manifests.write().unwrap();
+        for req in body.agents {
+            let name = req.name.clone();
+            let manifest = agent_manifest_from_request(req);
+            let replaced = manifests.upsert_agent(manifest);
+            results.push(RegisterAgentResponse { name, replaced });
+        }
+    }
+    Ok(Json(results))
+}
+
+/// `DELETE /api/agents/{id}` — remove an agent from the runtime registry.
+///
+/// Returns 204 on success, 404 if the agent was not registered.
+async fn delete_agent_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    validate_api_key(&state, &headers)?;
+    let removed = state.manifests.write().unwrap().remove_agent(&id);
+    if removed {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
 }
 
 /// Internal state machine for SSE streaming (sera-7mc1 + sera-k8do).
@@ -3630,7 +3745,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
     }
 
     // Load hook chains from manifests.
-    let chains = state.manifests.hook_chain_specs();
+    let chains = state.manifests.read().unwrap().hook_chain_specs();
 
     // Build principal for hook context.
     let principal = PrincipalRef {
@@ -3668,25 +3783,27 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
     }
 
     // Find the agent assigned to the Discord connector.
-    let agent_name = state
-        .manifests
-        .connectors
-        .iter()
-        .find_map(|c| {
-            let spec: ConnectorSpec = serde_json::from_value(c.spec.clone()).ok()?;
-            spec.agent
-        })
-        .unwrap_or_else(|| {
-            state
-                .manifests
-                .agent_names()
-                .into_iter()
-                .next()
-                .unwrap_or("sera")
-                .to_owned()
-        });
-
-    let agent_spec: AgentSpec = match state.manifests.agent_spec(&agent_name).ok().flatten() {
+    let (agent_name, agent_spec_for_msg) = {
+        let manifests = state.manifests.read().unwrap();
+        let name = manifests
+            .connectors
+            .iter()
+            .find_map(|c| {
+                let spec: ConnectorSpec = serde_json::from_value(c.spec.clone()).ok()?;
+                spec.agent
+            })
+            .unwrap_or_else(|| {
+                manifests
+                    .agent_names()
+                    .into_iter()
+                    .next()
+                    .map(|s| s.to_owned())
+                    .unwrap_or_else(|| "sera".to_owned())
+            });
+        let spec = manifests.agent_spec(&name).ok().flatten();
+        (name, spec)
+    };
+    let agent_spec: AgentSpec = match agent_spec_for_msg {
         Some(s) => s,
         None => {
             let err_msg = format!("Agent '{agent_name}' not found in manifests");
@@ -4944,7 +5061,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
 
     let state = Arc::new(AppState {
         db: Arc::new(Mutex::new(db)),
-        manifests,
+        manifests: Arc::new(std::sync::RwLock::new(manifests)),
         discord: shared_discord,
         api_key,
         lane_queue: Mutex::new(LaneQueue::new_with_counter_store(
@@ -5467,8 +5584,12 @@ fn build_router(state: Arc<AppState>) -> Router {
         // sera-mplr / J.0.4 ESC-cancel: abort the in-flight HTTP turn for a
         // session_id. Returns 204 on cancel, 404 when no turn is in flight.
         .route("/api/chat/cancel", post(chat_cancel_handler))
-        .route("/api/agents", get(agents_handler))
-        .route("/api/agents/{id}", get(agent_by_id_handler))
+        .route("/api/agents", get(agents_handler).post(register_agent_handler))
+        .route("/api/agents/batch", post(register_agents_batch_handler))
+        .route(
+            "/api/agents/{id}",
+            get(agent_by_id_handler).delete(delete_agent_handler),
+        )
         .route("/api/sessions", get(sessions_handler))
         .route("/api/sessions/{id}/transcript", get(transcript_handler))
         // sera-2q1d: read-only hook registry introspection — lists every hook
@@ -5787,7 +5908,7 @@ mod tests {
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         Arc::new(AppState {
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
-            manifests: test_manifests(),
+            manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
             api_key: None,
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
@@ -5837,7 +5958,7 @@ mod tests {
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         Arc::new(AppState {
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
-            manifests: test_manifests(),
+            manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
             api_key: None,
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
@@ -5887,7 +6008,7 @@ mod tests {
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         Arc::new(AppState {
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
-            manifests: test_manifests(),
+            manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
             api_key: Some(key.to_owned()),
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
@@ -5937,7 +6058,7 @@ mod tests {
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         Arc::new(AppState {
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
-            manifests: test_manifests(),
+            manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
             api_key: Some(key.to_owned()),
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
@@ -6445,7 +6566,7 @@ spec:
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         Arc::new(AppState {
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
-            manifests: parse_manifests(STRICT_AGENT_YAML).unwrap(),
+            manifests: Arc::new(std::sync::RwLock::new(parse_manifests(STRICT_AGENT_YAML).unwrap())),
             discord: None,
             api_key: None,
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
@@ -6955,7 +7076,7 @@ spec:
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         let state = AppState {
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
-            manifests: test_manifests(),
+            manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
             api_key: None,
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
@@ -7008,7 +7129,7 @@ spec:
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         let state = AppState {
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
-            manifests: test_manifests(),
+            manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
             api_key: Some("my-key".to_owned()),
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
@@ -7062,7 +7183,7 @@ spec:
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         let state = AppState {
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
-            manifests: test_manifests(),
+            manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
             api_key: Some("my-key".to_owned()),
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
@@ -7119,7 +7240,7 @@ spec:
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         let state = AppState {
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
-            manifests: test_manifests(),
+            manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
             api_key: Some("my-key".to_owned()),
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
@@ -7302,6 +7423,155 @@ spec:
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // -- POST /api/agents (sera-glsc) --
+
+    #[tokio::test]
+    async fn post_agent_creates_new_agent() {
+        let state = test_state();
+        let app = build_router(Arc::clone(&state));
+
+        let body = serde_json::json!({
+            "name": "new-bot",
+            "provider": "lm-studio",
+            "model": "gpt-4"
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agents")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["name"], "new-bot");
+        assert_eq!(json["replaced"], false);
+
+        // Agent should now appear in GET /api/agents.
+        let names = state.manifests.read().unwrap().agent_names().iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(names.contains(&"new-bot".to_string()));
+    }
+
+    #[tokio::test]
+    async fn post_agent_replaces_existing_agent() {
+        let state = test_state();
+        let app = build_router(Arc::clone(&state));
+
+        let body = serde_json::json!({
+            "name": "sera",
+            "provider": "openai",
+            "model": "gpt-4o"
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agents")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["name"], "sera");
+        assert_eq!(json["replaced"], true);
+    }
+
+    // -- POST /api/agents/batch (sera-glsc) --
+
+    #[tokio::test]
+    async fn post_agents_batch_registers_multiple_agents() {
+        let state = test_state();
+        let app = build_router(Arc::clone(&state));
+
+        let body = serde_json::json!({
+            "agents": [
+                { "name": "agent-a", "provider": "lm-studio" },
+                { "name": "agent-b", "provider": "lm-studio" }
+            ]
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agents/batch")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let results = json.as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["name"], "agent-a");
+        assert_eq!(results[0]["replaced"], false);
+        assert_eq!(results[1]["name"], "agent-b");
+        assert_eq!(results[1]["replaced"], false);
+
+        let names = state.manifests.read().unwrap().agent_names().iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(names.contains(&"agent-a".to_string()));
+        assert!(names.contains(&"agent-b".to_string()));
+    }
+
+    // -- DELETE /api/agents/{id} (sera-glsc) --
+
+    #[tokio::test]
+    async fn delete_agent_removes_agent() {
+        let state = test_state();
+        let app = build_router(Arc::clone(&state));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/agents/sera")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let names = state.manifests.read().unwrap().agent_names().iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(!names.contains(&"sera".to_string()));
+    }
+
+    #[tokio::test]
+    async fn delete_agent_returns_404_for_unknown_agent() {
+        let state = test_state();
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/agents/does-not-exist")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     // -- /api/sessions endpoint --
@@ -9456,7 +9726,7 @@ spec:
         let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
         let state = Arc::new(AppState {
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
-            manifests: test_manifests(),
+            manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
             api_key: None,
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
@@ -9548,7 +9818,7 @@ spec:
             let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
             Arc::new(AppState {
                 db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
-                manifests: test_manifests(),
+                manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
                 discord: None,
                 api_key: Some("secret".to_owned()),
                 lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
@@ -9639,7 +9909,7 @@ spec:
             let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
             Arc::new(AppState {
                 db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
-                manifests: test_manifests(),
+                manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
                 discord: None,
                 api_key: Some("secret".to_owned()),
                 lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
@@ -10388,7 +10658,7 @@ spec:
 
             let state = Arc::new(AppState {
                 db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
-                manifests,
+                manifests: Arc::new(std::sync::RwLock::new(manifests)),
                 discord: None,
                 api_key: None,
                 lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),

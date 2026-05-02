@@ -640,13 +640,20 @@ impl InMemorySessionStore {
 }
 
 fn synth_commit(session_id: &str, index: u64) -> String {
+    // Deterministic 40-hex synthetic SHA derived from (session_id, index)
+    // alone so that `head()` produces the same commit string as the
+    // matching `append_submission()` return — required for non-git stores
+    // (SqliteSessionStore, InMemorySessionStore) where the commit is purely
+    // an identity tag, not a content-addressed git object.
     use std::hash::{BuildHasher, Hasher};
-    let hasher_state = std::collections::hash_map::RandomState::new();
-    let mut h = hasher_state.build_hasher();
+    use std::hash::BuildHasherDefault;
+    use std::collections::hash_map::DefaultHasher;
+    let bh = BuildHasherDefault::<DefaultHasher>::default();
+    let mut h = bh.build_hasher();
     Hasher::write(&mut h, session_id.as_bytes());
     Hasher::write_u64(&mut h, index);
     let lo = h.finish();
-    let mut h2 = hasher_state.build_hasher();
+    let mut h2 = bh.build_hasher();
     Hasher::write_u64(&mut h2, lo);
     Hasher::write(&mut h2, session_id.as_bytes());
     let hi = h2.finish();

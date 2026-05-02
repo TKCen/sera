@@ -1,5 +1,19 @@
 //! `WorkflowEngine` — async orchestrator with durable persistence.
 //!
+//! # Storage boundary (ADR 2026-05-02)
+//!
+//! This crate owns the **claim / dispatch** lifecycle for `WorkflowTask`:
+//! `Open → Hooked → InProgress → Closed` (or `Blocked` on failure), plus the
+//! orphan-reaper for stale `Hooked` claims. The gateway-side
+//! `sera_gateway::workflow_store::WorkflowTaskStore` is **not** a duplicate of
+//! this engine — it owns the orthogonal **gate / resume** lifecycle
+//! (`Pending → Resolved`) for runtime continuations suspended on an
+//! `AwaitType` gate, with its own `agent_id` + `resume_token` routing pair.
+//!
+//! See [`docs/public/decisions/2026-05-02-workflow-storage.md`] for the full
+//! split rationale and the boundary contract that decides which crate touches
+//! which fields.
+//!
 //! Phase-1 surface from SPEC-workflow-engine §4a–§4d:
 //!
 //! - [`WorkflowEngine::submit_task`] — persist a freshly constructed

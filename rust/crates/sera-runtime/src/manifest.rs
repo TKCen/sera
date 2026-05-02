@@ -2,9 +2,9 @@
 //!
 //! Loads AGENT.yaml manifests and assembles system prompts using priority-ordered sections.
 
-// TODO(sera-2q1d): manifest types are used for YAML loading but many fields are
-// not yet consumed by the reasoning loop; suppress until wired end-to-end.
-#![allow(dead_code, non_snake_case)]
+// TODO(sera-2q1d): many fields are not yet consumed by the reasoning loop and
+// will be wired end-to-end incrementally.
+#![allow(non_snake_case)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -13,7 +13,6 @@ use std::path::Path;
 /// Agent manifest — mirrors AGENT.yaml spec with both flat and spec-wrapped formats.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-#[allow(dead_code)]
 pub enum RuntimeManifest {
     /// Spec-wrapped format (new): all config inside `spec` block
     SpecWrapped {
@@ -21,7 +20,7 @@ pub enum RuntimeManifest {
         api_version: String,
         kind: String,
         metadata: AgentManifestMetadata,
-        spec: AgentSpec,
+        spec: RuntimeAgentSpec,
     },
     /// Flat format (legacy): identity and model at top-level
     Flat {
@@ -58,9 +57,13 @@ pub struct AgentManifestMetadata {
     pub labels: BTreeMap<String, String>,
 }
 
-/// Agent spec (spec-wrapped format).
+/// Agent spec for the AGENT.yaml spec-wrapped format.
+///
+/// This is the runtime worker's own manifest spec — distinct from
+/// `sera_types::config_manifest::AgentSpec` (K8s-style operational config)
+/// and `sera_types::manifest::AgentTemplate` (agent catalog template).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSpec {
+pub struct RuntimeAgentSpec {
     pub identity: IdentityConfig,
     pub model: ModelConfig,
     #[serde(default)]
@@ -442,7 +445,7 @@ mod tests {
                 namespace: "default".to_string(),
                 labels: BTreeMap::new(),
             },
-            spec: AgentSpec {
+            spec: RuntimeAgentSpec {
                 identity: IdentityConfig {
                     role: "test".to_string(),
                     bio: "test bio".to_string(),

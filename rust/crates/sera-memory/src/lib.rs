@@ -19,6 +19,9 @@ pub mod store;
 #[cfg(feature = "pgvector")]
 pub mod pgvector_store;
 
+#[cfg(test)]
+pub mod contract_tests;
+
 #[cfg(feature = "sqlite")]
 pub mod sqlite_store;
 

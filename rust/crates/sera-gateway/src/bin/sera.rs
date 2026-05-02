@@ -63,7 +63,7 @@ use sera_gateway::kill_switch::{KillSwitch, admin_sock_path, spawn_admin_socket}
 use sera_gateway::scheduler::spawn_scheduler;
 #[cfg(test)]
 use sera_gateway::session_store::InMemorySessionStore;
-use sera_gateway::session_store::{SessionStore, SqliteGitSessionStore};
+use sera_gateway::session_store::{SessionStore, SqliteGitSessionStore, SqliteSessionStore};
 use sera_gateway::workflow_store::{InMemoryWorkflowTaskStore, WorkflowTaskStore};
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_mail::{
@@ -1259,8 +1259,10 @@ struct AppState {
     active_cancellation_tokens: Arc<std::sync::Mutex<std::collections::HashMap<String, CancelHandle>>>,
     /// Submission envelope store — every agent-facing route appends a
     /// Submission here before calling the underlying service (sera-r1g8).
-    /// Production boot uses SqliteGitSessionStore (sera-4i4i); tests keep
-    /// InMemorySessionStore to avoid writing shadow-git dirs to disk.
+    /// Default boot uses SqliteSessionStore (sera-fpmt / K.1); enabling the
+    /// `enterprise` feature or setting `SERA_SESSION_STORE=git-shadowed`
+    /// switches to SqliteGitSessionStore (sera-4i4i). Tests keep
+    /// InMemorySessionStore to avoid writing to disk.
     session_store: Arc<dyn SessionStore>,
     /// Constitutional rule registry. Seeded at startup from
     /// `SERA_CONSTITUTIONAL_RULES_PATH` (default `/etc/sera/constitutional_rules.yaml`).
@@ -4811,15 +4813,36 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
             std::collections::HashMap::new(),
         )),
-        // sera-4i4i: use SqliteGitSessionStore so envelopes survive restarts.
-        // db_path = <data_root>/parts.sqlite; sessions_root = <data_root>/sessions/.
+        // sera-fpmt (K.1): default to plain SqliteSessionStore (no shadow-git).
+        // The git-shadowed variant (sera-4i4i, byte-for-byte deterministic
+        // audit log) is enterprise-only; opt in via the `enterprise` cargo
+        // feature or `SERA_SESSION_STORE=git-shadowed`.
         session_store: {
             let parts_db = data_root.join("parts.sqlite");
             let sessions_root = data_root.join("sessions");
-            Arc::new(
-                SqliteGitSessionStore::open(&parts_db, &sessions_root)
-                    .expect("failed to initialize SqliteGitSessionStore"),
-            )
+            let want_git_shadow = cfg!(feature = "enterprise")
+                || std::env::var("SERA_SESSION_STORE")
+                    .map(|v| v == "git-shadowed")
+                    .unwrap_or(false);
+            if want_git_shadow {
+                tracing::info!(
+                    target: "sera_gateway::session_store",
+                    "using SqliteGitSessionStore (shadow-git audit log)"
+                );
+                Arc::new(
+                    SqliteGitSessionStore::open(&parts_db, &sessions_root)
+                        .expect("failed to initialize SqliteGitSessionStore"),
+                ) as Arc<dyn SessionStore>
+            } else {
+                tracing::info!(
+                    target: "sera_gateway::session_store",
+                    "using SqliteSessionStore (no shadow-git)"
+                );
+                Arc::new(
+                    SqliteSessionStore::open(&parts_db)
+                        .expect("failed to initialize SqliteSessionStore"),
+                ) as Arc<dyn SessionStore>
+            }
         },
         constitutional_registry,
         capability_registry: Arc::new(RwLock::new(Arc::clone(&capability_registry))),

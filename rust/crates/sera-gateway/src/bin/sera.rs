@@ -1333,6 +1333,13 @@ struct AppState {
     /// process restart loses in-flight tickets (no suspended turns to
     /// resume anyway). SQLite-backed store is a follow-up.
     ticket_store: Arc<dyn TicketStore>,
+    /// HITL Phase 2 resume broadcast (sera-93h4). The approve route fans out
+    /// `HitlResumedEvent` here after a parked chat turn's ticket transitions
+    /// to `Approved`. Subscribers are SSE clients on `GET /api/hitl/events`
+    /// or any background task that wants to react to ticket approval.
+    /// `tokio::sync::broadcast::Sender` is cheap to clone and lossy on slow
+    /// receivers (which is what we want for a notification fan-out).
+    hitl_resumed_tx: tokio::sync::broadcast::Sender<sera_gateway::hitl_gateway::HitlResumedEvent>,
     /// Workflow task store (sera-kgi8, Wave E Phase 1). Populated by the
     /// `/api/workflow/tasks` POST route; drained every `TICK_INTERVAL` by
     /// the scheduler spawned in `run_start`. Phase 1 uses an in-memory
@@ -1586,6 +1593,11 @@ impl HitlAppState for AppState {
     }
     fn ticket_store(&self) -> Arc<dyn TicketStore> {
         Arc::clone(&self.ticket_store)
+    }
+    fn hitl_resumed_tx(
+        &self,
+    ) -> Option<sera_gateway::hitl_gateway::HitlResumedSender> {
+        Some(self.hitl_resumed_tx.clone())
     }
 }
 
@@ -2188,6 +2200,29 @@ async fn chat_handler(
         if let Err(e) = state.ticket_store.insert(ticket).await {
             tracing::error!(error = %e, "ticket_store.insert failed; rejecting turn");
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
+        // Phase 2 (sera-93h4): persist the parked chat turn's payload so the
+        // approve route can broadcast a HitlResumedEvent carrying enough
+        // correlation data for the caller to retry. Failures here are
+        // logged but non-fatal — the ticket already exists and the caller
+        // can still poll /api/hitl/requests/{id}; only the resumed event
+        // will go missing.
+        let suspended = sera_gateway::hitl_gateway::SuspendedTurn {
+            ticket_id: ticket_id.clone(),
+            session_key: session_key.clone(),
+            session_id: session.id.clone(),
+            agent_name: agent_name.clone(),
+            message: req.message.clone(),
+            stream: req.stream,
+        };
+        if let Err(e) = state.ticket_store.record_suspended_turn(suspended).await {
+            tracing::warn!(
+                error = %e,
+                ticket_id = %ticket_id,
+                session_key = %session_key,
+                "ticket_store.record_suspended_turn failed; resume notifications will be lost"
+            );
         }
 
         // OCSF Policy Activity audit entry (class_uid=6003) — best-effort.
@@ -4931,6 +4966,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         constitutional_registry,
         capability_registry: Arc::new(RwLock::new(Arc::clone(&capability_registry))),
         ticket_store: Arc::new(InMemoryTicketStore::new()),
+        hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
         workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
         gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
         human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
@@ -5637,6 +5673,7 @@ mod tests {
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
@@ -5684,6 +5721,7 @@ mod tests {
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
@@ -5731,6 +5769,7 @@ mod tests {
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
@@ -5778,6 +5817,7 @@ mod tests {
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
@@ -6279,6 +6319,7 @@ spec:
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
@@ -6788,6 +6829,7 @@ spec:
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
@@ -6838,6 +6880,7 @@ spec:
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
@@ -6889,6 +6932,7 @@ spec:
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
@@ -6943,6 +6987,7 @@ spec:
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
@@ -9276,6 +9321,7 @@ spec:
             constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
+            hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
@@ -9365,6 +9411,7 @@ spec:
                 constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
                 capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
                 ticket_store: Arc::new(InMemoryTicketStore::new()),
+            hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
                 workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
                 gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
                 human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
@@ -10099,6 +10146,7 @@ spec:
                 constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
                 capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
                 ticket_store: Arc::new(InMemoryTicketStore::new()),
+            hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
                 workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
                 gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
                 human_gate_store: Arc::new(InMemoryHumanGateStore::new()),

@@ -104,6 +104,9 @@ pub enum AppCommand {
     RejectModal(String),
     /// Escalate the HITL request shown in the inline modal.
     EscalateModal(String),
+    /// Cancel the in-flight streaming turn (J.0.4 / sera-zate).
+    /// Carries the session_id to POST to /api/chat/cancel.
+    CancelTurn(String),
 }
 
 /// Root application state.
@@ -134,6 +137,17 @@ pub struct App {
     /// The agent currently being viewed / targeted by composer sends.
     /// Set by `Action::Select` and `Action::SelectAgent`.
     pub active_agent_id: Option<String>,
+
+    /// The session id of the current session.  Populated when a session is
+    /// loaded; used by `CancelTurn` to POST /api/chat/cancel.
+    pub active_session_id: Option<String>,
+
+    /// True while a chat turn is actively streaming from the gateway.
+    /// Set to true when `SendChat` is dispatched; cleared when the SSE
+    /// stream ends (Connected state) or a `CancelTurn` completes.
+    /// The input layer checks this to route ESC to `CancelTurn` instead
+    /// of `Back` / modal-close.
+    pub turn_streaming: bool,
 
     /// Session picker modal state.  Rendered on top of the current view
     /// when `show_session_picker` is true.
@@ -185,6 +199,8 @@ impl App {
             connection: ConnectionState::Disconnected,
             client: Arc::new(client),
             active_agent_id: None,
+            active_session_id: None,
+            turn_streaming: false,
             session_picker: SessionPickerView::new(),
             show_session_picker: false,
             show_hitl_modal: None,
@@ -514,6 +530,15 @@ impl App {
             | Action::RejectHitl(_)
             | Action::EscalateHitl(_)
             | Action::DismissHitlModal => {}
+            Action::CancelTurn => {
+                // Only act when a turn is actually in flight.
+                if self.turn_streaming
+                    && let Some(session_id) = self.active_session_id.clone()
+                {
+                    self.status = Status::warn("cancelling…");
+                    self.pending.push(AppCommand::CancelTurn(session_id));
+                }
+            }
             Action::NoOp => {}
         }
     }
@@ -523,13 +548,42 @@ impl App {
     pub fn apply_sse(&mut self, update: SseUpdate) {
         match update {
             SseUpdate::Event(ev) => {
+                // Always refresh active_session_id from incoming events so
+                // that a newly-created session replaces any stale id already
+                // held from a previous turn.
+                if !ev.session_id.is_empty() {
+                    self.active_session_id = Some(ev.session_id.clone());
+                }
                 self.session.apply_event(ev);
             }
             SseUpdate::State(s) => {
+                // Only clear turn_streaming when the stream transitions out
+                // of Reconnecting (in-flight) — not on the Connected state
+                // that arrives at stream *start*, which would kill ESC cancel
+                // before any tokens are generated.
+                let was_streaming = self.connection == ConnectionState::Reconnecting;
                 self.connection = s;
                 self.session.set_connection(s);
+                if was_streaming && s != ConnectionState::Reconnecting {
+                    self.turn_streaming = false;
+                }
             }
         }
+    }
+
+    /// Called by the runtime when `SendChat` is about to be executed.
+    /// Marks the turn as streaming and captures the session id so ESC can
+    /// cancel it.  The session id is taken from `active_session_id` if
+    /// already known; the runtime updates it after the POST response when
+    /// the gateway echoes back the session.
+    pub fn mark_turn_started(&mut self) {
+        self.turn_streaming = true;
+    }
+
+    /// Called by the runtime when a cancel completes (success or no-op).
+    pub fn mark_turn_cancelled(&mut self) {
+        self.turn_streaming = false;
+        self.status = Status::warn("turn cancelled");
     }
 
     /// Footer hint row — context-sensitive for the chat-dominant layout.
@@ -582,6 +636,15 @@ impl App {
                 display_first(&kb.select),
                 display_first(&kb.up),
                 display_first(&kb.down),
+            );
+        }
+
+        // Streaming turn — ESC cancels.
+        if self.turn_streaming {
+            return format!(
+                "{}:cancel turn  {}:quit",
+                display_first(&kb.cancel_turn),
+                display_first(&kb.quit),
             );
         }
 
@@ -756,6 +819,22 @@ impl Runtime {
                 AppCommand::SendChat { agent, message } => {
                     self.send_chat(app, agent, message).await;
                 }
+                AppCommand::CancelTurn(session_id) => {
+                    match app.client.cancel_turn(&session_id).await {
+                        Ok(true) => {
+                            app.mark_turn_cancelled();
+                        }
+                        Ok(false) => {
+                            // Turn already finished — clear streaming flag.
+                            app.mark_turn_cancelled();
+                            app.status = Status::info("turn already completed");
+                        }
+                        Err(e) => {
+                            app.turn_streaming = false;
+                            app.status = Status::error(format!("cancel failed: {e}"));
+                        }
+                    }
+                }
                 AppCommand::LoadSessionsForPicker(agent_id) => {
                     match app.client.list_sessions(Some(&agent_id)).await {
                         Ok(sessions) => {
@@ -829,6 +908,9 @@ impl Runtime {
         let client = Arc::clone(&app.client);
         let forward_to = self.sse_tx.clone();
 
+        // Mark turn as in-flight so ESC routes to CancelTurn.
+        app.mark_turn_started();
+
         // Transition to Reconnecting to give visual feedback while connecting.
         app.apply_sse(SseUpdate::State(ConnectionState::Reconnecting));
         app.status = Status::info(format!("sending to {agent}…"));
@@ -899,6 +981,7 @@ impl Runtime {
             }
         });
         self.sse_task = Some(app.client.spawn_sse(session_id.clone(), bridge_tx));
+        app.active_session_id = Some(session_id.clone());
         app.status = Status::info(format!("resumed session {session_id}"));
     }
 
@@ -930,6 +1013,7 @@ impl Runtime {
                         }
                     });
                     self.sse_task = Some(app.client.spawn_sse(session.id.clone(), bridge_tx));
+                    app.active_session_id = Some(session.id.clone());
                     app.status = Status::info(format!("session {} loaded", session.id));
                 } else {
                     // No sessions yet — clear any stale transcript so the
@@ -1382,5 +1466,128 @@ mod tests {
             app.status.text, baseline_status,
             "stale evolve error must not surface in the status line"
         );
+    }
+
+    // --- J.0.4: CancelTurn dispatch tests (sera-zate) ---
+
+    #[test]
+    fn cancel_turn_while_streaming_emits_command() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.turn_streaming = true;
+        app.active_session_id = Some("ses-abc".into());
+        app.dispatch(Action::CancelTurn);
+        assert!(matches!(
+            app.pending.last(),
+            Some(AppCommand::CancelTurn(id)) if id == "ses-abc"
+        ));
+        assert!(app.status.text.contains("cancelling"));
+    }
+
+    #[test]
+    fn cancel_turn_when_not_streaming_is_noop() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.turn_streaming = false;
+        app.active_session_id = Some("ses-abc".into());
+        app.dispatch(Action::CancelTurn);
+        assert!(app.pending.is_empty());
+    }
+
+    #[test]
+    fn cancel_turn_without_session_id_is_noop() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.turn_streaming = true;
+        app.active_session_id = None;
+        app.dispatch(Action::CancelTurn);
+        assert!(app.pending.is_empty());
+    }
+
+    #[test]
+    fn apply_sse_event_captures_session_id() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        assert!(app.active_session_id.is_none());
+        app.apply_sse(SseUpdate::Event(StreamEvent {
+            event_type: "message".into(),
+            session_id: "ses-xyz".into(),
+            role: "assistant".into(),
+            delta: "hi".into(),
+            tool: String::new(),
+        }));
+        assert_eq!(app.active_session_id.as_deref(), Some("ses-xyz"));
+    }
+
+    #[test]
+    fn apply_sse_event_refreshes_stale_session_id() {
+        // A stale active_session_id (e.g. from a previous turn / agent)
+        // must be replaced when a new session id arrives, otherwise
+        // CancelTurn would POST against the wrong session.
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.active_session_id = Some("ses-old".into());
+        app.apply_sse(SseUpdate::Event(StreamEvent {
+            event_type: "message".into(),
+            session_id: "ses-new".into(),
+            role: "assistant".into(),
+            delta: "hi".into(),
+            tool: String::new(),
+        }));
+        assert_eq!(app.active_session_id.as_deref(), Some("ses-new"));
+    }
+
+    #[test]
+    fn apply_sse_state_connected_clears_turn_streaming() {
+        // turn_streaming should only be cleared when the stream actually
+        // ends — i.e. when transitioning OUT of Reconnecting.  The Connected
+        // state that fires at stream *start* (right after the POST) must
+        // not clear it, otherwise ESC cancel is unreachable during the
+        // generation window.
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.turn_streaming = true;
+        // Mid-flight: connection enters Reconnecting (in-flight phase).
+        app.apply_sse(SseUpdate::State(ConnectionState::Reconnecting));
+        assert!(app.turn_streaming, "still streaming during Reconnecting");
+        // Stream-start Connected emitted after POST returns OK — turn is
+        // still streaming tokens, ESC must still cancel.
+        app.apply_sse(SseUpdate::State(ConnectionState::Connected));
+        assert!(
+            !app.turn_streaming,
+            "transition out of Reconnecting clears turn_streaming"
+        );
+    }
+
+    #[test]
+    fn apply_sse_state_connected_without_prior_reconnecting_keeps_turn_streaming() {
+        // Defensive: a stray Connected that does not follow Reconnecting
+        // (e.g. unrelated reconnection signal) must NOT prematurely end
+        // the streaming window.
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.turn_streaming = true;
+        // connection starts at Disconnected; jump straight to Connected.
+        app.apply_sse(SseUpdate::State(ConnectionState::Connected));
+        assert!(
+            app.turn_streaming,
+            "Connected without a prior Reconnecting must not clear turn_streaming"
+        );
+    }
+
+    #[test]
+    fn apply_sse_state_reconnecting_keeps_turn_streaming() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.turn_streaming = true;
+        app.apply_sse(SseUpdate::State(ConnectionState::Reconnecting));
+        assert!(app.turn_streaming);
+    }
+
+    #[test]
+    fn footer_hint_shows_cancel_when_streaming() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.turn_streaming = true;
+        let hint = app.footer_hint();
+        assert!(hint.contains("cancel turn"), "streaming hint must mention cancel turn; got: {hint}");
+    }
+
+    #[test]
+    fn footer_hint_shows_send_when_not_streaming() {
+        let app = App::new(client(), TuiKeybindings::defaults());
+        let hint = app.footer_hint();
+        assert!(hint.contains("send"), "idle hint must mention send; got: {hint}");
     }
 }

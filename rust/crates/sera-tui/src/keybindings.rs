@@ -94,6 +94,9 @@ pub struct TuiKeybindings {
     pub open_hitl_modal: Vec<KeyBinding>,
     /// Open the evolve status modal (default: Ctrl+E) — chat-dominant layout.
     pub open_evolve_modal: Vec<KeyBinding>,
+    /// Cancel the in-flight turn (default: Esc).  Only fires when a turn is
+    /// actively streaming; otherwise Esc falls through to modal-close / back.
+    pub cancel_turn: Vec<KeyBinding>,
 }
 
 impl TuiKeybindings {
@@ -148,6 +151,7 @@ impl TuiKeybindings {
                 KeyCode::Char('e'),
                 KeyModifiers::CONTROL,
             )],
+            cancel_turn: vec![KeyBinding::plain(KeyCode::Esc)],
         }
     }
 }
@@ -214,6 +218,7 @@ mod tests {
         assert!(!kb.open_agents_modal.is_empty());
         assert!(!kb.open_hitl_modal.is_empty());
         assert!(!kb.open_evolve_modal.is_empty());
+        assert!(!kb.cancel_turn.is_empty());
     }
 
     #[test]

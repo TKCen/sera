@@ -78,14 +78,27 @@ pub fn translate(event: &KeyEvent, kb: &TuiKeybindings) -> Action {
 ///
 /// When `composer_focused` is false the transcript pane is active and we
 /// fall back to the standard `translate` so scroll keys work normally.
+///
+/// `turn_streaming` is true while a chat turn is actively in flight.  When
+/// it is set, the `cancel_turn` binding (default: Esc) takes highest
+/// precedence so the operator can interrupt the stream immediately.
 pub fn translate_session(
     event: &KeyEvent,
     kb: &TuiKeybindings,
     composer_focused: bool,
+    turn_streaming: bool,
 ) -> Action {
-    // Global exits always win regardless of composer state.
+    // Global exits always win regardless of composer or streaming state.
     if matches_key(event, &kb.quit) {
         return Action::Quit;
+    }
+
+    // J.0.4: while a turn is streaming, ESC (cancel_turn binding) takes
+    // precedence over all other bindings — including Back and modal-open
+    // shortcuts.  The dispatch layer only acts on CancelTurn when
+    // `App::turn_streaming` is true, so a false-positive here is a no-op.
+    if turn_streaming && matches_key(event, &kb.cancel_turn) {
+        return Action::CancelTurn;
     }
 
     // Session-specific bindings checked before the global table.
@@ -172,11 +185,11 @@ mod tests {
     fn session_tab_toggles_composer_focus() {
         let kb = TuiKeybindings::defaults();
         assert_eq!(
-            translate_session(&ev(KeyCode::Tab), &kb, true),
+            translate_session(&ev(KeyCode::Tab), &kb, true, false),
             Action::ToggleComposerFocus,
         );
         assert_eq!(
-            translate_session(&ev(KeyCode::Tab), &kb, false),
+            translate_session(&ev(KeyCode::Tab), &kb, false, false),
             Action::ToggleComposerFocus,
         );
     }
@@ -186,11 +199,11 @@ mod tests {
         let kb = TuiKeybindings::defaults();
         let ctrl_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL);
         assert_eq!(
-            translate_session(&ctrl_enter, &kb, true),
+            translate_session(&ctrl_enter, &kb, true, false),
             Action::SubmitComposer,
         );
         assert_eq!(
-            translate_session(&ctrl_enter, &kb, false),
+            translate_session(&ctrl_enter, &kb, false, false),
             Action::SubmitComposer,
         );
     }
@@ -200,7 +213,7 @@ mod tests {
         let kb = TuiKeybindings::defaults();
         let key_h = ev(KeyCode::Char('h'));
         assert_eq!(
-            translate_session(&key_h, &kb, true),
+            translate_session(&key_h, &kb, true, false),
             Action::ComposerInput(key_h),
         );
     }
@@ -209,7 +222,7 @@ mod tests {
     fn session_plain_key_scrolls_when_transcript_focused() {
         let kb = TuiKeybindings::defaults();
         assert_eq!(
-            translate_session(&ev(KeyCode::Up), &kb, false),
+            translate_session(&ev(KeyCode::Up), &kb, false, false),
             Action::Up,
         );
     }
@@ -218,7 +231,51 @@ mod tests {
     fn session_quit_always_wins() {
         let kb = TuiKeybindings::defaults();
         assert_eq!(
-            translate_session(&ev(KeyCode::Char('q')), &kb, true),
+            translate_session(&ev(KeyCode::Char('q')), &kb, true, false),
+            Action::Quit,
+        );
+    }
+
+    // --- J.0.4 cancel-turn tests ---
+
+    #[test]
+    fn esc_during_streaming_routes_to_cancel_turn() {
+        let kb = TuiKeybindings::defaults();
+        assert_eq!(
+            translate_session(&ev(KeyCode::Esc), &kb, true, true),
+            Action::CancelTurn,
+        );
+        assert_eq!(
+            translate_session(&ev(KeyCode::Esc), &kb, false, true),
+            Action::CancelTurn,
+        );
+    }
+
+    #[test]
+    fn esc_when_not_streaming_routes_to_back_via_composer_input() {
+        // When not streaming, ESC in composer-focused mode goes to ComposerInput
+        // (the textarea handles it).  In transcript-focused mode it hits Back
+        // via the standard translate table.
+        let kb = TuiKeybindings::defaults();
+        let esc = ev(KeyCode::Esc);
+        // Composer focused + not streaming → ComposerInput (textarea handles ESC)
+        assert_eq!(
+            translate_session(&esc, &kb, true, false),
+            Action::ComposerInput(esc),
+        );
+        // Transcript focused + not streaming → Back (standard table)
+        assert_eq!(
+            translate_session(&esc, &kb, false, false),
+            Action::Back,
+        );
+    }
+
+    #[test]
+    fn ctrl_c_quits_even_during_streaming() {
+        let kb = TuiKeybindings::defaults();
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(
+            translate_session(&ctrl_c, &kb, true, true),
             Action::Quit,
         );
     }

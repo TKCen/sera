@@ -645,6 +645,30 @@ impl GatewayClient {
         Ok(Box::pin(resp.bytes_stream()))
     }
 
+    /// `POST /api/chat/cancel` — abort the in-flight turn for `session_id`.
+    ///
+    /// Returns `Ok(true)` when the gateway acknowledged the cancel (200/204),
+    /// `Ok(false)` when no turn was in flight (404), and `Err` on transport
+    /// or unexpected status errors.  The caller should treat `Ok(false)` as a
+    /// no-op (the turn already completed before the cancel arrived).
+    pub async fn cancel_turn(&self, session_id: &str) -> Result<bool, ClientError> {
+        let resp = self
+            .client
+            .post(self.url("/api/chat/cancel"))
+            .header("content-type", "application/json")
+            .json(&serde_json::json!({ "session_id": session_id }))
+            .send()
+            .await?;
+        match resp.status() {
+            s if s.is_success() => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            s => {
+                let body = resp.text().await.unwrap_or_default();
+                Err(ClientError::Status { status: s, body })
+            }
+        }
+    }
+
     /// `POST /api/chat` with `{message, agent, stream: true}`.
     ///
     /// Returns an async stream of [`StreamEvent`]s parsed from the SSE

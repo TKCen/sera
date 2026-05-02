@@ -129,6 +129,10 @@ pub enum Action {
     /// in the HITL queue pane).
     #[allow(dead_code)]
     DismissHitlModal,
+    /// Cancel the in-flight streaming turn (J.0.4 / sera-zate).
+    /// Only dispatched when `App::turn_streaming` is true; otherwise ESC
+    /// falls through to `Back` / modal-close precedence in the event loop.
+    CancelTurn,
     /// No-op — used when a key doesn't match any binding.  Reducing to
     /// this instead of returning `Option<Action>` lets the dispatch table
     /// stay a plain `match`.

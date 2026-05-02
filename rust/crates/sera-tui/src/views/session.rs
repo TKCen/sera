@@ -758,7 +758,7 @@ mod tests {
             role: "assistant".into(),
             delta: "hello ".into(),
             tool: String::new(),
-            parent_task_id: None,
+            ..Default::default()
         });
         v.apply_event(StreamEvent {
             event_type: "message".into(),
@@ -766,7 +766,7 @@ mod tests {
             role: "assistant".into(),
             delta: "world".into(),
             tool: String::new(),
-            parent_task_id: None,
+            ..Default::default()
         });
         assert_eq!(v.blocks.len(), 1);
         match &v.blocks[0] {
@@ -787,7 +787,7 @@ mod tests {
             role: "user".into(),
             delta: "ping".into(),
             tool: String::new(),
-            parent_task_id: None,
+            ..Default::default()
         });
         v.apply_event(StreamEvent {
             event_type: "message".into(),
@@ -795,7 +795,7 @@ mod tests {
             role: "assistant".into(),
             delta: "pong".into(),
             tool: String::new(),
-            parent_task_id: None,
+            ..Default::default()
         });
         assert_eq!(v.blocks.len(), 2);
         assert!(matches!(&v.blocks[0], Block::UserMessage { text } if text == "ping"));
@@ -814,7 +814,7 @@ mod tests {
             role: String::new(),
             delta: "args".into(),
             tool: "bash".into(),
-            parent_task_id: None,
+            ..Default::default()
         });
         assert_eq!(v.blocks.len(), 1);
         match &v.blocks[0] {
@@ -841,7 +841,7 @@ mod tests {
             role: String::new(),
             delta: "args".into(),
             tool: "bash".into(),
-            parent_task_id: None,
+            ..Default::default()
         });
         v.apply_event(StreamEvent {
             event_type: "tool_end".into(),
@@ -849,7 +849,7 @@ mod tests {
             role: String::new(),
             delta: "exit 0".into(),
             tool: "bash".into(),
-            parent_task_id: None,
+            ..Default::default()
         });
         assert_eq!(v.blocks.len(), 1, "tool_end must NOT push a new block");
         match &v.blocks[0] {
@@ -872,7 +872,7 @@ mod tests {
             role: String::new(),
             delta: "{\"path\":".into(),
             tool: "Write".into(),
-            parent_task_id: None,
+            ..Default::default()
         });
         v.apply_event(StreamEvent {
             event_type: "tool".into(),
@@ -880,7 +880,7 @@ mod tests {
             role: String::new(),
             delta: "\"poem.md\"}".into(),
             tool: "Write".into(),
-            parent_task_id: None,
+            ..Default::default()
         });
         // Block count must still be 1, not 2.
         assert_eq!(v.blocks.len(), 1, "intermediate tool frame must NOT push a new block");
@@ -922,7 +922,7 @@ mod tests {
             role: "assistant".into(),
             delta: String::new(),
             tool: String::new(),
-            parent_task_id: None,
+            ..Default::default()
         });
         assert!(!updated);
         assert!(v.blocks.is_empty());
@@ -937,7 +937,7 @@ mod tests {
             role: "assistant".into(),
             delta: "answer".into(),
             tool: String::new(),
-            parent_task_id: None,
+            ..Default::default()
         });
         match &v.blocks[0] {
             Block::AssistantMessage { streaming, .. } => assert!(streaming),
@@ -1150,7 +1150,7 @@ mod tests {
             role: String::new(),
             delta: "write /tmp/secret".into(),
             tool: "Write".into(),
-            parent_task_id: None,
+            ..Default::default()
         });
         assert!(updated);
         assert_eq!(v.blocks.len(), 1);

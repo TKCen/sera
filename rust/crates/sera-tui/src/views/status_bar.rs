@@ -104,7 +104,7 @@ mod tests {
             .join("")
     }
 
-    fn bar_with(agent: Option<&str>, session_id: Option<&str>, conn: ConnectionState) -> StatusBar<'_> {
+    fn bar_with<'a>(agent: Option<&'a str>, session_id: Option<&'a str>, conn: ConnectionState) -> StatusBar<'a> {
         StatusBar {
             agent,
             session_id,

@@ -76,13 +76,24 @@ impl SessionView {
     }
 
     /// Hydrate from a wire-format transcript fetch.  Each [`TranscriptEntry`]
-    /// becomes a [`Block`] of the matching role; unknown roles fall back
-    /// to `AssistantMessage` (matches the previous reducer's default).
+    /// becomes a [`Block`] of the matching role:
+    /// * `"user"` → [`Block::UserMessage`]
+    /// * `"tool"` → [`Block::ToolCall`] (completed, collapsed, no args)
+    /// * anything else (including `"assistant"`, `"system"`) →
+    ///   [`Block::AssistantMessage`] (matches the previous reducer's default
+    ///   for unknown roles)
     pub fn set_transcript(&mut self, entries: Vec<TranscriptEntry>) {
         self.blocks = entries
             .into_iter()
             .map(|entry| match entry.role.as_str() {
                 "user" => Block::UserMessage { text: entry.text },
+                "tool" => Block::ToolCall {
+                    tool: String::new(),
+                    summary: entry.text,
+                    args: serde_json::Value::Null,
+                    result: None,
+                    expanded: false,
+                },
                 _ => Block::AssistantMessage {
                     text: entry.text,
                     streaming: false,
@@ -97,10 +108,11 @@ impl SessionView {
     /// Tool events are folded into [`Block::ToolCall`] entries inline
     /// rather than the legacy side `tool_log` pane:
     ///
-    /// * `tool_start` / `tool` (with non-empty `tool` field) — push a
-    ///   collapsed `ToolCall` block; the `summary` is the delta payload
-    ///   (often the args preview).  J.0.3 (sera-c6mb) wires Space-toggle
-    ///   on top of this shape.
+    /// * `tool_start` — push a new collapsed `ToolCall` block; the `summary`
+    ///   is the delta payload (often the args preview).  J.0.3 (sera-c6mb)
+    ///   wires Space-toggle on top of this shape.
+    /// * `tool` (intermediate update) — append the delta to the summary of
+    ///   the most recent unresolved `ToolCall`; does **not** push a new block.
     /// * `tool_end` — attach a [`ToolResult`] to the most recent matching
     ///   `ToolCall` block.
     pub fn apply_event(&mut self, ev: StreamEvent) -> bool {
@@ -109,8 +121,12 @@ impl SessionView {
         if is_tool_event {
             if et == "tool_end" {
                 self.attach_tool_result(&ev.tool, &ev.delta);
-            } else {
+            } else if et == "tool_start" {
                 self.push_tool_call(&ev.tool, &ev.delta);
+            } else {
+                // Intermediate `tool` update: append delta to the most recent
+                // unresolved ToolCall rather than creating a duplicate block.
+                self.update_tool_call(&ev.tool, &ev.delta);
             }
             return true;
         }
@@ -167,6 +183,30 @@ impl SessionView {
             result: None,
             expanded: false,
         });
+    }
+
+    /// Append `delta` to the summary of the most recent unresolved `ToolCall`
+    /// whose tool name matches (or any if `tool` is empty).  Used for
+    /// intermediate `tool` stream frames that refine the args preview without
+    /// starting a new invocation.
+    fn update_tool_call(&mut self, tool: &str, delta: &str) {
+        for block in self.blocks.iter_mut().rev() {
+            if let Block::ToolCall {
+                tool: t,
+                summary,
+                result,
+                ..
+            } = block
+                && result.is_none()
+                && (tool.is_empty() || t == tool)
+            {
+                summary.push_str(delta);
+                return;
+            }
+        }
+        // No open call found — treat it like a tool_start so the frame is
+        // not silently dropped.
+        self.push_tool_call(tool, delta);
     }
 
     fn attach_tool_result(&mut self, tool: &str, delta: &str) {
@@ -578,6 +618,38 @@ mod tests {
     }
 
     #[test]
+    fn apply_event_intermediate_tool_update_does_not_push_new_block() {
+        // tool_start → tool (×2) → tool_end must leave exactly one ToolCall block.
+        let mut v = SessionView::new();
+        v.apply_event(StreamEvent {
+            event_type: "tool_start".into(),
+            session_id: String::new(),
+            role: String::new(),
+            delta: "{\"path\":".into(),
+            tool: "Write".into(),
+        });
+        v.apply_event(StreamEvent {
+            event_type: "tool".into(),
+            session_id: String::new(),
+            role: String::new(),
+            delta: "\"poem.md\"}".into(),
+            tool: "Write".into(),
+        });
+        // Block count must still be 1, not 2.
+        assert_eq!(v.blocks.len(), 1, "intermediate tool frame must NOT push a new block");
+        match &v.blocks[0] {
+            Block::ToolCall { tool, summary, result, .. } => {
+                assert_eq!(tool, "Write");
+                // Delta from tool_start and intermediate tool are both in the summary.
+                assert!(summary.contains("{\"path\":"), "initial delta preserved");
+                assert!(summary.contains("\"poem.md\"}"), "intermediate delta appended");
+                assert!(result.is_none(), "result not yet attached");
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn scroll_up_disables_auto_scroll() {
         let mut v = SessionView::new();
         assert!(v.auto_scroll);
@@ -648,6 +720,23 @@ mod tests {
             &v.blocks[1],
             Block::AssistantMessage { text, streaming } if text == "a" && !*streaming
         ));
+    }
+
+    #[test]
+    fn set_transcript_preserves_tool_role_as_tool_call_block() {
+        // A persisted "tool" entry in GET history must not be silently
+        // downgraded to AssistantMessage (P2 regression fix).
+        let mut v = SessionView::new();
+        v.set_transcript(vec![TranscriptEntry {
+            role: "tool".into(),
+            text: "exit 0".into(),
+        }]);
+        assert_eq!(v.blocks.len(), 1);
+        assert!(
+            matches!(&v.blocks[0], Block::ToolCall { summary, .. } if summary == "exit 0"),
+            "tool-role entry must map to ToolCall, got {:?}",
+            &v.blocks[0]
+        );
     }
 
     #[test]

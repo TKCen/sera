@@ -281,6 +281,11 @@ impl EvolveProposal {
 /// A streaming event from the SSE endpoint (or a synthetic "tool log"
 /// chunk).  Kept deliberately loose since the gateway's event shape is in
 /// flux — SessionView only reads `role`, `delta`, and `event_type`.
+///
+/// `prompt_tokens` / `completion_tokens` / `total_tokens` are populated when
+/// the gateway emits the terminal `done` frame on `/api/chat` (sera-c7bf).
+/// Earlier SSE frames carry `0` for all three; the TUI's status bar reads
+/// the values once the `done` frame lands.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StreamEvent {
     #[serde(default)]
@@ -299,6 +304,15 @@ pub struct StreamEvent {
     /// the parent transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_task_id: Option<String>,
+    /// Prompt tokens reported by the gateway in the terminal `done` frame.
+    #[serde(default)]
+    pub prompt_tokens: u64,
+    /// Completion tokens reported by the gateway in the terminal `done` frame.
+    #[serde(default)]
+    pub completion_tokens: u64,
+    /// Total tokens (prompt + completion) reported by the gateway.
+    #[serde(default)]
+    pub total_tokens: u64,
 }
 
 impl StreamEvent {
@@ -311,11 +325,31 @@ impl StreamEvent {
         }
         serde_json::from_str::<serde_json::Value>(trimmed)
             .ok()
-            .map(|v| Self {
+            .map(|v| {
+                // Usage may live at the top level or nested under "usage" — the
+                // gateway's `done` frame uses {"status":"complete","usage":{…}}.
+                let usage = v.get("usage");
+                let pt = usage
+                    .and_then(|u| u.get("prompt_tokens"))
+                    .or_else(|| v.get("prompt_tokens"))
+                    .and_then(|f| f.as_u64())
+                    .unwrap_or(0);
+                let ct = usage
+                    .and_then(|u| u.get("completion_tokens"))
+                    .or_else(|| v.get("completion_tokens"))
+                    .and_then(|f| f.as_u64())
+                    .unwrap_or(0);
+                let tt = usage
+                    .and_then(|u| u.get("total_tokens"))
+                    .or_else(|| v.get("total_tokens"))
+                    .and_then(|f| f.as_u64())
+                    .unwrap_or(pt + ct);
+                Self {
                 event_type: v
                     .get("event_type")
                     .or_else(|| v.get("event"))
                     .or_else(|| v.get("type"))
+                    .or_else(|| v.get("status"))
                     .and_then(|f| f.as_str())
                     .unwrap_or("message")
                     .to_owned(),
@@ -346,6 +380,10 @@ impl StreamEvent {
                     .get("parent_task_id")
                     .and_then(|f| f.as_str())
                     .map(str::to_owned),
+                prompt_tokens: pt,
+                completion_tokens: ct,
+                total_tokens: tt,
+                }
             })
     }
 }

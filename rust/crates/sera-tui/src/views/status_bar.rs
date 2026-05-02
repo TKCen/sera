@@ -21,6 +21,13 @@ pub struct StatusBar<'a> {
     pub session_id: Option<&'a str>,
     /// Current connection state.
     pub conn: ConnectionState,
+    /// Cumulative prompt tokens reported by the gateway across the
+    /// session's completed turns (sera-c7bf).
+    pub prompt_tokens: u64,
+    /// Cumulative completion tokens — see [`Self::prompt_tokens`].
+    pub completion_tokens: u64,
+    /// Cumulative cost in USD. `0.0` for local models.
+    pub cost_usd: f64,
 }
 
 impl StatusBar<'_> {
@@ -33,6 +40,20 @@ impl StatusBar<'_> {
 
         let (conn_label, conn_color) = conn_style(self.conn);
 
+        let total_tokens = self
+            .prompt_tokens
+            .saturating_add(self.completion_tokens);
+        let tokens_label = format!(
+            "tokens={} ({}↑/{}↓)",
+            total_tokens, self.prompt_tokens, self.completion_tokens
+        );
+        // Two decimals when nonzero, zero decimals at $0 to keep the line tight.
+        let cost_label = if self.cost_usd > 0.0 {
+            format!("cost=${:.4}", self.cost_usd)
+        } else {
+            "cost=$0".to_owned()
+        };
+
         let spans = vec![
             Span::raw(" agent="),
             Span::styled(
@@ -43,7 +64,11 @@ impl StatusBar<'_> {
             Span::styled(session_label, Style::default().fg(Color::White)),
             Span::raw(" · "),
             Span::styled(conn_label, Style::default().fg(conn_color)),
-            Span::raw(" · lane=idle "),
+            Span::raw(" · lane=idle · "),
+            Span::styled(tokens_label, Style::default().fg(Color::White)),
+            Span::raw(" · "),
+            Span::styled(cost_label, Style::default().fg(Color::White)),
+            Span::raw(" "),
         ];
 
         let bar = Paragraph::new(Line::from(spans))
@@ -79,27 +104,46 @@ mod tests {
             .join("")
     }
 
+    fn bar_with(agent: Option<&str>, session_id: Option<&str>, conn: ConnectionState) -> StatusBar<'_> {
+        StatusBar {
+            agent,
+            session_id,
+            conn,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            cost_usd: 0.0,
+        }
+    }
+
     #[test]
     fn renders_no_agent_label_when_active_none() {
-        let bar = StatusBar {
-            agent: None,
-            session_id: None,
-            conn: ConnectionState::Disconnected,
-        };
-        let out = render_to_string(bar, 80);
+        let bar = bar_with(None, None, ConnectionState::Disconnected);
+        let out = render_to_string(bar, 120);
         assert!(out.contains("no agent"), "expected 'no agent' in: {out}");
     }
 
     #[test]
     fn renders_agent_name_when_set() {
-        let bar = StatusBar {
-            agent: Some("sera"),
-            session_id: Some("abc123def456"),
-            conn: ConnectionState::Connected,
-        };
-        let out = render_to_string(bar, 80);
+        let bar = bar_with(Some("sera"), Some("abc123def456"), ConnectionState::Connected);
+        let out = render_to_string(bar, 120);
         assert!(out.contains("sera"), "expected 'sera' in: {out}");
         assert!(out.contains("abc123de"), "expected truncated session id in: {out}");
+    }
+
+    #[test]
+    fn renders_token_and_cost_labels() {
+        let bar = StatusBar {
+            agent: Some("sera"),
+            session_id: Some("s1"),
+            conn: ConnectionState::Connected,
+            prompt_tokens: 42,
+            completion_tokens: 17,
+            cost_usd: 0.0,
+        };
+        let out = render_to_string(bar, 160);
+        assert!(out.contains("tokens=59"), "expected 'tokens=59' in: {out}");
+        assert!(out.contains("42↑/17↓"), "expected '42↑/17↓' in: {out}");
+        assert!(out.contains("cost=$0"), "expected 'cost=$0' in: {out}");
     }
 
     #[test]
@@ -111,24 +155,16 @@ mod tests {
 
     #[test]
     fn session_id_truncated_to_8_chars() {
-        let bar = StatusBar {
-            agent: Some("test"),
-            session_id: Some("0123456789abcdef"),
-            conn: ConnectionState::Connected,
-        };
-        let out = render_to_string(bar, 80);
+        let bar = bar_with(Some("test"), Some("0123456789abcdef"), ConnectionState::Connected);
+        let out = render_to_string(bar, 120);
         assert!(out.contains("01234567"), "expected first 8 chars in: {out}");
         assert!(!out.contains("01234567890"), "should not contain full id in: {out}");
     }
 
     #[test]
     fn missing_session_id_renders_dash() {
-        let bar = StatusBar {
-            agent: Some("test"),
-            session_id: None,
-            conn: ConnectionState::Connected,
-        };
-        let out = render_to_string(bar, 80);
+        let bar = bar_with(Some("test"), None, ConnectionState::Connected);
+        let out = render_to_string(bar, 120);
         assert!(out.contains("session=-"), "expected 'session=-' in: {out}");
     }
 }

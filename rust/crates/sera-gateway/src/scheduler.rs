@@ -1,4 +1,4 @@
-//! Workflow scheduler — Wave E Phase 1 (sera-kgi8).
+//! Workflow scheduler — Wave E Phase 1 (sera-kgi8) + Mail gate (sera-0zch).
 //!
 //! Wakes every [`TICK_INTERVAL`] and asks [`WorkflowTaskStore::list_pending`]
 //! for the current set of pending tasks. Each pending task is passed through
@@ -6,11 +6,10 @@
 //! `chrono::Utc::now` snapshot; tasks whose gates have resolved are marked
 //! resolved on the store.
 //!
-//! Phase 1 only wires the Timer gate end-to-end — the default
-//! [`ReadyContext`] exposes no-op lookups for the remaining await types, so
-//! Human / GhRun / GhPr / Change / Mail tasks created via the HTTP surface
-//! stay pending until their dedicated beads (sera-dgk1, sera-comg, sera-4fel,
-//! sera-7ggi, sera-0zch) add real lookups.
+//! Timer and Mail gates are fully wired end-to-end. Other await types
+//! (Human: sera-dgk1, GhPr: sera-comg, GhRun: sera-4fel, Change: sera-7ggi)
+//! use no-op lookups and stay pending until their dedicated beads add real
+//! lookup sources.
 //!
 //! Event emission: Phase 1 logs a `tracing::info!` line per resolution. Wiring
 //! to the session SSE stream / event bus is deferred to a follow-up bead — the
@@ -22,6 +21,8 @@ use std::time::Duration;
 
 use chrono::Utc;
 
+use sera_mail::InMemoryMailLookup;
+use sera_workflow::MailLookup;
 use sera_workflow::ready::{ReadyContext, ready_tasks_with_context};
 
 use crate::workflow_store::WorkflowTaskStore;
@@ -34,10 +35,18 @@ pub const TICK_INTERVAL: Duration = Duration::from_secs(5);
 /// Single scheduler pass: snapshot pending tasks, ask sera-workflow which
 /// are ready, and mark ready tasks resolved on the store.
 ///
+/// `mail_lookup` is consulted for every [`sera_workflow::task::AwaitType::Mail`]
+/// gate. Pass the `Arc<InMemoryMailLookup>` wired to the correlator for
+/// production; tests may construct a fresh lookup and call
+/// [`InMemoryMailLookup::notify`] directly to drive the gate.
+///
 /// Returns the number of tasks that transitioned from Pending → Resolved.
 /// Exposed as `pub` (not just `pub(crate)`) so integration tests can drive
 /// a single tick deterministically without racing the real ticker.
-pub async fn tick(store: Arc<dyn WorkflowTaskStore>) -> usize {
+pub async fn tick(
+    store: Arc<dyn WorkflowTaskStore>,
+    mail_lookup: Arc<InMemoryMailLookup>,
+) -> usize {
     let pending = store.list_pending().await;
     if pending.is_empty() {
         return 0;
@@ -49,7 +58,10 @@ pub async fn tick(store: Arc<dyn WorkflowTaskStore>) -> usize {
         pending.iter().map(|r| r.task.clone()).collect();
 
     let now = Utc::now();
-    let ctx = ReadyContext::default_noop();
+    let ctx = ReadyContext {
+        mail: mail_lookup.as_ref() as &dyn MailLookup,
+        ..ReadyContext::default_noop()
+    };
     let ready = ready_tasks_with_context(&tasks, now, &ctx);
 
     let mut resolved = 0;
@@ -70,6 +82,10 @@ pub async fn tick(store: Arc<dyn WorkflowTaskStore>) -> usize {
 
 /// Spawn the scheduler background task.
 ///
+/// `mail_lookup` is passed to every [`tick`] call so Mail-gate tasks resolve
+/// as soon as the correlator pushes a terminal [`sera_workflow::task::MailEvent`]
+/// into the lookup.
+///
 /// Ticks every [`TICK_INTERVAL`]. The loop exits when `shutting_down` flips
 /// to `true` — observed between ticks so an in-flight `tick` call is never
 /// interrupted mid-way.
@@ -80,6 +96,7 @@ pub async fn tick(store: Arc<dyn WorkflowTaskStore>) -> usize {
 /// background loops.
 pub fn spawn_scheduler(
     store: Arc<dyn WorkflowTaskStore>,
+    mail_lookup: Arc<InMemoryMailLookup>,
     shutting_down: Arc<AtomicBool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -102,7 +119,7 @@ pub fn spawn_scheduler(
             if shutting_down.load(Ordering::SeqCst) {
                 break;
             }
-            let resolved = tick(Arc::clone(&store)).await;
+            let resolved = tick(Arc::clone(&store), Arc::clone(&mail_lookup)).await;
             if resolved > 0 {
                 tracing::debug!(
                     event = "workflow_scheduler_tick",

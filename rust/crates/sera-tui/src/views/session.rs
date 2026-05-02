@@ -458,9 +458,9 @@ fn block_to_list_items(block: &Block) -> Vec<ListItem<'static>> {
                 for line in md_to_lines(committed) {
                     items.push(ListItem::new(line));
                 }
-                if !in_flight.is_empty() {
+                for tail_line in in_flight.split('\n') {
                     items.push(ListItem::new(Line::from(Span::raw(
-                        in_flight.to_owned(),
+                        tail_line.to_owned(),
                     ))));
                 }
             } else {

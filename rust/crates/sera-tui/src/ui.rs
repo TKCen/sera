@@ -25,6 +25,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{App, DisconnectBanner, StatusLevel};
+use crate::autocomplete::AutocompletePopup;
 use crate::views::hitl_modal::render_hitl_modal;
 use crate::views::status_bar::StatusBar;
 
@@ -63,6 +64,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // gateway is unreachable unless a higher-priority modal is on top.
     if let Some(banner) = &app.disconnect_banner {
         render_disconnect_banner(frame, chunks[1], banner, &app.keybindings);
+    }
+
+    // J.0.5: autocomplete popup — floats over composer, below modals.
+    if let Some(popup) = &app.autocomplete {
+        render_popup(frame, popup, chunks[2]);
     }
 
     // Modal overlays — rendered on top of everything, topmost last.
@@ -195,6 +201,80 @@ fn render_help_modal(frame: &mut Frame, area: Rect) {
     );
     frame.render_widget(modal, modal_area);
 }
+
+/// Render the autocomplete popup anchored above the composer.
+fn render_popup(frame: &mut Frame, popup: &AutocompletePopup, composer_area: Rect) {
+    use crate::autocomplete::PopupMode;
+    use ratatui::widgets::{List, ListItem, ListState};
+
+    if popup.items.is_empty() {
+        return;
+    }
+
+    let visible_rows = popup.items.len().min(8) as u16;
+    let content_width = popup
+        .items
+        .iter()
+        .map(|i| {
+            i.insert.len()
+                + if i.description.is_empty() {
+                    0
+                } else {
+                    i.description.len() + 2
+                }
+        })
+        .max()
+        .unwrap_or(20) as u16;
+    let w = (content_width + 4)
+        .min(composer_area.width.saturating_sub(2))
+        .max(20);
+    let h = visible_rows + 2;
+    let x = composer_area.x + 1;
+    let y = composer_area.y.saturating_sub(h);
+    let popup_area = Rect::new(x, y, w, h.max(3));
+
+    frame.render_widget(Clear, popup_area);
+
+    let title = match popup.mode {
+        PopupMode::Slash => " commands — ↑/↓  enter/tab:confirm  esc:dismiss ",
+        PopupMode::AtFile => " files — ↑/↓  enter/tab:confirm  esc:dismiss ",
+    };
+
+    let items: Vec<ListItem<'_>> = popup
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let style = if i == popup.selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let label = if item.description.is_empty() {
+                item.insert.clone()
+            } else {
+                format!("{:<12}  {}", item.insert, item.description)
+            };
+            ListItem::new(Span::raw(label)).style(style)
+        })
+        .collect();
+
+    let mut state = ListState::default();
+    state.select(Some(popup.selected));
+
+    let list = List::new(items).block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+
+    frame.render_stateful_widget(list, popup_area, &mut state);
+}
+
 
 /// Centered rectangle by percentage of the parent area.
 fn centered_modal(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

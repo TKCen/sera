@@ -137,6 +137,14 @@ pub enum Action {
     /// timer.  Bound to `keybindings.retry_connection` (default `r`) while
     /// the disconnected banner is shown.  J.0.7 (sera-j0o8).
     RetryConnection,
+    /// Move the autocomplete popup selection up (J.0.5).
+    PopupUp,
+    /// Move the autocomplete popup selection down (J.0.5).
+    PopupDown,
+    /// Confirm the currently highlighted popup item (J.0.5).
+    PopupSelect,
+    /// Dismiss the autocomplete popup without inserting anything (J.0.5).
+    PopupDismiss,
     /// No-op — used when a key doesn't match any binding.  Reducing to
     /// this instead of returning `Option<Action>` lets the dispatch table
     /// stay a plain `match`.

@@ -88,6 +88,7 @@ pub fn translate_session(
     composer_focused: bool,
     turn_streaming: bool,
     disconnected: bool,
+    popup_open: bool,
 ) -> Action {
     // Global exits always win regardless of composer or streaming state.
     if matches_key(event, &kb.quit) {
@@ -130,6 +131,27 @@ pub fn translate_session(
         return Action::RetryConnection;
     }
 
+
+    // J.0.5: popup intercept — navigation drives the popup, not the textarea.
+    if popup_open {
+        if matches_key(event, &kb.popup_up) {
+            return Action::PopupUp;
+        }
+        if matches_key(event, &kb.popup_down) {
+            return Action::PopupDown;
+        }
+        if matches_key(event, &kb.popup_select) {
+            return Action::PopupSelect;
+        }
+        if matches_key(event, &kb.popup_dismiss) {
+            return Action::PopupDismiss;
+        }
+        // Any other key: dismiss the popup and forward the key to the composer
+        // so the typed character is not lost.  Fall through to the
+        // composer_focused branch below which emits ComposerInput; the
+        // autocomplete is re-derived from the updated line, so it will close
+        // if the new content no longer matches a trigger.
+    }
     if composer_focused {
         // All other keys go straight to the textarea widget.
         Action::ComposerInput(*event)
@@ -299,6 +321,20 @@ mod tests {
         assert_eq!(
             translate_session(&key_r, &kb, true, false, true),
             Action::RetryConnection,
+        );
+    }
+
+    #[test]
+    fn popup_open_non_nav_key_forwarded_to_composer() {
+        // A printable key that is not popup_up/down/select/dismiss must be
+        // forwarded to the composer as ComposerInput so the typed character
+        // is not lost.  This is the P1 fix: the old code returned
+        // PopupDismiss and dropped the keystroke.
+        let kb = TuiKeybindings::defaults();
+        let key_a = ev(KeyCode::Char('a'));
+        assert_eq!(
+            translate_session(&key_a, &kb, true, false, true),
+            Action::ComposerInput(key_a),
         );
     }
 }

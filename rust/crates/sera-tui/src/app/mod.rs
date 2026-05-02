@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio_stream::StreamExt as _;
 
+use crate::autocomplete::{detect_trigger, AutocompletePopup};
 use crate::client::{
     Agent, ClientError, ConnectionState, EvolveProposal, GatewayClient, HitlRequest, SseUpdate,
 };
@@ -228,6 +229,9 @@ pub struct App {
     pub agents_gen: u64,
     pub hitl_gen: u64,
     pub evolve_gen: u64,
+
+    /// Active autocomplete popup, or None when closed.
+    pub autocomplete: Option<AutocompletePopup>,
 }
 
 impl App {
@@ -260,6 +264,7 @@ impl App {
             agents_gen: 0,
             hitl_gen: 0,
             evolve_gen: 0,
+            autocomplete: None,
         }
     }
 
@@ -470,6 +475,8 @@ impl App {
             }
             Action::SubmitComposer => {
                 if let ViewKind::Session = self.focus {
+                    // Submitting always closes any open popup.
+                    self.autocomplete = None;
                     self.session.submit_composer();
                     // Drain slash commands first — parse and dispatch each.
                     let slashes: Vec<String> = self.session.pending_slash.drain(..).collect();
@@ -518,6 +525,10 @@ impl App {
             Action::ComposerInput(key) => {
                 if let ViewKind::Session = self.focus {
                     self.session.input_to_composer(key);
+                    // Re-derive autocomplete from the first composer line.
+                    let first_line = self.session.composer.lines()
+                        .first().cloned().unwrap_or_default();
+                    self.autocomplete = derive_autocomplete(&first_line);
                 }
             }
             Action::PasteToComposer(content) => {
@@ -581,6 +592,22 @@ impl App {
                     banner.retry_at = Instant::now();
                 }
             }
+            Action::PopupUp => {
+                if let Some(p) = &mut self.autocomplete { p.move_up(); }
+            }
+            Action::PopupDown => {
+                if let Some(p) = &mut self.autocomplete { p.move_down(); }
+            }
+            Action::PopupSelect => {
+                if let Some(popup) = self.autocomplete.take()
+                    && let Some(item) = popup.selected_item()
+                {
+                    self.session.insert_autocomplete(
+                        &popup.mode, &popup.filter, &item.insert,
+                    );
+                }
+            }
+            Action::PopupDismiss => { self.autocomplete = None; }
             // These are only dispatched via the modal intercept path above, so
             // reaching here means the modal was already closed.  Treat as no-op.
             Action::ApproveHitl(_)
@@ -806,6 +833,19 @@ pub fn apply_app_update(app: &mut App, update: AppUpdate) {
             }
         }
     }
+}
+
+/// Derive an [] from the current first composer line.
+fn derive_autocomplete(line: &str) -> Option<AutocompletePopup> {
+    use crate::autocomplete::PopupMode;
+    let (mode, filter) = detect_trigger(line)?;
+    let cwd = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let popup = match mode {
+        PopupMode::Slash => AutocompletePopup::for_slash(&filter),
+        PopupMode::AtFile => AutocompletePopup::for_at_file(&filter, &cwd),
+    };
+    if popup.is_empty() { None } else { Some(popup) }
 }
 
 fn display_first(bindings: &[crate::keybindings::KeyBinding]) -> String {

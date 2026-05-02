@@ -30,6 +30,7 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 mod app;
+mod autocomplete;
 mod client;
 mod config;
 mod highlight;
@@ -214,6 +215,7 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
                             app.session.composer_focused(),
                             app.turn_streaming,
                             app.disconnect_banner.is_some(),
+                            app.autocomplete.is_some(),
                         )
                     };
                     app.dispatch(action);

@@ -9332,6 +9332,7 @@ spec:
                 capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
                 ticket_store: Arc::new(InMemoryTicketStore::new()),
                 workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+                gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
                 admin_auth: None,
                 admin_audit: None,
             })
@@ -10064,6 +10065,7 @@ spec:
                 capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
                 ticket_store: Arc::new(InMemoryTicketStore::new()),
                 workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+                gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
                 admin_auth: None,
                 admin_audit: None,
             });

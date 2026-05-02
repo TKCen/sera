@@ -800,7 +800,36 @@ impl App {
                     // pricing will be threaded in via a separate bead.
                     self.usage_cost_usd = 0.0;
                 }
-                self.session.apply_event(ev);
+                // J.2.3 (sera-mfj3): when a child event is routed into a
+                // Task block's child_thread, sync the updated ThreadView into
+                // the thread_stack so the drilled-in view is live.
+                if let Some(ref task_id) = ev.parent_task_id.clone() {
+                    self.session.apply_event(ev);
+                    // Find the matching Task block and propagate its updated
+                    // child_thread to the topmost thread_stack entry whose
+                    // blocks originated from that task.  We match by task_id
+                    // stored on the block — the stack entry was cloned from it
+                    // at drill_in time.
+                    if let Some(stack_thread) = self.thread_stack.last_mut() {
+                        if let Some(child) = self.session.blocks.iter().find_map(|b| {
+                            if let crate::views::blocks::Block::Task {
+                                task_id: tid,
+                                child_thread,
+                                ..
+                            } = b
+                                && tid == task_id
+                            {
+                                Some(child_thread.clone())
+                            } else {
+                                None
+                            }
+                        }) {
+                            *stack_thread = child;
+                        }
+                    }
+                } else {
+                    self.session.apply_event(ev);
+                }
             }
             SseUpdate::State(s) => {
                 // Only clear turn_streaming when the stream transitions out
@@ -2173,5 +2202,124 @@ mod tests {
             "expected Approve(h1), got: {:?}",
             app.pending.last()
         );
+    }
+
+    // --- J.2.3 (sera-mfj3) subagent live-streaming tests ---
+
+    #[test]
+    fn subagent_start_creates_task_block() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.apply_sse(SseUpdate::Event(StreamEvent {
+            event_type: "subagent_start".into(),
+            session_id: "task-abc".into(),
+            role: String::new(),
+            delta: "searching docs".into(),
+            tool: "researcher".into(),
+            parent_task_id: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+        }));
+        assert_eq!(app.session.blocks.len(), 1);
+        match &app.session.blocks[0] {
+            crate::views::blocks::Block::Task {
+                task_id,
+                agent,
+                summary,
+                ..
+            } => {
+                assert_eq!(task_id, "task-abc");
+                assert_eq!(agent, "researcher");
+                assert_eq!(summary, "searching docs");
+            }
+            other => panic!("expected Task block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn subagent_text_events_route_into_child_thread() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        // First create the task block via subagent_start.
+        app.apply_sse(SseUpdate::Event(StreamEvent {
+            event_type: "subagent_start".into(),
+            session_id: "task-1".into(),
+            role: String::new(),
+            delta: "summary".into(),
+            tool: "planner".into(),
+            parent_task_id: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+        }));
+        // Then stream text into it via parent_task_id.
+        app.apply_sse(SseUpdate::Event(StreamEvent {
+            event_type: "message".into(),
+            session_id: String::new(),
+            role: "assistant".into(),
+            delta: "child text".into(),
+            tool: String::new(),
+            parent_task_id: Some("task-1".into()),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+        }));
+        // Top-level transcript should still have only the Task block.
+        assert_eq!(app.session.blocks.len(), 1);
+        // The child_thread should have the streamed text.
+        match &app.session.blocks[0] {
+            crate::views::blocks::Block::Task { child_thread, .. } => {
+                assert_eq!(child_thread.blocks.len(), 1);
+                match &child_thread.blocks[0] {
+                    crate::views::blocks::Block::AssistantMessage { text, .. } => {
+                        assert_eq!(text, "child text");
+                    }
+                    other => panic!("expected AssistantMessage, got {other:?}"),
+                }
+            }
+            other => panic!("expected Task block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn drilled_in_thread_stack_synced_on_child_event() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        // Create the task block.
+        app.apply_sse(SseUpdate::Event(StreamEvent {
+            event_type: "subagent_start".into(),
+            session_id: "task-2".into(),
+            role: String::new(),
+            delta: "plan".into(),
+            tool: "executor".into(),
+            parent_task_id: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+        }));
+        // Drill in (simulates user pressing Enter on the task block).
+        app.focus = ViewKind::Session;
+        app.dispatch(Action::DrillIn);
+        assert_eq!(app.thread_stack.len(), 1);
+        assert!(app.thread_stack[0].blocks.is_empty());
+        // Stream a child event — stack entry should be updated.
+        app.apply_sse(SseUpdate::Event(StreamEvent {
+            event_type: "message".into(),
+            session_id: String::new(),
+            role: "assistant".into(),
+            delta: "live output".into(),
+            tool: String::new(),
+            parent_task_id: Some("task-2".into()),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+        }));
+        // The top of thread_stack must now contain the streamed block.
+        assert_eq!(app.thread_stack.len(), 1);
+        assert_eq!(app.thread_stack[0].blocks.len(), 1);
+        match &app.thread_stack[0].blocks[0] {
+            crate::views::blocks::Block::AssistantMessage { text, .. } => {
+                assert_eq!(text, "live output");
+            }
+            other => panic!("expected AssistantMessage in stack, got {other:?}"),
+        }
     }
 }

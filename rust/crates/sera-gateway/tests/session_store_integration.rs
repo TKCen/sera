@@ -41,6 +41,7 @@ fn turn(text: &str) -> Submission {
         change_artifact: None,
         session_key: None,
         parent_session_key: None,
+        parent_task_id: None,
     }
 }
 
@@ -55,6 +56,7 @@ fn streaming_event(submission_id: uuid::Uuid, delta: &str) -> Event {
         trace: W3cTraceContext::default(),
         timestamp: chrono::DateTime::<chrono::Utc>::from_timestamp(1_767_225_600, 0).unwrap(),
         parent_session_key: None,
+        parent_task_id: None,
     }
 }
 

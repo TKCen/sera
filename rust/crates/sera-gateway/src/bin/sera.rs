@@ -4939,6 +4939,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         Arc::clone(&state.workflow_store),
         Arc::clone(&state.mail_lookup),
         Some(Arc::clone(&state.gh_run_store)),
+        None,
         Arc::clone(&shutting_down),
     );
 

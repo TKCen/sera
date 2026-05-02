@@ -69,8 +69,7 @@ pub struct CreateTaskRequest {
     /// The numeric or opaque run identifier as a string.
     #[serde(default)]
     pub run_id: Option<String>,
-    /// Required for `gh_run` await_type; ignored otherwise.
-    /// Repository in `owner/name` form (e.g. `"acme/my-repo"`).
+    /// Reserved for future `gh_run` gate (sera-4fel); ignored for now.
     #[serde(default)]
     pub repo: Option<String>,
     #[serde(default)]

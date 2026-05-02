@@ -80,6 +80,7 @@ use sera_types::event::IncomingEvent as DomainEvent;
 use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
 use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
 use sera_meta::constitutional::ConstitutionalRegistry;
+use sera_meta::artifact_pipeline::ArtifactPipeline;
 use sera_gateway::constitutional_config;
 
 // ── Phase-3 SPEC-interop crates ──────────────────────────────────────────────
@@ -101,11 +102,14 @@ mod route_hitl;
 mod route_workflow;
 #[path = "../routes/inference_proxy.rs"]
 mod route_inference_proxy;
+#[path = "../routes/evolution.rs"]
+mod route_evolution;
 
 use route_a2a::{A2aAppState, A2aPeerRegistry};
 use route_agui::{AguiAppState, AguiHub};
 use route_plugins::PluginsAppState;
 use route_workflow::WorkflowAppState;
+use route_evolution::EvolutionAppState;
 use route_inference_proxy::{
     InferenceProxyAppState, InferenceProxyAudit, LlmBudgetGate, NoopBudgetGate,
     SqliteInferenceProxyAudit, UpstreamProvider,
@@ -1364,6 +1368,10 @@ struct AppState {
     /// JSONL audit log handle for admin requests (sera-nrn9). `None` when
     /// the admin server is not started.
     admin_audit: Option<Arc<AdminAuditLogger>>,
+    /// Self-evolution artifact pipeline (sera-b1gb). Tracks in-flight change
+    /// proposals through the propose → evaluate → approve → apply lifecycle.
+    /// Shared across all `/api/evolution/proposals` routes via `EvolutionAppState`.
+    artifact_pipeline: Arc<ArtifactPipeline>,
 }
 
 impl AppState {
@@ -1624,6 +1632,15 @@ impl WorkflowAppState for AppState {
     }
     fn gh_pr_store(&self) -> Option<Arc<dyn GhPrStateStore>> {
         Some(Arc::clone(&self.gh_pr_store))
+    }
+}
+
+impl EvolutionAppState for AppState {
+    fn api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+    fn artifact_pipeline(&self) -> Arc<ArtifactPipeline> {
+        Arc::clone(&self.artifact_pipeline)
     }
 }
 
@@ -4994,6 +5011,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
         admin_auth: Some(Arc::clone(&admin_auth)),
         admin_audit: Some(Arc::clone(&admin_audit)),
+        artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
     });
 
     // 4. Start event processing loop.
@@ -5489,6 +5507,32 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/api/circles/{id}/party",
             post(party::start_party::<AppState>),
         )
+        // ── sera-b1gb: evolution proposal lifecycle ──────────────────────────
+        .route(
+            "/api/evolution/proposals",
+            post(route_evolution::create_proposal::<AppState>)
+                .get(route_evolution::list_proposals::<AppState>),
+        )
+        .route(
+            "/api/evolution/proposals/{id}",
+            get(route_evolution::get_proposal::<AppState>),
+        )
+        .route(
+            "/api/evolution/proposals/{id}/approve",
+            post(route_evolution::approve_proposal::<AppState>),
+        )
+        .route(
+            "/api/evolution/proposals/{id}/reject",
+            post(route_evolution::reject_proposal::<AppState>),
+        )
+        .route(
+            "/api/evolution/proposals/{id}/apply",
+            post(route_evolution::apply_proposal::<AppState>),
+        )
+        .route(
+            "/api/evolution/proposals/{id}/operator-key",
+            post(route_evolution::supply_operator_key::<AppState>),
+        )
         // TODO(sera-8d1.4-follow): wire GET/PUT /api/circles/{id}/constitution
         // when the constitution-get/put handlers get reimplemented against
         // this binary's SqliteDb-backed AppState (the previous orphan
@@ -5729,6 +5773,7 @@ mod tests {
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
+            artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
         })
     }
 
@@ -5778,6 +5823,7 @@ mod tests {
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
+            artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
         })
     }
 
@@ -5827,6 +5873,7 @@ mod tests {
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
+            artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
         })
     }
 
@@ -5876,6 +5923,7 @@ mod tests {
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
+            artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
         })
     }
 
@@ -6381,6 +6429,7 @@ spec:
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
+            artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
         })
     }
 
@@ -6892,6 +6941,7 @@ spec:
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
+            artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -6944,6 +6994,7 @@ spec:
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
+            artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -6997,6 +7048,7 @@ spec:
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
+            artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -7053,6 +7105,7 @@ spec:
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
+            artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
         };
         let headers = HeaderMap::new();
         assert_eq!(
@@ -9389,6 +9442,7 @@ spec:
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
+            artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
         });
 
         let app = build_router(Arc::clone(&state));
@@ -9480,6 +9534,7 @@ spec:
                 human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
                 admin_auth: None,
                 admin_audit: None,
+                artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
             })
         };
         let app = build_router(state);
@@ -10216,6 +10271,7 @@ spec:
                 human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
                 admin_auth: None,
                 admin_audit: None,
+                artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
             });
 
             (

@@ -7,3 +7,4 @@
 //! grow to need them.
 
 pub mod inference_proxy;
+pub mod evolution;

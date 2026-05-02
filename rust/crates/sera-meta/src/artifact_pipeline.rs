@@ -397,6 +397,37 @@ impl ArtifactPipeline {
             .map(|t| t.artifact.clone())
     }
 
+    /// List all tracked artifacts with the given status.
+    pub async fn list_by_status(&self, status: ChangeArtifactStatus) -> Vec<ChangeArtifact> {
+        self.artifacts
+            .read()
+            .await
+            .values()
+            .filter(|t| t.artifact.status == status)
+            .map(|t| t.artifact.clone())
+            .collect()
+    }
+
+    /// Reject a `Proposed` artifact directly (operator override, no dry-run).
+    ///
+    /// Only valid when the artifact is in `Proposed` state. Returns
+    /// `Err(NotFound)` or `Err(WrongState)` otherwise.
+    pub async fn reject(&self, id: &ChangeArtifactId) -> Result<(), PipelineError> {
+        let key = id.to_string();
+        let mut guard = self.artifacts.write().await;
+        let tracked = guard
+            .get_mut(&key)
+            .ok_or_else(|| PipelineError::NotFound(key.clone()))?;
+        if tracked.artifact.status != ChangeArtifactStatus::Proposed {
+            return Err(PipelineError::WrongState {
+                actual: tracked.artifact.status,
+                expected: ChangeArtifactStatus::Proposed,
+            });
+        }
+        tracked.artifact.transition_to(ChangeArtifactStatus::Rejected);
+        Ok(())
+    }
+
     /// Principals who have signed the artifact.
     pub async fn signers(&self, id: &ChangeArtifactId) -> HashSet<String> {
         self.artifacts

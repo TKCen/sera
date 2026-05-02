@@ -47,6 +47,7 @@ use sera_memory::SemanticMemoryStore;
 #[allow(unused_imports)]
 use sera_memory::{DEFAULT_SQLITE_VEC_DIMENSIONS, SqliteMemoryStore};
 use sera_runtime::skill_dispatch::SkillDispatchEngine;
+use sera_runtime::subagent::SubagentManager;
 // sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +
 // SERA-issued nonce fallback). Wired into AppState + `/api/mail/inbound`.
 use sera_gateway::admin::{
@@ -108,6 +109,8 @@ mod route_inference_proxy;
 mod route_evolution;
 #[path = "../routes/circles.rs"]
 mod route_circles;
+#[path = "../routes/subagents.rs"]
+mod route_subagents;
 
 use route_a2a::{A2aAppState, A2aPeerRegistry};
 use route_agui::{AguiAppState, AguiHub};
@@ -115,6 +118,7 @@ use route_plugins::PluginsAppState;
 use route_workflow::WorkflowAppState;
 use route_evolution::EvolutionAppState;
 use route_circles::CirclesAppState;
+use route_subagents::{InMemorySubagentManager, SubagentsAppState};
 use route_inference_proxy::{
     InferenceProxyAppState, InferenceProxyAudit, LlmBudgetGate, NoopBudgetGate,
     SqliteInferenceProxyAudit, UpstreamProvider,
@@ -1377,6 +1381,12 @@ struct AppState {
     /// proposals through the propose → evaluate → approve → apply lifecycle.
     /// Shared across all `/api/evolution/proposals` routes via `EvolutionAppState`.
     artifact_pipeline: Arc<ArtifactPipeline>,
+    /// Subagent lifecycle manager (sera-vuss). Backs the
+    /// `/api/sessions/{id}/subagents` spawn / list routes. Default boot
+    /// wires an in-memory implementation; richer backends (real child
+    /// processes, remote runtime) can be swapped in without touching the
+    /// routes.
+    subagent_manager: Arc<dyn SubagentManager>,
 }
 
 impl AppState {
@@ -1665,6 +1675,16 @@ impl CirclesAppState for AppState {
     }
     fn pg_pool(&self) -> Option<&sqlx::PgPool> {
         None
+    }
+}
+
+// ── sera-vuss: subagent route wiring ────────────────────────────────────────
+impl SubagentsAppState for AppState {
+    fn api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+    fn subagent_manager(&self) -> Arc<dyn SubagentManager> {
+        Arc::clone(&self.subagent_manager)
     }
 }
 
@@ -5055,6 +5075,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         admin_auth: Some(Arc::clone(&admin_auth)),
         admin_audit: Some(Arc::clone(&admin_audit)),
         artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+        subagent_manager: Arc::new(InMemorySubagentManager::new()),
     });
 
     // 4. Start event processing loop.
@@ -5588,6 +5609,12 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/api/evolution/proposals/{id}/operator-key",
             post(route_evolution::supply_operator_key::<AppState>),
         )
+        // ── sera-vuss: subagent spawn / inspect ──────────────────────────────
+        .route(
+            "/api/sessions/{id}/subagents",
+            post(route_subagents::spawn_subagent::<AppState>)
+                .get(route_subagents::list_subagents::<AppState>),
+        )
         // TODO(sera-8d1.4-follow): wire GET/PUT /api/circles/{id}/constitution
         // when the constitution-get/put handlers get reimplemented against
         // this binary's SqliteDb-backed AppState (the previous orphan
@@ -5829,6 +5856,7 @@ mod tests {
             admin_auth: None,
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+            subagent_manager: Arc::new(InMemorySubagentManager::new()),
         })
     }
 
@@ -5879,6 +5907,7 @@ mod tests {
             admin_auth: None,
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+            subagent_manager: Arc::new(InMemorySubagentManager::new()),
         })
     }
 
@@ -5929,6 +5958,7 @@ mod tests {
             admin_auth: None,
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+            subagent_manager: Arc::new(InMemorySubagentManager::new()),
         })
     }
 
@@ -5979,6 +6009,7 @@ mod tests {
             admin_auth: None,
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+            subagent_manager: Arc::new(InMemorySubagentManager::new()),
         })
     }
 
@@ -6485,6 +6516,7 @@ spec:
             admin_auth: None,
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+            subagent_manager: Arc::new(InMemorySubagentManager::new()),
         })
     }
 
@@ -6997,6 +7029,7 @@ spec:
             admin_auth: None,
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+            subagent_manager: Arc::new(InMemorySubagentManager::new()),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -7050,6 +7083,7 @@ spec:
             admin_auth: None,
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+            subagent_manager: Arc::new(InMemorySubagentManager::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -7104,6 +7138,7 @@ spec:
             admin_auth: None,
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+            subagent_manager: Arc::new(InMemorySubagentManager::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -7161,6 +7196,7 @@ spec:
             admin_auth: None,
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+            subagent_manager: Arc::new(InMemorySubagentManager::new()),
         };
         let headers = HeaderMap::new();
         assert_eq!(
@@ -9498,6 +9534,7 @@ spec:
             admin_auth: None,
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+            subagent_manager: Arc::new(InMemorySubagentManager::new()),
         });
 
         let app = build_router(Arc::clone(&state));
@@ -9590,6 +9627,7 @@ spec:
                 admin_auth: None,
                 admin_audit: None,
                 artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+                subagent_manager: Arc::new(InMemorySubagentManager::new()),
             })
         };
         let app = build_router(state);
@@ -9679,6 +9717,7 @@ spec:
                 admin_auth: None,
                 admin_audit: None,
                 artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+                subagent_manager: Arc::new(InMemorySubagentManager::new()),
             })
         };
         let app = build_router(state);
@@ -10429,6 +10468,7 @@ spec:
                 admin_auth: None,
                 admin_audit: None,
                 artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+                subagent_manager: Arc::new(InMemorySubagentManager::new()),
             });
 
             (

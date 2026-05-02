@@ -147,6 +147,31 @@ impl ManifestSet {
             .map(|m| m.metadata.name.as_str())
             .collect()
     }
+
+    /// Insert or replace an agent manifest by name.
+    ///
+    /// If an agent with `name` already exists it is replaced in-place;
+    /// otherwise a new manifest is appended. Returns `true` when the agent
+    /// was replaced, `false` when it was newly inserted.
+    pub fn upsert_agent(&mut self, manifest: ConfigManifest) -> bool {
+        if let Some(pos) = self.agents.iter().position(|m| m.metadata.name == manifest.metadata.name) {
+            self.agents[pos] = manifest;
+            true
+        } else {
+            self.agents.push(manifest);
+            false
+        }
+    }
+
+    /// Remove an agent manifest by name.
+    ///
+    /// Returns `true` when the agent was found and removed, `false` when it
+    /// did not exist.
+    pub fn remove_agent(&mut self, name: &str) -> bool {
+        let before = self.agents.len();
+        self.agents.retain(|m| m.metadata.name != name);
+        self.agents.len() < before
+    }
 }
 
 /// Parse a YAML string containing one or more `---`-separated manifests.

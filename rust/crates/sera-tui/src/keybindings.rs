@@ -108,6 +108,18 @@ pub struct TuiKeybindings {
     pub popup_select: Vec<KeyBinding>,
     /// Dismiss the autocomplete popup without inserting (default: Esc).
     pub popup_dismiss: Vec<KeyBinding>,
+    /// Drill into the focused Task block's child thread (default: Enter)
+    /// when the transcript pane is focused (J.2.2 / sera-9vkz).  Currently
+    /// dispatched implicitly via `select` while transcript is focused; the
+    /// dedicated binding is reserved for the explicit input layer wiring
+    /// that lands with sera-mfj3.
+    #[allow(dead_code)]
+    pub drill_in: Vec<KeyBinding>,
+    /// Pop one level out of the drill-in stack (default: Esc) — only fires
+    /// when the stack is non-empty (J.2.2 / sera-9vkz).  Currently
+    /// dispatched implicitly via `back`; reserved for explicit wiring.
+    #[allow(dead_code)]
+    pub drill_out: Vec<KeyBinding>,
 }
 
 impl TuiKeybindings {
@@ -171,6 +183,8 @@ impl TuiKeybindings {
                 KeyBinding::plain(KeyCode::Tab),
             ],
             popup_dismiss: vec![KeyBinding::plain(KeyCode::Esc)],
+            drill_in: vec![KeyBinding::plain(KeyCode::Enter)],
+            drill_out: vec![KeyBinding::plain(KeyCode::Esc)],
         }
     }
 }
@@ -243,6 +257,8 @@ mod tests {
         assert!(!kb.popup_down.is_empty());
         assert!(!kb.popup_select.is_empty());
         assert!(!kb.popup_dismiss.is_empty());
+        assert!(!kb.drill_in.is_empty());
+        assert!(!kb.drill_out.is_empty());
     }
 
     #[test]

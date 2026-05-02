@@ -28,6 +28,10 @@ pub struct StatusBar<'a> {
     pub completion_tokens: u64,
     /// Cumulative cost in USD. `0.0` for local models.
     pub cost_usd: f64,
+    /// **J.2.2 (sera-9vkz)** drill-in breadcrumb (e.g. `└ Task(planner)`).
+    /// Empty string means the root transcript is active; rendered as a
+    /// trailing segment in the status line when non-empty.
+    pub drill_breadcrumb: &'a str,
 }
 
 impl StatusBar<'_> {
@@ -54,7 +58,7 @@ impl StatusBar<'_> {
             "cost=$0".to_owned()
         };
 
-        let spans = vec![
+        let mut spans = vec![
             Span::raw(" agent="),
             Span::styled(
                 agent_label.to_owned(),
@@ -70,6 +74,17 @@ impl StatusBar<'_> {
             Span::styled(cost_label, Style::default().fg(Color::White)),
             Span::raw(" "),
         ];
+        // J.2.2 (sera-9vkz): append the drill-in breadcrumb when the
+        // operator has drilled into a child thread.  Hidden at the root
+        // transcript so the status line stays compact.
+        if !self.drill_breadcrumb.is_empty() {
+            spans.push(Span::raw("· "));
+            spans.push(Span::styled(
+                self.drill_breadcrumb.to_owned(),
+                Style::default().fg(Color::Magenta),
+            ));
+            spans.push(Span::raw(" "));
+        }
 
         let bar = Paragraph::new(Line::from(spans))
             .style(Style::default().fg(Color::DarkGray));
@@ -112,6 +127,7 @@ mod tests {
             prompt_tokens: 0,
             completion_tokens: 0,
             cost_usd: 0.0,
+            drill_breadcrumb: "",
         }
     }
 
@@ -139,6 +155,7 @@ mod tests {
             prompt_tokens: 42,
             completion_tokens: 17,
             cost_usd: 0.0,
+            drill_breadcrumb: "",
         };
         let out = render_to_string(bar, 160);
         assert!(out.contains("tokens=59"), "expected 'tokens=59' in: {out}");
@@ -166,5 +183,37 @@ mod tests {
         let bar = bar_with(Some("test"), None, ConnectionState::Connected);
         let out = render_to_string(bar, 120);
         assert!(out.contains("session=-"), "expected 'session=-' in: {out}");
+    }
+
+    // --- J.2.2 (sera-9vkz) drill-in breadcrumb tests ---
+
+    #[test]
+    fn renders_drill_breadcrumb_when_non_empty() {
+        let bar = StatusBar {
+            agent: Some("sera"),
+            session_id: Some("s1"),
+            conn: ConnectionState::Connected,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            cost_usd: 0.0,
+            drill_breadcrumb: "└ Task(planner)",
+        };
+        let out = render_to_string(bar, 120);
+        assert!(out.contains("Task(planner)"), "expected breadcrumb in: {out}");
+    }
+
+    #[test]
+    fn omits_drill_breadcrumb_when_empty() {
+        let bar = StatusBar {
+            agent: Some("sera"),
+            session_id: Some("s1"),
+            conn: ConnectionState::Connected,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            cost_usd: 0.0,
+            drill_breadcrumb: "",
+        };
+        let out = render_to_string(bar, 120);
+        assert!(!out.contains("Task("), "did not expect breadcrumb in: {out}");
     }
 }

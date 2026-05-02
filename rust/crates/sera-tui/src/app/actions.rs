@@ -156,6 +156,17 @@ pub enum Action {
     /// Escalate the focused inline Approval block in the transcript (J.1.4).
     #[allow(dead_code)]
     EscalateInlineBlock(String),
+    /// Drill into the `child_thread` of the currently focused Task block
+    /// (J.2.2 / sera-9vkz).  Pushes the child thread onto `App::thread_stack`.
+    /// Currently dispatched via the `Select` arm in `App::dispatch` when the
+    /// transcript pane is focused; reserved here for an explicit binding.
+    #[allow(dead_code)]
+    DrillIn,
+    /// Pop the top of `App::thread_stack` (J.2.2 / sera-9vkz).  Currently
+    /// dispatched via the `Back` arm in `App::dispatch`; reserved here for
+    /// an explicit binding.
+    #[allow(dead_code)]
+    DrillOut,
     /// No-op — used when a key doesn't match any binding.  Reducing to
     /// this instead of returning `Option<Action>` lets the dispatch table
     /// stay a plain `match`.

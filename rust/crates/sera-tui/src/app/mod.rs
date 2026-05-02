@@ -252,6 +252,18 @@ pub struct App {
     /// bead will introduce a real pricing table; until then this stays 0.0
     /// for local backends.
     pub usage_cost_usd: f64,
+
+    /// **J.2.2 (sera-9vkz)** drill-in stack.  Each entry is a child
+    /// `ThreadView` cloned from a `Block::Task` when the operator pressed
+    /// Enter on it.  Empty = the root session transcript is active.
+    /// `DrillOut` pops one level; `Back` falls through to this before
+    /// resetting `focus`.  J.2.3 (sera-mfj3) wires live SSE streaming
+    /// into the topmost stack entry's `blocks`.
+    pub thread_stack: Vec<crate::views::blocks::ThreadView>,
+    /// Optional human-readable label for each stack entry, used by the
+    /// status bar breadcrumb (`└ Task(agent)`).  Same length as
+    /// `thread_stack` — index `i` labels the thread at depth `i+1`.
+    pub thread_stack_labels: Vec<String>,
 }
 
 impl App {
@@ -288,6 +300,61 @@ impl App {
             usage_prompt_tokens: 0,
             usage_completion_tokens: 0,
             usage_cost_usd: 0.0,
+            thread_stack: Vec::new(),
+            thread_stack_labels: Vec::new(),
+        }
+    }
+
+    /// **J.2.2 (sera-9vkz)** breadcrumb describing the current drill-in
+    /// depth.  Empty string when the root transcript is active.  Used by
+    /// the status bar to hint at the current child-thread context, e.g.
+    /// `└ Task(planner) › Task(executor)`.
+    pub fn drill_breadcrumb(&self) -> String {
+        if self.thread_stack_labels.is_empty() {
+            String::new()
+        } else {
+            format!("└ {}", self.thread_stack_labels.join(" › "))
+        }
+    }
+
+    /// **J.2.2 (sera-9vkz)** push the `child_thread` of the first
+    /// `Block::Task` in the active thread (root or topmost stacked) onto
+    /// `thread_stack`.  Returns `true` when a Task block was found and
+    /// pushed; `false` otherwise (no-op).
+    fn drill_in(&mut self) -> bool {
+        // Locate a Task block in the currently-active block list.
+        let active_blocks: &[crate::views::blocks::Block] = match self.thread_stack.last() {
+            Some(thread) => &thread.blocks,
+            None => &self.session.blocks,
+        };
+        let task = active_blocks.iter().find_map(|b| {
+            if let crate::views::blocks::Block::Task {
+                agent, child_thread, ..
+            } = b
+            {
+                Some((agent.clone(), child_thread.clone()))
+            } else {
+                None
+            }
+        });
+        if let Some((agent, child)) = task {
+            self.thread_stack.push(child);
+            self.thread_stack_labels.push(format!("Task({agent})"));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// **J.2.2 (sera-9vkz)** pop the topmost entry from `thread_stack`.
+    /// Returns `true` when a level was popped; `false` when the stack was
+    /// already empty.
+    fn drill_out(&mut self) -> bool {
+        if self.thread_stack.pop().is_some() {
+            self.thread_stack_labels.pop();
+            true
+        } else {
+            false
         }
     }
 
@@ -474,6 +541,13 @@ impl App {
                     self.active_agent_id = Some(id.clone());
                     self.focus = ViewKind::Session;
                     self.pending.push(AppCommand::LoadSessionFor(id));
+                } else if self.focus == ViewKind::Session
+                    && self.session.focus == crate::views::session::ComposerFocus::Transcript
+                {
+                    // J.2.2 (sera-9vkz): Enter while the transcript pane is
+                    // focused drills into the first Task block in the active
+                    // thread.  No-op when no Task block is present.
+                    self.drill_in();
                 }
             }
             Action::SelectAgent(id) => {
@@ -482,10 +556,25 @@ impl App {
                 self.pending.push(AppCommand::LoadSessionFor(id));
             }
             Action::Back => {
-                if self.focus != ViewKind::Agents {
+                // J.2.2 (sera-9vkz): when drilled into a child thread, Back
+                // pops one level instead of bouncing back to the agent list.
+                if self.drill_out() {
+                    // Stack popped — stay on Session view.
+                } else if self.focus != ViewKind::Agents {
                     self.focus = ViewKind::Agents;
                     self.pending.push(AppCommand::RefreshCurrent);
                 }
+            }
+            Action::DrillIn => {
+                // Only meaningful while the Session view is active.  Looks
+                // for a Task block in the currently-active thread and
+                // pushes its `child_thread` onto the drill-in stack.
+                if self.focus == ViewKind::Session {
+                    self.drill_in();
+                }
+            }
+            Action::DrillOut => {
+                self.drill_out();
             }
             Action::Approve => {
                 if let ViewKind::Hitl = self.focus
@@ -1956,6 +2045,113 @@ mod tests {
             "expected EscalateInlineBlock(req-3), got: {:?}",
             app.pending.last()
         );
+    }
+
+    // --- J.2.2 (sera-9vkz) drill-in stack tests ---
+
+    fn task_block(task_id: &str, agent: &str) -> crate::views::blocks::Block {
+        crate::views::blocks::Block::Task {
+            task_id: task_id.into(),
+            agent: agent.into(),
+            summary: "doing things".into(),
+            child_thread: crate::views::blocks::ThreadView::default(),
+            expanded: false,
+        }
+    }
+
+    #[test]
+    fn drill_in_pushes_child_thread_onto_stack() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
+        app.session.focus = crate::views::session::ComposerFocus::Transcript;
+        app.session.blocks.push(task_block("t-1", "planner"));
+        assert!(app.thread_stack.is_empty());
+        app.dispatch(Action::Select);
+        assert_eq!(app.thread_stack.len(), 1);
+        assert_eq!(app.thread_stack_labels, vec!["Task(planner)".to_owned()]);
+    }
+
+    #[test]
+    fn drill_in_noop_when_no_task_block_present() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
+        app.session.focus = crate::views::session::ComposerFocus::Transcript;
+        // No task block in transcript.
+        app.dispatch(Action::Select);
+        assert!(app.thread_stack.is_empty());
+        assert!(app.thread_stack_labels.is_empty());
+    }
+
+    #[test]
+    fn back_pops_thread_stack_before_resetting_focus() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
+        app.session.focus = crate::views::session::ComposerFocus::Transcript;
+        app.session.blocks.push(task_block("t-1", "planner"));
+        app.dispatch(Action::Select); // drill in
+        assert_eq!(app.thread_stack.len(), 1);
+        app.dispatch(Action::Back); // first Back pops the stack
+        assert!(app.thread_stack.is_empty());
+        // Focus stays on Session (we only popped a level, didn't bounce out).
+        assert_eq!(app.focus, ViewKind::Session);
+        // A second Back with empty stack falls through to the focus reset.
+        app.dispatch(Action::Back);
+        assert_eq!(app.focus, ViewKind::Agents);
+    }
+
+    #[test]
+    fn drill_out_action_pops_stack() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
+        app.session.focus = crate::views::session::ComposerFocus::Transcript;
+        app.session.blocks.push(task_block("t-1", "executor"));
+        app.dispatch(Action::Select);
+        assert_eq!(app.thread_stack.len(), 1);
+        app.dispatch(Action::DrillOut);
+        assert!(app.thread_stack.is_empty());
+    }
+
+    #[test]
+    fn drill_in_action_pushes_when_explicit() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
+        // Transcript focus is the contract for Select-drill, but the
+        // explicit DrillIn action is gated only on focus == Session.
+        app.session.blocks.push(task_block("t-2", "writer"));
+        app.dispatch(Action::DrillIn);
+        assert_eq!(app.thread_stack.len(), 1);
+        assert_eq!(app.thread_stack_labels, vec!["Task(writer)".to_owned()]);
+    }
+
+    #[test]
+    fn drill_breadcrumb_renders_path() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        assert_eq!(app.drill_breadcrumb(), "");
+        app.thread_stack
+            .push(crate::views::blocks::ThreadView::default());
+        app.thread_stack_labels.push("Task(planner)".into());
+        assert_eq!(app.drill_breadcrumb(), "└ Task(planner)");
+        app.thread_stack
+            .push(crate::views::blocks::ThreadView::default());
+        app.thread_stack_labels.push("Task(executor)".into());
+        assert_eq!(
+            app.drill_breadcrumb(),
+            "└ Task(planner) › Task(executor)"
+        );
+    }
+
+    #[test]
+    fn select_on_session_with_composer_focus_does_not_drill() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
+        // Composer focus is the default — drill-in via Select must not fire.
+        assert_eq!(
+            app.session.focus,
+            crate::views::session::ComposerFocus::Composer,
+        );
+        app.session.blocks.push(task_block("t-3", "planner"));
+        app.dispatch(Action::Select);
+        assert!(app.thread_stack.is_empty());
     }
 
     #[test]

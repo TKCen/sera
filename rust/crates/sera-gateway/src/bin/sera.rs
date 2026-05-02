@@ -1594,6 +1594,11 @@ impl WorkflowAppState for AppState {
     fn mail_lookup(&self) -> Arc<InMemoryMailLookup> {
         Arc::clone(&self.mail_lookup)
     }
+    fn change_artifact_store(&self) -> Option<Arc<dyn sera_gateway::workflow_store::ChangeArtifactStateStore>> {
+        // sera-7ggi: change-artifact store not yet provisioned in the binary.
+        // Returning None makes Change-gated POST /api/workflow/tasks return 501.
+        None
+    }
 }
 
 // ── sera-7ivj: inference proxy wiring ───────────────────────────────────────
@@ -4939,6 +4944,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         Arc::clone(&state.workflow_store),
         Arc::clone(&state.mail_lookup),
         Some(Arc::clone(&state.gh_run_store)),
+        None,
         Arc::clone(&shutting_down),
     );
 

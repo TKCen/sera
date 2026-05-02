@@ -1,14 +1,15 @@
-//! Workflow task HTTP routes — Wave E Phase 1 (sera-kgi8) + Mail gate (sera-0zch) + GhRun gate (sera-4fel).
+//! Workflow task HTTP routes — Wave E Phase 1 (sera-kgi8) + Mail gate (sera-0zch) + GhRun gate (sera-4fel) + Change gate (sera-7ggi).
 //!
 //! Routes:
-//!   POST /api/workflow/tasks           — create a task (Timer, Mail, and GhRun gates)
-//!   GET  /api/workflow/tasks           — list every known task
-//!   GET  /api/workflow/tasks/{id}      — fetch a single task
-//!   POST /api/workflow/mail/deliver    — deliver a mail event (in-memory; for tests)
+//!   POST /api/workflow/tasks                      — create a task (Timer, Mail, GhRun, and Change gates)
+//!   GET  /api/workflow/tasks                      — list every known task
+//!   GET  /api/workflow/tasks/{id}                 — fetch a single task
+//!   POST /api/workflow/mail/deliver               — deliver a mail event (in-memory; for tests)
+//!   POST /api/workflow/tasks/{id}/resolve-change  — push a ChangeState event
 //!
-//! Timer, Mail, and GhRun are fully wired end-to-end. Other non-Timer `await_type`
+//! Timer, Mail, GhRun, and Change are fully wired end-to-end. Other non-Timer `await_type`
 //! values still return 501 Not Implemented — their wiring ships in follow-up
-//! beads (Human: sera-dgk1, GhPr: sera-comg, Change: sera-7ggi).
+//! beads (Human: sera-dgk1, GhPr: sera-comg).
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -22,11 +23,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use sera_mail::InMemoryMailLookup;
-use sera_workflow::task::{GhRunId, MailEvent, MailThreadId, WorkflowTaskInput};
+use sera_types::evolution::ChangeArtifactId;
+use sera_workflow::task::{ChangeState, GhRunId, MailEvent, MailThreadId, WorkflowTaskInput};
 use sera_workflow::{AwaitType, WorkflowTask, WorkflowTaskStatus, WorkflowTaskType};
 
 use sera_gateway::workflow_store::{
-    SchedulerTaskStatus, WorkflowTaskRecord, WorkflowTaskStore,
+    ChangeArtifactStateStore, SchedulerTaskStatus, WorkflowTaskRecord, WorkflowTaskStore,
 };
 
 // ── Request / response shapes ────────────────────────────────────────────────
@@ -35,7 +37,7 @@ use sera_gateway::workflow_store::{
 ///
 /// Mirrors [`AwaitType`] but decoupled so the HTTP payload does not require
 /// callers to thread through e.g. GitHub repo metadata when all they want is
-/// a Timer gate. Timer and Mail are wired end-to-end; other variants return 501.
+/// a Timer gate. Timer, Mail, GhRun, and Change are wired end-to-end; other variants return 501.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AwaitTypeTag {
@@ -52,6 +54,7 @@ pub enum AwaitTypeTag {
 /// - `timer` gate: supply `deadline`.
 /// - `mail` gate: supply `thread_id` (opaque string identifying the email thread).
 /// - `gh_run` gate: supply `run_id` and `repo` (in `owner/name` form).
+/// - `change` gate: supply `artifact_id` (64-char hex SHA-256 of the change artifact).
 /// - `title` / `description` are always optional.
 #[derive(Debug, Deserialize)]
 pub struct CreateTaskRequest {
@@ -69,13 +72,28 @@ pub struct CreateTaskRequest {
     /// The numeric or opaque run identifier as a string.
     #[serde(default)]
     pub run_id: Option<String>,
-    /// Reserved for future `gh_run` gate (sera-4fel); ignored for now.
+    /// Required for `gh_run` await_type; ignored otherwise.
     #[serde(default)]
     pub repo: Option<String>,
+    /// Required for `change` await_type: 64-char hex SHA-256 of the change
+    /// artifact. Ignored for other await types.
+    #[serde(default)]
+    pub artifact_id: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+}
+
+/// Request body for `POST /api/workflow/tasks/{id}/resolve-change`.
+///
+/// Pushes a [`ChangeState`] event for the artifact tracked by the identified
+/// task. The scheduler picks it up on the next tick and marks the task
+/// resolved if the state is terminal.
+#[derive(Debug, Deserialize)]
+pub struct ResolveChangeRequest {
+    /// New state of the change artifact (e.g. `"applied"`, `"rejected"`).
+    pub state: ChangeState,
 }
 
 /// JSON projection of a [`WorkflowTaskRecord`] returned by every route.
@@ -129,6 +147,15 @@ fn check_auth(api_key: &Option<String>, headers: &HeaderMap) -> Result<(), Statu
     }
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Parse a 64-character hex string into a [`ChangeArtifactId`].
+fn parse_artifact_id(s: &str) -> Result<ChangeArtifactId, StatusCode> {
+    let bytes = hex::decode(s).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let hash: [u8; 32] = bytes.try_into().map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok(ChangeArtifactId { hash })
+}
+
 // ── AppState abstraction ─────────────────────────────────────────────────────
 
 /// Abstraction over AppState for workflow handlers.
@@ -139,6 +166,11 @@ pub trait WorkflowAppState: Send + Sync + 'static {
     /// `POST /api/workflow/mail/deliver` endpoint to inject test events without
     /// real SMTP/IMAP infrastructure.
     fn mail_lookup(&self) -> Arc<InMemoryMailLookup>;
+    /// Returns the change-artifact state store backing the Change gate.
+    /// Returning `None` means Change-gate wiring is not provisioned in this
+    /// deployment — `create_task` for `await_type = "change"` returns 501 in
+    /// that case, and `resolve-change` returns 501.
+    fn change_artifact_store(&self) -> Option<Arc<dyn ChangeArtifactStateStore>>;
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -154,9 +186,9 @@ where
 {
     check_auth(state.api_key(), &headers)?;
 
-    // Timer, Mail, and GhRun are wired end-to-end. Other variants are accepted
-    // at the tag level but short-circuit with 501 — their gate wiring lands in
-    // follow-up beads (Human: sera-dgk1, GhPr: sera-comg, Change: sera-7ggi).
+    // Timer, Mail, GhRun, and Change are wired end-to-end. Other variants are
+    // accepted at the tag level but short-circuit with 501 — their gate wiring
+    // lands in follow-up beads (Human: sera-dgk1, GhPr: sera-comg).
     let await_type = match body.await_type {
         AwaitTypeTag::Timer => {
             let deadline = body.deadline.ok_or(StatusCode::BAD_REQUEST)?;
@@ -170,6 +202,16 @@ where
             let run_id = body.run_id.ok_or(StatusCode::BAD_REQUEST)?;
             let repo = body.repo.ok_or(StatusCode::BAD_REQUEST)?;
             AwaitType::GhRun { run_id: GhRunId::new(run_id), repo }
+        }
+        AwaitTypeTag::Change => {
+            // Refuse if the deployment hasn't wired a change-artifact store —
+            // otherwise the task would block forever.
+            if state.change_artifact_store().is_none() {
+                return Err(StatusCode::NOT_IMPLEMENTED);
+            }
+            let raw = body.artifact_id.as_deref().ok_or(StatusCode::BAD_REQUEST)?;
+            let artifact_id = parse_artifact_id(raw)?;
+            AwaitType::Change { artifact_id }
         }
         _ => return Err(StatusCode::NOT_IMPLEMENTED),
     };
@@ -280,12 +322,57 @@ where
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ── Change resolve ────────────────────────────────────────────────────────────
+
+/// POST /api/workflow/tasks/{id}/resolve-change
+///
+/// Pushes a [`ChangeState`] event for the change artifact bound to the task
+/// identified by `id`. The scheduler picks the new state up on the next tick
+/// and marks the task resolved if the state is terminal.
+///
+/// 404 — task not found, or task is not bound to a Change gate.
+/// 501 — change-artifact store not wired in this deployment.
+pub async fn resolve_change<S>(
+    State(state): State<Arc<S>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<ResolveChangeRequest>,
+) -> Result<Json<WorkflowTaskView>, StatusCode>
+where
+    S: WorkflowAppState,
+{
+    check_auth(state.api_key(), &headers)?;
+
+    let change_store = state
+        .change_artifact_store()
+        .ok_or(StatusCode::NOT_IMPLEMENTED)?;
+
+    let record = state
+        .workflow_store()
+        .get(&id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Only meaningful for Change-gated tasks — refuse otherwise so callers do
+    // not push state for the wrong artifact.
+    let artifact_id = match &record.task.await_type {
+        Some(AwaitType::Change { artifact_id }) => *artifact_id,
+        _ => return Err(StatusCode::NOT_FOUND),
+    };
+
+    change_store.upsert(artifact_id, body.state).await;
+
+    Ok(Json(record.into()))
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sera_gateway::workflow_store::InMemoryWorkflowTaskStore;
+    use sera_gateway::workflow_store::{
+        InMemoryChangeArtifactStateStore, InMemoryWorkflowTaskStore,
+    };
     use axum::{
         Router,
         body::Body,
@@ -298,6 +385,7 @@ mod tests {
         api_key: Option<String>,
         store: Arc<InMemoryWorkflowTaskStore>,
         mail: Arc<InMemoryMailLookup>,
+        change_store: Option<Arc<InMemoryChangeArtifactStateStore>>,
     }
 
     impl TestState {
@@ -306,6 +394,16 @@ mod tests {
                 api_key: key.map(|k| k.to_owned()),
                 store: Arc::new(InMemoryWorkflowTaskStore::new()),
                 mail: Arc::new(InMemoryMailLookup::new()),
+                change_store: Some(Arc::new(InMemoryChangeArtifactStateStore::new())),
+            })
+        }
+
+        fn without_change_store(key: Option<&str>) -> Arc<Self> {
+            Arc::new(Self {
+                api_key: key.map(|k| k.to_owned()),
+                store: Arc::new(InMemoryWorkflowTaskStore::new()),
+                mail: Arc::new(InMemoryMailLookup::new()),
+                change_store: None,
             })
         }
     }
@@ -320,6 +418,11 @@ mod tests {
         fn mail_lookup(&self) -> Arc<InMemoryMailLookup> {
             Arc::clone(&self.mail)
         }
+        fn change_artifact_store(&self) -> Option<Arc<dyn ChangeArtifactStateStore>> {
+            self.change_store
+                .as_ref()
+                .map(|s| Arc::clone(s) as Arc<dyn ChangeArtifactStateStore>)
+        }
     }
 
     fn test_router(state: Arc<TestState>) -> Router {
@@ -330,6 +433,10 @@ mod tests {
             .route(
                 "/api/workflow/mail/deliver",
                 post(deliver_mail::<TestState>),
+            )
+            .route(
+                "/api/workflow/tasks/{id}/resolve-change",
+                post(resolve_change::<TestState>),
             )
             .with_state(state)
     }
@@ -429,7 +536,93 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_non_timer_returns_not_implemented() {
+    async fn create_change_task_returns_created() {
+        let app = test_router(TestState::new(None));
+        let artifact_hex = "00".repeat(32);
+        let body = serde_json::json!({
+            "await_type": "change",
+            "agent_id": "sera",
+            "resume_token": "tok-c",
+            "artifact_id": artifact_hex,
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflow/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn create_change_task_missing_artifact_id_is_bad_request() {
+        let app = test_router(TestState::new(None));
+        let body = serde_json::json!({
+            "await_type": "change",
+            "agent_id": "sera",
+            "resume_token": "tok-c",
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflow/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_change_task_invalid_artifact_id_is_bad_request() {
+        let app = test_router(TestState::new(None));
+        let body = serde_json::json!({
+            "await_type": "change",
+            "agent_id": "sera",
+            "resume_token": "tok-c",
+            "artifact_id": "not-hex",
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflow/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_change_task_without_store_is_not_implemented() {
+        // Deployments without a change-artifact store must refuse to create
+        // Change-gated tasks rather than orphaning them.
+        let app = test_router(TestState::without_change_store(None));
+        let body = serde_json::json!({
+            "await_type": "change",
+            "agent_id": "sera",
+            "resume_token": "tok-c",
+            "artifact_id": "00".repeat(32),
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflow/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn create_human_returns_not_implemented() {
         let app = test_router(TestState::new(None));
         let body = serde_json::json!({
             "await_type": "human",
@@ -446,6 +639,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn resolve_change_unknown_task_is_404() {
+        let app = test_router(TestState::new(None));
+        let body = serde_json::json!({"state": "applied"});
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflow/tasks/deadbeef/resolve-change")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

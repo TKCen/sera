@@ -1,10 +1,10 @@
-//! Workflow task store — Wave E Phase 1 (sera-kgi8) + persistence (sera-d2xh) + GhRun gate (sera-4fel).
+//! Workflow task store — Wave E Phase 1 (sera-kgi8) + persistence (sera-d2xh) + GhRun gate (sera-4fel) + Change gate (sera-7ggi).
 //!
 //! Holds the set of pending [`WorkflowTask`]s the scheduler enumerates every
-//! tick. Timer and GhRun gates are fully wired end-to-end; other `AwaitType`
+//! tick. Timer, GhRun, and Change gates are fully wired end-to-end; other `AwaitType`
 //! variants are accepted at creation time but will not transition to "resolved"
 //! until their dedicated gate beads land (Human: sera-dgk1, GhPr: sera-comg,
-//! Change: sera-7ggi, Mail: sera-0zch).
+//! Mail: sera-0zch).
 //!
 //! Two implementations ship today:
 //! - [`InMemoryWorkflowTaskStore`] — `HashMap`-backed, used by tests and the
@@ -22,7 +22,8 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
-use sera_workflow::task::{GhRunId, GhRunStatus};
+use sera_types::evolution::ChangeArtifactId;
+use sera_workflow::task::{ChangeState, GhRunId, GhRunStatus};
 use sera_workflow::WorkflowTask;
 
 /// Lifecycle status of a [`WorkflowTaskRecord`] as seen by the scheduler.
@@ -617,6 +618,67 @@ impl GhRunStateStore for InMemoryGhRunStateStore {
     }
 
     async fn snapshot(&self) -> HashMap<String, GhRunStatus> {
+        let map = self.inner.read().await;
+        map.clone()
+    }
+}
+
+// ── Change artifact state store (sera-7ggi) ──────────────────────────────────
+
+/// Persistence boundary for change-artifact states consulted by the scheduler.
+///
+/// The scheduler snapshots this store each tick and wraps it in a
+/// [`sera_workflow::ready::ChangeLookup`] impl so the ready-queue can evaluate
+/// [`sera_workflow::task::AwaitType::Change`] gates without holding the async
+/// store lock during the synchronous gate evaluation.
+///
+/// Phase 1 ships [`InMemoryChangeArtifactStateStore`] only — the production
+/// change-artifact poller (sera-meta integration) that pushes state changes
+/// here lives in a follow-up bead. Test code drives the store directly to
+/// exercise the wait-then-resume round trip.
+#[async_trait::async_trait]
+pub trait ChangeArtifactStateStore: Send + Sync {
+    /// Record (or overwrite) the current [`ChangeState`] for `artifact_id`.
+    async fn upsert(&self, artifact_id: ChangeArtifactId, state: ChangeState);
+
+    /// Return the current state for `artifact_id`, or `None` when unknown.
+    async fn get_state(&self, artifact_id: &ChangeArtifactId) -> Option<ChangeState>;
+
+    /// Snapshot all entries as a `HashMap` keyed on the raw artifact hash for
+    /// the synchronous [`sera_workflow::ready::ChangeLookup`] bridge in the
+    /// scheduler.
+    async fn snapshot(&self) -> HashMap<[u8; 32], ChangeState>;
+}
+
+/// Process-local change-artifact state store backed by a `HashMap`.
+#[derive(Default)]
+pub struct InMemoryChangeArtifactStateStore {
+    inner: RwLock<HashMap<[u8; 32], ChangeState>>,
+}
+
+impl InMemoryChangeArtifactStateStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn shared() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+}
+
+#[async_trait::async_trait]
+impl ChangeArtifactStateStore for InMemoryChangeArtifactStateStore {
+    async fn upsert(&self, artifact_id: ChangeArtifactId, state: ChangeState) {
+        let mut map = self.inner.write().await;
+        map.insert(artifact_id.hash, state);
+    }
+
+    async fn get_state(&self, artifact_id: &ChangeArtifactId) -> Option<ChangeState> {
+        let map = self.inner.read().await;
+        map.get(&artifact_id.hash).cloned()
+    }
+
+    async fn snapshot(&self) -> HashMap<[u8; 32], ChangeState> {
         let map = self.inner.read().await;
         map.clone()
     }

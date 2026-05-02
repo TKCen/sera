@@ -22,6 +22,7 @@ use crate::client::{
 };
 use crate::keybindings::TuiKeybindings;
 use crate::views::agent_list::AgentListView;
+use crate::views::blocks::ApprovalStatus;
 use crate::views::evolve_status::EvolveStatusView;
 use crate::views::hitl_queue::HitlQueueView;
 use crate::views::session::SessionView;
@@ -146,6 +147,13 @@ pub enum AppCommand {
     /// Re-attempt a `SendChat` that previously failed due to a disconnected
     /// gateway.  Bypasses the backoff timer and retries immediately.
     RetrySendChat { agent: String, message: String },
+    /// Approve an inline transcript Approval block (J.1.4).
+    /// On success the block status is updated to Approved.
+    ApproveInlineBlock(String),
+    /// Reject an inline transcript Approval block (J.1.4).
+    RejectInlineBlock(String),
+    /// Escalate an inline transcript Approval block (J.1.4).
+    EscalateInlineBlock(String),
 }
 
 /// Root application state.
@@ -386,6 +394,31 @@ impl App {
             return;
         }
 
+        // J.1.4: when a pending inline Approval block exists in the transcript,
+        // intercept approve/reject/escalate and route to the inline block action.
+        // Only active when the Session view has focus so that approve/reject/
+        // escalate keypresses in the HITL queue view (or other views) are not
+        // silently redirected to the first pending inline block.
+        if self.focus == ViewKind::Session
+            && let Some(id) = self.session.first_pending_approval_id().map(str::to_owned) {
+            match action {
+                Action::Approve => {
+                    self.pending.push(AppCommand::ApproveInlineBlock(id));
+                    return;
+                }
+                Action::Reject => {
+                    self.pending.push(AppCommand::RejectInlineBlock(id));
+                    return;
+                }
+                Action::Escalate => {
+                    self.pending.push(AppCommand::EscalateInlineBlock(id));
+                    return;
+                }
+                // All other actions fall through to the normal handler.
+                _ => {}
+            }
+        }
+
         match action {
             Action::Quit => self.should_quit = true,
             Action::NextView => {
@@ -622,6 +655,17 @@ impl App {
                     self.status = Status::warn("cancelling…");
                     self.pending.push(AppCommand::CancelTurn(session_id));
                 }
+            }
+            // J.1.4: inline transcript Approval block actions.
+            // Dispatch HTTP command; runtime will update block status on success.
+            Action::ApproveInlineBlock(id) => {
+                self.pending.push(AppCommand::ApproveInlineBlock(id));
+            }
+            Action::RejectInlineBlock(id) => {
+                self.pending.push(AppCommand::RejectInlineBlock(id));
+            }
+            Action::EscalateInlineBlock(id) => {
+                self.pending.push(AppCommand::EscalateInlineBlock(id));
             }
             Action::NoOp => {}
         }
@@ -961,6 +1005,48 @@ impl Runtime {
                 }
                 AppCommand::OpenSession(session_id) => {
                     self.load_session_by_id(app, session_id).await;
+                }
+                // J.1.4: inline transcript Approval block actions.
+                // Call the HITL HTTP endpoint; update the block status in the
+                // transcript on success so the operator sees the resolved state.
+                AppCommand::ApproveInlineBlock(id) => {
+                    match app.client.approve_hitl(&id).await {
+                        Ok(()) => {
+                            app.session
+                                .update_approval_status(&id, ApprovalStatus::Approved);
+                            app.status = Status::info(format!("approved {id}"));
+                            self.spawn_refresh_hitl(app);
+                        }
+                        Err(e) => {
+                            app.status = Status::error(format!("approve failed: {e}"));
+                        }
+                    }
+                }
+                AppCommand::RejectInlineBlock(id) => {
+                    match app.client.reject_hitl(&id).await {
+                        Ok(()) => {
+                            app.session
+                                .update_approval_status(&id, ApprovalStatus::Rejected);
+                            app.status = Status::info(format!("rejected {id}"));
+                            self.spawn_refresh_hitl(app);
+                        }
+                        Err(e) => {
+                            app.status = Status::error(format!("reject failed: {e}"));
+                        }
+                    }
+                }
+                AppCommand::EscalateInlineBlock(id) => {
+                    match app.client.escalate_hitl(&id).await {
+                        Ok(()) => {
+                            app.session
+                                .update_approval_status(&id, ApprovalStatus::Escalated);
+                            app.status = Status::info(format!("escalated {id}"));
+                            self.spawn_refresh_hitl(app);
+                        }
+                        Err(e) => {
+                            app.status = Status::error(format!("escalate failed: {e}"));
+                        }
+                    }
                 }
             }
         }
@@ -1749,6 +1835,29 @@ mod tests {
         );
     }
 
+    // --- J.1.4: inline HITL approval block dispatch tests ---
+
+    #[test]
+    fn approve_inline_block_routes_to_approve_inline_command() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
+        // Seed a pending approval block.
+        app.session
+            .push_approval("req-99".into(), "Write".into(), "reason".into());
+        assert_eq!(app.session.first_pending_approval_id(), Some("req-99"));
+
+        // Dispatching Approve with a pending block should push ApproveInlineBlock.
+        app.dispatch(Action::Approve);
+        assert!(
+            matches!(
+                app.pending.last(),
+                Some(AppCommand::ApproveInlineBlock(id)) if id == "req-99"
+            ),
+            "expected ApproveInlineBlock(req-99), got: {:?}",
+            app.pending.last()
+        );
+    }
+
     #[test]
     fn apply_sse_state_reconnecting_keeps_turn_streaming() {
         let mut app = App::new(client(), TuiKeybindings::defaults());
@@ -1781,5 +1890,60 @@ mod tests {
         app.dispatch(Action::RetryConnection);
         let secs = app.disconnect_banner.as_ref().unwrap().secs_until_retry();
         assert_eq!(secs, 0, "banner timer must be reset to now");
+    }
+
+    #[test]
+    fn reject_inline_block_routes_to_reject_inline_command() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
+        app.session
+            .push_approval("req-7".into(), "Bash".into(), "cmd".into());
+        app.dispatch(Action::Reject);
+        assert!(
+            matches!(
+                app.pending.last(),
+                Some(AppCommand::RejectInlineBlock(id)) if id == "req-7"
+            ),
+            "expected RejectInlineBlock(req-7), got: {:?}",
+            app.pending.last()
+        );
+    }
+
+    #[test]
+    fn escalate_inline_block_routes_to_escalate_inline_command() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
+        app.session
+            .push_approval("req-3".into(), "Read".into(), "sensitive file".into());
+        app.dispatch(Action::Escalate);
+        assert!(
+            matches!(
+                app.pending.last(),
+                Some(AppCommand::EscalateInlineBlock(id)) if id == "req-3"
+            ),
+            "expected EscalateInlineBlock(req-3), got: {:?}",
+            app.pending.last()
+        );
+    }
+
+    #[test]
+    fn approve_falls_through_to_hitl_queue_when_no_pending_approval_block() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        // No approval blocks in transcript — focus HITL view and add a request.
+        app.focus = ViewKind::Hitl;
+        app.hitl.set_requests(vec![HitlRequest {
+            id: "h1".into(),
+            agent_id: "a1".into(),
+            summary: "read".into(),
+            age: "".into(),
+            status: "pending".into(),
+        }]);
+        app.dispatch(Action::Approve);
+        // Should have routed to the HITL queue pane handler.
+        assert!(
+            matches!(app.pending.last(), Some(AppCommand::Approve(id)) if id == "h1"),
+            "expected Approve(h1), got: {:?}",
+            app.pending.last()
+        );
     }
 }

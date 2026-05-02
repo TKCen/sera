@@ -52,7 +52,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     .render(frame, chunks[0]);
 
     // Main canvas: Session chat (transcript + tool log).
-    app.session.render_chat(frame, chunks[1], true);
+    app.session.render_chat(frame, chunks[1], true, &app.keybindings);
 
     // Composer — always visible, regardless of modal state.
     app.session.render_composer_only(frame, chunks[2]);

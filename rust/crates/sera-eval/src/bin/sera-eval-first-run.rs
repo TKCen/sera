@@ -53,7 +53,10 @@ use sera_eval::{EvalStore, HarnessConfig};
 
 const MODEL: &str = "qwen/qwen3.6-35b-a3b";
 const LM_STUDIO_BASE: &str = "http://127.0.0.1:1234/v1";
-const SERA_ENDPOINT_DEFAULT: &str = "http://127.0.0.1:3001";
+// docker-compose.rust.yaml publishes sera-gateway on host :3002 to avoid
+// colliding with rust/docker-compose.sera.yml which uses :3001.
+// Override via SERA_ENDPOINT env var for other setups.
+const SERA_ENDPOINT_DEFAULT: &str = "http://127.0.0.1:3002";
 const SERA_CONTAINER_DEFAULT: &str = "rust-sera-1";
 const SERA_API_KEY_DEFAULT: &str =
     "605d685d121d2f50daf1b1e3be84b3161ff80d16e56d60df4e5be35f9ebca639";
@@ -838,7 +841,9 @@ fn render_report(
     md.push_str("\n## How to reproduce\n\n");
     md.push_str(
         "```bash\n\
-         # from repo root; SERA gateway must be running at :3001 and LM Studio at :1234\n\
+         # from repo root; SERA gateway must be running at :3002 (docker-compose.rust.yaml)\n\
+         # or set SERA_ENDPOINT=http://127.0.0.1:3001 for the rust/docker-compose.sera.yml stack\n\
+         # LM Studio must be running at :1234\n\
          cd rust && cargo run -p sera-eval --bin sera-eval-first-run\n\
          ```\n\n",
     );

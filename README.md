@@ -132,7 +132,7 @@ A React 19 + Vite + Tailwind v4 SPA against the rust gateway. Five pages: dashbo
 docker compose -f docker-compose.rust.yaml up --build
 ```
 
-Starts Postgres (with pgvector), Centrifugo, `sera-gateway` on :3001, and the web operator console on <http://localhost:5173>. The gateway auto-detects `DATABASE_URL` and switches from SQLite to Postgres for all stores; pgvector replaces the SQLite hybrid store for Tier-1 semantic memory; Centrifugo enables multi-pod thought streaming.
+Starts Postgres (with pgvector), Centrifugo, `sera-gateway` on :3002 (host port; container listens on :3001), and the web operator console on <http://localhost:5173>. The gateway auto-detects `DATABASE_URL` and switches from SQLite to Postgres for all stores; pgvector replaces the SQLite hybrid store for Tier-1 semantic memory; Centrifugo enables multi-pod thought streaming.
 
 ## Memory tiers
 

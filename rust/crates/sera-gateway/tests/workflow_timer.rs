@@ -9,6 +9,11 @@
 //! the past and drives a single tick directly. The 5-second ticker behaviour
 //! is covered by unit tests in the scheduler module; this test exercises the
 //! HTTP → store → scheduler → store wake path.
+//!
+//! `http_create_timer_task_and_resolve_round_trip` adds the missing HTTP layer:
+//! it creates the task via `POST /api/workflow/tasks`, drives one tick, and
+//! confirms the store transitions to Resolved — closing the acceptance gap
+//! identified in sera-kgi8.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -159,4 +164,146 @@ async fn scheduler_background_task_resolves_pending_timer() {
     drop(handle);
 
     assert!(resolved, "background scheduler must resolve pending timer");
+}
+
+// ── HTTP round-trip test ──────────────────────────────────────────────────────
+
+// Import the route module via the same #[path] trick used in workflow_human.rs.
+#[path = "../src/routes/workflow.rs"]
+mod route_workflow;
+
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, StatusCode},
+    routing::{get, post},
+};
+use tower::ServiceExt;
+use route_workflow::WorkflowAppState;
+use sera_gateway::workflow_store::WorkflowTaskStore as WfStore;
+use sera_mail::InMemoryMailLookup as HttpTestMailLookup;
+
+struct TimerTestState {
+    store: Arc<InMemoryWorkflowTaskStore>,
+}
+
+impl TimerTestState {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            store: Arc::new(InMemoryWorkflowTaskStore::new()),
+        })
+    }
+}
+
+impl WorkflowAppState for TimerTestState {
+    fn api_key(&self) -> &Option<String> {
+        &None::<String>
+    }
+    fn workflow_store(&self) -> Arc<dyn WfStore> {
+        Arc::clone(&self.store) as Arc<dyn WfStore>
+    }
+    fn mail_lookup(&self) -> Arc<HttpTestMailLookup> {
+        Arc::new(HttpTestMailLookup::new())
+    }
+    fn change_artifact_store(
+        &self,
+    ) -> Option<Arc<dyn sera_gateway::workflow_store::ChangeArtifactStateStore>> {
+        None
+    }
+}
+
+fn timer_test_router(state: Arc<TimerTestState>) -> Router {
+    Router::new()
+        .route(
+            "/api/workflow/tasks",
+            post(route_workflow::create_task::<TimerTestState>)
+                .get(route_workflow::list_tasks::<TimerTestState>),
+        )
+        .route(
+            "/api/workflow/tasks/{id}",
+            get(route_workflow::get_task::<TimerTestState>),
+        )
+        .with_state(state)
+}
+
+/// Full HTTP → store → tick → Resolved round-trip for the Timer gate.
+///
+/// 1. `POST /api/workflow/tasks` with `deadline` in the past → 201 + Pending.
+/// 2. `GET /api/workflow/tasks/{id}` → still Pending (no tick yet).
+/// 3. Drive one [`tick`] directly — timer already elapsed so it must resolve.
+/// 4. `GET /api/workflow/tasks/{id}` → Resolved + `resolved_at` set.
+#[tokio::test]
+async fn http_create_timer_task_and_resolve_round_trip() {
+    let state = TimerTestState::new();
+    let app = timer_test_router(Arc::clone(&state));
+
+    // 1. Create a Timer task with a deadline already in the past.
+    let deadline = Utc::now() - ChronoDuration::seconds(2);
+    let create_body = serde_json::json!({
+        "await_type": "timer",
+        "agent_id": "sera",
+        "resume_token": "tok-http-timer-1",
+        "deadline": deadline,
+    });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/api/workflow/tasks")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let created: route_workflow::WorkflowTaskView = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(created.status, SchedulerTaskStatus::Pending);
+    assert_eq!(created.resume_token, "tok-http-timer-1");
+
+    // 2. GET before any tick — must still be Pending.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/workflow/tasks/{}", created.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let view: route_workflow::WorkflowTaskView = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(view.status, SchedulerTaskStatus::Pending, "task must be pending before tick");
+
+    // 3. Drive one scheduler tick — deadline elapsed, must resolve.
+    let resolved = tick(
+        Arc::clone(&state.store) as Arc<dyn WfStore>,
+        Arc::new(InMemoryMailLookup::new()),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(resolved, 1, "elapsed timer must resolve on first tick");
+
+    // 4. GET after tick — must be Resolved.
+    let resp = app
+        .oneshot(
+            Request::get(format!("/api/workflow/tasks/{}", created.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let view: route_workflow::WorkflowTaskView = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        view.status,
+        SchedulerTaskStatus::Resolved,
+        "task must be resolved after tick"
+    );
+    assert!(view.resolved_at.is_some(), "resolved_at must be set");
 }

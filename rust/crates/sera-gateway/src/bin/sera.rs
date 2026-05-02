@@ -7407,6 +7407,60 @@ spec:
         );
     }
 
+    /// sera-bsem regression: after `cancel_all_in_flight` cancels every
+    /// registered token, the cancel arm of `execute_turn` returns
+    /// `MvsTurnResult { cancelled: true, .. }`, which the calling chat handler
+    /// drives through the same `release_lane` cleanup as the success path.
+    /// Lock down the end of that loop: a previously-busy lane must accept new
+    /// admissions once the operator path completes, otherwise ROLLBACK plus
+    /// disarm leaves the lane wedged at `active_runs == 1` until process
+    /// restart (the original bug).
+    #[tokio::test]
+    async fn rollback_releases_lane_slot_for_subsequent_admissions() {
+        let state = test_state_async().await;
+        let session_key = occupy_sera_lane(&state).await;
+
+        // Mirror the production registration sequence: a chat handler stamps a
+        // CancellationToken into the registry alongside the lane reservation.
+        let token = state.register_cancellation_token(&session_key);
+
+        // Operator fires ROLLBACK → cancel_all_in_flight drains the registry
+        // and cancels every token (the existing
+        // `cancel_all_in_flight_cancels_every_registered_token` test pins this
+        // half down).
+        let cancelled = state.cancel_all_in_flight();
+        assert_eq!(cancelled, 1, "rollback must cancel exactly one token");
+        assert!(token.is_cancelled());
+
+        // The cancel arm of execute_turn fires before the chat handler's
+        // `release_lane`. Mirror that cleanup so the lane returns to baseline.
+        {
+            let mut lq = state.lane_queue.lock().await;
+            lq.complete_run(&session_key);
+        }
+
+        let active = state.lane_queue.lock().await.active_runs();
+        assert_eq!(
+            active, 0,
+            "rollback + cancel arm cleanup must release the lane slot; \
+             leaving it at 1 is the sera-bsem wedge that pins the next \
+             /api/chat at 429 until process restart"
+        );
+
+        // Subsequent submissions on the same session_key must be admitted.
+        let principal = PrincipalRef {
+            id: PrincipalId::new("http-chat"),
+            kind: PrincipalKind::Human,
+        };
+        let event = DomainEvent::api_message("sera", &session_key, principal, "after rollback");
+        let mut lq = state.lane_queue.lock().await;
+        assert_eq!(
+            lq.enqueue(event),
+            sera_db::lane_queue::EnqueueResult::Ready,
+            "post-rollback enqueue must be Ready, not Queued — lane was leaked"
+        );
+    }
+
     /// sera-mplr: `AppState::cancel_http_chat_session` marks the matching
     /// `http:{agent}:{session_id}` handle as client-cancelled and fires its
     /// token. The handle is **not** removed here — the chat handler's

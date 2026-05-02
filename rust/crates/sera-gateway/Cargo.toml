@@ -69,7 +69,7 @@ regex.workspace = true
 async-trait.workspace = true
 sera-queue.workspace = true
 sera-secrets.workspace = true
-sera-a2a.workspace = true
+sera-a2a = { workspace = true, features = ["http-transport"] }
 sera-agui.workspace = true
 sera-plugins.workspace = true
 

@@ -114,6 +114,8 @@ mod route_evolution;
 mod route_circles;
 #[path = "../routes/subagents.rs"]
 mod route_subagents;
+#[path = "../routes/intercom.rs"]
+mod route_intercom;
 
 use route_a2a::{A2aAppState, A2aPeerRegistry};
 use route_agui::{AguiAppState, AguiHub};
@@ -122,6 +124,7 @@ use route_workflow::WorkflowAppState;
 use route_evolution::EvolutionAppState;
 use route_circles::CirclesAppState;
 use route_subagents::{InMemorySubagentManager, SubagentsAppState};
+use route_intercom::{IntercomAppState, IntercomBroker, SharedIntercomBroker};
 use route_inference_proxy::{
     InferenceProxyAppState, InferenceProxyAudit, LlmBudgetGate, NoopBudgetGate,
     SqliteInferenceProxyAudit, UpstreamProvider,
@@ -1390,6 +1393,10 @@ struct AppState {
     /// processes, remote runtime) can be swapped in without touching the
     /// routes.
     subagent_manager: Arc<dyn SubagentManager>,
+    /// Local-first intercom pub/sub broker (sera-nd4v). Shared across all
+    /// `/api/intercom/*` routes via `IntercomAppState`. Tier-1 default; the
+    /// Centrifugo-backed transport remains enterprise-only.
+    intercom_broker: SharedIntercomBroker,
 }
 
 impl AppState {
@@ -1664,6 +1671,15 @@ impl EvolutionAppState for AppState {
     }
     fn artifact_pipeline(&self) -> Arc<ArtifactPipeline> {
         Arc::clone(&self.artifact_pipeline)
+    }
+}
+
+impl IntercomAppState for AppState {
+    fn api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+    fn intercom_broker(&self) -> SharedIntercomBroker {
+        Arc::clone(&self.intercom_broker)
     }
 }
 
@@ -5203,6 +5219,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         admin_audit: Some(Arc::clone(&admin_audit)),
         artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
         subagent_manager: Arc::new(InMemorySubagentManager::new()),
+        intercom_broker: Arc::new(IntercomBroker::new()),
     });
 
     // 4. Start event processing loop.
@@ -5746,6 +5763,19 @@ fn build_router(state: Arc<AppState>) -> Router {
             post(route_subagents::spawn_subagent::<AppState>)
                 .get(route_subagents::list_subagents::<AppState>),
         )
+        // ── sera-nd4v: intercom pub/sub HTTP API ─────────────────────────────
+        .route(
+            "/api/intercom/publish",
+            post(route_intercom::publish::<AppState>),
+        )
+        .route(
+            "/api/intercom/subscribe/{topic}",
+            get(route_intercom::subscribe::<AppState>),
+        )
+        .route(
+            "/api/intercom/topics",
+            get(route_intercom::list_topics::<AppState>),
+        )
         // TODO(sera-8d1.4-follow): wire GET/PUT /api/circles/{id}/constitution
         // when the constitution-get/put handlers get reimplemented against
         // this binary's SqliteDb-backed AppState (the previous orphan
@@ -5988,6 +6018,7 @@ mod tests {
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
             subagent_manager: Arc::new(InMemorySubagentManager::new()),
+            intercom_broker: Arc::new(IntercomBroker::new()),
         })
     }
 
@@ -6039,6 +6070,7 @@ mod tests {
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
             subagent_manager: Arc::new(InMemorySubagentManager::new()),
+            intercom_broker: Arc::new(IntercomBroker::new()),
         })
     }
 
@@ -6090,6 +6122,7 @@ mod tests {
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
             subagent_manager: Arc::new(InMemorySubagentManager::new()),
+            intercom_broker: Arc::new(IntercomBroker::new()),
         })
     }
 
@@ -6141,6 +6174,7 @@ mod tests {
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
             subagent_manager: Arc::new(InMemorySubagentManager::new()),
+            intercom_broker: Arc::new(IntercomBroker::new()),
         })
     }
 
@@ -6648,6 +6682,7 @@ spec:
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
             subagent_manager: Arc::new(InMemorySubagentManager::new()),
+            intercom_broker: Arc::new(IntercomBroker::new()),
         })
     }
 
@@ -7161,6 +7196,7 @@ spec:
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
             subagent_manager: Arc::new(InMemorySubagentManager::new()),
+            intercom_broker: Arc::new(IntercomBroker::new()),
         };
         let headers = HeaderMap::new();
         assert!(validate_api_key(&state, &headers).is_ok());
@@ -7215,6 +7251,7 @@ spec:
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
             subagent_manager: Arc::new(InMemorySubagentManager::new()),
+            intercom_broker: Arc::new(IntercomBroker::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer my-key".parse().unwrap());
@@ -7270,6 +7307,7 @@ spec:
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
             subagent_manager: Arc::new(InMemorySubagentManager::new()),
+            intercom_broker: Arc::new(IntercomBroker::new()),
         };
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
@@ -7328,6 +7366,7 @@ spec:
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
             subagent_manager: Arc::new(InMemorySubagentManager::new()),
+            intercom_broker: Arc::new(IntercomBroker::new()),
         };
         let headers = HeaderMap::new();
         assert_eq!(
@@ -9818,6 +9857,7 @@ spec:
             admin_audit: None,
             artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
             subagent_manager: Arc::new(InMemorySubagentManager::new()),
+            intercom_broker: Arc::new(IntercomBroker::new()),
         });
 
         let app = build_router(Arc::clone(&state));
@@ -9911,6 +9951,7 @@ spec:
                 admin_audit: None,
                 artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
                 subagent_manager: Arc::new(InMemorySubagentManager::new()),
+                intercom_broker: Arc::new(IntercomBroker::new()),
             })
         };
         let app = build_router(state);
@@ -10001,6 +10042,7 @@ spec:
                 admin_audit: None,
                 artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
                 subagent_manager: Arc::new(InMemorySubagentManager::new()),
+                intercom_broker: Arc::new(IntercomBroker::new()),
             })
         };
         let app = build_router(state);
@@ -10752,6 +10794,7 @@ spec:
                 admin_audit: None,
                 artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
                 subagent_manager: Arc::new(InMemorySubagentManager::new()),
+                intercom_broker: Arc::new(IntercomBroker::new()),
             });
 
             (

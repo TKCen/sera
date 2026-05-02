@@ -107,7 +107,7 @@ casbin = "2"
 tokio-tungstenite = { version = "0.26", features = ["connect", "rustls-tls-webpki-roots"] }
 
 # Streaming
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["sync"] }
 async-stream = "0.3"
 futures-util = "0.3"
 tokio-util = "0.7"

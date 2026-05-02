@@ -10,3 +10,4 @@ pub mod circles;
 pub mod inference_proxy;
 pub mod evolution;
 pub mod subagents;
+pub mod intercom;

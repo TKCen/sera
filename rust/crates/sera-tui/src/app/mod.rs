@@ -508,6 +508,17 @@ impl App {
                     self.pending.push(AppCommand::OpenSession(id));
                 }
             }
+            // J.0.3: tool-block focus cycling and expansion toggle.
+            Action::FocusNextToolBlock => {
+                if let ViewKind::Session = self.focus {
+                    self.session.focus_next_tool_block();
+                }
+            }
+            Action::ToggleToolBlock => {
+                if let ViewKind::Session = self.focus {
+                    self.session.toggle_focused_tool_block();
+                }
+            }
             // These are only dispatched via the modal intercept path above, so
             // reaching here means the modal was already closed.  Treat as no-op.
             Action::ApproveHitl(_)
@@ -582,6 +593,19 @@ impl App {
                 display_first(&kb.select),
                 display_first(&kb.up),
                 display_first(&kb.down),
+            );
+        }
+
+        // When transcript is focused and a tool block is selected, show tool hints.
+        if self.session.focus == crate::views::session::ComposerFocus::Transcript
+            && self.session.focused_tool_index.is_some()
+        {
+            return format!(
+                "{}:toggle  {}:next-tool  {}:focus  {}:quit",
+                display_first(&kb.toggle_tool_block),
+                display_first(&kb.focus_next_tool_block),
+                display_first(&kb.toggle_composer_focus),
+                display_first(&kb.quit),
             );
         }
 
@@ -1382,5 +1406,83 @@ mod tests {
             app.status.text, baseline_status,
             "stale evolve error must not surface in the status line"
         );
+    }
+
+    // --- J.0.3 collapsible tool-block dispatch tests ---
+
+    fn tool_call_block(tool: &str) -> crate::views::blocks::Block {
+        crate::views::blocks::Block::ToolCall {
+            tool: tool.to_owned(),
+            summary: "arg".to_owned(),
+            args: serde_json::Value::Null,
+            result: None,
+            expanded: false,
+        }
+    }
+
+    #[test]
+    fn focus_next_tool_block_action_advances_selection() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
+        app.session.blocks.push(tool_call_block("bash"));
+        app.session.blocks.push(tool_call_block("write"));
+
+        app.dispatch(Action::FocusNextToolBlock);
+        assert_eq!(app.session.focused_tool_index, Some(0));
+
+        app.dispatch(Action::FocusNextToolBlock);
+        assert_eq!(app.session.focused_tool_index, Some(1));
+    }
+
+    #[test]
+    fn toggle_tool_block_action_expands_focused_block() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
+        app.session.blocks.push(tool_call_block("bash"));
+        app.session.focused_tool_index = Some(0);
+
+        app.dispatch(Action::ToggleToolBlock);
+        assert!(
+            matches!(
+                &app.session.blocks[0],
+                crate::views::blocks::Block::ToolCall { expanded, .. } if *expanded
+            ),
+            "block should be expanded after first toggle"
+        );
+
+        app.dispatch(Action::ToggleToolBlock);
+        assert!(
+            matches!(
+                &app.session.blocks[0],
+                crate::views::blocks::Block::ToolCall { expanded, .. } if !*expanded
+            ),
+            "block should be collapsed after second toggle"
+        );
+    }
+
+    #[test]
+    fn toggle_tool_block_with_no_focus_is_noop() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
+        app.session.blocks.push(tool_call_block("bash"));
+        // No focused_tool_index — dispatch must not panic.
+        app.dispatch(Action::ToggleToolBlock);
+        assert!(
+            matches!(
+                &app.session.blocks[0],
+                crate::views::blocks::Block::ToolCall { expanded, .. } if !*expanded
+            ),
+            "unfocused block must not be toggled"
+        );
+    }
+
+    #[test]
+    fn focus_next_tool_block_only_acts_on_session_view() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        // focus is Agents — action must be a no-op.
+        app.focus = ViewKind::Agents;
+        app.session.blocks.push(tool_call_block("bash"));
+        app.dispatch(Action::FocusNextToolBlock);
+        assert_eq!(app.session.focused_tool_index, None);
     }
 }

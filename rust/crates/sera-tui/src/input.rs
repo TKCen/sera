@@ -77,7 +77,7 @@ pub fn translate(event: &KeyEvent, kb: &TuiKeybindings) -> Action {
 /// session-specific bindings are checked first.
 ///
 /// When `composer_focused` is false the transcript pane is active and we
-/// fall back to the standard `translate` so scroll keys work normally.
+/// check tool-block bindings (J.0.3) before falling back to standard navigation.
 pub fn translate_session(
     event: &KeyEvent,
     kb: &TuiKeybindings,
@@ -88,12 +88,9 @@ pub fn translate_session(
         return Action::Quit;
     }
 
-    // Session-specific bindings checked before the global table.
+    // Submit is global — fires regardless of which pane is focused.
     if matches_key(event, &kb.submit_message) {
         return Action::SubmitComposer;
-    }
-    if matches_key(event, &kb.toggle_composer_focus) {
-        return Action::ToggleComposerFocus;
     }
 
     // J.0.1 modal-open shortcuts — handled even when composer has focus so
@@ -112,10 +109,27 @@ pub fn translate_session(
     }
 
     if composer_focused {
+        // When the composer is active, Tab toggles back to the transcript.
+        if matches_key(event, &kb.toggle_composer_focus) {
+            return Action::ToggleComposerFocus;
+        }
         // All other keys go straight to the textarea widget.
         Action::ComposerInput(*event)
     } else {
-        // Transcript is focused — standard navigation.
+        // Transcript pane is active.
+        // J.0.3: Tab cycles through tool blocks; Space toggles the focused one.
+        if matches_key(event, &kb.focus_next_tool_block) {
+            return Action::FocusNextToolBlock;
+        }
+        if matches_key(event, &kb.toggle_tool_block) {
+            return Action::ToggleToolBlock;
+        }
+        // Fall back: toggle_composer_focus fires on Tab when there are no tool
+        // blocks (focus_next_tool_block has the same default binding).
+        if matches_key(event, &kb.toggle_composer_focus) {
+            return Action::ToggleComposerFocus;
+        }
+        // Standard transcript navigation (Up/Down/PageUp/PageDown/End/…).
         translate(event, kb)
     }
 }
@@ -169,15 +183,43 @@ mod tests {
     }
 
     #[test]
-    fn session_tab_toggles_composer_focus() {
+    fn session_tab_when_composer_focused_toggles_focus() {
+        // J.0.3: Tab from the composer always hands focus to the transcript.
         let kb = TuiKeybindings::defaults();
         assert_eq!(
             translate_session(&ev(KeyCode::Tab), &kb, true),
             Action::ToggleComposerFocus,
         );
+    }
+
+    #[test]
+    fn session_tab_when_transcript_focused_cycles_tool_blocks() {
+        // J.0.3: Tab from the transcript cycles through tool blocks.
+        let kb = TuiKeybindings::defaults();
         assert_eq!(
             translate_session(&ev(KeyCode::Tab), &kb, false),
-            Action::ToggleComposerFocus,
+            Action::FocusNextToolBlock,
+        );
+    }
+
+    #[test]
+    fn session_space_when_transcript_focused_toggles_tool_block() {
+        // J.0.3: Space from the transcript toggles the focused tool block.
+        let kb = TuiKeybindings::defaults();
+        assert_eq!(
+            translate_session(&ev(KeyCode::Char(' ')), &kb, false),
+            Action::ToggleToolBlock,
+        );
+    }
+
+    #[test]
+    fn session_space_when_composer_focused_goes_to_textarea() {
+        // Space inside the composer must not toggle any block.
+        let kb = TuiKeybindings::defaults();
+        let space = ev(KeyCode::Char(' '));
+        assert_eq!(
+            translate_session(&space, &kb, true),
+            Action::ComposerInput(space),
         );
     }
 

@@ -41,6 +41,11 @@ pub struct SessionView {
     pub conn: ConnectionState,
     pub composer: TextArea<'static>,
     pub focus: ComposerFocus,
+    /// **J.0.3**: index into `blocks` of the currently-focused tool block,
+    /// or `None` when no tool block is selected.  Only `ToolCall` (and
+    /// future `Task`) blocks are focusable; other block types are skipped
+    /// by `focus_next_tool_block`.
+    pub focused_tool_index: Option<usize>,
     /// Messages drained from the composer via `submit_composer`.
     pub pending_sends: Vec<String>,
     /// Slash-command strings drained from the composer via `submit_composer`.
@@ -62,6 +67,7 @@ impl SessionView {
             conn: ConnectionState::Disconnected,
             composer,
             focus: ComposerFocus::Composer,
+            focused_tool_index: None,
             pending_sends: Vec::new(),
             pending_slash: Vec::new(),
             composer_full_text: None,
@@ -73,6 +79,7 @@ impl SessionView {
         self.blocks.clear();
         self.scroll_offset = 0;
         self.auto_scroll = true;
+        self.focused_tool_index = None;
     }
 
     /// Hydrate from a wire-format transcript fetch.  Each [`TranscriptEntry`]
@@ -266,6 +273,47 @@ impl SessionView {
         self.scroll_offset = 0;
     }
 
+    /// **J.0.3**: Advance `focused_tool_index` to the next `ToolCall` (or
+    /// `Task`) block, wrapping around.  When nothing is focused yet, focuses
+    /// the first tool block.  When there are no tool blocks, clears the focus
+    /// and returns `false`.
+    pub fn focus_next_tool_block(&mut self) -> bool {
+        // Collect the indices of all focusable (tool/task) blocks.
+        let tool_indices: Vec<usize> = self
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| matches!(b, Block::ToolCall { .. } | Block::Task { .. }))
+            .map(|(i, _)| i)
+            .collect();
+
+        if tool_indices.is_empty() {
+            self.focused_tool_index = None;
+            return false;
+        }
+
+        self.focused_tool_index = Some(match self.focused_tool_index {
+            None => tool_indices[0],
+            Some(current) => {
+                // Find the position of `current` in tool_indices and advance.
+                let pos = tool_indices.iter().position(|&i| i == current);
+                match pos {
+                    None => tool_indices[0],
+                    Some(p) => tool_indices[(p + 1) % tool_indices.len()],
+                }
+            }
+        });
+        true
+    }
+
+    /// **J.0.3**: Toggle expansion of the currently-focused tool block.
+    /// No-op when no tool block is focused.  Returns the new `expanded`
+    /// state, or `None` when there is nothing to toggle.
+    pub fn toggle_focused_tool_block(&mut self) -> Option<bool> {
+        let idx = self.focused_tool_index?;
+        self.blocks.get_mut(idx)?.toggle_expanded()
+    }
+
     /// Toggle keyboard focus between the composer and the transcript.
     pub fn toggle_focus(&mut self) {
         self.focus = match self.focus {
@@ -363,7 +411,11 @@ impl SessionView {
         } else {
             self.blocks
                 .iter()
-                .flat_map(|block| block_to_list_items(block))
+                .enumerate()
+                .flat_map(|(i, block)| {
+                    let is_focused = self.focused_tool_index == Some(i);
+                    block_to_list_items(block, is_focused)
+                })
                 .collect()
         };
 
@@ -402,7 +454,11 @@ impl SessionView {
 /// Render one [`Block`] into a sequence of [`ListItem`]s.  Kept free
 /// (rather than a method) so leaf beads can wrap their own variants
 /// without re-borrowing `&self`.
-fn block_to_list_items(block: &Block) -> Vec<ListItem<'static>> {
+///
+/// `focused` is `true` when this block is the currently-selected tool block
+/// (J.0.3) — the renderer adds a `►` prefix and bold style to make it
+/// visually distinct.
+fn block_to_list_items(block: &Block, focused: bool) -> Vec<ListItem<'static>> {
     match block {
         Block::TurnSeparator => vec![
             ListItem::new(Line::from(Span::styled(
@@ -418,12 +474,25 @@ fn block_to_list_items(block: &Block) -> Vec<ListItem<'static>> {
                 Block::Error { .. } => Color::Red,
                 _ => unreachable!(),
             };
+            // When this tool/task block is focused, apply bold + a focus marker.
+            let style = if focused && matches!(block, Block::ToolCall { .. } | Block::Task { .. }) {
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(header_color)
+            };
+            let prefix = if focused && matches!(block, Block::ToolCall { .. } | Block::Task { .. }) {
+                "► "
+            } else {
+                "  "
+            };
             let mut items = Vec::new();
-            for line in block.plain_text().lines() {
-                items.push(ListItem::new(Line::from(Span::styled(
-                    line.to_owned(),
-                    Style::default().fg(header_color),
-                ))));
+            for (i, line) in block.plain_text().lines().enumerate() {
+                let text = if i == 0 {
+                    format!("{prefix}{line}")
+                } else {
+                    format!("  {line}")
+                };
+                items.push(ListItem::new(Line::from(Span::styled(text, style))));
             }
             items.push(ListItem::new(Line::from("")));
             items
@@ -799,5 +868,101 @@ mod tests {
         v.submit_composer();
         assert_eq!(v.pending_sends.len(), 1);
         assert_eq!(v.pending_sends[0], long_paste);
+    }
+
+    // --- J.0.3 collapsible tool block tests ---
+
+    fn tool_call_block(tool: &str) -> Block {
+        Block::ToolCall {
+            tool: tool.to_owned(),
+            summary: "arg".to_owned(),
+            args: serde_json::Value::Null,
+            result: None,
+            expanded: false,
+        }
+    }
+
+    #[test]
+    fn focus_next_tool_block_with_no_tools_returns_false() {
+        let mut v = SessionView::new();
+        v.blocks.push(Block::UserMessage { text: "hi".into() });
+        assert!(!v.focus_next_tool_block());
+        assert_eq!(v.focused_tool_index, None);
+    }
+
+    #[test]
+    fn focus_next_tool_block_selects_first_when_none_focused() {
+        let mut v = SessionView::new();
+        v.blocks.push(Block::UserMessage { text: "hi".into() });
+        v.blocks.push(tool_call_block("bash"));
+        assert!(v.focus_next_tool_block());
+        assert_eq!(v.focused_tool_index, Some(1));
+    }
+
+    #[test]
+    fn focus_next_tool_block_cycles_through_multiple_tools() {
+        let mut v = SessionView::new();
+        v.blocks.push(tool_call_block("bash"));   // index 0
+        v.blocks.push(tool_call_block("write"));  // index 1
+        v.blocks.push(tool_call_block("read"));   // index 2
+
+        v.focus_next_tool_block();
+        assert_eq!(v.focused_tool_index, Some(0));
+
+        v.focus_next_tool_block();
+        assert_eq!(v.focused_tool_index, Some(1));
+
+        v.focus_next_tool_block();
+        assert_eq!(v.focused_tool_index, Some(2));
+
+        // Wraps back to first.
+        v.focus_next_tool_block();
+        assert_eq!(v.focused_tool_index, Some(0));
+    }
+
+    #[test]
+    fn toggle_focused_tool_block_expands_and_collapses() {
+        let mut v = SessionView::new();
+        v.blocks.push(tool_call_block("bash"));
+        v.focused_tool_index = Some(0);
+
+        // First toggle: collapsed → expanded.
+        assert_eq!(v.toggle_focused_tool_block(), Some(true));
+        assert!(matches!(&v.blocks[0], Block::ToolCall { expanded, .. } if *expanded));
+
+        // Second toggle: expanded → collapsed.
+        assert_eq!(v.toggle_focused_tool_block(), Some(false));
+        assert!(matches!(&v.blocks[0], Block::ToolCall { expanded, .. } if !*expanded));
+    }
+
+    #[test]
+    fn toggle_focused_tool_block_with_no_focus_is_noop() {
+        let mut v = SessionView::new();
+        v.blocks.push(tool_call_block("bash"));
+        assert_eq!(v.toggle_focused_tool_block(), None);
+    }
+
+    #[test]
+    fn set_session_resets_focused_tool_index() {
+        let mut v = SessionView::new();
+        v.blocks.push(tool_call_block("bash"));
+        v.focused_tool_index = Some(0);
+        v.set_session(sess("s2"));
+        assert_eq!(v.focused_tool_index, None);
+        assert!(v.blocks.is_empty());
+    }
+
+    #[test]
+    fn focus_skips_non_tool_blocks_between_tools() {
+        let mut v = SessionView::new();
+        v.blocks.push(tool_call_block("a"));              // index 0
+        v.blocks.push(Block::AssistantMessage { text: "text".into(), streaming: false }); // index 1
+        v.blocks.push(tool_call_block("b"));              // index 2
+
+        v.focus_next_tool_block();
+        assert_eq!(v.focused_tool_index, Some(0));
+
+        v.focus_next_tool_block();
+        assert_eq!(v.focused_tool_index, Some(2), "must skip AssistantMessage");
     }
 }

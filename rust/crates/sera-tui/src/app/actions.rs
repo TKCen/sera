@@ -129,6 +129,13 @@ pub enum Action {
     /// in the HITL queue pane).
     #[allow(dead_code)]
     DismissHitlModal,
+    /// Toggle expansion of the currently-focused tool block in the transcript.
+    /// J.0.3 (sera-c6mb): only fires when transcript pane is focused and a tool
+    /// block is selected.
+    ToggleToolBlock,
+    /// Cycle focus to the next tool block in the transcript (wraps around).
+    /// J.0.3 (sera-c6mb): Tab when transcript pane is focused.
+    FocusNextToolBlock,
     /// No-op — used when a key doesn't match any binding.  Reducing to
     /// this instead of returning `Option<Action>` lets the dispatch table
     /// stay a plain `match`.

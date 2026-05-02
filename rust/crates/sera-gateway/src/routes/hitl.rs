@@ -24,7 +24,7 @@ use std::sync::Arc;
 use sera_hitl::{ApprovalTicket, HitlError};
 use sera_types::principal::Principal;
 
-use sera_gateway::hitl_gateway::{HitlAppState, TicketStoreError};
+use sera_gateway::hitl_gateway::{HitlAppState, HitlResumedEvent, TicketStoreError};
 
 // ── Request/response shapes ──────────────────────────────────────────────────
 
@@ -119,9 +119,12 @@ where
 
 /// POST /api/hitl/requests/{id}/approve
 ///
-/// Phase 1: records the approval on the ticket; no suspended turn is
-/// resumed. The approver principal is the default admin until the auth
-/// layer threads a real identity here (tracked for Phase 2).
+/// Phase 2 (sera-93h4): records the approval and, if the ticket was minted
+/// for a chat turn that was parked at the gateway pre-LLM gate, broadcasts a
+/// [`HitlResumedEvent`] so subscribers know the original submission may be
+/// resubmitted. Server-side replay of the parked turn is deferred to a
+/// follow-up bead — the resume contract at this layer is "the gate is now
+/// clear; client may retry the same request".
 pub async fn approve_ticket<S>(
     State(state): State<Arc<S>>,
     headers: HeaderMap,
@@ -141,6 +144,19 @@ where
         .approve(Principal::default_admin().as_ref(), reason)
         .map_err(|e| map_hitl_err(&e))?;
     store.update(ticket).await.map_err(map_store_err)?;
+
+    // Phase 2: notify subscribers that a parked chat turn may be resumed.
+    // Best-effort — a `SendError` only fires when there are no subscribers
+    // (the receiver-side has no live readers), which is a normal idle state
+    // and must not turn an otherwise successful approval into a 5xx.
+    if let Some(tx) = state.hitl_resumed_tx()
+        && let Ok(suspended) = store.get_suspended_turn(&id).await
+    {
+        let _ = tx.send(HitlResumedEvent {
+            ticket_id: id.clone(),
+            session_key: suspended.session_key,
+        });
+    }
 
     Ok(Json(DecisionResponse { id, status }))
 }
@@ -194,7 +210,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sera_gateway::hitl_gateway::{InMemoryTicketStore, TicketStore};
+    use sera_gateway::hitl_gateway::{
+        HitlResumedSender, InMemoryTicketStore, SuspendedTurn, TicketStore,
+    };
     use axum::{
         Router,
         body::Body,
@@ -212,6 +230,7 @@ mod tests {
     struct TestState {
         api_key: Option<String>,
         tickets: Arc<InMemoryTicketStore>,
+        resumed_tx: Option<HitlResumedSender>,
     }
 
     impl HitlAppState for TestState {
@@ -220,6 +239,9 @@ mod tests {
         }
         fn ticket_store(&self) -> Arc<dyn TicketStore> {
             Arc::clone(&self.tickets) as Arc<dyn TicketStore>
+        }
+        fn hitl_resumed_tx(&self) -> Option<HitlResumedSender> {
+            self.resumed_tx.clone()
         }
     }
 
@@ -275,6 +297,7 @@ mod tests {
         let state = Arc::new(TestState {
             api_key: None,
             tickets,
+            resumed_tx: None,
         });
         (state, id)
     }
@@ -284,6 +307,7 @@ mod tests {
         let state = Arc::new(TestState {
             api_key: None,
             tickets: Arc::new(InMemoryTicketStore::new()),
+            resumed_tx: None,
         });
         let app = router(state);
         let resp = app
@@ -315,6 +339,7 @@ mod tests {
         let state = Arc::new(TestState {
             api_key: None,
             tickets: Arc::new(InMemoryTicketStore::new()),
+            resumed_tx: None,
         });
         let app = router(state);
         let resp = app
@@ -435,6 +460,7 @@ mod tests {
         let state = Arc::new(TestState {
             api_key: None,
             tickets,
+            resumed_tx: None,
         });
 
         let app = router(Arc::clone(&state));
@@ -501,6 +527,7 @@ mod tests {
         let state = Arc::new(TestState {
             api_key: Some("secret".into()),
             tickets,
+            resumed_tx: None,
         });
         let app = router(state);
         let resp = app
@@ -512,5 +539,86 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // -- Phase 2 (sera-93h4) — suspend/resume --
+
+    /// Approving a ticket that has a recorded `SuspendedTurn` must broadcast
+    /// a `HitlResumedEvent` carrying the original ticket id and session key.
+    /// Subscribers exit their `recv()` with the matching payload — that is
+    /// what tells a client it is now safe to retry the 403'd chat turn.
+    #[tokio::test]
+    async fn approve_emits_resumed_event_when_suspended_turn_recorded() {
+        let tickets = Arc::new(InMemoryTicketStore::new());
+        let ticket = sample_ticket();
+        let id = ticket.id.clone();
+        tickets.insert(ticket).await.unwrap();
+        // Record a suspended turn for this ticket. The session_key must
+        // round-trip to the broadcast subscriber.
+        tickets
+            .record_suspended_turn(SuspendedTurn {
+                ticket_id: id.clone(),
+                session_key: "http:agent-x:sess-1".to_string(),
+                session_id: "sess-1".to_string(),
+                agent_name: "agent-x".to_string(),
+                message: "do the thing".to_string(),
+                stream: false,
+            })
+            .await
+            .unwrap();
+
+        let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+        let state = Arc::new(TestState {
+            api_key: None,
+            tickets,
+            resumed_tx: Some(tx),
+        });
+
+        let app = router(Arc::clone(&state));
+        let resp = app
+            .oneshot(
+                Request::post(format!("/api/hitl/requests/{id}/approve"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let event = rx.try_recv().expect("expected a HitlResumedEvent");
+        assert_eq!(event.ticket_id, id);
+        assert_eq!(event.session_key, "http:agent-x:sess-1");
+    }
+
+    /// Approving a ticket with no recorded suspended turn must still succeed
+    /// (Phase 1 ApprovalRouter use cases hit this path) and must not blow
+    /// up when the broadcast channel has no listeners.
+    #[tokio::test]
+    async fn approve_without_suspended_turn_is_noop_for_resumed_channel() {
+        let tickets = Arc::new(InMemoryTicketStore::new());
+        let ticket = sample_ticket();
+        let id = ticket.id.clone();
+        tickets.insert(ticket).await.unwrap();
+
+        let (tx, _rx) = tokio::sync::broadcast::channel(8);
+        // Drop the receiver to simulate "no subscribers". The approve route
+        // must still return 200.
+        drop(_rx);
+        let state = Arc::new(TestState {
+            api_key: None,
+            tickets,
+            resumed_tx: Some(tx),
+        });
+
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::post(format!("/api/hitl/requests/{id}/approve"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }

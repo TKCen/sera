@@ -153,6 +153,16 @@ pub enum EventMsg {
         approval_id: Uuid,
         description: String,
     },
+    /// HITL Phase 2 (sera-93h4): emitted when a previously suspended turn's
+    /// approval ticket has been approved. Clients listening on a session-
+    /// scoped event channel use this to know it is safe to resubmit the
+    /// blocked message — the original chat response already closed with 403,
+    /// so resume semantics are "re-send the same submission with the ticket
+    /// now approved" rather than a server-side replay.
+    Resumed {
+        ticket_id: String,
+        session_key: String,
+    },
     CompactionStarted,
     CompactionCompleted {
         tokens_before: u32,

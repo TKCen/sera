@@ -17,6 +17,37 @@ use tokio::sync::RwLock;
 use sera_hitl::{ApprovalRouting, ApprovalTicket, HitlMode};
 use sera_types::config_manifest::AgentSpec;
 
+// ── SuspendedTurn (Phase 2, sera-93h4) ──────────────────────────────────────
+
+/// Captures the state needed to resume a chat turn that was blocked at the
+/// gateway pre-LLM HITL gate.
+///
+/// Phase 2 (sera-93h4) decision: the gateway pre-gate stays as the fast-fail
+/// front gate (returns 403 before the LLM runs) and the suspended-turn record
+/// is what clients use to resubmit the original request once the ticket has
+/// been approved. Server-side auto-replay of the blocked turn is deferred to
+/// a follow-up bead — at this layer, "resume" means "the ticket cleared, now
+/// the client may re-POST the same message and it will pass the gate".
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SuspendedTurn {
+    /// Ticket that gates this turn.
+    pub ticket_id: String,
+    /// Session key the original request targeted (`http:{agent}:{session_id}`).
+    pub session_key: String,
+    /// Session row id in the SqliteDb. Carried so a future server-side replay
+    /// can rehydrate the transcript without re-deriving it from `session_key`.
+    pub session_id: String,
+    /// Manifest agent name the chat handler resolved.
+    pub agent_name: String,
+    /// Original `req.message` payload as provided by the caller.
+    pub message: String,
+    /// Whether the original submission opted into SSE streaming (`req.stream`).
+    /// Recorded so a future replay can match the caller's expected response
+    /// shape; today it is informational only.
+    #[serde(default)]
+    pub stream: bool,
+}
+
 // ── TicketStore ──────────────────────────────────────────────────────────────
 
 /// Errors surfaced from [`TicketStore`] operations. Kept intentionally small
@@ -53,13 +84,42 @@ pub trait TicketStore: Send + Sync {
     /// ticket is unknown — callers must `get` first to obtain the current
     /// state.
     async fn update(&self, ticket: ApprovalTicket) -> Result<(), TicketStoreError>;
+
+    /// Phase 2 (sera-93h4): persist a [`SuspendedTurn`] alongside its ticket.
+    ///
+    /// Called from `chat_handler` when the HITL gate mints a ticket and the
+    /// caller's submission must be carried forward so it can be resumed
+    /// after approval. Default is a no-op so implementors that have no
+    /// Phase-2 wiring (e.g. legacy tests) compile unchanged.
+    async fn record_suspended_turn(
+        &self,
+        _turn: SuspendedTurn,
+    ) -> Result<(), TicketStoreError> {
+        Ok(())
+    }
+
+    /// Phase 2 (sera-93h4): fetch a previously recorded [`SuspendedTurn`].
+    ///
+    /// Returns [`TicketStoreError::NotFound`] when no suspended turn was
+    /// recorded for `ticket_id`. Default returns `NotFound` so legacy
+    /// implementors degrade gracefully.
+    async fn get_suspended_turn(
+        &self,
+        ticket_id: &str,
+    ) -> Result<SuspendedTurn, TicketStoreError> {
+        Err(TicketStoreError::NotFound {
+            id: ticket_id.to_owned(),
+        })
+    }
 }
 
-/// Process-local [`TicketStore`] backed by a `HashMap`. Sufficient for Phase 1
-/// — tickets are ephemeral anyway (Phase 1 does not resume suspended turns).
+/// Process-local [`TicketStore`] backed by a `HashMap`. Phase 2 (sera-93h4)
+/// adds a sibling `suspended_turns` map keyed by ticket id so the
+/// `chat_handler` can park the request payload until the ticket is approved.
 #[derive(Default)]
 pub struct InMemoryTicketStore {
     inner: RwLock<HashMap<String, ApprovalTicket>>,
+    suspended_turns: RwLock<HashMap<String, SuspendedTurn>>,
 }
 
 impl InMemoryTicketStore {
@@ -98,6 +158,27 @@ impl TicketStore for InMemoryTicketStore {
         map.insert(ticket.id.clone(), ticket);
         Ok(())
     }
+
+    async fn record_suspended_turn(
+        &self,
+        turn: SuspendedTurn,
+    ) -> Result<(), TicketStoreError> {
+        let mut map = self.suspended_turns.write().await;
+        map.insert(turn.ticket_id.clone(), turn);
+        Ok(())
+    }
+
+    async fn get_suspended_turn(
+        &self,
+        ticket_id: &str,
+    ) -> Result<SuspendedTurn, TicketStoreError> {
+        let map = self.suspended_turns.read().await;
+        map.get(ticket_id)
+            .cloned()
+            .ok_or_else(|| TicketStoreError::NotFound {
+                id: ticket_id.to_owned(),
+            })
+    }
 }
 
 // ── AgentSpec → HITL config resolution ───────────────────────────────────────
@@ -127,6 +208,28 @@ pub fn resolve_approval_routing(spec: &AgentSpec) -> ApprovalRouting {
     }
 }
 
+// ── HITL resume event channel (Phase 2, sera-93h4) ──────────────────────────
+
+/// Notification emitted on the HITL resume broadcast channel after a
+/// suspended ticket transitions to `Approved`.
+///
+/// Subscribers (typically a TUI watching `GET /api/hitl/events` or a long-
+/// poll loop in a CLI) use this to know when their previously 403'd chat
+/// turn may safely be resubmitted. The channel carries the original
+/// `ticket_id` and the `session_key` of the blocked turn — that pair is the
+/// minimal correlation the caller needs to match a resumed event to its
+/// in-flight retry.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HitlResumedEvent {
+    pub ticket_id: String,
+    pub session_key: String,
+}
+
+/// Broadcast handle shared with subscribers. Wrapped in [`Arc`] in
+/// `AppState` so the route handlers can [`tokio::sync::broadcast::Sender::send`]
+/// without taking a write lock.
+pub type HitlResumedSender = tokio::sync::broadcast::Sender<HitlResumedEvent>;
+
 // ── AppState trait abstraction for the HITL routes ───────────────────────────
 
 /// Abstraction over the binary's `AppState` so the HITL HTTP handlers can
@@ -135,6 +238,17 @@ pub fn resolve_approval_routing(spec: &AgentSpec) -> ApprovalRouting {
 pub trait HitlAppState: Send + Sync + 'static {
     fn api_key(&self) -> &Option<String>;
     fn ticket_store(&self) -> Arc<dyn TicketStore>;
+
+    /// Phase 2 (sera-93h4): broadcast handle for [`HitlResumedEvent`].
+    ///
+    /// The default impl returns `None`, which keeps existing test states
+    /// (and any future readers that do not care about resume notifications)
+    /// compiling. The production `AppState` overrides this to return a
+    /// process-wide sender so the approve route can fan out to live SSE
+    /// subscribers.
+    fn hitl_resumed_tx(&self) -> Option<HitlResumedSender> {
+        None
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -202,6 +316,31 @@ mod tests {
         let store = InMemoryTicketStore::new();
         let ticket = sample_ticket();
         let err = store.update(ticket).await.unwrap_err();
+        assert!(matches!(err, TicketStoreError::NotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn in_memory_suspended_turn_roundtrip() {
+        let store = InMemoryTicketStore::new();
+        let turn = SuspendedTurn {
+            ticket_id: "t-1".to_string(),
+            session_key: "http:a:s".to_string(),
+            session_id: "s".to_string(),
+            agent_name: "a".to_string(),
+            message: "hello".to_string(),
+            stream: true,
+        };
+        store.record_suspended_turn(turn.clone()).await.unwrap();
+        let got = store.get_suspended_turn("t-1").await.unwrap();
+        assert_eq!(got.ticket_id, "t-1");
+        assert_eq!(got.message, "hello");
+        assert!(got.stream);
+    }
+
+    #[tokio::test]
+    async fn in_memory_get_suspended_turn_missing_is_not_found() {
+        let store = InMemoryTicketStore::new();
+        let err = store.get_suspended_turn("nope").await.unwrap_err();
         assert!(matches!(err, TicketStoreError::NotFound { .. }));
     }
 

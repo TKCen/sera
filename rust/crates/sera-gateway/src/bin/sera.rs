@@ -2104,6 +2104,18 @@ async fn chat_handler(
     // even flagged/rejected turns leave a record of intent.
     {
         use sera_gateway::envelope::{Op, Submission, W3cTraceContext};
+        // Propagate incoming W3C trace context headers so distributed traces
+        // can be correlated across gateway → runtime → LLM-client boundaries.
+        let trace = W3cTraceContext {
+            traceparent: headers
+                .get("traceparent")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned),
+            tracestate: headers
+                .get("tracestate")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned),
+        };
         let envelope = Submission {
             id: uuid::Uuid::new_v4(),
             op: Op::UserTurn {
@@ -2118,7 +2130,7 @@ async fn chat_handler(
                 effort: None,
                 final_output_schema: None,
             },
-            trace: W3cTraceContext::default(),
+            trace,
             change_artifact: None,
             session_key: Some(session_key.clone()),
             parent_session_key: None,
@@ -10848,5 +10860,62 @@ spec:
             drop(state);
             drop(mock);
         }
+    }
+
+    // ── W3C traceparent header propagation (sera-n806) ───────────────────────
+
+    /// Verify that W3cTraceContext fields are populated from the incoming HTTP
+    /// headers rather than left as None (default).
+    #[test]
+    fn w3c_trace_context_from_headers() {
+        use axum::http::HeaderMap;
+        use sera_types::envelope::W3cTraceContext;
+
+        fn extract_trace(headers: &HeaderMap) -> W3cTraceContext {
+            W3cTraceContext {
+                traceparent: headers
+                    .get("traceparent")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned),
+                tracestate: headers
+                    .get("tracestate")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned),
+            }
+        }
+
+        // Both headers present — both fields populated.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "traceparent",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+                .parse()
+                .unwrap(),
+        );
+        headers.insert("tracestate", "vendor=value".parse().unwrap());
+        let trace = extract_trace(&headers);
+        assert_eq!(
+            trace.traceparent.as_deref(),
+            Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+        );
+        assert_eq!(trace.tracestate.as_deref(), Some("vendor=value"));
+
+        // No headers — both fields None (same as default).
+        let empty = HeaderMap::new();
+        let trace_none = extract_trace(&empty);
+        assert_eq!(trace_none.traceparent, None);
+        assert_eq!(trace_none.tracestate, None);
+
+        // Only traceparent — tracestate is None.
+        let mut partial = HeaderMap::new();
+        partial.insert(
+            "traceparent",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+                .parse()
+                .unwrap(),
+        );
+        let trace_partial = extract_trace(&partial);
+        assert!(trace_partial.traceparent.is_some());
+        assert_eq!(trace_partial.tracestate, None);
     }
 }

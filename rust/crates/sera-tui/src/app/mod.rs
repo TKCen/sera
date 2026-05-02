@@ -810,8 +810,8 @@ impl App {
                     // blocks originated from that task.  We match by task_id
                     // stored on the block — the stack entry was cloned from it
                     // at drill_in time.
-                    if let Some(stack_thread) = self.thread_stack.last_mut() {
-                        if let Some(child) = self.session.blocks.iter().find_map(|b| {
+                    if let Some(stack_thread) = self.thread_stack.last_mut()
+                        && let Some(child) = self.session.blocks.iter().find_map(|b| {
                             if let crate::views::blocks::Block::Task {
                                 task_id: tid,
                                 child_thread,
@@ -823,9 +823,9 @@ impl App {
                             } else {
                                 None
                             }
-                        }) {
-                            *stack_thread = child;
-                        }
+                        })
+                    {
+                        *stack_thread = child;
                     }
                 } else {
                     self.session.apply_event(ev);

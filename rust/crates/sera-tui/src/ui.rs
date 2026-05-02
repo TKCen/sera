@@ -44,6 +44,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Status bar: agent name + session short-id + connection state.
     let agent = app.active_agent_id.as_deref();
     let session_id = app.session.session.as_ref().map(|s| s.id.as_str());
+    let drill_breadcrumb = app.drill_breadcrumb();
     StatusBar {
         agent,
         session_id,
@@ -51,6 +52,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         prompt_tokens: app.usage_prompt_tokens,
         completion_tokens: app.usage_completion_tokens,
         cost_usd: app.usage_cost_usd,
+        drill_breadcrumb: drill_breadcrumb.as_str(),
     }
     .render(frame, chunks[0]);
 

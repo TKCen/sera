@@ -106,12 +106,15 @@ mod route_workflow;
 mod route_inference_proxy;
 #[path = "../routes/evolution.rs"]
 mod route_evolution;
+#[path = "../routes/circles.rs"]
+mod route_circles;
 
 use route_a2a::{A2aAppState, A2aPeerRegistry};
 use route_agui::{AguiAppState, AguiHub};
 use route_plugins::PluginsAppState;
 use route_workflow::WorkflowAppState;
 use route_evolution::EvolutionAppState;
+use route_circles::CirclesAppState;
 use route_inference_proxy::{
     InferenceProxyAppState, InferenceProxyAudit, LlmBudgetGate, NoopBudgetGate,
     SqliteInferenceProxyAudit, UpstreamProvider,
@@ -1647,6 +1650,21 @@ impl EvolutionAppState for AppState {
     }
     fn artifact_pipeline(&self) -> Arc<ArtifactPipeline> {
         Arc::clone(&self.artifact_pipeline)
+    }
+}
+
+// ── sera-3g1n: circle CRUD wiring ───────────────────────────────────────────
+//
+// The MVS AppState uses SqliteDb; CircleRepository requires PgPool.
+// `pg_pool()` returns None here, so CRUD routes respond 503 on the SQLite
+// deployment. A Postgres-backed deployment would carry a DbPool in AppState
+// and return `Some(pool.inner())` — tracked as a follow-up.
+impl CirclesAppState for AppState {
+    fn api_key(&self) -> &Option<String> {
+        &self.api_key
+    }
+    fn pg_pool(&self) -> Option<&sqlx::PgPool> {
+        None
     }
 }
 
@@ -5526,6 +5544,18 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/v1/messages",
             post(route_inference_proxy::chat_messages::<AppState>),
+        )
+        // ── sera-3g1n: circle CRUD ────────────────────────────────────────────
+        .route(
+            "/api/circles",
+            post(route_circles::create_circle::<AppState>)
+                .get(route_circles::list_circles::<AppState>),
+        )
+        .route(
+            "/api/circles/{id}",
+            get(route_circles::get_circle::<AppState>)
+                .put(route_circles::update_circle::<AppState>)
+                .delete(route_circles::delete_circle::<AppState>),
         )
         // ── sera-8d1.2-follow: party mode (circles/{id}/party) ───────────────
         .route(
@@ -9597,6 +9627,108 @@ spec:
             .unwrap();
         // 404 = route matched, circle not found via stub — NOT "no route matched"
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── sera-3g1n: circle CRUD route smoke tests ─────────────────────────────
+
+    /// Without a bearer token the circles list route must return 401.
+    #[tokio::test]
+    async fn circles_list_requires_auth() {
+        let state = {
+            let hook_registry = Arc::new(HookRegistry::new());
+            let chain_executor = Arc::new(ChainExecutor::new(Arc::clone(&hook_registry)));
+            Arc::new(AppState {
+                db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
+                manifests: test_manifests(),
+                discord: None,
+                api_key: Some("secret".to_owned()),
+                lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
+                hook_registry,
+                chain_executor,
+                harnesses: std::collections::HashMap::new(),
+                runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                mail_correlator: Arc::new(HeaderMailCorrelator::new(
+                    Arc::new(InMemoryEnvelopeIndex::default()),
+                    None,
+                )),
+                mail_lookup: Arc::new(InMemoryMailLookup::new()),
+                a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+                a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
+                    Ok(serde_json::json!({"status": "test"}))
+                })),
+                agui_hub: Arc::new(RwLock::new(AguiHub::new())),
+                plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
+                skill_engine: Arc::new(SkillDispatchEngine::new()),
+                semantic_store: Arc::new(
+                    SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+                ),
+                kill_switch: Arc::new(KillSwitch::new()),
+                active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
+                    std::collections::HashMap::new(),
+                )),
+                session_store: Arc::new(InMemorySessionStore::new()),
+                constitutional_registry: Arc::new(ConstitutionalRegistry::new()),
+                capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
+                ticket_store: Arc::new(InMemoryTicketStore::new()),
+                hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
+                workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+                gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+                gh_pr_store: Arc::new(InMemoryGhPrStateStore::new()),
+                human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
+                admin_auth: None,
+                admin_audit: None,
+                artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+            })
+        };
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/circles")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// No api_key (autonomous mode) + SQLite backend → 503 (no pg_pool).
+    /// Proves the route IS registered and auth passes before the DB check.
+    #[tokio::test]
+    async fn circles_list_returns_503_on_sqlite_backend() {
+        let app = build_router(test_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/circles")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 503 = route matched, auth passed, SQLite backend → no pg_pool
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// GET /api/circles/{id} with no auth → 503 (no pg_pool) in autonomous mode.
+    #[tokio::test]
+    async fn circles_get_returns_503_on_sqlite_backend() {
+        let app = build_router(test_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/circles/some-id")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     // ── Kill switch admission gate tests (SPEC-gateway §7a.4) ────────────────

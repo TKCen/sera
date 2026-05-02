@@ -6,5 +6,6 @@
 //! into the binary via `#[path]`; promote them here as integration tests
 //! grow to need them.
 
+pub mod circles;
 pub mod inference_proxy;
 pub mod evolution;

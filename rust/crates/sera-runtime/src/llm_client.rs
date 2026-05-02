@@ -2085,6 +2085,7 @@ mod tests {
             tool_authz_enabled: false,
             tool_authz_roles: None,
             thinking_level: level,
+            subagents_allowed: Vec::new(),
         }
     }
 

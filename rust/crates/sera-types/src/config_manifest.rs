@@ -244,6 +244,15 @@ pub struct AgentSpec {
     /// `{ "mode": "autonomous" }`. Wave D (sera-z6ql).
     #[serde(default, alias = "approvalPolicy", skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<serde_json::Value>,
+    /// Agent IDs this agent may hand off control to (sera-q9i5).
+    ///
+    /// When non-empty, the gateway forwards this list as
+    /// `SERA_AGENT_SUBAGENTS_ALLOWED` to the runtime; the runtime injects
+    /// `metadata["subagents_allowed"]` into every `TurnContext` so
+    /// `default_runtime` builds `handoff_to_<id>` tool definitions for the
+    /// LLM. Empty/absent (the default) means no handoff tools are exposed.
+    #[serde(default, alias = "subagentsAllowed", skip_serializing_if = "Vec::is_empty")]
+    pub subagents_allowed: Vec<String>,
 }
 
 /// Persona configuration within an agent spec.

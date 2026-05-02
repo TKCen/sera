@@ -70,6 +70,14 @@ pub struct RuntimeConfig {
     /// When `Some`, [`crate::llm_client::LlmClient`] applies the matching
     /// provider-native parameter before sending each request.
     pub thinking_level: Option<ThinkingLevel>,
+    /// Agent IDs this agent may hand off control to (sera-q9i5).
+    ///
+    /// Reads `SERA_AGENT_SUBAGENTS_ALLOWED` (comma-separated). Forwarded by
+    /// the gateway from the agent manifest's `subagents_allowed` list. The
+    /// runtime injects this into every `TurnContext.metadata` so
+    /// `default_runtime` builds `handoff_to_<id>` tool definitions for the
+    /// LLM. Empty (the default) means no handoff tools are exposed.
+    pub subagents_allowed: Vec<String>,
 }
 
 impl RuntimeConfig {
@@ -129,6 +137,16 @@ impl RuntimeConfig {
             thinking_level: std::env::var("SERA_THINKING_LEVEL")
                 .ok()
                 .and_then(|v| v.parse::<ThinkingLevel>().ok()),
+            subagents_allowed: std::env::var("SERA_AGENT_SUBAGENTS_ALLOWED")
+                .ok()
+                .map(|v| {
+                    v.split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 }

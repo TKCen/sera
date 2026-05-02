@@ -66,7 +66,9 @@ use sera_gateway::session_store::InMemorySessionStore;
 use sera_gateway::session_store::{SessionStore, SqliteSessionStore};
 #[cfg(feature = "enterprise")]
 use sera_gateway::session_store::SqliteGitSessionStore;
-use sera_gateway::workflow_store::{InMemoryWorkflowTaskStore, WorkflowTaskStore};
+use sera_gateway::workflow_store::{
+    GhRunStateStore, InMemoryGhRunStateStore, InMemoryWorkflowTaskStore, WorkflowTaskStore,
+};
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_mail::{
     CorrelationOutcome, HeaderMailCorrelator, InMemoryEnvelopeIndex, InMemoryMailLookup,
@@ -1335,6 +1337,11 @@ struct AppState {
     /// the scheduler spawned in `run_start`. Phase 1 uses an in-memory
     /// store — SQLite-backed store is a follow-up bead.
     workflow_store: Arc<dyn WorkflowTaskStore>,
+    /// GitHub Actions run state store (sera-4fel). Keyed by run_id string;
+    /// populated by future GhRun status polling (or tests via direct upsert).
+    /// Consulted by the scheduler each tick via a snapshot lookup so GhRun-
+    /// gated workflow tasks transition to resolved when their run completes.
+    gh_run_store: Arc<dyn GhRunStateStore>,
     /// Admin HTTP auth (sera-nrn9, L.3). Separate token from the public
     /// API's `api_key`. `None` when the admin server is not started (e.g. in
     /// tests that don't exercise admin routes).
@@ -4912,6 +4919,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         capability_registry: Arc::new(RwLock::new(Arc::clone(&capability_registry))),
         ticket_store: Arc::new(InMemoryTicketStore::new()),
         workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+        gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
         admin_auth: Some(Arc::clone(&admin_auth)),
         admin_audit: Some(Arc::clone(&admin_audit)),
     });
@@ -4930,6 +4938,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
     spawn_scheduler(
         Arc::clone(&state.workflow_store),
         Arc::clone(&state.mail_lookup),
+        Some(Arc::clone(&state.gh_run_store)),
         Arc::clone(&shutting_down),
     );
 
@@ -5605,6 +5614,7 @@ mod tests {
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             admin_auth: None,
             admin_audit: None,
         })
@@ -5650,6 +5660,7 @@ mod tests {
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             admin_auth: None,
             admin_audit: None,
         })
@@ -5695,6 +5706,7 @@ mod tests {
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             admin_auth: None,
             admin_audit: None,
         })
@@ -5740,6 +5752,7 @@ mod tests {
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             admin_auth: None,
             admin_audit: None,
         })
@@ -6239,6 +6252,7 @@ spec:
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             admin_auth: None,
             admin_audit: None,
         })
@@ -6746,6 +6760,7 @@ spec:
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             admin_auth: None,
             admin_audit: None,
         };
@@ -6794,6 +6809,7 @@ spec:
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             admin_auth: None,
             admin_audit: None,
         };
@@ -6843,6 +6859,7 @@ spec:
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             admin_auth: None,
             admin_audit: None,
         };
@@ -6895,6 +6912,7 @@ spec:
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             admin_auth: None,
             admin_audit: None,
         };
@@ -9226,6 +9244,7 @@ spec:
             capability_registry: Arc::new(RwLock::new(Arc::new(CapabilityRegistry::empty()))),
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
+            gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
             admin_auth: None,
             admin_audit: None,
         });

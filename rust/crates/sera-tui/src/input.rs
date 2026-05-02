@@ -123,6 +123,11 @@ pub fn translate_session(
     if matches_key(event, &kb.open_session_picker) {
         return Action::OpenSessionPicker;
     }
+    // Retry is checked globally so the operator can hit 'r' regardless
+    // of composer/transcript focus when the disconnected banner is shown.
+    if matches_key(event, &kb.retry_connection) {
+        return Action::RetryConnection;
+    }
 
     if composer_focused {
         // All other keys go straight to the textarea widget.

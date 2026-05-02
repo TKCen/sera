@@ -133,6 +133,10 @@ pub enum Action {
     /// Only dispatched when `App::turn_streaming` is true; otherwise ESC
     /// falls through to `Back` / modal-close precedence in the event loop.
     CancelTurn,
+    /// Trigger an immediate reconnect attempt, bypassing the current backoff
+    /// timer.  Bound to `keybindings.retry_connection` (default `r`) while
+    /// the disconnected banner is shown.  J.0.7 (sera-j0o8).
+    RetryConnection,
     /// No-op — used when a key doesn't match any binding.  Reducing to
     /// this instead of returning `Option<Action>` lets the dispatch table
     /// stay a plain `match`.

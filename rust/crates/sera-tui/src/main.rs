@@ -133,6 +133,19 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
             app::apply_app_update(&mut app, update);
         }
 
+        // J.0.7: if the disconnect banner timer has elapsed, advance the
+        // backoff and re-queue the pending send (or just flag that the SSE
+        // reconnect loop should retry).  Uses the banner's advance() method.
+        if let Some(banner) = &mut app.disconnect_banner
+            && banner.retry_at <= std::time::Instant::now()
+        {
+            banner.advance();
+            if let Some((agent, message)) = app.pending_retry.clone() {
+                app.pending
+                    .push(app::AppCommand::RetrySendChat { agent, message });
+            }
+        }
+
         // Poll crossterm for input with a short budget so SSE + timer
         // have a chance to run each tick.
         if event::poll(tick)? {

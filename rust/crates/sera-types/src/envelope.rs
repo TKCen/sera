@@ -163,6 +163,16 @@ pub enum EventMsg {
         ticket_id: String,
         session_key: String,
     },
+    /// Guardian pre-approval LLM risk assessment (sera-k600 / SPEC-hitl-approval §2b).
+    /// Emitted by the runtime when a `SecurityAnalyzer` returns a structured
+    /// `GuardianAssessment` for a proposed tool call. Carries the analyzer
+    /// name (e.g. `"invariant"`, `"gray_swan"`, `"heuristic"`) plus the
+    /// assessment payload as a `serde_json::Value` so this crate stays free
+    /// of a `sera-hitl` dependency cycle.
+    GuardianAssessment {
+        analyzer: String,
+        assessment: serde_json::Value,
+    },
     CompactionStarted,
     CompactionCompleted {
         tokens_before: u32,

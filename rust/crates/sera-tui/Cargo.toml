@@ -31,6 +31,10 @@ futures-util.workspace = true
 once_cell.workspace = true
 bytes = "1"
 tui-textarea = "0.7"
+# Syntect — code-block syntax highlighting (J.1.2, sera-jie3).
+# Default features pull `onig` (C dep). We disable defaults and re-enable the
+# pure-Rust path: `default-syntaxes` + `default-themes` + `parsing` + `regex-fancy`.
+syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "parsing", "regex-fancy"] }
 
 # Optional integration-test support.  Cargo does not permit dev-dependencies
 # to be optional, so the harness/mock stack lives up here with a feature flag.

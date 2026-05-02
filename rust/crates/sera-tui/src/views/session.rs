@@ -1,14 +1,23 @@
-//! Session view — metadata header, streaming transcript, tool log, composer.
+//! Session view — block-based transcript + composer.
+//!
+//! **J.0.2 (sera-s3gb)**: the flat `Vec<TranscriptEntry>` + `Vec<String>`
+//! tool log of waves G/J.0.1 was replaced by a typed [`Block`] enum (see
+//! [`crate::views::blocks`]).  Markdown is stubbed as plain text in this
+//! bead; J.1.1 (sera-7fpx) wires `pulldown-cmark` parsing and J.1.2
+//! (sera-jie3) adds `syntect` for code blocks.  Tool/task/approval/error
+//! variants are shaped here so the leaf beads (J.0.3, J.1.4, J.0.4) only
+//! need to fill in the SSE-event handlers.
 
 use crossterm::event::KeyEvent;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem};
+use ratatui::widgets::{Block as TuiBlock, Borders, List, ListItem};
 use ratatui::Frame;
 use tui_textarea::TextArea;
 
 use super::agent_list::make_block;
+use super::blocks::{ApprovalStatus, Block, ToolResult};
 use crate::client::{ConnectionState, SessionSummary, StreamEvent, TranscriptEntry};
 
 /// Which pane inside the Session view holds keyboard focus.
@@ -20,28 +29,24 @@ pub enum ComposerFocus {
 
 /// Viewer state for a single session.  Owns:
 /// * metadata (agent id, session id, state)
-/// * transcript lines (seeded by GET, appended by SSE)
-/// * tool events (SSE only, non-message events)
+/// * a typed [`Block`] transcript seeded by GET, appended by SSE
 /// * scroll bookkeeping — auto-scrolls to tail unless the user has paused
 /// * a multi-line composer for drafting outgoing messages
 pub struct SessionView {
     pub session: Option<SessionSummary>,
-    pub transcript: Vec<TranscriptEntry>,
-    pub tool_log: Vec<String>,
+    /// Block-based transcript — the canonical store as of J.0.2.
+    pub blocks: Vec<Block>,
     pub scroll_offset: u16,
     pub auto_scroll: bool,
     pub conn: ConnectionState,
     pub composer: TextArea<'static>,
     pub focus: ComposerFocus,
     /// Messages drained from the composer via `submit_composer`.
-    /// G.0.2 (sera-5d4k) will wire these to POST /api/chat.
     pub pending_sends: Vec<String>,
     /// Slash-command strings drained from the composer via `submit_composer`.
-    /// The app dispatcher parses and executes these each tick.
     pub pending_slash: Vec<String>,
     /// Full text of a long paste that was collapsed to a placeholder token
-    /// in the textarea.  When `Some`, `take_composer_text` returns this
-    /// instead of the textarea buffer so the full content is sent verbatim.
+    /// in the textarea.
     pub composer_full_text: Option<String>,
 }
 
@@ -51,8 +56,7 @@ impl SessionView {
         composer.set_placeholder_text("Type a message…");
         Self {
             session: None,
-            transcript: Vec::new(),
-            tool_log: Vec::new(),
+            blocks: Vec::new(),
             scroll_offset: 0,
             auto_scroll: true,
             conn: ConnectionState::Disconnected,
@@ -66,48 +70,210 @@ impl SessionView {
 
     pub fn set_session(&mut self, session: SessionSummary) {
         self.session = Some(session);
-        self.transcript.clear();
-        self.tool_log.clear();
+        self.blocks.clear();
         self.scroll_offset = 0;
         self.auto_scroll = true;
     }
 
+    /// Hydrate from a wire-format transcript fetch.  Each [`TranscriptEntry`]
+    /// becomes a [`Block`] of the matching role:
+    /// * `"user"` → [`Block::UserMessage`]
+    /// * `"tool"` → [`Block::ToolCall`] (completed, collapsed, no args)
+    /// * anything else (including `"assistant"`, `"system"`) →
+    ///   [`Block::AssistantMessage`] (matches the previous reducer's default
+    ///   for unknown roles)
     pub fn set_transcript(&mut self, entries: Vec<TranscriptEntry>) {
-        self.transcript = entries;
+        self.blocks = entries
+            .into_iter()
+            .map(|entry| match entry.role.as_str() {
+                "user" => Block::UserMessage { text: entry.text },
+                "tool" => Block::ToolCall {
+                    tool: String::new(),
+                    summary: entry.text,
+                    args: serde_json::Value::Null,
+                    result: None,
+                    expanded: false,
+                },
+                _ => Block::AssistantMessage {
+                    text: entry.text,
+                    streaming: false,
+                },
+            })
+            .collect();
     }
 
     /// Apply a [`StreamEvent`] to the view state.  Returns true if the
     /// update is "display-worthy" (i.e. the app should rerender).
+    ///
+    /// Tool events are folded into [`Block::ToolCall`] entries inline
+    /// rather than the legacy side `tool_log` pane:
+    ///
+    /// * `tool_start` — push a new collapsed `ToolCall` block; the `summary`
+    ///   is the delta payload (often the args preview).  J.0.3 (sera-c6mb)
+    ///   wires Space-toggle on top of this shape.
+    /// * `tool` (intermediate update) — append the delta to the summary of
+    ///   the most recent unresolved `ToolCall`; does **not** push a new block.
+    /// * `tool_end` — attach a [`ToolResult`] to the most recent matching
+    ///   `ToolCall` block.
     pub fn apply_event(&mut self, ev: StreamEvent) -> bool {
         let et = ev.event_type.to_ascii_lowercase();
-        if et == "tool" || et == "tool_start" || et == "tool_end" || !ev.tool.is_empty() {
-            // Tool events land in the tool log pane, not the transcript.
-            let line = if ev.delta.is_empty() {
-                format!("[{}] {}", ev.event_type, ev.tool)
+        let is_tool_event = et == "tool" || et == "tool_start" || et == "tool_end" || !ev.tool.is_empty();
+        if is_tool_event {
+            if et == "tool_end" {
+                self.attach_tool_result(&ev.tool, &ev.delta);
+            } else if et == "tool_start" {
+                self.push_tool_call(&ev.tool, &ev.delta);
             } else {
-                format!("[{}] {}: {}", ev.event_type, ev.tool, ev.delta)
-            };
-            self.tool_log.push(line);
+                // Intermediate `tool` update: append delta to the most recent
+                // unresolved ToolCall rather than creating a duplicate block.
+                self.update_tool_call(&ev.tool, &ev.delta);
+            }
             return true;
         }
         if ev.delta.is_empty() {
             return false;
         }
-        // Append delta to the latest entry if the role matches; else push
-        // a new entry.  This is the single-turn streaming assumption —
-        // it matches the autonomous gateway's actual emit pattern.
-        match self.transcript.last_mut() {
-            Some(last) if last.role == ev.role => last.text.push_str(&ev.delta),
-            _ => self.transcript.push(TranscriptEntry {
-                role: if ev.role.is_empty() {
-                    "assistant".to_owned()
-                } else {
-                    ev.role
-                },
-                text: ev.delta,
-            }),
+        let role = if ev.role.is_empty() {
+            "assistant"
+        } else {
+            ev.role.as_str()
+        };
+        match role {
+            "user" => {
+                // User-role deltas are rare from the SSE stream (the
+                // composer pushes the user block directly), but the wire
+                // format allows replays — preserve the legacy behaviour
+                // of merging consecutive same-role entries.
+                match self.blocks.last_mut() {
+                    Some(Block::UserMessage { text }) => text.push_str(&ev.delta),
+                    _ => self.blocks.push(Block::UserMessage {
+                        text: ev.delta.clone(),
+                    }),
+                }
+            }
+            _ => {
+                Block::extend_assistant_text(&mut self.blocks, &ev.delta);
+            }
         }
         true
+    }
+
+    /// Mark all in-flight streaming on the trailing assistant block as
+    /// finished.  Called by the runtime when an SSE stream ends cleanly
+    /// or a `turn_completed` frame arrives.  Wired by J.0.4 (sera-zate)
+    /// on ESC-cancel and by the runtime on stream completion.
+    #[allow(dead_code)]
+    pub fn finalize_turn(&mut self) {
+        Block::finalize_streaming(&mut self.blocks);
+    }
+
+    fn push_tool_call(&mut self, tool: &str, delta: &str) {
+        // Treat the delta as the inline summary — most autonomous gateway
+        // tool_start frames put the args preview in `delta`.  When delta
+        // looks like JSON, store it in `args` as well.
+        let args = if delta.trim_start().starts_with('{') {
+            serde_json::from_str(delta).unwrap_or(serde_json::Value::Null)
+        } else {
+            serde_json::Value::Null
+        };
+        self.blocks.push(Block::ToolCall {
+            tool: tool.to_owned(),
+            summary: delta.to_owned(),
+            args,
+            result: None,
+            expanded: false,
+        });
+    }
+
+    /// Append `delta` to the summary of the most recent unresolved `ToolCall`
+    /// whose tool name matches (or any if `tool` is empty).  Used for
+    /// intermediate `tool` stream frames that refine the args preview without
+    /// starting a new invocation.
+    fn update_tool_call(&mut self, tool: &str, delta: &str) {
+        for block in self.blocks.iter_mut().rev() {
+            if let Block::ToolCall {
+                tool: t,
+                summary,
+                result,
+                ..
+            } = block
+                && result.is_none()
+                && (tool.is_empty() || t == tool)
+            {
+                summary.push_str(delta);
+                return;
+            }
+        }
+        // No open call found — treat it like a tool_start so the frame is
+        // not silently dropped.
+        self.push_tool_call(tool, delta);
+    }
+
+    fn attach_tool_result(&mut self, tool: &str, delta: &str) {
+        // Walk back to the most recent unresolved ToolCall whose tool
+        // matches.  When `tool` is empty we attach to the most recent
+        // unresolved one regardless.
+        for block in self.blocks.iter_mut().rev() {
+            if let Block::ToolCall {
+                tool: t,
+                result,
+                ..
+            } = block
+                && result.is_none()
+                && (tool.is_empty() || t == tool)
+            {
+                *result = Some(ToolResult {
+                    ok: true,
+                    output: delta.to_owned(),
+                });
+                return;
+            }
+        }
+        // No matching call found — push a synthetic completed block so
+        // the operator still sees the result.  Should be rare.
+        self.blocks.push(Block::ToolCall {
+            tool: tool.to_owned(),
+            summary: String::new(),
+            args: serde_json::Value::Null,
+            result: Some(ToolResult {
+                ok: true,
+                output: delta.to_owned(),
+            }),
+            expanded: false,
+        });
+    }
+
+    /// Push a user message directly (used when the composer submits — the
+    /// gateway echoes the user message back in the SSE stream, but
+    /// rendering it locally first keeps the UI responsive).
+    #[allow(dead_code)] // J.0.4 / leaves wire this up
+    pub fn push_user_message(&mut self, text: String) {
+        self.blocks.push(Block::UserMessage { text });
+    }
+
+    /// Push an inline error block.  Wired by J.0.7 (disconnected-state)
+    /// and the gateway error event path.
+    #[allow(dead_code)] // leaves wire this up
+    pub fn push_error(&mut self, message: String, retryable: bool) {
+        self.blocks.push(Block::Error { message, retryable });
+    }
+
+    /// Push an inline approval block.  Wired by J.1.4 (sera-7olp).
+    #[allow(dead_code)] // J.1.4 will wire this
+    pub fn push_approval(&mut self, request_id: String, tool: String, reason: String) {
+        self.blocks.push(Block::Approval {
+            request_id,
+            tool,
+            reason,
+            status: ApprovalStatus::Pending,
+        });
+    }
+
+    /// Push a turn separator.  Renderers use this to draw a thin rule
+    /// between turns.
+    #[allow(dead_code)] // J.0.4 will wire this on turn_completed
+    pub fn push_turn_separator(&mut self) {
+        self.blocks.push(Block::TurnSeparator);
     }
 
     pub fn set_connection(&mut self, state: ConnectionState) {
@@ -160,8 +326,7 @@ impl SessionView {
 
     /// Drain the composer buffer and return the accumulated text.
     /// If a long paste was stashed in `composer_full_text`, that is returned
-    /// verbatim (the textarea may only show the collapsed placeholder).
-    /// Resets both the textarea and the stash to empty.
+    /// verbatim.  Resets both the textarea and the stash to empty.
     pub fn take_composer_text(&mut self) -> String {
         let text = if let Some(full) = self.composer_full_text.take() {
             full
@@ -181,7 +346,6 @@ impl SessionView {
         const COLLAPSE_THRESHOLD: usize = 5;
         let line_count = content.lines().count();
         if line_count <= COLLAPSE_THRESHOLD {
-            // Insert each line; newlines become actual newline inputs.
             for line in content.lines() {
                 for ch in line.chars() {
                     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -190,7 +354,6 @@ impl SessionView {
                 }
             }
         } else {
-            // Replace any prior stash and insert a visible placeholder.
             self.composer_full_text = Some(content);
             let placeholder = format!("[{line_count}-line paste]");
             for ch in placeholder.chars() {
@@ -212,75 +375,39 @@ impl SessionView {
         if text.trim_start().starts_with('/') {
             self.pending_slash.push(text);
         } else {
-            tracing::info!(message = %text, "composer submit queued (pending G.0.2 wiring)");
+            tracing::info!(message = %text, "composer submit queued");
             self.pending_sends.push(text);
         }
     }
 
-    /// **J.0.1 (sera-ckw5)**: render the chat canvas — transcript filling
-    /// the dominant area with a small tool-log strip pinned at the bottom.
-    /// Composer is owned by the root layout, and the agent/session
-    /// metadata previously rendered as a header is now carried by the
-    /// top-of-screen status bar in `ui::render`.  The tool log is retained
-    /// here as a transitional pane; J.0.3 will fold tool calls into inline
-    /// collapsible blocks within the transcript itself.
+    /// **J.0.2 (sera-s3gb)**: render the chat canvas.  Composer is owned
+    /// by the root layout; this method renders the block-based transcript
+    /// only — the legacy bottom tool-log pane is gone (tool calls are
+    /// inline blocks now).
     pub fn render_chat(&self, frame: &mut Frame, area: Rect, focused: bool) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(3),    // transcript
-                Constraint::Length(7), // tool log (transitional)
-            ])
-            .split(area);
-
-        self.render_transcript(frame, chunks[0], focused);
-        self.render_tool_log(frame, chunks[1], focused);
+        self.render_transcript(frame, area, focused);
     }
 
-    /// **J.0.1**: render only the composer into `area`.  Paired with
-    /// [`render_chat`] for the chat-dominant layout where composer has
-    /// its own slot in the root layout.
+    /// **J.0.1**: render only the composer into `area`.
     pub fn render_composer_only(&self, frame: &mut Frame, area: Rect) {
         self.render_composer(frame, area);
     }
 
     fn render_transcript(&self, frame: &mut Frame, area: Rect, focused: bool) {
         let transcript_focused = focused && self.focus == ComposerFocus::Transcript;
-        let items: Vec<ListItem<'_>> = if self.transcript.is_empty() {
+        let items: Vec<ListItem<'_>> = if self.blocks.is_empty() {
             vec![ListItem::new(Line::from(Span::styled(
                 "(no transcript yet — waiting for first event)",
                 Style::default().fg(Color::DarkGray),
             )))]
         } else {
-            self.transcript
+            self.blocks
                 .iter()
-                .flat_map(|entry| {
-                    let role_color = match entry.role.as_str() {
-                        "user" => Color::Cyan,
-                        "assistant" => Color::Green,
-                        "system" => Color::Magenta,
-                        "tool" => Color::Yellow,
-                        _ => Color::White,
-                    };
-                    let header = Line::from(vec![Span::styled(
-                        format!("[{}]", entry.role),
-                        Style::default()
-                            .fg(role_color)
-                            .add_modifier(Modifier::BOLD),
-                    )]);
-                    let mut lines = vec![ListItem::new(header)];
-                    for body_line in entry.text.lines() {
-                        lines.push(ListItem::new(Line::from(Span::raw(body_line.to_owned()))));
-                    }
-                    lines.push(ListItem::new(Line::from("")));
-                    lines
-                })
+                .flat_map(|block| block_to_list_items(block))
                 .collect()
         };
 
         // When auto-scroll is on, we implicitly want the tail visible.
-        // ratatui's List doesn't support scroll-to-end natively on stateless
-        // calls, so we take the last N items where N is the visible area.
         let visible = area.height.saturating_sub(2) as usize;
         let shown: Vec<ListItem<'_>> = if self.auto_scroll && items.len() > visible {
             items.into_iter().rev().take(visible).rev().collect()
@@ -295,30 +422,6 @@ impl SessionView {
         frame.render_widget(list, area);
     }
 
-    fn render_tool_log(&self, frame: &mut Frame, area: Rect, focused: bool) {
-        let items: Vec<ListItem<'_>> = if self.tool_log.is_empty() {
-            vec![ListItem::new(Span::styled(
-                "(no tool events)",
-                Style::default().fg(Color::DarkGray),
-            ))]
-        } else {
-            // Tail the latest 5 tool events — older ones fall off the
-            // bottom pane; the operator can scroll the full session log
-            // via the transcript.
-            self.tool_log
-                .iter()
-                .rev()
-                .take(5)
-                .rev()
-                .map(|l| {
-                    ListItem::new(Span::styled(l.clone(), Style::default().fg(Color::Yellow)))
-                })
-                .collect()
-        };
-        let list = List::new(items).block(make_block("Tool events", focused));
-        frame.render_widget(list, area);
-    }
-
     fn render_composer(&self, frame: &mut Frame, area: Rect) {
         let composer_focused = self.focus == ComposerFocus::Composer;
         let border_style = if composer_focused {
@@ -326,14 +429,65 @@ impl SessionView {
         } else {
             Style::default().fg(Color::DarkGray)
         };
-        // Render the textarea widget into the inner area (inside the border).
-        let block = Block::default()
+        let block = TuiBlock::default()
             .title("Composer — Ctrl+Enter to send")
             .borders(Borders::ALL)
             .border_style(border_style);
         let inner = block.inner(area);
         frame.render_widget(block, area);
         frame.render_widget(&self.composer, inner);
+    }
+}
+
+/// Render one [`Block`] into a sequence of [`ListItem`]s.  Kept free
+/// (rather than a method) so leaf beads can wrap their own variants
+/// without re-borrowing `&self`.
+fn block_to_list_items(block: &Block) -> Vec<ListItem<'static>> {
+    match block {
+        Block::TurnSeparator => vec![
+            ListItem::new(Line::from(Span::styled(
+                "─".repeat(60),
+                Style::default().fg(Color::DarkGray),
+            ))),
+        ],
+        Block::ToolCall { .. } | Block::Task { .. } | Block::Approval { .. } | Block::Error { .. } => {
+            let header_color = match block {
+                Block::ToolCall { .. } => Color::Yellow,
+                Block::Task { .. } => Color::Magenta,
+                Block::Approval { .. } => Color::Yellow,
+                Block::Error { .. } => Color::Red,
+                _ => unreachable!(),
+            };
+            let mut items = Vec::new();
+            for line in block.plain_text().lines() {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    line.to_owned(),
+                    Style::default().fg(header_color),
+                ))));
+            }
+            items.push(ListItem::new(Line::from("")));
+            items
+        }
+        Block::UserMessage { text } | Block::AssistantMessage { text, .. } => {
+            let role = block.role_label();
+            let role_color = match role {
+                "user" => Color::Cyan,
+                "assistant" => Color::Green,
+                _ => Color::White,
+            };
+            let header = Line::from(vec![Span::styled(
+                format!("[{role}]"),
+                Style::default()
+                    .fg(role_color)
+                    .add_modifier(Modifier::BOLD),
+            )]);
+            let mut items = vec![ListItem::new(header)];
+            for body_line in text.lines() {
+                items.push(ListItem::new(Line::from(Span::raw(body_line.to_owned()))));
+            }
+            items.push(ListItem::new(Line::from("")));
+            items
+        }
     }
 }
 
@@ -357,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_event_appends_delta_to_last_entry() {
+    fn apply_event_appends_delta_to_last_assistant_block() {
         let mut v = SessionView::new();
         v.set_session(sess("s1"));
         v.apply_event(StreamEvent {
@@ -374,13 +528,18 @@ mod tests {
             delta: "world".into(),
             tool: String::new(),
         });
-        assert_eq!(v.transcript.len(), 1);
-        assert_eq!(v.transcript[0].text, "hello world");
-        assert_eq!(v.transcript[0].role, "assistant");
+        assert_eq!(v.blocks.len(), 1);
+        match &v.blocks[0] {
+            Block::AssistantMessage { text, streaming } => {
+                assert_eq!(text, "hello world");
+                assert!(streaming);
+            }
+            other => panic!("expected AssistantMessage, got {other:?}"),
+        }
     }
 
     #[test]
-    fn apply_event_pushes_new_entry_on_role_change() {
+    fn apply_event_pushes_new_block_on_role_change() {
         let mut v = SessionView::new();
         v.apply_event(StreamEvent {
             event_type: "message".into(),
@@ -396,13 +555,16 @@ mod tests {
             delta: "pong".into(),
             tool: String::new(),
         });
-        assert_eq!(v.transcript.len(), 2);
-        assert_eq!(v.transcript[0].role, "user");
-        assert_eq!(v.transcript[1].role, "assistant");
+        assert_eq!(v.blocks.len(), 2);
+        assert!(matches!(&v.blocks[0], Block::UserMessage { text } if text == "ping"));
+        assert!(matches!(
+            &v.blocks[1],
+            Block::AssistantMessage { text, .. } if text == "pong"
+        ));
     }
 
     #[test]
-    fn apply_event_routes_tool_to_tool_log() {
+    fn apply_event_tool_start_pushes_collapsed_tool_block() {
         let mut v = SessionView::new();
         v.apply_event(StreamEvent {
             event_type: "tool_start".into(),
@@ -411,9 +573,80 @@ mod tests {
             delta: "args".into(),
             tool: "bash".into(),
         });
-        assert_eq!(v.transcript.len(), 0);
-        assert_eq!(v.tool_log.len(), 1);
-        assert!(v.tool_log[0].contains("bash"));
+        assert_eq!(v.blocks.len(), 1);
+        match &v.blocks[0] {
+            Block::ToolCall {
+                tool,
+                expanded,
+                result,
+                ..
+            } => {
+                assert_eq!(tool, "bash");
+                assert!(!*expanded, "tool blocks must be collapsed by default");
+                assert!(result.is_none(), "result populated only on tool_end");
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_event_tool_end_attaches_result_to_matching_call() {
+        let mut v = SessionView::new();
+        v.apply_event(StreamEvent {
+            event_type: "tool_start".into(),
+            session_id: String::new(),
+            role: String::new(),
+            delta: "args".into(),
+            tool: "bash".into(),
+        });
+        v.apply_event(StreamEvent {
+            event_type: "tool_end".into(),
+            session_id: String::new(),
+            role: String::new(),
+            delta: "exit 0".into(),
+            tool: "bash".into(),
+        });
+        assert_eq!(v.blocks.len(), 1, "tool_end must NOT push a new block");
+        match &v.blocks[0] {
+            Block::ToolCall { result, .. } => {
+                let r = result.as_ref().expect("result attached");
+                assert!(r.ok);
+                assert_eq!(r.output, "exit 0");
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_event_intermediate_tool_update_does_not_push_new_block() {
+        // tool_start → tool (×2) → tool_end must leave exactly one ToolCall block.
+        let mut v = SessionView::new();
+        v.apply_event(StreamEvent {
+            event_type: "tool_start".into(),
+            session_id: String::new(),
+            role: String::new(),
+            delta: "{\"path\":".into(),
+            tool: "Write".into(),
+        });
+        v.apply_event(StreamEvent {
+            event_type: "tool".into(),
+            session_id: String::new(),
+            role: String::new(),
+            delta: "\"poem.md\"}".into(),
+            tool: "Write".into(),
+        });
+        // Block count must still be 1, not 2.
+        assert_eq!(v.blocks.len(), 1, "intermediate tool frame must NOT push a new block");
+        match &v.blocks[0] {
+            Block::ToolCall { tool, summary, result, .. } => {
+                assert_eq!(tool, "Write");
+                // Delta from tool_start and intermediate tool are both in the summary.
+                assert!(summary.contains("{\"path\":"), "initial delta preserved");
+                assert!(summary.contains("\"poem.md\"}"), "intermediate delta appended");
+                assert!(result.is_none(), "result not yet attached");
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
     }
 
     #[test]
@@ -434,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_delta_event_is_no_op_on_transcript() {
+    fn empty_delta_event_is_no_op_on_blocks() {
         let mut v = SessionView::new();
         let updated = v.apply_event(StreamEvent {
             event_type: "keepalive".into(),
@@ -444,7 +677,111 @@ mod tests {
             tool: String::new(),
         });
         assert!(!updated);
-        assert!(v.transcript.is_empty());
+        assert!(v.blocks.is_empty());
+    }
+
+    #[test]
+    fn finalize_turn_clears_streaming_flag() {
+        let mut v = SessionView::new();
+        v.apply_event(StreamEvent {
+            event_type: "message".into(),
+            session_id: String::new(),
+            role: "assistant".into(),
+            delta: "answer".into(),
+            tool: String::new(),
+        });
+        match &v.blocks[0] {
+            Block::AssistantMessage { streaming, .. } => assert!(streaming),
+            _ => panic!(),
+        }
+        v.finalize_turn();
+        match &v.blocks[0] {
+            Block::AssistantMessage { streaming, .. } => assert!(!streaming),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn set_transcript_maps_wire_entries_to_blocks() {
+        let mut v = SessionView::new();
+        v.set_transcript(vec![
+            TranscriptEntry {
+                role: "user".into(),
+                text: "q".into(),
+            },
+            TranscriptEntry {
+                role: "assistant".into(),
+                text: "a".into(),
+            },
+        ]);
+        assert_eq!(v.blocks.len(), 2);
+        assert!(matches!(&v.blocks[0], Block::UserMessage { text } if text == "q"));
+        assert!(matches!(
+            &v.blocks[1],
+            Block::AssistantMessage { text, streaming } if text == "a" && !*streaming
+        ));
+    }
+
+    #[test]
+    fn set_transcript_preserves_tool_role_as_tool_call_block() {
+        // A persisted "tool" entry in GET history must not be silently
+        // downgraded to AssistantMessage (P2 regression fix).
+        let mut v = SessionView::new();
+        v.set_transcript(vec![TranscriptEntry {
+            role: "tool".into(),
+            text: "exit 0".into(),
+        }]);
+        assert_eq!(v.blocks.len(), 1);
+        assert!(
+            matches!(&v.blocks[0], Block::ToolCall { summary, .. } if summary == "exit 0"),
+            "tool-role entry must map to ToolCall, got {:?}",
+            &v.blocks[0]
+        );
+    }
+
+    #[test]
+    fn push_user_message_helper_appends_block() {
+        let mut v = SessionView::new();
+        v.push_user_message("hi".into());
+        assert_eq!(v.blocks.len(), 1);
+        assert!(matches!(&v.blocks[0], Block::UserMessage { text } if text == "hi"));
+    }
+
+    #[test]
+    fn push_error_helper_appends_error_block() {
+        let mut v = SessionView::new();
+        v.push_error("boom".into(), true);
+        assert!(matches!(
+            &v.blocks[0],
+            Block::Error { message, retryable } if message == "boom" && *retryable
+        ));
+    }
+
+    #[test]
+    fn push_approval_helper_starts_pending() {
+        let mut v = SessionView::new();
+        v.push_approval("h1".into(), "Write".into(), "needs ack".into());
+        match &v.blocks[0] {
+            Block::Approval {
+                request_id,
+                tool,
+                reason,
+                status,
+            } => {
+                assert_eq!(request_id, "h1");
+                assert_eq!(tool, "Write");
+                assert_eq!(reason, "needs ack");
+                assert_eq!(*status, ApprovalStatus::Pending);
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn push_turn_separator_appends_marker() {
+        let mut v = SessionView::new();
+        v.push_turn_separator();
+        assert!(matches!(v.blocks[0], Block::TurnSeparator));
     }
 
     // --- Composer-specific tests (G.0.1) ---
@@ -472,7 +809,6 @@ mod tests {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
         let mut v = SessionView::new();
-        // Type "hello" into the composer.
         for ch in "hello".chars() {
             v.input_to_composer(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         }
@@ -482,7 +818,6 @@ mod tests {
 
         assert_eq!(v.pending_sends.len(), 1);
         assert_eq!(v.pending_sends[0], "hello");
-        // Composer should be empty after drain.
         assert!(v.composer.lines().iter().all(|l| l.is_empty()));
     }
 
@@ -529,28 +864,20 @@ mod tests {
     #[test]
     fn paste_short_content_renders_inline_unchanged() {
         let mut v = SessionView::new();
-        // 3-line paste — below collapse threshold of 5.
         v.handle_paste("line one\nline two\nline three".to_owned());
-        // No stash set; textarea contains the typed characters.
         assert!(v.composer_full_text.is_none());
         let displayed = v.composer.lines().join("\n");
-        assert!(displayed.contains("line one"), "expected textarea to contain pasted text");
+        assert!(displayed.contains("line one"));
     }
 
     #[test]
     fn paste_long_content_renders_collapsed_token() {
         let mut v = SessionView::new();
-        // 6-line paste — above collapse threshold of 5.
         let content = "a\nb\nc\nd\ne\nf".to_owned();
         v.handle_paste(content.clone());
-        // Full content stashed.
         assert_eq!(v.composer_full_text.as_deref(), Some(content.as_str()));
-        // Textarea shows placeholder, not the raw lines.
         let displayed = v.composer.lines().join("\n");
-        assert!(
-            displayed.contains("[6-line paste]"),
-            "expected collapsed token in textarea, got: {displayed:?}"
-        );
+        assert!(displayed.contains("[6-line paste]"));
     }
 
     #[test]
@@ -559,7 +886,6 @@ mod tests {
         let long_paste = (0..6).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
         v.handle_paste(long_paste.clone());
         v.submit_composer();
-        // The sent text must be the full content, not the placeholder.
         assert_eq!(v.pending_sends.len(), 1);
         assert_eq!(v.pending_sends[0], long_paste);
     }

@@ -9717,6 +9717,7 @@ spec:
                 admin_auth: None,
                 admin_audit: None,
                 artifact_pipeline: Arc::new(ArtifactPipeline::with_defaults()),
+                subagent_manager: Arc::new(InMemorySubagentManager::new()),
             })
         };
         let app = build_router(state);

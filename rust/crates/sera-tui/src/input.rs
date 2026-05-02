@@ -146,8 +146,11 @@ pub fn translate_session(
         if matches_key(event, &kb.popup_dismiss) {
             return Action::PopupDismiss;
         }
-        // Any other key dismisses popup; fall through to forward key to textarea.
-        return Action::PopupDismiss;
+        // Any other key: dismiss the popup and forward the key to the composer
+        // so the typed character is not lost.  Fall through to the
+        // composer_focused branch below which emits ComposerInput; the
+        // autocomplete is re-derived from the updated line, so it will close
+        // if the new content no longer matches a trigger.
     }
     if composer_focused {
         // All other keys go straight to the textarea widget.
@@ -318,6 +321,20 @@ mod tests {
         assert_eq!(
             translate_session(&key_r, &kb, true, false, true),
             Action::RetryConnection,
+        );
+    }
+
+    #[test]
+    fn popup_open_non_nav_key_forwarded_to_composer() {
+        // A printable key that is not popup_up/down/select/dismiss must be
+        // forwarded to the composer as ComposerInput so the typed character
+        // is not lost.  This is the P1 fix: the old code returned
+        // PopupDismiss and dropped the keystroke.
+        let kb = TuiKeybindings::defaults();
+        let key_a = ev(KeyCode::Char('a'));
+        assert_eq!(
+            translate_session(&key_a, &kb, true, false, true),
+            Action::ComposerInput(key_a),
         );
     }
 }

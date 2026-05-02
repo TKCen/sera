@@ -95,15 +95,11 @@ impl AutocompletePopup {
 /// Keep in sync with `app::slash::parse` and the spec command table.
 pub fn slash_command_items() -> Vec<PopupItem> {
     vec![
-        PopupItem { insert: "/new".into(),    description: "clear transcript, start fresh turn".into() },
-        PopupItem { insert: "/clear".into(),  description: "alias for /new".into() },
-        PopupItem { insert: "/agent".into(),  description: "switch active agent: /agent <name>".into() },
-        PopupItem { insert: "/help".into(),   description: "toggle help modal".into() },
-        PopupItem { insert: "/quit".into(),   description: "exit the TUI".into() },
-        PopupItem { insert: "/model".into(),  description: "override agent model: /model <name>".into() },
-        PopupItem { insert: "/retry".into(),  description: "re-send the last user message".into() },
-        PopupItem { insert: "/export".into(), description: "write transcript to ./sera-transcript-<session>.md".into() },
-        PopupItem { insert: "/debug".into(),  description: "toggle raw SSE debug overlay".into() },
+        PopupItem { insert: "/new".into(),   description: "clear transcript, start fresh turn".into() },
+        PopupItem { insert: "/clear".into(), description: "alias for /new".into() },
+        PopupItem { insert: "/agent".into(), description: "switch active agent: /agent <name>".into() },
+        PopupItem { insert: "/help".into(),  description: "toggle help modal".into() },
+        PopupItem { insert: "/quit".into(),  description: "exit the TUI".into() },
     ]
 }
 

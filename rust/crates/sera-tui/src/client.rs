@@ -281,7 +281,7 @@ impl EvolveProposal {
 /// A streaming event from the SSE endpoint (or a synthetic "tool log"
 /// chunk).  Kept deliberately loose since the gateway's event shape is in
 /// flux — SessionView only reads `role`, `delta`, and `event_type`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StreamEvent {
     #[serde(default)]
     pub event_type: String,

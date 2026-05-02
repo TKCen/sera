@@ -117,7 +117,20 @@ impl SessionView {
     ///   the most recent unresolved `ToolCall`; does **not** push a new block.
     /// * `tool_end` — attach a [`ToolResult`] to the most recent matching
     ///   `ToolCall` block.
+    ///
+    /// **J.2.3 (sera-mfj3)**: when `ev.parent_task_id` is `Some(id)`, the
+    /// event is routed into the `child_thread` of the matching `Block::Task`
+    /// instead of the top-level `blocks` list.  Returns `true` when the task
+    /// was found and the event applied; `false` when the task id has no
+    /// matching block (event is silently dropped so the main transcript is
+    /// not polluted).
     pub fn apply_event(&mut self, ev: StreamEvent) -> bool {
+        // J.2.3: child-thread routing — events tagged with parent_task_id
+        // are streamed into the matching Task block's child_thread.
+        if let Some(ref task_id) = ev.parent_task_id.clone() {
+            return self.apply_child_event(task_id, ev);
+        }
+
         let et = ev.event_type.to_ascii_lowercase();
 
         // J.2.1: subagent_start SSE frame → push a collapsed Task block.
@@ -342,6 +355,76 @@ impl SessionView {
             child_thread: ThreadView::default(),
             expanded: false,
         });
+    }
+
+    /// **J.2.3 (sera-mfj3)** route a child SSE event into the `child_thread`
+    /// of the `Block::Task` whose `task_id` matches `id`.  Applies the same
+    /// rendering logic as `apply_event` but writes into the child block list.
+    /// Returns `true` when the task was found and updated; `false` otherwise.
+    pub fn apply_child_event(&mut self, id: &str, ev: StreamEvent) -> bool {
+        let task = self.blocks.iter_mut().find_map(|b| {
+            if let Block::Task {
+                task_id,
+                child_thread,
+                ..
+            } = b
+                && task_id == id
+            {
+                Some(child_thread)
+            } else {
+                None
+            }
+        });
+        let Some(thread) = task else {
+            return false;
+        };
+        let et = ev.event_type.to_ascii_lowercase();
+        if et == "tool_start" {
+            let args = if ev.delta.trim_start().starts_with('{') {
+                serde_json::from_str(&ev.delta).unwrap_or(serde_json::Value::Null)
+            } else {
+                serde_json::Value::Null
+            };
+            thread.blocks.push(Block::ToolCall {
+                tool: ev.tool.clone(),
+                summary: ev.delta.clone(),
+                args,
+                result: None,
+                expanded: false,
+            });
+            return true;
+        }
+        if et == "tool_end" {
+            for block in thread.blocks.iter_mut().rev() {
+                if let Block::ToolCall {
+                    tool: t,
+                    result,
+                    ..
+                } = block
+                    && result.is_none()
+                    && (ev.tool.is_empty() || t == &ev.tool)
+                {
+                    *result = Some(ToolResult {
+                        ok: true,
+                        output: ev.delta.clone(),
+                    });
+                    return true;
+                }
+            }
+            return true;
+        }
+        if et == "error" {
+            thread.blocks.push(Block::Error {
+                message: ev.delta.clone(),
+                retryable: false,
+            });
+            return true;
+        }
+        if !ev.delta.is_empty() {
+            Block::extend_assistant_text(&mut thread.blocks, &ev.delta);
+            return true;
+        }
+        false
     }
 
     pub fn set_connection(&mut self, state: ConnectionState) {

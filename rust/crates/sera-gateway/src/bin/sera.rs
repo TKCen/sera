@@ -5636,6 +5636,7 @@ mod tests {
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
         })
@@ -5682,6 +5683,7 @@ mod tests {
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
         })
@@ -5728,6 +5730,7 @@ mod tests {
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
         })
@@ -5774,6 +5777,7 @@ mod tests {
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
         })
@@ -6274,6 +6278,7 @@ spec:
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
         })
@@ -6782,6 +6787,7 @@ spec:
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
         };
@@ -6831,6 +6837,7 @@ spec:
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
         };
@@ -6881,6 +6888,7 @@ spec:
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
         };
@@ -6934,6 +6942,7 @@ spec:
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
         };
@@ -9266,6 +9275,7 @@ spec:
             ticket_store: Arc::new(InMemoryTicketStore::new()),
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
         });
@@ -9354,6 +9364,7 @@ spec:
                 ticket_store: Arc::new(InMemoryTicketStore::new()),
                 workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
                 gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+                human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
                 admin_auth: None,
                 admin_audit: None,
             })
@@ -10087,6 +10098,7 @@ spec:
                 ticket_store: Arc::new(InMemoryTicketStore::new()),
                 workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
                 gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+                human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
                 admin_auth: None,
                 admin_audit: None,
             });

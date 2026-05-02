@@ -11,6 +11,7 @@ use sera_gateway::scheduler::tick;
 use sera_gateway::workflow_store::{
     SchedulerTaskStatus, SqliteWorkflowTaskStore, WorkflowTaskRecord, WorkflowTaskStore,
 };
+use sera_mail::lookup::InMemoryMailLookup;
 use sera_workflow::task::WorkflowTaskInput;
 use sera_workflow::{AwaitType, WorkflowTask, WorkflowTaskStatus, WorkflowTaskType};
 
@@ -60,7 +61,14 @@ async fn sqlite_store_round_trips_through_scheduler_tick() {
     // Phase 2 — "restart": reopen the same DB, run a single tick, confirm
     // the gate resolved.
     let store = Arc::new(SqliteWorkflowTaskStore::open(&db_path).unwrap());
-    let resolved = tick(Arc::clone(&store) as Arc<dyn WorkflowTaskStore>).await;
+    let resolved = tick(
+        Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
+        None,
+        None,
+        None,
+    )
+    .await;
     assert_eq!(resolved, 1, "elapsed timer must resolve on reopened store");
 
     let rec = store.get(&task_id).await.expect("record present");
@@ -100,7 +108,14 @@ async fn sqlite_store_blocks_future_timer_across_restart() {
     }
 
     let store = Arc::new(SqliteWorkflowTaskStore::open(&db_path).unwrap());
-    let resolved = tick(Arc::clone(&store) as Arc<dyn WorkflowTaskStore>).await;
+    let resolved = tick(
+        Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
+        None,
+        None,
+        None,
+    )
+    .await;
     assert_eq!(resolved, 0, "future-deadline timer must not resolve");
 
     let rec = store.get(&task_id).await.unwrap();

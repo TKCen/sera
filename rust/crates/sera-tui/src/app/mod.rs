@@ -549,19 +549,23 @@ impl App {
     pub fn apply_sse(&mut self, update: SseUpdate) {
         match update {
             SseUpdate::Event(ev) => {
-                // Capture the session_id from the first event that carries
-                // one so CancelTurn knows which session to POST to.
-                if !ev.session_id.is_empty() && self.active_session_id.is_none() {
+                // Always refresh active_session_id from incoming events so
+                // that a newly-created session replaces any stale id already
+                // held from a previous turn.
+                if !ev.session_id.is_empty() {
                     self.active_session_id = Some(ev.session_id.clone());
                 }
                 self.session.apply_event(ev);
             }
             SseUpdate::State(s) => {
+                // Only clear turn_streaming when the stream transitions out
+                // of Reconnecting (in-flight) — not on the Connected state
+                // that arrives at stream *start*, which would kill ESC cancel
+                // before any tokens are generated.
+                let was_streaming = self.connection == ConnectionState::Reconnecting;
                 self.connection = s;
                 self.session.set_connection(s);
-                // Turn completes (or fails) when the SSE stream returns to
-                // Connected/Disconnected after a Reconnecting (in-flight) phase.
-                if s != ConnectionState::Reconnecting {
+                if was_streaming && s != ConnectionState::Reconnecting {
                     self.turn_streaming = false;
                 }
             }
@@ -1506,11 +1510,56 @@ mod tests {
     }
 
     #[test]
+    fn apply_sse_event_refreshes_stale_session_id() {
+        // A stale active_session_id (e.g. from a previous turn / agent)
+        // must be replaced when a new session id arrives, otherwise
+        // CancelTurn would POST against the wrong session.
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.active_session_id = Some("ses-old".into());
+        app.apply_sse(SseUpdate::Event(StreamEvent {
+            event_type: "message".into(),
+            session_id: "ses-new".into(),
+            role: "assistant".into(),
+            delta: "hi".into(),
+            tool: String::new(),
+        }));
+        assert_eq!(app.active_session_id.as_deref(), Some("ses-new"));
+    }
+
+    #[test]
     fn apply_sse_state_connected_clears_turn_streaming() {
+        // turn_streaming should only be cleared when the stream actually
+        // ends — i.e. when transitioning OUT of Reconnecting.  The Connected
+        // state that fires at stream *start* (right after the POST) must
+        // not clear it, otherwise ESC cancel is unreachable during the
+        // generation window.
         let mut app = App::new(client(), TuiKeybindings::defaults());
         app.turn_streaming = true;
+        // Mid-flight: connection enters Reconnecting (in-flight phase).
+        app.apply_sse(SseUpdate::State(ConnectionState::Reconnecting));
+        assert!(app.turn_streaming, "still streaming during Reconnecting");
+        // Stream-start Connected emitted after POST returns OK — turn is
+        // still streaming tokens, ESC must still cancel.
         app.apply_sse(SseUpdate::State(ConnectionState::Connected));
-        assert!(!app.turn_streaming);
+        assert!(
+            !app.turn_streaming,
+            "transition out of Reconnecting clears turn_streaming"
+        );
+    }
+
+    #[test]
+    fn apply_sse_state_connected_without_prior_reconnecting_keeps_turn_streaming() {
+        // Defensive: a stray Connected that does not follow Reconnecting
+        // (e.g. unrelated reconnection signal) must NOT prematurely end
+        // the streaming window.
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.turn_streaming = true;
+        // connection starts at Disconnected; jump straight to Connected.
+        app.apply_sse(SseUpdate::State(ConnectionState::Connected));
+        assert!(
+            app.turn_streaming,
+            "Connected without a prior Reconnecting must not clear turn_streaming"
+        );
     }
 
     #[test]

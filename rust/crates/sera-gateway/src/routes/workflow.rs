@@ -30,9 +30,10 @@ use sera_workflow::task::{ChangeState, GhRunId, MailEvent, MailThreadId, Workflo
 use sera_workflow::{AwaitType, WorkflowTask, WorkflowTaskStatus, WorkflowTaskType};
 
 use sera_gateway::workflow_store::{
-    ChangeArtifactStateStore, HumanGateStore, SchedulerTaskStatus, WorkflowTaskRecord,
-    WorkflowTaskStore,
+    ChangeArtifactStateStore, GhPrStateStore, HumanGateStore, SchedulerTaskStatus,
+    WorkflowTaskRecord, WorkflowTaskStore,
 };
+use sera_workflow::task::{GhPrId, GhPrState};
 
 // ── Request / response shapes ────────────────────────────────────────────────
 
@@ -200,6 +201,10 @@ pub trait WorkflowAppState: Send + Sync + 'static {
     fn human_gate_store(&self) -> Option<Arc<dyn HumanGateStore>> {
         None
     }
+    /// Returns the GitHub PR state store backing the GhPr gate (sera-ai4w).
+    fn gh_pr_store(&self) -> Option<Arc<dyn GhPrStateStore>> {
+        None
+    }
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -249,10 +254,17 @@ where
                 approval_id: ApprovalId::new(id_str),
             }
         }
-        // GhPr creation is blocked until the GitHub API poller is wired (sera-comg
-        // follow-up). Scheduler starts with gh_pr_store=None so accepting the task
-        // would leave it permanently pending with no path to resolution.
-        AwaitTypeTag::GhPr => return Err(StatusCode::NOT_IMPLEMENTED),
+        AwaitTypeTag::GhPr => {
+            // sera-ai4w: refuse if no GhPr state store / poller wired.
+            let gh_pr_store = state
+                .gh_pr_store()
+                .ok_or(StatusCode::NOT_IMPLEMENTED)?;
+            let pr_id_str = body.pr_id.ok_or(StatusCode::BAD_REQUEST)?;
+            let repo = body.repo.ok_or(StatusCode::BAD_REQUEST)?;
+            let pr_id = GhPrId::new(pr_id_str.clone());
+            gh_pr_store.upsert(pr_id.clone(), GhPrState::Unknown).await;
+            AwaitType::GhPr { pr_id, repo }
+        }
     };
 
     let now = Utc::now();

@@ -876,6 +876,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_gh_pr_task_returns_not_implemented() {
+        // sera-comg: GhPr creation returns 501 until the GitHub API poller is
+        // wired. Scheduler starts with gh_pr_store=None so accepting the task
+        // would leave it permanently pending with no path to resolution.
+        let app = test_router(TestState::new(None));
+        let body = serde_json::json!({
+            "await_type": "gh_pr",
+            "agent_id": "sera",
+            "resume_token": "tok-pr",
+            "pr_id": "owner/repo#42",
+            "repo": "owner/repo",
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflow/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn create_gh_pr_task_missing_pr_id_is_not_implemented() {
+        // sera-comg: GhPr creation returns 501 regardless of pr_id presence —
+        // the gate is blocked until lookup wiring ships.
+        let app = test_router(TestState::new(None));
+        let body = serde_json::json!({
+            "await_type": "gh_pr",
+            "agent_id": "sera",
+            "resume_token": "tok-pr",
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflow/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
     async fn list_tasks_empty() {
         let app = test_router(TestState::new(None));
         let resp = app

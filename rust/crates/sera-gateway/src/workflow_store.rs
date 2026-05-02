@@ -280,7 +280,7 @@ impl WorkflowTaskStore for SqliteWorkflowTaskStore {
         // semantics from the in-memory impl: the same task id replaces the
         // previous record verbatim. Callers that want a hard "no overwrite"
         // contract should `get` first.
-        conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT OR REPLACE INTO workflow_tasks
                 (id, agent_id, resume_token, status, resolved_at, task_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -292,8 +292,14 @@ impl WorkflowTaskStore for SqliteWorkflowTaskStore {
                 resolved_at_str,
                 &task_json,
             ],
-        )
-        .expect("workflow_tasks insert failed");
+        ) {
+            tracing::error!(
+                event = "workflow_store_insert_failed",
+                task_id = %id,
+                error = %e,
+                "SqliteWorkflowTaskStore::insert failed; record not persisted"
+            );
+        }
         record
     }
 
@@ -339,7 +345,18 @@ impl WorkflowTaskStore for SqliteWorkflowTaskStore {
                 return Vec::new();
             }
         };
-        iter.filter_map(|r| r.ok()).collect()
+        iter.filter_map(|r| match r {
+            Ok(rec) => Some(rec),
+            Err(e) => {
+                tracing::warn!(
+                    event = "workflow_store_list_decode_failed",
+                    error = %e,
+                    "SqliteWorkflowTaskStore::list skipping undecodable row"
+                );
+                None
+            }
+        })
+        .collect()
     }
 
     async fn list_pending(&self) -> Vec<WorkflowTaskRecord> {
@@ -371,7 +388,19 @@ impl WorkflowTaskStore for SqliteWorkflowTaskStore {
                 return Vec::new();
             }
         };
-        iter.filter_map(|r| r.ok()).collect()
+        iter.filter_map(|r| match r {
+            Ok(rec) => Some(rec),
+            Err(e) => {
+                tracing::warn!(
+                    event = "workflow_store_list_pending_decode_failed",
+                    error = %e,
+                    "SqliteWorkflowTaskStore::list_pending skipping undecodable row; \
+                     task remains in DB but will not be scheduled until row is fixed"
+                );
+                None
+            }
+        })
+        .collect()
     }
 
     async fn mark_resolved(&self, id: &str, at: DateTime<Utc>) -> bool {

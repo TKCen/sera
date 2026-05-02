@@ -78,6 +78,7 @@ pub async fn run_ndjson_loop(
                         trace: Default::default(),
                         timestamp: chrono::Utc::now(),
                         parent_session_key: None,
+                        parent_task_id: None,
                     },
                 )
                 .await?;
@@ -112,6 +113,11 @@ async fn process_submission(
     // frame so consumers can route child-session events without parsing the
     // message body (sera-zx5w — was previously a per-op field).
     let submission_parent_key = submission.parent_session_key.clone();
+    // sera-pmil: parent_task_id mirrors parent_session_key — when the gateway
+    // dispatches a subagent invocation it stamps the parent's tool call_id on
+    // the Submission so every Event we emit while servicing this submission is
+    // routable to the parent's `Task` block in the TUI.
+    let submission_parent_task = submission.parent_task_id.clone();
 
     // Emit TurnStarted
     emit(
@@ -123,6 +129,7 @@ async fn process_submission(
             trace: Default::default(),
             timestamp: chrono::Utc::now(),
             parent_session_key: submission_parent_key.clone(),
+            parent_task_id: submission_parent_task.clone(),
         },
     )
     .await?;
@@ -146,8 +153,15 @@ async fn process_submission(
 
     match outcome {
         Ok(TurnOutcome::FinalOutput { response, transcript, .. }) => {
-            emit_tool_events_from_transcript(stdout, &submission, turn_id, &submission_parent_key, &transcript)
-                .await?;
+            emit_tool_events_from_transcript(
+                stdout,
+                &submission,
+                turn_id,
+                &submission_parent_key,
+                &submission_parent_task,
+                &transcript,
+            )
+            .await?;
             emit(
                 stdout,
                 Event {
@@ -157,6 +171,7 @@ async fn process_submission(
                     trace: Default::default(),
                     timestamp: chrono::Utc::now(),
                     parent_session_key: submission_parent_key.clone(),
+                    parent_task_id: submission_parent_task.clone(),
                 },
             )
             .await?;
@@ -166,6 +181,7 @@ async fn process_submission(
                 stdout,
                 &submission,
                 &submission_parent_key,
+                &submission_parent_task,
                 "[run_again — tool calls dispatched]".into(),
             )
             .await?;
@@ -175,6 +191,7 @@ async fn process_submission(
                 stdout,
                 &submission,
                 &submission_parent_key,
+                &submission_parent_task,
                 format!("[handoff -> {target_agent_id}]"),
             )
             .await?;
@@ -184,6 +201,7 @@ async fn process_submission(
                 stdout,
                 &submission,
                 &submission_parent_key,
+                &submission_parent_task,
                 "[compact — context condensed]".into(),
             )
             .await?;
@@ -193,6 +211,7 @@ async fn process_submission(
                 stdout,
                 &submission,
                 &submission_parent_key,
+                &submission_parent_task,
                 format!("[interrupted: {reason}]"),
             )
             .await?;
@@ -202,6 +221,7 @@ async fn process_submission(
                 stdout,
                 &submission,
                 &submission_parent_key,
+                &submission_parent_task,
                 format!("[stop: {summary}]"),
             )
             .await?;
@@ -211,6 +231,7 @@ async fn process_submission(
                 stdout,
                 &submission,
                 &submission_parent_key,
+                &submission_parent_task,
                 format!("[waiting_for_approval: ticket={ticket_id}]"),
             )
             .await?;
@@ -221,7 +242,14 @@ async fn process_submission(
                 plan_tool_calls.len(),
                 rationale
             );
-            emit_delta(stdout, &submission, &submission_parent_key, summary).await?;
+            emit_delta(
+                stdout,
+                &submission,
+                &submission_parent_key,
+                &submission_parent_task,
+                summary,
+            )
+            .await?;
         }
         Err(e) => {
             tracing::error!("execute_turn failed: {e:?}");
@@ -237,6 +265,7 @@ async fn process_submission(
                     trace: Default::default(),
                     timestamp: chrono::Utc::now(),
                     parent_session_key: submission_parent_key.clone(),
+                    parent_task_id: submission_parent_task.clone(),
                 },
             )
             .await?;
@@ -256,6 +285,7 @@ async fn process_submission(
             trace: Default::default(),
             timestamp: chrono::Utc::now(),
             parent_session_key: submission_parent_key,
+            parent_task_id: submission_parent_task,
         },
     )
     .await?;
@@ -272,6 +302,7 @@ async fn emit_tool_events_from_transcript(
     submission: &Submission,
     turn_id: uuid::Uuid,
     parent_session_key: &Option<String>,
+    parent_task_id: &Option<String>,
     transcript: &[serde_json::Value],
 ) -> anyhow::Result<()> {
     for msg in transcript {
@@ -311,6 +342,7 @@ async fn emit_tool_events_from_transcript(
                             trace: Default::default(),
                             timestamp: chrono::Utc::now(),
                             parent_session_key: parent_session_key.clone(),
+                            parent_task_id: parent_task_id.clone(),
                         },
                     )
                     .await?;
@@ -340,6 +372,7 @@ async fn emit_tool_events_from_transcript(
                     trace: Default::default(),
                     timestamp: chrono::Utc::now(),
                     parent_session_key: parent_session_key.clone(),
+                    parent_task_id: parent_task_id.clone(),
                 },
             )
             .await?;
@@ -352,6 +385,7 @@ async fn emit_delta(
     stdout: &mut tokio::io::Stdout,
     submission: &Submission,
     parent_session_key: &Option<String>,
+    parent_task_id: &Option<String>,
     delta: String,
 ) -> anyhow::Result<()> {
     emit(
@@ -363,6 +397,7 @@ async fn emit_delta(
             trace: Default::default(),
             timestamp: chrono::Utc::now(),
             parent_session_key: parent_session_key.clone(),
+            parent_task_id: parent_task_id.clone(),
         },
     )
     .await
@@ -479,6 +514,7 @@ mod tests {
             trace: Default::default(),
             timestamp: chrono::Utc::now(),
             parent_session_key: None,
+            parent_task_id: None,
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains("\"prompt_tokens\":10"));

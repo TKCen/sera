@@ -44,6 +44,7 @@ fn user_turn_submission() -> Submission {
         change_artifact: None,
         session_key: Some("session-1".to_string()),
         parent_session_key: None,
+        parent_task_id: None,
     }
 }
 

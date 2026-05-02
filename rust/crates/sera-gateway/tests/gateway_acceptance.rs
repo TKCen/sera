@@ -31,6 +31,7 @@ fn envelope_submission_roundtrip() {
         change_artifact: None,
         session_key: None,
         parent_session_key: None,
+        parent_task_id: None,
     };
     let json = serde_json::to_string(&sub).unwrap();
     let parsed: Submission = serde_json::from_str(&json).unwrap();
@@ -50,6 +51,7 @@ fn envelope_event_roundtrip() {
         trace: W3cTraceContext::default(),
         timestamp: chrono::Utc::now(),
         parent_session_key: None,
+        parent_task_id: None,
     };
     let json = serde_json::to_string(&evt).unwrap();
     let parsed: Event = serde_json::from_str(&json).unwrap();
@@ -107,6 +109,7 @@ async fn in_process_transport_dispatch() {
         change_artifact: None,
         session_key: None,
         parent_session_key: None,
+        parent_task_id: None,
     };
     let sub_id = sub.id;
 
@@ -125,6 +128,7 @@ async fn in_process_transport_dispatch() {
         trace: W3cTraceContext::default(),
         timestamp: chrono::Utc::now(),
         parent_session_key: None,
+        parent_task_id: None,
     };
     let evt_id = evt.id;
     event_tx.send(evt).await.unwrap();
@@ -156,6 +160,7 @@ impl AgentHarness for MockHarness {
                 trace: W3cTraceContext::default(),
                 timestamp: chrono::Utc::now(),
                 parent_session_key: None,
+                parent_task_id: None,
             };
         };
         Ok(Box::pin(stream))
@@ -197,6 +202,7 @@ async fn harness_dispatch_routes_to_correct_harness() {
         change_artifact: None,
         session_key: None,
         parent_session_key: None,
+        parent_task_id: None,
     };
 
     let mut stream = dispatch(&sub, "agent-b", &registry).await.unwrap();
@@ -254,6 +260,7 @@ fn rest_chat_handler_wraps_as_submission() {
         change_artifact: None,
         session_key: None,
         parent_session_key: None,
+        parent_task_id: None,
     };
     let json = serde_json::to_string(&sub).unwrap();
     assert!(json.contains("Hello"));
@@ -289,6 +296,7 @@ async fn session_store_chat_envelope_recorded() {
         change_artifact: None,
         session_key: None,
         parent_session_key: None,
+        parent_task_id: None,
     };
     let sub_id = sub.id;
 
@@ -331,6 +339,7 @@ async fn session_store_task_enqueue_envelope_recorded() {
         change_artifact: None,
         session_key: None,
         parent_session_key: None,
+        parent_task_id: None,
     };
     let sub_id = sub.id;
     let session = "agent-xyz";
@@ -372,6 +381,7 @@ async fn session_store_permission_request_envelope_recorded() {
         change_artifact: None,
         session_key: None,
         parent_session_key: None,
+        parent_task_id: None,
     };
     let sub_id = sub.id;
     let session = "instance-abc";
@@ -403,6 +413,7 @@ async fn session_store_intercom_dm_envelope_recorded() {
         change_artifact: None,
         session_key: None,
         parent_session_key: None,
+        parent_task_id: None,
     };
     let sub_id = sub.id;
     let session = "agent-a";
@@ -451,6 +462,7 @@ async fn session_store_sequence_preserves_order_and_ids() {
         change_artifact: None,
         session_key: None,
         parent_session_key: None,
+        parent_task_id: None,
     };
 
     // 2. Task enqueue submission
@@ -469,6 +481,7 @@ async fn session_store_sequence_preserves_order_and_ids() {
         change_artifact: None,
         session_key: None,
         parent_session_key: None,
+        parent_task_id: None,
     };
 
     // 3. Task result submission
@@ -489,6 +502,7 @@ async fn session_store_sequence_preserves_order_and_ids() {
         change_artifact: None,
         session_key: None,
         parent_session_key: None,
+        parent_task_id: None,
     };
 
     // Append in sequence — simulates a complete agent workflow

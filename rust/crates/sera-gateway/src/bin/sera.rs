@@ -2122,6 +2122,10 @@ async fn chat_handler(
             change_artifact: None,
             session_key: Some(session_key.clone()),
             parent_session_key: None,
+            // Top-level chat turns aren't subagent invocations — leave the
+            // task correlator empty. Subagent dispatch (J.2.4 follow-ups) will
+            // populate this with the parent's tool call_id.
+            parent_task_id: None,
         };
         if let Err(e) = state
             .session_store

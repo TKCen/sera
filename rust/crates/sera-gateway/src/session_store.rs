@@ -733,6 +733,7 @@ mod tests {
             change_artifact: None,
             session_key: None,
             parent_session_key: None,
+            parent_task_id: None,
         }
     }
 
@@ -746,6 +747,7 @@ mod tests {
             trace: W3cTraceContext::default(),
             timestamp: chrono::Utc::now(),
             parent_session_key: None,
+            parent_task_id: None,
         }
     }
 

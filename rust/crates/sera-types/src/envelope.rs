@@ -18,6 +18,12 @@ use crate::runtime::TokenUsage;
 /// inside every [`Op`] variant. Both fields are optional for backwards
 /// compatibility with pre-zx5w senders.
 ///
+/// `parent_task_id` (sera-pmil) tags submissions that belong to a subagent
+/// invocation: the parent's turn calls a handoff/Task tool which becomes a
+/// `Task` block in the parent's transcript; the spawned child's submission
+/// carries the parent's `call_id` here so every [`Event`] the child emits can
+/// be routed to the matching `Task` block in the parent's TUI thread.
+///
 /// `trace` is `#[serde(default)]` so submissions arriving over NDJSON from
 /// non-W3C-aware callers (e.g. the runtime harness) deserialize successfully.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +42,13 @@ pub struct Submission {
     /// session spawned by another turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_key: Option<String>,
+    /// Parent `Task` block correlator — set when this submission is the
+    /// subagent invocation triggered by a `Task`/handoff tool call in the
+    /// parent's turn. Carries the `call_id` of that tool call so every Event
+    /// emitted while servicing this submission can be tagged for routing to
+    /// the parent's Task block in the TUI (sera-pmil / J.2.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_task_id: Option<String>,
 }
 
 /// Operations that can be submitted to the gateway.
@@ -107,6 +120,11 @@ pub enum RegisterOp {
 ///
 /// `parent_session_key` is carried on every frame so consumers can route
 /// events for child sessions without parsing the `msg` body (sera-zx5w).
+///
+/// `parent_task_id` (sera-pmil) carries the parent turn's tool `call_id` for
+/// every frame emitted by a subagent invocation. The TUI uses this to route
+/// child SSE events to the matching `Task` block in the parent's transcript.
+/// `None` means the event belongs to the top-level turn, not a subagent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub id: Uuid,
@@ -117,6 +135,8 @@ pub struct Event {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_task_id: Option<String>,
 }
 
 /// Event message variants.
@@ -193,6 +213,7 @@ pub struct ProtocolCapabilities {
     /// - `"hitl"` — runtime can gate tool calls on HITL approval
     /// - `"hooks@v2"` — runtime runs ConstitutionalGate hooks on input + output
     /// - `"parent_session_key"` — runtime propagates `parent_session_key` on child frames
+    /// - `"parent_task_id"` — runtime propagates `parent_task_id` on subagent frames (sera-pmil)
     #[serde(default)]
     pub features: Vec<String>,
 }
@@ -244,6 +265,7 @@ impl HandshakeFrame {
                     "hitl".to_string(),
                     "hooks@v2".to_string(),
                     "parent_session_key".to_string(),
+                    "parent_task_id".to_string(),
                 ],
             },
             agent_id: Some(agent_id.into()),
@@ -310,6 +332,7 @@ mod tests {
         assert!(parsed.capabilities.supports("hitl"));
         assert!(parsed.capabilities.supports("hooks@v2"));
         assert!(parsed.capabilities.supports("parent_session_key"));
+        assert!(parsed.capabilities.supports("parent_task_id"));
     }
 
     #[test]
@@ -355,5 +378,121 @@ mod tests {
         // Missing `features` field → defaults to empty vec via #[serde(default)]
         let parsed: ProtocolCapabilities = serde_json::from_str("{}").unwrap();
         assert!(parsed.features.is_empty());
+    }
+
+    // ── parent_task_id (sera-pmil) ───────────────────────────────────────────
+
+    #[test]
+    fn event_parent_task_id_roundtrip() {
+        let evt = Event {
+            id: Uuid::new_v4(),
+            submission_id: Uuid::new_v4(),
+            msg: EventMsg::StreamingDelta {
+                delta: "hi".to_string(),
+            },
+            trace: W3cTraceContext::default(),
+            timestamp: chrono::Utc::now(),
+            parent_session_key: Some("parent-sess".to_string()),
+            parent_task_id: Some("call_abc123".to_string()),
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(
+            json.contains("\"parent_task_id\":\"call_abc123\""),
+            "json = {json}"
+        );
+        let parsed: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.parent_task_id.as_deref(), Some("call_abc123"));
+    }
+
+    #[test]
+    fn event_parent_task_id_omitted_when_none() {
+        let evt = Event {
+            id: Uuid::new_v4(),
+            submission_id: Uuid::new_v4(),
+            msg: EventMsg::TurnStarted {
+                turn_id: Uuid::new_v4(),
+            },
+            trace: W3cTraceContext::default(),
+            timestamp: chrono::Utc::now(),
+            parent_session_key: None,
+            parent_task_id: None,
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(
+            !json.contains("parent_task_id"),
+            "field must be skipped when None; json = {json}"
+        );
+    }
+
+    #[test]
+    fn event_legacy_payload_without_parent_task_id_parses() {
+        // A producer that predates sera-pmil emits no `parent_task_id` field.
+        // Consumers must still be able to deserialize the event and observe
+        // `parent_task_id == None` (forward-compat / `#[serde(default)]`).
+        let legacy = serde_json::json!({
+            "id": Uuid::new_v4(),
+            "submission_id": Uuid::new_v4(),
+            "msg": {"type": "streaming_delta", "delta": "x"},
+            "timestamp": "2024-01-01T00:00:00Z"
+        });
+        let parsed: Event = serde_json::from_value(legacy).unwrap();
+        assert!(parsed.parent_task_id.is_none());
+        assert!(parsed.parent_session_key.is_none());
+    }
+
+    #[test]
+    fn submission_parent_task_id_roundtrip() {
+        let sub = Submission {
+            id: Uuid::new_v4(),
+            op: Op::UserTurn {
+                items: vec![],
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model_override: None,
+                effort: None,
+                final_output_schema: None,
+            },
+            trace: W3cTraceContext::default(),
+            change_artifact: None,
+            session_key: Some("child-sess".to_string()),
+            parent_session_key: Some("parent-sess".to_string()),
+            parent_task_id: Some("call_xyz".to_string()),
+        };
+        let json = serde_json::to_string(&sub).unwrap();
+        assert!(
+            json.contains("\"parent_task_id\":\"call_xyz\""),
+            "json = {json}"
+        );
+        let parsed: Submission = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.parent_task_id.as_deref(), Some("call_xyz"));
+    }
+
+    #[test]
+    fn submission_parent_task_id_omitted_when_none() {
+        let sub = Submission {
+            id: Uuid::new_v4(),
+            op: Op::Interrupt,
+            trace: W3cTraceContext::default(),
+            change_artifact: None,
+            session_key: None,
+            parent_session_key: None,
+            parent_task_id: None,
+        };
+        let json = serde_json::to_string(&sub).unwrap();
+        assert!(
+            !json.contains("parent_task_id"),
+            "field must be skipped when None; json = {json}"
+        );
+    }
+
+    #[test]
+    fn submission_legacy_payload_without_parent_task_id_parses() {
+        let legacy = serde_json::json!({
+            "id": Uuid::new_v4(),
+            "op": {"type": "interrupt"}
+        });
+        let parsed: Submission = serde_json::from_value(legacy).unwrap();
+        assert!(parsed.parent_task_id.is_none());
     }
 }

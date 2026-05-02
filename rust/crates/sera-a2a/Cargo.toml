@@ -6,6 +6,7 @@ edition.workspace = true
 [features]
 default = []
 acp-compat = []
+http-transport = ["dep:reqwest"]
 
 [dependencies]
 sera-types = { workspace = true }
@@ -18,3 +19,4 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+reqwest = { workspace = true, optional = true }

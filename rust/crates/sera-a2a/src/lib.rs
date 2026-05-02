@@ -400,7 +400,7 @@ impl InProcRouter {
         Self { handler }
     }
 
-    fn make_error_response(id: String, err: &A2aError) -> A2aResponse {
+    pub fn make_error_response(id: String, err: &A2aError) -> A2aResponse {
         // JSON-RPC error codes: -32000..-32099 is reserved "server error".
         // Map our coarse A2aError variants onto stable codes.
         let code = match err {
@@ -460,6 +460,170 @@ impl<R: A2aRouter> LoopbackTransport<R> {
 
 #[async_trait]
 impl<R: A2aRouter> A2aTransport for LoopbackTransport<R> {
+    async fn send(&self, _endpoint: &str, request: &A2aRequest) -> Result<A2aResponse, A2aError> {
+        Ok(self.router.handle(request.clone()).await)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HTTP transport (feature-gated behind `http-transport`)
+// ---------------------------------------------------------------------------
+
+/// reqwest-backed HTTP transport.
+///
+/// Sends A2A JSON-RPC requests as HTTP POST to `{endpoint}` with
+/// `Content-Type: application/json`. The peer is expected to respond
+/// with a JSON-encoded [`A2aResponse`].
+///
+/// Enabled by the `http-transport` feature; requires `reqwest` in the
+/// dependency tree.
+#[cfg(feature = "http-transport")]
+pub struct HttpTransport {
+    client: reqwest::Client,
+}
+
+#[cfg(feature = "http-transport")]
+impl HttpTransport {
+    /// Build from a pre-configured [`reqwest::Client`].
+    pub fn new(client: reqwest::Client) -> Self {
+        Self { client }
+    }
+
+    /// Build using a default client (no custom TLS/timeout config).
+    pub fn default_client() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+#[cfg(feature = "http-transport")]
+#[async_trait]
+impl A2aTransport for HttpTransport {
+    async fn send(&self, endpoint: &str, request: &A2aRequest) -> Result<A2aResponse, A2aError> {
+        let resp = self
+            .client
+            .post(endpoint)
+            .json(request)
+            .send()
+            .await
+            .map_err(|e| A2aError::DelegationFailed {
+                reason: format!("HTTP send failed: {e}"),
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            return Err(A2aError::DelegationFailed {
+                reason: format!("peer returned HTTP {status}"),
+            });
+        }
+
+        resp.json::<A2aResponse>()
+            .await
+            .map_err(|e| A2aError::Serialization {
+                reason: format!("failed to decode A2A response: {e}"),
+            })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Task dispatch router (SPEC-interop §4.3)
+// ---------------------------------------------------------------------------
+
+/// Handler signature for inbound A2A method dispatch.
+type MethodHandler = Box<
+    dyn Fn(
+            serde_json::Value,
+        )
+            -> futures_core_like::BoxFuture<'static, Result<serde_json::Value, A2aError>>
+        + Send
+        + Sync,
+>;
+
+/// Router that dispatches inbound A2A JSON-RPC requests to per-method
+/// handlers.
+///
+/// Register handlers for the standard `tasks/*` methods via
+/// [`TaskDispatchRouter::on`]. Unregistered methods return a
+/// `-32601 Method not found` error per the JSON-RPC spec.
+pub struct TaskDispatchRouter {
+    handlers: std::collections::HashMap<String, MethodHandler>,
+}
+
+impl TaskDispatchRouter {
+    /// Create an empty router.
+    pub fn new() -> Self {
+        Self {
+            handlers: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Register an async handler for `method`.
+    pub fn on<F, Fut>(mut self, method: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn(serde_json::Value) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<serde_json::Value, A2aError>> + Send + 'static,
+    {
+        let boxed: MethodHandler = Box::new(move |params| Box::pin(handler(params)));
+        self.handlers.insert(method.into(), boxed);
+        self
+    }
+
+    fn method_not_found(id: String, method: &str) -> A2aResponse {
+        A2aResponse {
+            jsonrpc: "2.0".to_owned(),
+            id,
+            result: None,
+            error: Some(A2aRpcError {
+                code: -32601,
+                message: format!("method not found: {method}"),
+                data: None,
+            }),
+        }
+    }
+}
+
+impl Default for TaskDispatchRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl A2aRouter for TaskDispatchRouter {
+    async fn handle(&self, request: A2aRequest) -> A2aResponse {
+        let id = request.id.clone();
+        match self.handlers.get(&request.method) {
+            None => Self::method_not_found(id, &request.method),
+            Some(handler) => match handler(request.params).await {
+                Ok(result) => A2aResponse {
+                    jsonrpc: "2.0".to_owned(),
+                    id,
+                    result: Some(result),
+                    error: None,
+                },
+                Err(err) => InProcRouter::make_error_response(id, &err),
+            },
+        }
+    }
+}
+
+/// Loopback transport backed by a type-erased `Arc<dyn A2aRouter>`.
+///
+/// Use this when you store the router as a trait object and still need
+/// to produce a loopback client from it.
+pub struct DynLoopbackTransport {
+    router: std::sync::Arc<dyn A2aRouter>,
+}
+
+impl DynLoopbackTransport {
+    pub fn new(router: std::sync::Arc<dyn A2aRouter>) -> Self {
+        Self { router }
+    }
+}
+
+#[async_trait]
+impl A2aTransport for DynLoopbackTransport {
     async fn send(&self, _endpoint: &str, request: &A2aRequest) -> Result<A2aResponse, A2aError> {
         Ok(self.router.handle(request.clone()).await)
     }
@@ -787,6 +951,107 @@ mod tests {
         let json = serde_json::to_string(&caps).unwrap();
         let back: Capabilities = serde_json::from_str(&json).unwrap();
         assert_eq!(caps, back);
+    }
+
+    // ---------- TaskDispatchRouter ----------
+
+    #[tokio::test]
+    async fn task_dispatch_router_routes_known_method() {
+        let router = TaskDispatchRouter::new().on(methods::TASKS_SEND, |_params| async move {
+            Ok(serde_json::json!({"routed": true}))
+        });
+        let resp = router
+            .handle(A2aRequest {
+                jsonrpc: "2.0".into(),
+                id: "d-1".into(),
+                method: methods::TASKS_SEND.into(),
+                params: serde_json::json!({}),
+            })
+            .await;
+        assert_eq!(resp.id, "d-1");
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["routed"], serde_json::json!(true));
+    }
+
+    #[tokio::test]
+    async fn task_dispatch_router_returns_method_not_found() {
+        let router = TaskDispatchRouter::new();
+        let resp = router
+            .handle(A2aRequest {
+                jsonrpc: "2.0".into(),
+                id: "d-2".into(),
+                method: "unknown/method".into(),
+                params: serde_json::json!({}),
+            })
+            .await;
+        assert!(resp.result.is_none());
+        let err = resp.error.expect("error present");
+        assert_eq!(err.code, -32601);
+        assert!(err.message.contains("unknown/method"));
+    }
+
+    #[tokio::test]
+    async fn task_dispatch_router_propagates_handler_error() {
+        let router = TaskDispatchRouter::new().on(methods::TASKS_GET, |_params| async move {
+            Err(A2aError::AgentNotFound {
+                agent_id: "missing".into(),
+            })
+        });
+        let resp = router
+            .handle(A2aRequest {
+                jsonrpc: "2.0".into(),
+                id: "d-3".into(),
+                method: methods::TASKS_GET.into(),
+                params: serde_json::json!({"id": "missing"}),
+            })
+            .await;
+        assert!(resp.result.is_none());
+        let err = resp.error.expect("error present");
+        assert_eq!(err.code, -32004);
+    }
+
+    // ---------- DynLoopbackTransport ----------
+
+    #[tokio::test]
+    async fn dyn_loopback_transport_routes_through_arc_dyn_router() {
+        let router: std::sync::Arc<dyn A2aRouter> =
+            std::sync::Arc::new(TaskDispatchRouter::new().on(
+                methods::TASKS_SEND,
+                |params| async move { Ok(params) },
+            ));
+        let client = A2aClient::new(DynLoopbackTransport::new(router));
+        let task = A2ATask {
+            id: "dyn-1".into(),
+            status: TaskStatus::Submitted,
+            artifacts: vec![],
+            history: vec![],
+            metadata: serde_json::json!({}),
+        };
+        let out = client.send_task("loopback", &task).await.unwrap();
+        assert_eq!(out.id, "dyn-1");
+    }
+
+    // ---------- HttpTransport (feature-gated) ----------
+
+    #[cfg(feature = "http-transport")]
+    #[tokio::test]
+    async fn http_transport_fails_on_unreachable_host() {
+        let transport = HttpTransport::default_client();
+        let req = A2aRequest {
+            jsonrpc: "2.0".into(),
+            id: "h-1".into(),
+            method: methods::TASKS_SEND.into(),
+            params: serde_json::json!({}),
+        };
+        // Port 1 on loopback is never open — connection refused.
+        let err = transport
+            .send("http://127.0.0.1:1/a2a", &req)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, A2aError::DelegationFailed { .. }),
+            "expected DelegationFailed, got {err:?}"
+        );
     }
 
     #[cfg(feature = "acp-compat")]

@@ -84,7 +84,9 @@ use sera_meta::artifact_pipeline::ArtifactPipeline;
 use sera_gateway::constitutional_config;
 
 // ── Phase-3 SPEC-interop crates ──────────────────────────────────────────────
-use sera_a2a::{A2aClient, A2aRequest, A2aRouter, InProcRouter, LoopbackTransport};
+use sera_a2a::{A2aClient, A2aRouter, DynLoopbackTransport, HttpTransport, TaskDispatchRouter};
+#[cfg(test)]
+use sera_a2a::{A2aRequest, InProcRouter};
 #[allow(unused_imports)]
 use sera_agui::AgUiEvent;
 use sera_plugins::InMemoryPluginRegistry;
@@ -1272,7 +1274,7 @@ struct AppState {
     /// Known A2A peers and the inbound router (SPEC-interop §4).
     a2a_peers: Arc<RwLock<A2aPeerRegistry>>,
     /// Inbound A2A JSON-RPC router — dispatches `tasks/*` methods.
-    a2a_router: Arc<InProcRouter>,
+    a2a_router: Arc<dyn A2aRouter>,
     /// AG-UI broadcast hub — SSE subscribers for `/api/agui/stream`.
     agui_hub: Arc<RwLock<AguiHub>>,
     /// Plugin registry — backing store for `/api/plugins` routes.
@@ -1573,10 +1575,14 @@ impl A2aAppState for AppState {
         Arc::clone(&self.a2a_peers)
     }
     fn a2a_router(&self) -> Arc<dyn A2aRouter> {
-        Arc::clone(&self.a2a_router) as Arc<dyn A2aRouter>
+        Arc::clone(&self.a2a_router)
     }
-    fn a2a_client(&self) -> A2aClient {
-        A2aClient::new(LoopbackTransport::from_arc(Arc::clone(&self.a2a_router)))
+    fn a2a_client_for(&self, peer_url: &str) -> A2aClient {
+        if peer_url.starts_with("http://") || peer_url.starts_with("https://") {
+            A2aClient::new(HttpTransport::default_client())
+        } else {
+            A2aClient::new(DynLoopbackTransport::new(Arc::clone(&self.a2a_router)))
+        }
     }
 }
 
@@ -4936,9 +4942,28 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         mail_correlator,
         mail_lookup,
         a2a_peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
-        a2a_router: Arc::new(InProcRouter::new(|_req: A2aRequest| async move {
-            Ok(serde_json::json!({"status": "no handler registered"}))
-        })),
+        a2a_router: Arc::new(
+            TaskDispatchRouter::new()
+                .on(sera_a2a::methods::TASKS_SEND, |params| async move {
+                    let mut task: serde_json::Value = params;
+                    task["status"] = serde_json::json!("submitted");
+                    Ok(task)
+                })
+                .on(sera_a2a::methods::TASKS_GET, |params| async move {
+                    let id = params.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    Ok(serde_json::json!({
+                        "id": id, "status": "unknown",
+                        "artifacts": [], "history": [], "metadata": {}
+                    }))
+                })
+                .on(sera_a2a::methods::TASKS_CANCEL, |params| async move {
+                    let id = params.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    Ok(serde_json::json!({
+                        "id": id, "status": "canceled",
+                        "artifacts": [], "history": [], "metadata": {}
+                    }))
+                }),
+        ),
         agui_hub: Arc::new(RwLock::new(AguiHub::new())),
         plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         skill_engine,

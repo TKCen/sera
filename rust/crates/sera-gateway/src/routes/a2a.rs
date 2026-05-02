@@ -68,7 +68,7 @@ pub struct SendMessageRequest {
     pub task: A2ATask,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SendMessageResponse {
     pub task: A2ATask,
 }
@@ -116,15 +116,14 @@ where
 {
     check_auth(state.api_key(), &headers)?;
 
-    // Build a loopback client that can reach external peers.
-    // In production the transport would use reqwest; for now we stub
-    // with the inbound router in loopback mode and return NOT_IMPLEMENTED
-    // for external URLs (the external HTTP transport is a follow-up).
-    let client = state.a2a_client();
+    let client = state.a2a_client_for(&body.peer_url);
     let task = client
         .send_task(&body.peer_url, &body.task)
         .await
-        .map_err(|_| StatusCode::NOT_IMPLEMENTED)?;
+        .map_err(|e| {
+            tracing::warn!(peer_url = %body.peer_url, error = %e, "A2A send_task failed");
+            StatusCode::BAD_GATEWAY
+        })?;
 
     Ok(Json(SendMessageResponse { task }))
 }
@@ -168,7 +167,11 @@ pub trait A2aAppState: Send + Sync + 'static {
     fn api_key(&self) -> &Option<String>;
     fn a2a_peers(&self) -> Arc<RwLock<A2aPeerRegistry>>;
     fn a2a_router(&self) -> Arc<dyn sera_a2a::A2aRouter>;
-    fn a2a_client(&self) -> A2aClient;
+    /// Return an outbound client suitable for the given `peer_url`.
+    ///
+    /// Implementations should return an `HttpTransport`-backed client for
+    /// external `http[s]://` URLs and a loopback client for in-process peers.
+    fn a2a_client_for(&self, peer_url: &str) -> A2aClient;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +187,7 @@ mod tests {
         http::{Request, StatusCode},
         routing::{get, post},
     };
-    use sera_a2a::{A2aRequest, A2aResponse, A2aRouter, LoopbackTransport};
+    use sera_a2a::{A2aRequest, A2aResponse, A2aRouter, DynLoopbackTransport, LoopbackTransport};
     use tower::ServiceExt;
 
     // --- minimal AppState for tests ---
@@ -218,8 +221,8 @@ mod tests {
         fn a2a_router(&self) -> Arc<dyn A2aRouter> {
             Arc::clone(&self.router) as Arc<dyn A2aRouter>
         }
-        fn a2a_client(&self) -> A2aClient {
-            // loopback: sends to our InProcRouter
+        fn a2a_client_for(&self, _peer_url: &str) -> A2aClient {
+            // In tests always use loopback so we don't make real HTTP calls.
             let transport = LoopbackTransport::from_arc(Arc::clone(&self.router));
             A2aClient::new(transport)
         }
@@ -312,6 +315,47 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // --- happy-path: send_message succeeds via loopback ---
+
+    #[tokio::test]
+    async fn send_message_happy_path() {
+        // Wire an echo router so A2aClient gets back a valid A2ATask.
+        let router = Arc::new(InProcRouter::new(|req: A2aRequest| async move {
+            Ok(req.params)
+        }));
+        let state = Arc::new(TestState {
+            api_key: None,
+            peers: Arc::new(RwLock::new(A2aPeerRegistry::new())),
+            router,
+        });
+        let app = test_router(state);
+        let req_body = serde_json::json!({
+            "peer_url": "loopback://self",
+            "task": {
+                "id": "t-happy",
+                "status": "submitted",
+                "artifacts": [],
+                "history": [],
+                "metadata": {}
+            }
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/api/a2a/send")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&req_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp_json: SendMessageResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(resp_json.task.id, "t-happy");
     }
 
     // --- auth-denied: send rejects bad key ---

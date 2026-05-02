@@ -396,9 +396,11 @@ impl App {
 
         // J.1.4: when a pending inline Approval block exists in the transcript,
         // intercept approve/reject/escalate and route to the inline block action.
-        // This takes lower priority than the modal overlay (above) but higher
-        // priority than the HITL queue pane handler (in the main match below).
-        if let Some(id) = self.session.first_pending_approval_id().map(str::to_owned) {
+        // Only active when the Session view has focus so that approve/reject/
+        // escalate keypresses in the HITL queue view (or other views) are not
+        // silently redirected to the first pending inline block.
+        if self.focus == ViewKind::Session
+            && let Some(id) = self.session.first_pending_approval_id().map(str::to_owned) {
             match action {
                 Action::Approve => {
                     self.pending.push(AppCommand::ApproveInlineBlock(id));
@@ -1838,6 +1840,7 @@ mod tests {
     #[test]
     fn approve_inline_block_routes_to_approve_inline_command() {
         let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
         // Seed a pending approval block.
         app.session
             .push_approval("req-99".into(), "Write".into(), "reason".into());
@@ -1892,6 +1895,7 @@ mod tests {
     #[test]
     fn reject_inline_block_routes_to_reject_inline_command() {
         let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
         app.session
             .push_approval("req-7".into(), "Bash".into(), "cmd".into());
         app.dispatch(Action::Reject);
@@ -1908,6 +1912,7 @@ mod tests {
     #[test]
     fn escalate_inline_block_routes_to_escalate_inline_command() {
         let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.focus = ViewKind::Session;
         app.session
             .push_approval("req-3".into(), "Read".into(), "sensitive file".into());
         app.dispatch(Action::Escalate);

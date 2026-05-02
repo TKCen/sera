@@ -20,6 +20,7 @@ use super::agent_list::make_block;
 use super::blocks::{ApprovalStatus, Block, ToolResult};
 use crate::client::{ConnectionState, SessionSummary, StreamEvent, TranscriptEntry};
 use crate::highlight;
+use crate::keybindings::{display_first, TuiKeybindings};
 
 /// Which pane inside the Session view holds keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -465,8 +466,8 @@ impl SessionView {
     /// by the root layout; this method renders the block-based transcript
     /// only — the legacy bottom tool-log pane is gone (tool calls are
     /// inline blocks now).
-    pub fn render_chat(&self, frame: &mut Frame, area: Rect, focused: bool) {
-        self.render_transcript(frame, area, focused);
+    pub fn render_chat(&self, frame: &mut Frame, area: Rect, focused: bool, kb: &TuiKeybindings) {
+        self.render_transcript(frame, area, focused, kb);
     }
 
     /// **J.0.1**: render only the composer into `area`.
@@ -474,7 +475,7 @@ impl SessionView {
         self.render_composer(frame, area);
     }
 
-    fn render_transcript(&self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render_transcript(&self, frame: &mut Frame, area: Rect, focused: bool, kb: &TuiKeybindings) {
         let transcript_focused = focused && self.focus == ComposerFocus::Transcript;
         let items: Vec<ListItem<'_>> = if self.blocks.is_empty() {
             vec![ListItem::new(Line::from(Span::styled(
@@ -484,7 +485,7 @@ impl SessionView {
         } else {
             self.blocks
                 .iter()
-                .flat_map(|block| block_to_list_items(block))
+                .flat_map(|block| block_to_list_items(block, kb))
                 .collect()
         };
 
@@ -523,7 +524,7 @@ impl SessionView {
 /// Render one [`Block`] into a sequence of [`ListItem`]s.  Kept free
 /// (rather than a method) so leaf beads can wrap their own variants
 /// without re-borrowing `&self`.
-fn block_to_list_items(block: &Block) -> Vec<ListItem<'static>> {
+fn block_to_list_items(block: &Block, kb: &TuiKeybindings) -> Vec<ListItem<'static>> {
     match block {
         Block::TurnSeparator => vec![
             ListItem::new(Line::from(Span::styled(
@@ -537,7 +538,7 @@ fn block_to_list_items(block: &Block) -> Vec<ListItem<'static>> {
             reason,
             status,
             ..
-        } => render_approval_block(tool, reason, *status),
+        } => render_approval_block(tool, reason, *status, kb),
         Block::ToolCall { .. } | Block::Task { .. } | Block::Error { .. } => {
             let header_color = match block {
                 Block::ToolCall { .. } => Color::Yellow,
@@ -600,7 +601,7 @@ fn block_to_list_items(block: &Block) -> Vec<ListItem<'static>> {
 ///   [a]pprove  [r]eject  [e]scalate
 /// ```
 /// Resolved blocks show a single status line with matching colour.
-fn render_approval_block(tool: &str, reason: &str, status: ApprovalStatus) -> Vec<ListItem<'static>> {
+fn render_approval_block(tool: &str, reason: &str, status: ApprovalStatus, kb: &TuiKeybindings) -> Vec<ListItem<'static>> {
     match status {
         ApprovalStatus::Pending => {
             let header = ListItem::new(Line::from(vec![
@@ -624,17 +625,17 @@ fn render_approval_block(tool: &str, reason: &str, status: ApprovalStatus) -> Ve
             let hint = ListItem::new(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(
-                    "[a]pprove".to_owned(),
+                    format!("[{}]pprove", display_first(&kb.approve)),
                     Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
                 Span::styled(
-                    "[r]eject".to_owned(),
+                    format!("[{}]eject", display_first(&kb.reject)),
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
                 Span::styled(
-                    "[e]scalate".to_owned(),
+                    format!("[{}]scalate", display_first(&kb.escalate)),
                     Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
                 ),
             ]));

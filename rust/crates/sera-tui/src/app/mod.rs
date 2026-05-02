@@ -11,6 +11,7 @@ pub mod actions;
 pub mod slash;
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio_stream::StreamExt as _;
@@ -81,6 +82,40 @@ pub enum AppUpdate {
     Evolve(u64, Result<Vec<EvolveProposal>, ClientError>),
 }
 
+/// State for the disconnected-gateway banner (J.0.7, sera-j0o8).
+///
+/// Rendered as a centred paragraph over the chat canvas while the gateway
+/// is unreachable.  Cleared when a connection succeeds.
+#[derive(Debug, Clone)]
+pub struct DisconnectBanner {
+    /// Monotonic time at which the next automatic retry will be attempted.
+    pub retry_at: Instant,
+    /// Current backoff interval: 1 → 2 → 4 → 8 → 16 → 30 s (capped).
+    pub backoff: Duration,
+}
+
+impl DisconnectBanner {
+    /// First banner: 1 s backoff, retry 1 s from now.
+    pub fn new() -> Self {
+        let backoff = Duration::from_secs(1);
+        Self { retry_at: Instant::now() + backoff, backoff }
+    }
+
+    /// Advance backoff level (doubles, capped at 30 s) and reschedule.
+    pub fn advance(&mut self) {
+        self.backoff = (self.backoff * 2).min(Duration::from_secs(30));
+        self.retry_at = Instant::now() + self.backoff;
+    }
+
+    /// Whole seconds until the next automatic retry, saturating at zero.
+    pub fn secs_until_retry(&self) -> u64 {
+        self.retry_at
+            .checked_duration_since(Instant::now())
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+}
+
 /// Async command emitted by the reducer when a view transition needs
 /// I/O (refresh data, approve HITL ticket, subscribe SSE).  The runtime
 /// loop executes these out-of-band so the dispatcher stays pure.
@@ -107,6 +142,9 @@ pub enum AppCommand {
     /// Cancel the in-flight streaming turn (J.0.4 / sera-zate).
     /// Carries the session_id to POST to /api/chat/cancel.
     CancelTurn(String),
+    /// Re-attempt a `SendChat` that previously failed due to a disconnected
+    /// gateway.  Bypasses the backoff timer and retries immediately.
+    RetrySendChat { agent: String, message: String },
 }
 
 /// Root application state.
@@ -175,6 +213,14 @@ pub struct App {
     /// When true, the help modal is rendered over the session pane.
     pub show_help: bool,
 
+    /// Set when the gateway is unreachable; cleared on first successful
+    /// connection.  Renderer shows a centred banner while this is `Some`.
+    pub disconnect_banner: Option<DisconnectBanner>,
+
+    /// Most-recent `SendChat` payload that failed with a connection error.
+    /// Stored so `RetryConnection` can re-issue it without re-typing.
+    pub pending_retry: Option<(String, String)>,
+
     /// Per-resource generation counters bumped on every refresh spawn.
     /// `apply_app_update` compares the result's captured generation
     /// against these to drop stale out-of-order responses (see
@@ -209,6 +255,8 @@ impl App {
             show_evolve_modal: false,
             pending: Vec::new(),
             show_help: false,
+            disconnect_banner: None,
+            pending_retry: None,
             agents_gen: 0,
             hitl_gen: 0,
             evolve_gen: 0,
@@ -524,6 +572,15 @@ impl App {
                     self.pending.push(AppCommand::OpenSession(id));
                 }
             }
+            Action::RetryConnection => {
+                // Operator hit retry while the disconnected banner is visible.
+                // Re-queue a pending chat send, or reset the backoff timer.
+                if let Some((agent, message)) = self.pending_retry.take() {
+                    self.pending.push(AppCommand::RetrySendChat { agent, message });
+                } else if let Some(banner) = &mut self.disconnect_banner {
+                    banner.retry_at = Instant::now();
+                }
+            }
             // These are only dispatched via the modal intercept path above, so
             // reaching here means the modal was already closed.  Treat as no-op.
             Action::ApproveHitl(_)
@@ -566,6 +623,16 @@ impl App {
                 self.session.set_connection(s);
                 if was_streaming && s != ConnectionState::Reconnecting {
                     self.turn_streaming = false;
+                }
+                // Clear the disconnected banner the moment the gateway comes back;
+                // create one when it goes away.
+                if s == ConnectionState::Connected {
+                    self.disconnect_banner = None;
+                    self.pending_retry = None;
+                } else if s == ConnectionState::Disconnected
+                    && self.disconnect_banner.is_none()
+                {
+                    self.disconnect_banner = Some(DisconnectBanner::new());
                 }
             }
         }
@@ -835,6 +902,10 @@ impl Runtime {
                         }
                     }
                 }
+                AppCommand::RetrySendChat { agent, message } => {
+                    // Immediate retry — same code path as SendChat.
+                    self.send_chat(app, agent, message).await;
+                }
                 AppCommand::LoadSessionsForPicker(agent_id) => {
                     match app.client.list_sessions(Some(&agent_id)).await {
                         Ok(sessions) => {
@@ -910,6 +981,9 @@ impl Runtime {
 
         // Mark turn as in-flight so ESC routes to CancelTurn.
         app.mark_turn_started();
+        // Stash the payload for RetryConnection before moving into the spawn.
+        // Cleared by apply_sse when Connected is received.
+        app.pending_retry = Some((agent.clone(), message.clone()));
 
         // Transition to Reconnecting to give visual feedback while connecting.
         app.apply_sse(SseUpdate::State(ConnectionState::Reconnecting));
@@ -1553,6 +1627,57 @@ mod tests {
         );
     }
 
+    // ── J.0.7 disconnect-banner tests ──────────────────────────────────────
+
+    #[test]
+    fn disconnect_banner_new_has_1s_backoff() {
+        let b = DisconnectBanner::new();
+        assert_eq!(b.backoff.as_secs(), 1);
+    }
+
+    #[test]
+    fn disconnect_banner_advance_doubles_capped_at_30s() {
+        let mut b = DisconnectBanner::new();
+        b.advance(); assert_eq!(b.backoff.as_secs(), 2);
+        b.advance(); assert_eq!(b.backoff.as_secs(), 4);
+        b.advance(); assert_eq!(b.backoff.as_secs(), 8);
+        b.advance(); assert_eq!(b.backoff.as_secs(), 16);
+        b.advance(); assert_eq!(b.backoff.as_secs(), 30);
+        b.advance(); assert_eq!(b.backoff.as_secs(), 30, "should not exceed 30s cap");
+    }
+
+    #[test]
+    fn apply_sse_connected_clears_banner_and_pending_retry() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.disconnect_banner = Some(DisconnectBanner::new());
+        app.pending_retry = Some(("agent".into(), "msg".into()));
+        app.apply_sse(SseUpdate::State(ConnectionState::Connected));
+        assert!(app.disconnect_banner.is_none(), "banner must clear on connect");
+        assert!(app.pending_retry.is_none(), "pending_retry must clear on connect");
+    }
+
+    #[test]
+    fn apply_sse_disconnected_creates_banner_when_none() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        assert!(app.disconnect_banner.is_none());
+        app.apply_sse(SseUpdate::State(ConnectionState::Disconnected));
+        assert!(app.disconnect_banner.is_some(), "banner must appear on disconnect");
+    }
+
+    #[test]
+    fn apply_sse_disconnected_preserves_existing_banner_backoff() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        let mut b = DisconnectBanner::new();
+        b.advance(); // backoff now 2s
+        app.disconnect_banner = Some(b);
+        app.apply_sse(SseUpdate::State(ConnectionState::Disconnected));
+        assert_eq!(
+            app.disconnect_banner.as_ref().unwrap().backoff.as_secs(),
+            2,
+            "second disconnect must not reset existing banner backoff"
+        );
+    }
+
     #[test]
     fn apply_sse_state_connected_without_prior_reconnecting_keeps_turn_streaming() {
         // Defensive: a stray Connected that does not follow Reconnecting
@@ -1565,6 +1690,22 @@ mod tests {
         assert!(
             app.turn_streaming,
             "Connected without a prior Reconnecting must not clear turn_streaming"
+        );
+    }
+
+    #[test]
+    fn retry_connection_with_pending_retry_queues_command() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        app.pending_retry = Some(("ag".into(), "hello".into()));
+        app.dispatch(Action::RetryConnection);
+        assert!(app.pending_retry.is_none(), "pending_retry must be consumed");
+        assert!(
+            matches!(
+                app.pending.last(),
+                Some(AppCommand::RetrySendChat { agent, message })
+                    if agent == "ag" && message == "hello"
+            ),
+            "expected RetrySendChat command"
         );
     }
 
@@ -1589,5 +1730,16 @@ mod tests {
         let app = App::new(client(), TuiKeybindings::defaults());
         let hint = app.footer_hint();
         assert!(hint.contains("send"), "idle hint must mention send; got: {hint}");
+    }
+
+    #[test]
+    fn retry_connection_without_pending_retry_resets_banner_timer() {
+        let mut app = App::new(client(), TuiKeybindings::defaults());
+        let mut b = DisconnectBanner::new();
+        b.retry_at = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        app.disconnect_banner = Some(b);
+        app.dispatch(Action::RetryConnection);
+        let secs = app.disconnect_banner.as_ref().unwrap().secs_until_retry();
+        assert_eq!(secs, 0, "banner timer must be reset to now");
     }
 }

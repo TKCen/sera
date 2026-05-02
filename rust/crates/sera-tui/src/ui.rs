@@ -24,7 +24,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, StatusLevel};
+use crate::app::{App, DisconnectBanner, StatusLevel};
 use crate::views::hitl_modal::render_hitl_modal;
 use crate::views::status_bar::StatusBar;
 
@@ -58,6 +58,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     // Key hint footer — context-sensitive.
     render_hint(frame, chunks[3], app);
+
+    // Disconnected banner — rendered below modals so it's visible when the
+    // gateway is unreachable unless a higher-priority modal is on top.
+    if let Some(banner) = &app.disconnect_banner {
+        render_disconnect_banner(frame, chunks[1], banner, &app.keybindings);
+    }
 
     // Modal overlays — rendered on top of everything, topmost last.
     if app.show_agents_modal {
@@ -207,6 +213,53 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
     Rect::new(x, y, w, h)
+}
+
+
+/// Render the disconnected-gateway banner centred over `area`.
+///
+/// Shows "disconnected from gateway · retrying in Xs" with retry/quit hints.
+/// Cleared by `apply_sse` when the gateway reconnects.  J.0.7 (sera-j0o8).
+fn render_disconnect_banner(
+    frame: &mut Frame,
+    area: Rect,
+    banner: &DisconnectBanner,
+    kb: &crate::keybindings::TuiKeybindings,
+) {
+    use crate::keybindings::display_first;
+
+    let secs = banner.secs_until_retry();
+    let retry_key = display_first(&kb.retry_connection);
+    let quit_key = display_first(&kb.quit);
+
+    let msg = if secs == 0 {
+        "  disconnected from gateway · retrying…  ".to_owned()
+    } else {
+        format!("  disconnected from gateway · retrying in {secs}s  ")
+    };
+    let hint = format!("  [{retry_key}] retry now   [{quit_key}] quit  ");
+
+    let modal_w = (msg.len().max(hint.len()) as u16 + 4).min(area.width);
+    let modal_h = 4u16.min(area.height);
+    let x = area.x + area.width.saturating_sub(modal_w) / 2;
+    let y = area.y + area.height.saturating_sub(modal_h) / 2;
+    let modal_area = Rect::new(x, y, modal_w, modal_h);
+
+    frame.render_widget(Clear, modal_area);
+
+    let lines = vec![
+        Line::from(Span::styled(
+            msg,
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))),
+    ];
+    let para = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Red)),
+    );
+    frame.render_widget(para, modal_area);
 }
 
 #[cfg(test)]

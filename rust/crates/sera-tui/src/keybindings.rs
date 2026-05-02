@@ -97,6 +97,9 @@ pub struct TuiKeybindings {
     /// Cancel the in-flight turn (default: Esc).  Only fires when a turn is
     /// actively streaming; otherwise Esc falls through to modal-close / back.
     pub cancel_turn: Vec<KeyBinding>,
+    /// Trigger an immediate reconnect when the disconnected banner is shown
+    /// (default: `r`).  J.0.7 (sera-j0o8).
+    pub retry_connection: Vec<KeyBinding>,
 }
 
 impl TuiKeybindings {
@@ -152,6 +155,7 @@ impl TuiKeybindings {
                 KeyModifiers::CONTROL,
             )],
             cancel_turn: vec![KeyBinding::plain(KeyCode::Esc)],
+            retry_connection: vec![KeyBinding::plain(KeyCode::Char('r'))],
         }
     }
 }
@@ -219,6 +223,7 @@ mod tests {
         assert!(!kb.open_hitl_modal.is_empty());
         assert!(!kb.open_evolve_modal.is_empty());
         assert!(!kb.cancel_turn.is_empty());
+        assert!(!kb.retry_connection.is_empty());
     }
 
     #[test]
@@ -264,5 +269,11 @@ mod tests {
         assert_eq!(b2.display(), "enter");
         let b3 = KeyBinding::plain(KeyCode::Char('q'));
         assert_eq!(b3.display(), "q");
+    }
+
+    #[test]
+    fn retry_connection_bound_to_r() {
+        let kb = TuiKeybindings::defaults();
+        assert!(matches_key(&evt(KeyCode::Char('r')), &kb.retry_connection));
     }
 }

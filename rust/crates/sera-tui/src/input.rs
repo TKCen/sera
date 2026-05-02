@@ -87,6 +87,7 @@ pub fn translate_session(
     kb: &TuiKeybindings,
     composer_focused: bool,
     turn_streaming: bool,
+    disconnected: bool,
 ) -> Action {
     // Global exits always win regardless of composer or streaming state.
     if matches_key(event, &kb.quit) {
@@ -122,6 +123,11 @@ pub fn translate_session(
     }
     if matches_key(event, &kb.open_session_picker) {
         return Action::OpenSessionPicker;
+    }
+    // Retry is only intercepted while the disconnect banner is shown, so
+    // plain `r` still reaches the composer / standard refresh otherwise.
+    if disconnected && matches_key(event, &kb.retry_connection) {
+        return Action::RetryConnection;
     }
 
     if composer_focused {
@@ -185,11 +191,11 @@ mod tests {
     fn session_tab_toggles_composer_focus() {
         let kb = TuiKeybindings::defaults();
         assert_eq!(
-            translate_session(&ev(KeyCode::Tab), &kb, true, false),
+            translate_session(&ev(KeyCode::Tab), &kb, true, false, false),
             Action::ToggleComposerFocus,
         );
         assert_eq!(
-            translate_session(&ev(KeyCode::Tab), &kb, false, false),
+            translate_session(&ev(KeyCode::Tab), &kb, false, false, false),
             Action::ToggleComposerFocus,
         );
     }
@@ -199,11 +205,11 @@ mod tests {
         let kb = TuiKeybindings::defaults();
         let ctrl_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL);
         assert_eq!(
-            translate_session(&ctrl_enter, &kb, true, false),
+            translate_session(&ctrl_enter, &kb, true, false, false),
             Action::SubmitComposer,
         );
         assert_eq!(
-            translate_session(&ctrl_enter, &kb, false, false),
+            translate_session(&ctrl_enter, &kb, false, false, false),
             Action::SubmitComposer,
         );
     }
@@ -213,7 +219,7 @@ mod tests {
         let kb = TuiKeybindings::defaults();
         let key_h = ev(KeyCode::Char('h'));
         assert_eq!(
-            translate_session(&key_h, &kb, true, false),
+            translate_session(&key_h, &kb, true, false, false),
             Action::ComposerInput(key_h),
         );
     }
@@ -222,7 +228,7 @@ mod tests {
     fn session_plain_key_scrolls_when_transcript_focused() {
         let kb = TuiKeybindings::defaults();
         assert_eq!(
-            translate_session(&ev(KeyCode::Up), &kb, false, false),
+            translate_session(&ev(KeyCode::Up), &kb, false, false, false),
             Action::Up,
         );
     }
@@ -231,7 +237,7 @@ mod tests {
     fn session_quit_always_wins() {
         let kb = TuiKeybindings::defaults();
         assert_eq!(
-            translate_session(&ev(KeyCode::Char('q')), &kb, true, false),
+            translate_session(&ev(KeyCode::Char('q')), &kb, true, false, false),
             Action::Quit,
         );
     }
@@ -242,11 +248,11 @@ mod tests {
     fn esc_during_streaming_routes_to_cancel_turn() {
         let kb = TuiKeybindings::defaults();
         assert_eq!(
-            translate_session(&ev(KeyCode::Esc), &kb, true, true),
+            translate_session(&ev(KeyCode::Esc), &kb, true, true, false),
             Action::CancelTurn,
         );
         assert_eq!(
-            translate_session(&ev(KeyCode::Esc), &kb, false, true),
+            translate_session(&ev(KeyCode::Esc), &kb, false, true, false),
             Action::CancelTurn,
         );
     }
@@ -260,12 +266,12 @@ mod tests {
         let esc = ev(KeyCode::Esc);
         // Composer focused + not streaming → ComposerInput (textarea handles ESC)
         assert_eq!(
-            translate_session(&esc, &kb, true, false),
+            translate_session(&esc, &kb, true, false, false),
             Action::ComposerInput(esc),
         );
         // Transcript focused + not streaming → Back (standard table)
         assert_eq!(
-            translate_session(&esc, &kb, false, false),
+            translate_session(&esc, &kb, false, false, false),
             Action::Back,
         );
     }
@@ -275,8 +281,24 @@ mod tests {
         let kb = TuiKeybindings::defaults();
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(
-            translate_session(&ctrl_c, &kb, true, true),
+            translate_session(&ctrl_c, &kb, true, true, false),
             Action::Quit,
+        );
+    }
+
+    #[test]
+    fn session_r_only_retries_when_disconnected() {
+        let kb = TuiKeybindings::defaults();
+        let key_r = ev(KeyCode::Char('r'));
+        // Banner not shown — `r` reaches the composer instead of retrying.
+        assert_eq!(
+            translate_session(&key_r, &kb, true, false, false),
+            Action::ComposerInput(key_r),
+        );
+        // Banner shown — `r` triggers an immediate retry.
+        assert_eq!(
+            translate_session(&key_r, &kb, true, false, true),
+            Action::RetryConnection,
         );
     }
 }

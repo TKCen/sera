@@ -94,6 +94,13 @@ pub struct TuiKeybindings {
     pub open_hitl_modal: Vec<KeyBinding>,
     /// Open the evolve status modal (default: Ctrl+E) — chat-dominant layout.
     pub open_evolve_modal: Vec<KeyBinding>,
+    /// Toggle expansion of the currently-focused tool block (default: Space).
+    /// Only fires when the transcript pane is focused and a tool block is selected.
+    pub toggle_tool_block: Vec<KeyBinding>,
+    /// Cycle focus to the next tool block in the transcript (default: Tab when
+    /// transcript is focused).  Wraps around.  When no tool block is focused
+    /// yet, selects the first one.
+    pub focus_next_tool_block: Vec<KeyBinding>,
 }
 
 impl TuiKeybindings {
@@ -148,6 +155,10 @@ impl TuiKeybindings {
                 KeyCode::Char('e'),
                 KeyModifiers::CONTROL,
             )],
+            // Space toggles the focused tool block (transcript pane only).
+            toggle_tool_block: vec![KeyBinding::plain(KeyCode::Char(' '))],
+            // Tab cycles through tool blocks when the transcript pane is active.
+            focus_next_tool_block: vec![KeyBinding::plain(KeyCode::Tab)],
         }
     }
 }
@@ -214,6 +225,8 @@ mod tests {
         assert!(!kb.open_agents_modal.is_empty());
         assert!(!kb.open_hitl_modal.is_empty());
         assert!(!kb.open_evolve_modal.is_empty());
+        assert!(!kb.toggle_tool_block.is_empty());
+        assert!(!kb.focus_next_tool_block.is_empty());
     }
 
     #[test]

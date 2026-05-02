@@ -25,6 +25,7 @@ use sera_gateway::workflow_store::{
     HumanGateStore, InMemoryHumanGateStore, InMemoryWorkflowTaskStore, SchedulerTaskStatus,
     WorkflowTaskRecord, WorkflowTaskStore,
 };
+use sera_mail::lookup::InMemoryMailLookup;
 use sera_hitl::{ApprovalId, TicketStatus};
 use sera_workflow::task::WorkflowTaskInput;
 use sera_workflow::{AwaitType, WorkflowTask, WorkflowTaskStatus, WorkflowTaskType};
@@ -73,6 +74,9 @@ async fn human_gate_blocks_without_resolution() {
     // No ticket status recorded → gate must NOT resolve.
     let resolved = tick(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
+        None,
+        None,
         Some(Arc::clone(&hitl) as Arc<dyn HumanGateStore>),
     )
     .await;
@@ -107,6 +111,9 @@ async fn human_gate_resolves_after_approval() {
 
     let resolved = tick(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
+        None,
+        None,
         Some(Arc::clone(&hitl) as Arc<dyn HumanGateStore>),
     )
     .await;
@@ -141,6 +148,9 @@ async fn human_gate_resolves_on_rejection() {
 
     let resolved = tick(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
+        None,
+        None,
         Some(Arc::clone(&hitl) as Arc<dyn HumanGateStore>),
     )
     .await;
@@ -173,6 +183,9 @@ async fn human_gate_resolves_on_expiry() {
 
     let resolved = tick(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
+        None,
+        None,
         Some(Arc::clone(&hitl) as Arc<dyn HumanGateStore>),
     )
     .await;
@@ -195,6 +208,9 @@ async fn scheduler_background_task_resolves_human_gate() {
 
     let handle = spawn_scheduler(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
+        None,
+        None,
         Some(Arc::clone(&hitl) as Arc<dyn HumanGateStore>),
         Arc::clone(&shutting_down),
     );
@@ -267,6 +283,14 @@ impl WorkflowAppState for TestState {
     }
     fn workflow_store(&self) -> Arc<dyn WfStore> {
         Arc::clone(&self.store) as Arc<dyn WfStore>
+    }
+    fn mail_lookup(&self) -> Arc<InMemoryMailLookup> {
+        Arc::new(InMemoryMailLookup::new())
+    }
+    fn change_artifact_store(
+        &self,
+    ) -> Option<Arc<dyn sera_gateway::workflow_store::ChangeArtifactStateStore>> {
+        None
     }
     fn human_gate_store(&self) -> Option<Arc<dyn HumanGateStoreTrait>> {
         Some(Arc::clone(&self.hitl) as Arc<dyn HumanGateStoreTrait>)
@@ -351,6 +375,9 @@ async fn http_create_human_task_and_resume_round_trip() {
     // 4. Tick the scheduler — the Human gate should now resolve.
     let resolved = tick(
         Arc::clone(&state.store) as Arc<dyn WfStore>,
+        Arc::new(InMemoryMailLookup::new()),
+        None,
+        None,
         Some(Arc::clone(&state.hitl) as Arc<dyn HumanGateStoreTrait>),
     )
     .await;

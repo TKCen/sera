@@ -18,6 +18,7 @@ use sera_gateway::workflow_store::{
     ChangeArtifactStateStore, InMemoryChangeArtifactStateStore, InMemoryWorkflowTaskStore,
     SchedulerTaskStatus, WorkflowTaskRecord, WorkflowTaskStore,
 };
+use sera_mail::lookup::InMemoryMailLookup;
 use sera_types::evolution::ChangeArtifactId;
 use sera_workflow::task::{ChangeState, WorkflowTaskInput};
 use sera_workflow::{AwaitType, WorkflowTask, WorkflowTaskStatus, WorkflowTaskType};
@@ -61,7 +62,10 @@ async fn change_gate_resolves_when_state_becomes_terminal() {
     // First tick — artifact state unknown, must remain pending.
     let resolved = tick(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
+        None,
         Some(Arc::clone(&change_store) as Arc<dyn ChangeArtifactStateStore>),
+        None,
     )
     .await;
     assert_eq!(resolved, 0, "unknown artifact state must not resolve");
@@ -75,7 +79,10 @@ async fn change_gate_resolves_when_state_becomes_terminal() {
     // Second tick — gate must now wake the task.
     let resolved = tick(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
+        None,
         Some(Arc::clone(&change_store) as Arc<dyn ChangeArtifactStateStore>),
+        None,
     )
     .await;
     assert_eq!(resolved, 1, "applied artifact must resolve the gate");
@@ -110,7 +117,10 @@ async fn change_gate_blocks_on_non_terminal_state() {
 
     let resolved = tick(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
+        None,
         Some(Arc::clone(&change_store) as Arc<dyn ChangeArtifactStateStore>),
+        None,
     )
     .await;
     assert_eq!(resolved, 0, "approved (non-terminal) artifact must not resolve");
@@ -144,7 +154,10 @@ async fn change_gate_resolves_on_rejected_too() {
 
     let resolved = tick(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
+        None,
         Some(Arc::clone(&change_store) as Arc<dyn ChangeArtifactStateStore>),
+        None,
     )
     .await;
     assert_eq!(resolved, 1, "rejected artifact must resolve the gate");

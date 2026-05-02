@@ -21,6 +21,7 @@ use sera_gateway::workflow_store::{
     GhRunStateStore, InMemoryGhRunStateStore, InMemoryWorkflowTaskStore, SchedulerTaskStatus,
     WorkflowTaskRecord, WorkflowTaskStore,
 };
+use sera_mail::lookup::InMemoryMailLookup;
 use sera_workflow::task::{GhRunId, GhRunStatus, WorkflowTaskInput};
 use sera_workflow::{AwaitType, WorkflowTask, WorkflowTaskStatus, WorkflowTaskType};
 
@@ -65,7 +66,10 @@ async fn gh_run_gate_blocks_when_run_unknown() {
     // No status in store → tick must NOT resolve.
     let resolved = tick(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
         Some(Arc::clone(&gh_run_store) as Arc<dyn GhRunStateStore>),
+        None,
+        None,
     )
     .await;
     assert_eq!(resolved, 0, "unknown run must not resolve");
@@ -99,7 +103,10 @@ async fn gh_run_gate_resolves_on_terminal_status() {
 
     let resolved = tick(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
         Some(Arc::clone(&gh_run_store) as Arc<dyn GhRunStateStore>),
+        None,
+        None,
     )
     .await;
     assert_eq!(resolved, 1, "completed run must resolve on first tick");
@@ -133,7 +140,10 @@ async fn gh_run_gate_resolves_on_failed_status() {
 
     let resolved = tick(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
         Some(Arc::clone(&gh_run_store) as Arc<dyn GhRunStateStore>),
+        None,
+        None,
     )
     .await;
     assert_eq!(resolved, 1, "failed run must also resolve (handler branches on outcome)");
@@ -153,7 +163,10 @@ async fn gh_run_gate_background_scheduler_resolves_after_status_populated() {
 
     let handle = spawn_scheduler(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
         Some(Arc::clone(&gh_run_store) as Arc<dyn GhRunStateStore>),
+        None,
+        None,
         Arc::clone(&shutting_down),
     );
 

@@ -12,8 +12,14 @@
 # Host port assignments (chosen to avoid collisions on dev machine):
 #   5434  → postgres:5432       (5432 = hindsight-db internal, 5433 = radio-player)
 #   8001  → centrifugo:8000     (8000 = portainer internal, 8100 = radio-player centrifugo)
-#   3001  → sera-gateway:3001
+#   3002  → sera-gateway:3001   (3001 = the local rust/docker-compose.sera.yml stack)
 #   5173  → sera-web:80         (matches the dev `bun run dev` port)
+#
+# sera-jefd: published on both 0.0.0.0 and [::] so Windows 11 / WSL2 mirrored
+# networking can reach the container — the IPv4-only publish in rust/docker-
+# compose.sera.yml's sibling note still applies here. Host port is 3002 so
+# both stacks (`docker-compose.rust.yaml` and `rust/docker-compose.sera.yml`)
+# can run side-by-side without colliding on :3001.
 #
 # Provider endpoints default to host.docker.internal so a locally-running
 # Ollama or LM Studio on the host is reachable from inside the container.
@@ -82,8 +88,13 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - sera_logs:/app/logs
+    # sera-jefd: host port 3002 → container 3001 to avoid colliding with the
+    # rust/docker-compose.sera.yml stack already publishing :3001. Dual-stack
+    # publish so localhost resolves on both v4 and v6 (Windows 11 / WSL2
+    # mirrored mode resolves localhost as ::1 first).
     ports:
-      - "3001:3001"
+      - "0.0.0.0:3002:3001"
+      - "[::]:3002:3001"
     networks:
       - sera_net
     healthcheck:

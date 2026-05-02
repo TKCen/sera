@@ -1,28 +1,20 @@
-//! Two-layer session persistence — `SessionStore` (sera-r9ed, Phase 1).
-//!
-//! Per SPEC-gateway §6.1b, the gateway keeps current session state in a SQLite
-//! **PartTable** and pushes an audit-grade replay log into a **shadow git**
-//! repo. PartTable rows reference a commit SHA on the shadow repo; replaying
-//! from that SHA reproduces the session byte-for-byte.
+//! Session persistence — `SessionStore` (sera-r9ed / sera-fpmt, Phase 1).
 //!
 //! This module exposes:
 //!
 //! * [`SessionStore`] — the trait the gateway session lifecycle calls into.
-//! * [`SqliteGitSessionStore`] — the default implementation backing PartTable
-//!   by SQLite (via `rusqlite`, following the [`sera_db::signals`] pattern)
-//!   and the shadow repo by bare `git2` repositories on disk.
-//!
-//! Each submission (with its emitted events) becomes exactly **one** commit on
-//! `refs/heads/main` in a per-session bare repo at
-//! `<data_root>/sessions/<session_id>/git`. The commit's tree contains:
-//!
-//! * `submission.json` — serialized [`sera_types::envelope::Submission`]
-//! * `emissions/<0000>.json` … `emissions/<NNNN>.json` — serialized
-//!   [`sera_types::envelope::Event`]s in emission order
-//!
-//! The head SHA of that commit is the durable [`SubmissionRef`]; PartTable
-//! stores it as the session head plus one row per part for fast indexed
-//! access.
+//! * [`SqliteSessionStore`] — the **default** implementation; stores
+//!   submissions and emissions as JSON rows in SQLite. No shadow-git
+//!   directories on disk (K.1 / sera-fpmt).
+//! * [`SqliteGitSessionStore`] — enterprise-only (`#[cfg(feature =
+//!   "enterprise")]`). Backs PartTable by SQLite and pushes an audit-grade
+//!   replay log into bare `git2` repositories on disk (sera-r9ed). Each
+//!   submission becomes exactly **one** commit on `refs/heads/main` in a
+//!   per-session bare repo at `<data_root>/sessions/<session_id>/git`.
+//!   The commit tree contains:
+//!   * `submission.json` — serialized [`sera_types::envelope::Submission`]
+//!   * `emissions/<0000>.json` … `emissions/<NNNN>.json` — serialized
+//!     [`sera_types::envelope::Event`]s in emission order
 //!
 //! # Minimal API
 //!
@@ -30,7 +22,9 @@
 //! needs. More session methods will arrive in a follow-up when the route
 //! layer asks for them.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "enterprise")]
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -70,6 +64,7 @@ pub struct StoredSubmission {
 pub enum SessionStoreError {
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[cfg(feature = "enterprise")]
     #[error("git error: {0}")]
     Git(#[from] git2::Error),
     #[error("io error: {0}")]
@@ -125,7 +120,7 @@ pub trait SessionStore: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// SqliteGitSessionStore
+// SqliteGitSessionStore (enterprise only)
 // ---------------------------------------------------------------------------
 
 /// PartTable (SQLite) + shadow-git backed [`SessionStore`].
@@ -133,6 +128,7 @@ pub trait SessionStore: Send + Sync {
 /// Construct via [`SqliteGitSessionStore::open`] for normal use or
 /// [`SqliteGitSessionStore::open_with_conn`] when the SQLite connection is
 /// shared with other gateway tables.
+#[cfg(feature = "enterprise")]
 #[derive(Clone)]
 pub struct SqliteGitSessionStore {
     conn: Arc<Mutex<Connection>>,
@@ -140,6 +136,7 @@ pub struct SqliteGitSessionStore {
     sessions_root: PathBuf,
 }
 
+#[cfg(feature = "enterprise")]
 impl SqliteGitSessionStore {
     /// Create the PartTable schema. Idempotent.
     pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -218,6 +215,7 @@ impl SqliteGitSessionStore {
 // Internal helpers that need Repository borrows but are pure enough to keep
 // outside the `impl SessionStore` block.
 
+#[cfg(feature = "enterprise")]
 fn write_bundle_tree(
     repo: &git2::Repository,
     bundle: &StoredSubmission,
@@ -243,6 +241,7 @@ fn write_bundle_tree(
     Ok(root_tb.write()?)
 }
 
+#[cfg(feature = "enterprise")]
 fn op_kind_label(sub: &Submission) -> &'static str {
     use sera_types::envelope::Op;
     match &sub.op {
@@ -262,6 +261,7 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+#[cfg(feature = "enterprise")]
 #[async_trait]
 impl SessionStore for SqliteGitSessionStore {
     async fn append_submission(
@@ -439,14 +439,175 @@ impl SessionStore for SqliteGitSessionStore {
 }
 
 // ---------------------------------------------------------------------------
+// SqliteSessionStore (no shadow-git)
+// ---------------------------------------------------------------------------
+
+/// Plain SQLite-only [`SessionStore`] — no shadow-git audit trail.
+///
+/// Per K.1 (`sera-fpmt`) this is the default for non-enterprise builds.
+/// Submissions and their emissions are stored as JSON blobs in dedicated
+/// tables; replay walks them back in append order. Avoids the per-turn
+/// latency and on-disk repo footprint of [`SqliteGitSessionStore`] for
+/// chat-first local use, at the cost of the byte-for-byte deterministic git
+/// audit log.
+///
+/// Synthesises a stable 40-hex `SubmissionRef::commit` value per append (same
+/// approach as [`InMemorySessionStore`]) so callers do not need to special-
+/// case which store they are talking to.
+#[derive(Clone)]
+pub struct SqliteSessionStore {
+    conn: Arc<Mutex<Connection>>,
+}
+
+impl SqliteSessionStore {
+    /// Create the schema. Idempotent.
+    pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS plain_session_heads (
+                session_id TEXT PRIMARY KEY,
+                head_index INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+
+             CREATE TABLE IF NOT EXISTS plain_session_parts (
+                session_id TEXT NOT NULL,
+                part_index INTEGER NOT NULL,
+                submission_id TEXT NOT NULL,
+                bundle_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (session_id, part_index)
+             );
+             CREATE INDEX IF NOT EXISTS idx_plain_session_parts_session
+                ON plain_session_parts(session_id, part_index);",
+        )
+    }
+
+    /// Open a store at `db_path`, creating the schema if missing.
+    pub fn open(db_path: impl AsRef<Path>) -> Result<Self, SessionStoreError> {
+        let conn = Connection::open(db_path.as_ref())?;
+        Self::init_schema(&conn)?;
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+        })
+    }
+
+    /// Open against an existing shared connection. Caller is responsible for
+    /// running [`init_schema`](Self::init_schema) before first use.
+    pub fn open_with_conn(conn: Arc<Mutex<Connection>>) -> Self {
+        Self { conn }
+    }
+}
+
+#[async_trait]
+impl SessionStore for SqliteSessionStore {
+    async fn append_submission(
+        &self,
+        session_id: &str,
+        bundle: &StoredSubmission,
+    ) -> Result<SubmissionRef, SessionStoreError> {
+        let conn = self.conn.lock().await;
+
+        let prior_index: Option<i64> = conn
+            .query_row(
+                "SELECT head_index FROM plain_session_heads WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+
+        let next_index: u64 = match prior_index {
+            Some(idx) => (idx as u64) + 1,
+            None => 0,
+        };
+
+        let bundle_json = serde_json::to_string(bundle)?;
+        let now = now_secs();
+        let submission_id = bundle.submission.id.to_string();
+
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        let tx_result: Result<(), SessionStoreError> = (|| {
+            conn.execute(
+                "INSERT INTO plain_session_parts
+                    (session_id, part_index, submission_id, bundle_json, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    session_id,
+                    next_index as i64,
+                    submission_id,
+                    bundle_json,
+                    now,
+                ],
+            )?;
+            conn.execute(
+                "INSERT INTO plain_session_heads
+                    (session_id, head_index, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(session_id) DO UPDATE SET
+                    head_index = excluded.head_index,
+                    updated_at = excluded.updated_at",
+                params![session_id, next_index as i64, now],
+            )?;
+            Ok(())
+        })();
+
+        match tx_result {
+            Ok(()) => {
+                conn.execute_batch("COMMIT")?;
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(e);
+            }
+        }
+
+        Ok(SubmissionRef {
+            session_id: session_id.to_string(),
+            commit: synth_commit(session_id, next_index),
+            index: next_index,
+        })
+    }
+
+    async fn head(&self, session_id: &str) -> Result<Option<SubmissionRef>, SessionStoreError> {
+        let conn = self.conn.lock().await;
+        let row: Option<i64> = conn
+            .query_row(
+                "SELECT head_index FROM plain_session_heads WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        Ok(row.map(|index| SubmissionRef {
+            session_id: session_id.to_string(),
+            commit: synth_commit(session_id, index as u64),
+            index: index as u64,
+        }))
+    }
+
+    async fn replay(&self, session_id: &str) -> Result<Vec<Submission>, SessionStoreError> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT bundle_json FROM plain_session_parts
+             WHERE session_id = ?1 ORDER BY part_index ASC",
+        )?;
+        let rows = stmt.query_map(params![session_id], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let bundle_json = row?;
+            let bundle: StoredSubmission = serde_json::from_str(&bundle_json)?;
+            out.push(bundle.submission);
+        }
+        Ok(out)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // InMemorySessionStore
 // ---------------------------------------------------------------------------
 
-/// In-memory [`SessionStore`] used by the default binary boot path and by
-/// every gateway test that does not exercise shadow-git persistence. Stores
-/// appended bundles per session in a tokio `Mutex<Vec>`; synthesises a stable
-/// 40-hex commit string per append so [`SubmissionRef`] consumers never see
-/// an ambiguous short SHA.
+/// In-memory [`SessionStore`] used by gateway tests that do not exercise
+/// disk-backed persistence. Stores appended bundles per session in a tokio
+/// `Mutex<Vec>`; synthesises a stable 40-hex commit string per append so
+/// [`SubmissionRef`] consumers never see an ambiguous short SHA.
 #[derive(Default, Clone)]
 pub struct InMemorySessionStore {
     inner: Arc<Mutex<std::collections::HashMap<String, Vec<StoredSubmission>>>>,
@@ -479,13 +640,20 @@ impl InMemorySessionStore {
 }
 
 fn synth_commit(session_id: &str, index: u64) -> String {
+    // Deterministic 40-hex synthetic SHA derived from (session_id, index)
+    // alone so that `head()` produces the same commit string as the
+    // matching `append_submission()` return — required for non-git stores
+    // (SqliteSessionStore, InMemorySessionStore) where the commit is purely
+    // an identity tag, not a content-addressed git object.
     use std::hash::{BuildHasher, Hasher};
-    let hasher_state = std::collections::hash_map::RandomState::new();
-    let mut h = hasher_state.build_hasher();
+    use std::hash::BuildHasherDefault;
+    use std::collections::hash_map::DefaultHasher;
+    let bh = BuildHasherDefault::<DefaultHasher>::default();
+    let mut h = bh.build_hasher();
     Hasher::write(&mut h, session_id.as_bytes());
     Hasher::write_u64(&mut h, index);
     let lo = h.finish();
-    let mut h2 = hasher_state.build_hasher();
+    let mut h2 = bh.build_hasher();
     Hasher::write_u64(&mut h2, lo);
     Hasher::write(&mut h2, session_id.as_bytes());
     let hi = h2.finish();
@@ -581,6 +749,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "enterprise")]
     fn fresh_store() -> (SqliteGitSessionStore, TempDir) {
         let dir = TempDir::new().unwrap();
         let db = dir.path().join("parts.sqlite");
@@ -589,6 +758,7 @@ mod tests {
         (store, dir)
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test]
     async fn init_schema_idempotent() {
         let conn = Connection::open_in_memory().unwrap();
@@ -597,12 +767,14 @@ mod tests {
         SqliteGitSessionStore::init_schema(&conn).unwrap();
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn head_returns_none_for_unknown_session() {
         let (store, _d) = fresh_store();
         assert!(store.head("nope").await.unwrap().is_none());
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn append_then_head_returns_latest() {
         let (store, _d) = fresh_store();
@@ -619,6 +791,7 @@ mod tests {
         assert_eq!(head, refa);
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn append_increments_index_and_parents_commit() {
         let (store, _d) = fresh_store();
@@ -646,6 +819,7 @@ mod tests {
         assert_eq!(c2.parent(0).unwrap().id().to_string(), r1.commit);
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn replay_returns_submissions_in_order() {
         let (store, _d) = fresh_store();
@@ -666,6 +840,7 @@ mod tests {
         assert_eq!(replayed_ids, appended_ids);
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn replay_is_byte_for_byte_deterministic() {
         let (store, _d) = fresh_store();
@@ -694,6 +869,7 @@ mod tests {
         assert_eq!(replayed[0].id, sub_id);
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_appends_to_same_session_are_serialised() {
         let (store, _d) = fresh_store();
@@ -738,6 +914,7 @@ mod tests {
         assert_eq!(replayed.len(), n);
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn emissions_land_in_git_tree() {
         let (store, _d) = fresh_store();
@@ -768,6 +945,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn part_rows_track_session_and_index() {
         let (store, _d) = fresh_store();
@@ -801,5 +979,138 @@ mod tests {
                 ("beta".to_string(), 0, "user_turn".to_string()),
             ]
         );
+    }
+
+    // -------------------------------------------------------------------
+    // SqliteSessionStore (sera-fpmt / K.1) — plain SQLite, no shadow-git
+    // -------------------------------------------------------------------
+
+    fn fresh_plain_store() -> (SqliteSessionStore, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let db = dir.path().join("parts.sqlite");
+        let store = SqliteSessionStore::open(&db).unwrap();
+        (store, dir)
+    }
+
+    #[tokio::test]
+    async fn plain_init_schema_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        SqliteSessionStore::init_schema(&conn).unwrap();
+        SqliteSessionStore::init_schema(&conn).unwrap();
+        SqliteSessionStore::init_schema(&conn).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plain_head_returns_none_for_unknown_session() {
+        let (store, _d) = fresh_plain_store();
+        assert!(store.head("nope").await.unwrap().is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plain_append_then_head_returns_latest() {
+        let (store, _d) = fresh_plain_store();
+        let bundle = StoredSubmission {
+            submission: user_turn("hello"),
+            emissions: vec![],
+        };
+        let refa = store.append_submission("s1", &bundle).await.unwrap();
+        assert_eq!(refa.session_id, "s1");
+        assert_eq!(refa.index, 0);
+        assert_eq!(refa.commit.len(), 40, "synth commit must be 40-hex chars");
+
+        let head = store.head("s1").await.unwrap().unwrap();
+        assert_eq!(head, refa);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plain_does_not_create_sessions_dir() {
+        // Regression guard for K.1: the plain store must not write any
+        // shadow-git directories on disk.
+        let dir = TempDir::new().unwrap();
+        let db = dir.path().join("parts.sqlite");
+        let store = SqliteSessionStore::open(&db).unwrap();
+        let bundle = StoredSubmission {
+            submission: user_turn("hello"),
+            emissions: vec![],
+        };
+        store.append_submission("s1", &bundle).await.unwrap();
+        assert!(
+            !dir.path().join("sessions").exists(),
+            "plain store must not create per-session shadow-git dirs"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plain_replay_returns_submissions_in_order() {
+        let (store, _d) = fresh_plain_store();
+        let texts = ["one", "two", "three", "four"];
+        let mut appended_ids = Vec::new();
+        for t in &texts {
+            let sub = user_turn(t);
+            appended_ids.push(sub.id);
+            let bundle = StoredSubmission {
+                submission: sub,
+                emissions: vec![],
+            };
+            store.append_submission("s1", &bundle).await.unwrap();
+        }
+        let replayed = store.replay("s1").await.unwrap();
+        assert_eq!(replayed.len(), 4);
+        let replayed_ids: Vec<_> = replayed.iter().map(|s| s.id).collect();
+        assert_eq!(replayed_ids, appended_ids);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plain_replay_survives_reopen() {
+        let dir = TempDir::new().unwrap();
+        let db = dir.path().join("parts.sqlite");
+        let store = SqliteSessionStore::open(&db).unwrap();
+        let sub = user_turn("persisted");
+        let sub_id = sub.id;
+        let ev = event(sub_id, "hi");
+        let bundle = StoredSubmission {
+            submission: sub,
+            emissions: vec![ev],
+        };
+        store.append_submission("s1", &bundle).await.unwrap();
+        drop(store);
+
+        let reopened = SqliteSessionStore::open(&db).unwrap();
+        let head = reopened.head("s1").await.unwrap().unwrap();
+        assert_eq!(head.index, 0);
+        let replayed = reopened.replay("s1").await.unwrap();
+        assert_eq!(replayed.len(), 1);
+        assert_eq!(replayed[0].id, sub_id);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plain_concurrent_appends_serialise() {
+        let (store, _d) = fresh_plain_store();
+        let store = Arc::new(store);
+        let n = 16;
+        let mut handles = Vec::new();
+        for i in 0..n {
+            let s = Arc::clone(&store);
+            handles.push(tokio::spawn(async move {
+                let bundle = StoredSubmission {
+                    submission: user_turn(&format!("msg-{i}")),
+                    emissions: vec![],
+                };
+                s.append_submission("s1", &bundle).await.unwrap()
+            }));
+        }
+        let mut refs = Vec::new();
+        for h in handles {
+            refs.push(h.await.unwrap());
+        }
+        let mut indices: Vec<u64> = refs.iter().map(|r| r.index).collect();
+        indices.sort();
+        assert_eq!(indices, (0..n as u64).collect::<Vec<_>>());
+
+        let head = store.head("s1").await.unwrap().unwrap();
+        assert_eq!(head.index, (n as u64) - 1);
+
+        let replayed = store.replay("s1").await.unwrap();
+        assert_eq!(replayed.len(), n);
     }
 }

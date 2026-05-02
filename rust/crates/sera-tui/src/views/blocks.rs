@@ -194,6 +194,7 @@ impl Block {
     /// pick a colour.  Matches the legacy role strings ("user",
     /// "assistant", "tool", "system") so existing snapshot-style tests
     /// keep working.
+    #[allow(dead_code)]
     pub fn role_label(&self) -> &'static str {
         match self {
             Block::UserMessage { .. } => "user",

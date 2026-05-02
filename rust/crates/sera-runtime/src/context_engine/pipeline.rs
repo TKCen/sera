@@ -497,6 +497,65 @@ mod tests {
         assert_eq!(window.messages[0]["id"], "fresh");
     }
 
+    /// Verify the auto-compaction trigger path:
+    ///
+    /// 1. Ingest enough messages to exceed the budget — `assemble()` must return
+    ///    `BudgetExceeded`.
+    /// 2. Call `compact(OverflowRetry)` — the condenser trims the message list.
+    /// 3. Retry `assemble()` — must now succeed within the budget.
+    #[tokio::test]
+    async fn budget_exceeded_compact_overflow_retry_then_assemble_succeeds() {
+        // Keep only the 1 most-recent message after compaction.
+        let mut engine = ContextPipeline::new()
+            .with_condenser(Box::new(RecentEventsCondenser::new(1)));
+
+        // Ingest 20 short messages so total tokens definitely exceed a tight budget.
+        for i in 0u8..20 {
+            engine
+                .ingest(json!({ "role": "user", "content": format!("msg {i}") }))
+                .await
+                .unwrap();
+        }
+
+        // Compute the actual token count so we can craft a budget just below it.
+        let full_window = engine
+            .assemble(TokenBudget { max_tokens: 1_000_000, reserved_for_output: 0 })
+            .await
+            .unwrap();
+        let actual_tokens = full_window.estimated_tokens;
+
+        // Budget just below actual → assemble must return BudgetExceeded.
+        let tight_budget = TokenBudget {
+            max_tokens: actual_tokens - 1,
+            reserved_for_output: 0,
+        };
+        let err = engine.assemble(tight_budget.clone()).await.unwrap_err();
+        assert!(
+            matches!(err, ContextError::BudgetExceeded { limit, actual }
+                if limit == actual_tokens - 1 && actual == actual_tokens),
+            "expected BudgetExceeded, got {err:?}"
+        );
+
+        // Auto-compaction trigger: compact with OverflowRetry reason.
+        let checkpoint = engine
+            .compact(CheckpointReason::OverflowRetry)
+            .await
+            .unwrap();
+        assert!(
+            checkpoint.tokens_after < checkpoint.tokens_before,
+            "compact() must reduce token count"
+        );
+
+        // Post-compaction assemble must succeed within the original tight budget.
+        let window = engine.assemble(tight_budget).await.unwrap();
+        assert_eq!(
+            window.messages.len(),
+            1,
+            "condenser keeps 1 message; window should contain exactly 1 message"
+        );
+        assert_eq!(window.messages[0]["content"], "msg 19");
+    }
+
     #[tokio::test]
     async fn assemble_with_zero_vectors_does_not_panic() {
         // Explicit zero-vector embeddings on candidates → vector component

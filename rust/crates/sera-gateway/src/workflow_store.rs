@@ -11,6 +11,21 @@
 //! - [`SqliteWorkflowTaskStore`] — `rusqlite`-backed (sera-d2xh). Survives
 //!   gateway restarts so a Timer or Human gate scheduled before a crash still
 //!   resolves after recovery.
+//!
+//! # Storage boundary (ADR 2026-05-02)
+//!
+//! This trait owns the **gate / resume** lifecycle for runtime continuations
+//! suspended on an `AwaitType` gate: `Pending → Resolved`, plus the
+//! `agent_id` + `resume_token` routing pair the runtime supplies at suspension
+//! time and consumes verbatim on the wake event.
+//!
+//! It is **not** a duplicate of `sera_workflow::WorkflowEngine` (and its
+//! `SqliteWorkflowBackend`). That engine owns the orthogonal **claim /
+//! dispatch** lifecycle (`Open → Hooked → InProgress → Closed`) plus the
+//! stale-claim orphan reaper. A single [`WorkflowTask`] can in principle live
+//! in both stores at once — they answer different questions over the same
+//! payload. See `docs/public/decisions/2026-05-02-workflow-storage.md` for the
+//! full boundary contract.
 
 use std::collections::HashMap;
 use std::path::Path;

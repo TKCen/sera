@@ -1,28 +1,20 @@
-//! Two-layer session persistence — `SessionStore` (sera-r9ed, Phase 1).
-//!
-//! Per SPEC-gateway §6.1b, the gateway keeps current session state in a SQLite
-//! **PartTable** and pushes an audit-grade replay log into a **shadow git**
-//! repo. PartTable rows reference a commit SHA on the shadow repo; replaying
-//! from that SHA reproduces the session byte-for-byte.
+//! Session persistence — `SessionStore` (sera-r9ed / sera-fpmt, Phase 1).
 //!
 //! This module exposes:
 //!
 //! * [`SessionStore`] — the trait the gateway session lifecycle calls into.
-//! * [`SqliteGitSessionStore`] — the default implementation backing PartTable
-//!   by SQLite (via `rusqlite`, following the [`sera_db::signals`] pattern)
-//!   and the shadow repo by bare `git2` repositories on disk.
-//!
-//! Each submission (with its emitted events) becomes exactly **one** commit on
-//! `refs/heads/main` in a per-session bare repo at
-//! `<data_root>/sessions/<session_id>/git`. The commit's tree contains:
-//!
-//! * `submission.json` — serialized [`sera_types::envelope::Submission`]
-//! * `emissions/<0000>.json` … `emissions/<NNNN>.json` — serialized
-//!   [`sera_types::envelope::Event`]s in emission order
-//!
-//! The head SHA of that commit is the durable [`SubmissionRef`]; PartTable
-//! stores it as the session head plus one row per part for fast indexed
-//! access.
+//! * [`SqliteSessionStore`] — the **default** implementation; stores
+//!   submissions and emissions as JSON rows in SQLite. No shadow-git
+//!   directories on disk (K.1 / sera-fpmt).
+//! * [`SqliteGitSessionStore`] — enterprise-only (`#[cfg(feature =
+//!   "enterprise")]`). Backs PartTable by SQLite and pushes an audit-grade
+//!   replay log into bare `git2` repositories on disk (sera-r9ed). Each
+//!   submission becomes exactly **one** commit on `refs/heads/main` in a
+//!   per-session bare repo at `<data_root>/sessions/<session_id>/git`.
+//!   The commit tree contains:
+//!   * `submission.json` — serialized [`sera_types::envelope::Submission`]
+//!   * `emissions/<0000>.json` … `emissions/<NNNN>.json` — serialized
+//!     [`sera_types::envelope::Event`]s in emission order
 //!
 //! # Minimal API
 //!
@@ -30,7 +22,9 @@
 //! needs. More session methods will arrive in a follow-up when the route
 //! layer asks for them.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "enterprise")]
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -70,6 +64,7 @@ pub struct StoredSubmission {
 pub enum SessionStoreError {
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[cfg(feature = "enterprise")]
     #[error("git error: {0}")]
     Git(#[from] git2::Error),
     #[error("io error: {0}")]
@@ -125,7 +120,7 @@ pub trait SessionStore: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// SqliteGitSessionStore
+// SqliteGitSessionStore (enterprise only)
 // ---------------------------------------------------------------------------
 
 /// PartTable (SQLite) + shadow-git backed [`SessionStore`].
@@ -133,6 +128,7 @@ pub trait SessionStore: Send + Sync {
 /// Construct via [`SqliteGitSessionStore::open`] for normal use or
 /// [`SqliteGitSessionStore::open_with_conn`] when the SQLite connection is
 /// shared with other gateway tables.
+#[cfg(feature = "enterprise")]
 #[derive(Clone)]
 pub struct SqliteGitSessionStore {
     conn: Arc<Mutex<Connection>>,
@@ -140,6 +136,7 @@ pub struct SqliteGitSessionStore {
     sessions_root: PathBuf,
 }
 
+#[cfg(feature = "enterprise")]
 impl SqliteGitSessionStore {
     /// Create the PartTable schema. Idempotent.
     pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -218,6 +215,7 @@ impl SqliteGitSessionStore {
 // Internal helpers that need Repository borrows but are pure enough to keep
 // outside the `impl SessionStore` block.
 
+#[cfg(feature = "enterprise")]
 fn write_bundle_tree(
     repo: &git2::Repository,
     bundle: &StoredSubmission,
@@ -243,6 +241,7 @@ fn write_bundle_tree(
     Ok(root_tb.write()?)
 }
 
+#[cfg(feature = "enterprise")]
 fn op_kind_label(sub: &Submission) -> &'static str {
     use sera_types::envelope::Op;
     match &sub.op {
@@ -262,6 +261,7 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+#[cfg(feature = "enterprise")]
 #[async_trait]
 impl SessionStore for SqliteGitSessionStore {
     async fn append_submission(
@@ -749,6 +749,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "enterprise")]
     fn fresh_store() -> (SqliteGitSessionStore, TempDir) {
         let dir = TempDir::new().unwrap();
         let db = dir.path().join("parts.sqlite");
@@ -757,6 +758,7 @@ mod tests {
         (store, dir)
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test]
     async fn init_schema_idempotent() {
         let conn = Connection::open_in_memory().unwrap();
@@ -765,12 +767,14 @@ mod tests {
         SqliteGitSessionStore::init_schema(&conn).unwrap();
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn head_returns_none_for_unknown_session() {
         let (store, _d) = fresh_store();
         assert!(store.head("nope").await.unwrap().is_none());
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn append_then_head_returns_latest() {
         let (store, _d) = fresh_store();
@@ -787,6 +791,7 @@ mod tests {
         assert_eq!(head, refa);
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn append_increments_index_and_parents_commit() {
         let (store, _d) = fresh_store();
@@ -814,6 +819,7 @@ mod tests {
         assert_eq!(c2.parent(0).unwrap().id().to_string(), r1.commit);
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn replay_returns_submissions_in_order() {
         let (store, _d) = fresh_store();
@@ -834,6 +840,7 @@ mod tests {
         assert_eq!(replayed_ids, appended_ids);
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn replay_is_byte_for_byte_deterministic() {
         let (store, _d) = fresh_store();
@@ -862,6 +869,7 @@ mod tests {
         assert_eq!(replayed[0].id, sub_id);
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_appends_to_same_session_are_serialised() {
         let (store, _d) = fresh_store();
@@ -906,6 +914,7 @@ mod tests {
         assert_eq!(replayed.len(), n);
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn emissions_land_in_git_tree() {
         let (store, _d) = fresh_store();
@@ -936,6 +945,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "enterprise")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn part_rows_track_session_and_index() {
         let (store, _d) = fresh_store();

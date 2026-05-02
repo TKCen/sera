@@ -1,6 +1,10 @@
 //! End-to-end integration test for `sera-r9ed` two-layer session
 //! persistence: submit envelopes, commit to the shadow repo, replay from the
 //! SHA alone, and verify byte-for-byte reproduction of the PartTable state.
+//!
+//! Gated behind the `enterprise` feature because `SqliteGitSessionStore` and
+//! its `git2` dependency are enterprise-only (K.1 / sera-fpmt).
+#![cfg(feature = "enterprise")]
 
 use std::sync::Arc;
 

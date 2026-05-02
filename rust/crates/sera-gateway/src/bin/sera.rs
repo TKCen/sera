@@ -63,7 +63,9 @@ use sera_gateway::kill_switch::{KillSwitch, admin_sock_path, spawn_admin_socket}
 use sera_gateway::scheduler::spawn_scheduler;
 #[cfg(test)]
 use sera_gateway::session_store::InMemorySessionStore;
-use sera_gateway::session_store::{SessionStore, SqliteGitSessionStore, SqliteSessionStore};
+use sera_gateway::session_store::{SessionStore, SqliteSessionStore};
+#[cfg(feature = "enterprise")]
+use sera_gateway::session_store::SqliteGitSessionStore;
 use sera_gateway::workflow_store::{InMemoryWorkflowTaskStore, WorkflowTaskStore};
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_mail::{
@@ -4819,11 +4821,13 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         // feature or `SERA_SESSION_STORE=git-shadowed`.
         session_store: {
             let parts_db = data_root.join("parts.sqlite");
+            #[cfg(feature = "enterprise")]
             let sessions_root = data_root.join("sessions");
-            let want_git_shadow = cfg!(feature = "enterprise")
-                || std::env::var("SERA_SESSION_STORE")
-                    .map(|v| v == "git-shadowed")
-                    .unwrap_or(false);
+            #[cfg(feature = "enterprise")]
+            let want_git_shadow = std::env::var("SERA_SESSION_STORE")
+                .map(|v| v == "git-shadowed")
+                .unwrap_or(true);
+            #[cfg(feature = "enterprise")]
             if want_git_shadow {
                 tracing::info!(
                     target: "sera_gateway::session_store",
@@ -4834,6 +4838,27 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
                         .expect("failed to initialize SqliteGitSessionStore"),
                 ) as Arc<dyn SessionStore>
             } else {
+                tracing::info!(
+                    target: "sera_gateway::session_store",
+                    "using SqliteSessionStore (no shadow-git)"
+                );
+                Arc::new(
+                    SqliteSessionStore::open(&parts_db)
+                        .expect("failed to initialize SqliteSessionStore"),
+                ) as Arc<dyn SessionStore>
+            }
+            #[cfg(not(feature = "enterprise"))]
+            {
+                let want_git_shadow = std::env::var("SERA_SESSION_STORE")
+                    .map(|v| v == "git-shadowed")
+                    .unwrap_or(false);
+                if want_git_shadow {
+                    tracing::warn!(
+                        target: "sera_gateway::session_store",
+                        "SERA_SESSION_STORE=git-shadowed requested but enterprise feature is not \
+                         enabled; falling back to SqliteSessionStore"
+                    );
+                }
                 tracing::info!(
                     target: "sera_gateway::session_store",
                     "using SqliteSessionStore (no shadow-git)"

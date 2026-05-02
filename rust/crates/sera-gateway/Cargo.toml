@@ -60,7 +60,8 @@ futures-util.workspace = true
 # qdrant-client deferred — native deps need Docker build env
 # openidconnect deferred — uses reqwest directly for token exchange
 # git2 backs the shadow-repo half of two-layer session persistence (sera-r9ed).
-git2.workspace = true
+# Only needed for SqliteGitSessionStore (enterprise feature).
+git2 = { workspace = true, optional = true }
 rand.workspace = true
 cron.workspace = true
 chrono.workspace = true
@@ -79,7 +80,7 @@ stdio = []
 grpc = []
 webhook-back = []
 connector-discord = []
-enterprise = []
+enterprise = ["dep:git2"]
 
 [dev-dependencies]
 sera-testing.workspace = true

@@ -84,14 +84,11 @@ pub struct ToolResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalStatus {
     Pending,
-    /// Wired by J.1.4 (sera-7olp) when the operator presses `[a]pprove`.
-    #[allow(dead_code)]
+    /// Set when the operator presses the approve key on the inline block (J.1.4).
     Approved,
-    /// Wired by J.1.4 (sera-7olp) when the operator presses `[r]eject`.
-    #[allow(dead_code)]
+    /// Set when the operator presses the reject key on the inline block (J.1.4).
     Rejected,
-    /// Wired by J.1.4 (sera-7olp) when the operator presses `[e]scalate`.
-    #[allow(dead_code)]
+    /// Set when the operator presses the escalate key on the inline block (J.1.4).
     Escalated,
 }
 
@@ -184,10 +181,37 @@ impl Block {
                 reason,
                 status,
                 ..
-            } => format!("⚠ Approval required: {tool} — {reason} [{status:?}]"),
+            } => match status {
+                ApprovalStatus::Pending => {
+                    format!("⚠ Approval required: {tool} — {reason}  [a]pprove [r]eject [e]scalate")
+                }
+                ApprovalStatus::Approved => format!("✓ Approved: {tool}"),
+                ApprovalStatus::Rejected => format!("✗ Rejected: {tool}"),
+                ApprovalStatus::Escalated => format!("↑ Escalated: {tool}"),
+            },
             Block::Error { message, .. } => format!("⨯ {message}"),
             Block::TurnSeparator => String::new(),
         }
+    }
+
+    /// Find the first `Approval` block with `request_id == id` and set its
+    /// status.  Returns `true` if a matching block was found and updated.
+    /// Called by `SessionView::update_approval_status` after the HTTP action
+    /// completes so the inline block reflects the resolved state (J.1.4).
+    pub fn update_approval_status(blocks: &mut [Block], id: &str, status: ApprovalStatus) -> bool {
+        for block in blocks.iter_mut() {
+            if let Block::Approval {
+                request_id,
+                status: s,
+                ..
+            } = block
+                && request_id == id
+            {
+                *s = status;
+                return true;
+            }
+        }
+        false
     }
 
     /// Stable role label used by the J.0.2 transitional list renderer to

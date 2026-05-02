@@ -118,6 +118,20 @@ impl SessionView {
     ///   `ToolCall` block.
     pub fn apply_event(&mut self, ev: StreamEvent) -> bool {
         let et = ev.event_type.to_ascii_lowercase();
+
+        // J.1.4: approval_required SSE frame → push an inline Approval block.
+        // The request_id comes in `session_id` (repurposed) or the `delta`
+        // field; tool name is in `tool`; reason/summary is in `delta`.
+        if et == "approval_required" {
+            let request_id = if !ev.session_id.is_empty() {
+                ev.session_id.clone()
+            } else {
+                ev.delta.clone()
+            };
+            self.push_approval(request_id, ev.tool.clone(), ev.delta.clone());
+            return true;
+        }
+
         let is_tool_event = et == "tool" || et == "tool_start" || et == "tool_end" || !ev.tool.is_empty();
         if is_tool_event {
             if et == "tool_end" {
@@ -259,8 +273,8 @@ impl SessionView {
         self.blocks.push(Block::Error { message, retryable });
     }
 
-    /// Push an inline approval block.  Wired by J.1.4 (sera-7olp).
-    #[allow(dead_code)] // J.1.4 will wire this
+    /// Push an inline approval block.  Called by `apply_event` on
+    /// `approval_required` SSE frames (J.1.4).
     pub fn push_approval(&mut self, request_id: String, tool: String, reason: String) {
         self.blocks.push(Block::Approval {
             request_id,
@@ -268,6 +282,30 @@ impl SessionView {
             reason,
             status: ApprovalStatus::Pending,
         });
+    }
+
+    /// Update the status of an inline approval block by request id.
+    /// Called by the app after the HTTP action completes (J.1.4).
+    pub fn update_approval_status(&mut self, request_id: &str, status: ApprovalStatus) {
+        Block::update_approval_status(&mut self.blocks, request_id, status);
+    }
+
+    /// Return the `request_id` of the first `Pending` inline Approval block,
+    /// if any.  Used by the app reducer to route approve/reject/escalate keys
+    /// to the inline block when one is waiting (J.1.4).
+    pub fn first_pending_approval_id(&self) -> Option<&str> {
+        self.blocks.iter().find_map(|b| {
+            if let Block::Approval {
+                request_id,
+                status: ApprovalStatus::Pending,
+                ..
+            } = b
+            {
+                Some(request_id.as_str())
+            } else {
+                None
+            }
+        })
     }
 
     /// Push a turn separator.  Renderers use this to draw a thin rule
@@ -493,11 +531,17 @@ fn block_to_list_items(block: &Block) -> Vec<ListItem<'static>> {
                 Style::default().fg(Color::DarkGray),
             ))),
         ],
-        Block::ToolCall { .. } | Block::Task { .. } | Block::Approval { .. } | Block::Error { .. } => {
+        // J.1.4: Approval blocks get rich inline rendering with action hints.
+        Block::Approval {
+            tool,
+            reason,
+            status,
+            ..
+        } => render_approval_block(tool, reason, *status),
+        Block::ToolCall { .. } | Block::Task { .. } | Block::Error { .. } => {
             let header_color = match block {
                 Block::ToolCall { .. } => Color::Yellow,
                 Block::Task { .. } => Color::Magenta,
-                Block::Approval { .. } => Color::Yellow,
                 Block::Error { .. } => Color::Red,
                 _ => unreachable!(),
             };
@@ -545,6 +589,78 @@ fn block_to_list_items(block: &Block) -> Vec<ListItem<'static>> {
             items.push(ListItem::new(Line::from("")));
             items
         }
+    }
+}
+
+/// Render an inline [`Block::Approval`] as styled list items.
+///
+/// Pending blocks show a warning header and a coloured action-hint line:
+/// ```text
+/// ⚠ Approval required: Write — write to /tmp/foo
+///   [a]pprove  [r]eject  [e]scalate
+/// ```
+/// Resolved blocks show a single status line with matching colour.
+fn render_approval_block(tool: &str, reason: &str, status: ApprovalStatus) -> Vec<ListItem<'static>> {
+    match status {
+        ApprovalStatus::Pending => {
+            let header = ListItem::new(Line::from(vec![
+                Span::styled(
+                    "⚠ Approval required: ".to_owned(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    tool.to_owned(),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" — {reason}"),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]));
+            let hint = ListItem::new(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    "[a]pprove".to_owned(),
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    "[r]eject".to_owned(),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    "[e]scalate".to_owned(),
+                    Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            vec![header, hint, ListItem::new(Line::from(""))]
+        }
+        ApprovalStatus::Approved => vec![
+            ListItem::new(Line::from(Span::styled(
+                format!("✓ Approved: {tool}"),
+                Style::default().fg(Color::Green),
+            ))),
+            ListItem::new(Line::from("")),
+        ],
+        ApprovalStatus::Rejected => vec![
+            ListItem::new(Line::from(Span::styled(
+                format!("✗ Rejected: {tool}"),
+                Style::default().fg(Color::Red),
+            ))),
+            ListItem::new(Line::from("")),
+        ],
+        ApprovalStatus::Escalated => vec![
+            ListItem::new(Line::from(Span::styled(
+                format!("↑ Escalated: {tool}"),
+                Style::default().fg(Color::Magenta),
+            ))),
+            ListItem::new(Line::from("")),
+        ],
     }
 }
 
@@ -945,5 +1061,83 @@ mod tests {
         v.submit_composer();
         assert_eq!(v.pending_sends.len(), 1);
         assert_eq!(v.pending_sends[0], long_paste);
+    }
+
+    // --- J.1.4: inline HITL approval block tests ---
+
+    #[test]
+    fn approval_required_sse_event_pushes_approval_block() {
+        let mut v = SessionView::new();
+        let updated = v.apply_event(StreamEvent {
+            event_type: "approval_required".into(),
+            session_id: "req-42".into(),
+            role: String::new(),
+            delta: "write /tmp/secret".into(),
+            tool: "Write".into(),
+        });
+        assert!(updated);
+        assert_eq!(v.blocks.len(), 1);
+        match &v.blocks[0] {
+            Block::Approval {
+                request_id,
+                tool,
+                reason,
+                status,
+            } => {
+                assert_eq!(request_id, "req-42");
+                assert_eq!(tool, "Write");
+                assert_eq!(reason, "write /tmp/secret");
+                assert_eq!(*status, ApprovalStatus::Pending);
+            }
+            other => panic!("expected Approval block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn first_pending_approval_id_returns_pending_block_id() {
+        let mut v = SessionView::new();
+        v.push_approval("req-1".into(), "Bash".into(), "run cmd".into());
+        assert_eq!(v.first_pending_approval_id(), Some("req-1"));
+    }
+
+    #[test]
+    fn first_pending_approval_id_returns_none_when_resolved() {
+        let mut v = SessionView::new();
+        v.push_approval("req-1".into(), "Bash".into(), "run cmd".into());
+        v.update_approval_status("req-1", ApprovalStatus::Approved);
+        assert_eq!(v.first_pending_approval_id(), None);
+    }
+
+    #[test]
+    fn update_approval_status_changes_block_status() {
+        let mut v = SessionView::new();
+        v.push_approval("req-5".into(), "Write".into(), "reason".into());
+        assert_eq!(v.first_pending_approval_id(), Some("req-5"));
+        v.update_approval_status("req-5", ApprovalStatus::Rejected);
+        assert_eq!(v.first_pending_approval_id(), None);
+        match &v.blocks[0] {
+            Block::Approval { status, .. } => assert_eq!(*status, ApprovalStatus::Rejected),
+            other => panic!("expected Approval, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn approval_block_plain_text_pending_shows_action_hints() {
+        let mut v = SessionView::new();
+        v.push_approval("r1".into(), "Bash".into(), "run rm -rf".into());
+        let text = v.blocks[0].plain_text();
+        assert!(text.contains("[a]pprove"), "missing approve hint in: {text}");
+        assert!(text.contains("[r]eject"), "missing reject hint in: {text}");
+        assert!(text.contains("[e]scalate"), "missing escalate hint in: {text}");
+    }
+
+    #[test]
+    fn approval_block_plain_text_resolved_shows_status() {
+        let mut v = SessionView::new();
+        v.push_approval("r1".into(), "Bash".into(), "cmd".into());
+        v.update_approval_status("r1", ApprovalStatus::Approved);
+        let text = v.blocks[0].plain_text();
+        assert!(text.contains("Approved"), "expected Approved in: {text}");
+        assert!(!text.contains("[a]pprove"), "should not show hints when resolved: {text}");
     }
 }

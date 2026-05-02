@@ -145,6 +145,17 @@ pub enum Action {
     PopupSelect,
     /// Dismiss the autocomplete popup without inserting anything (J.0.5).
     PopupDismiss,
+    /// Approve the focused inline Approval block in the transcript (J.1.4).
+    /// Carries the HITL request_id extracted from the block.
+    /// Also dispatched by `/approve <id>` slash command.
+    #[allow(dead_code)]
+    ApproveInlineBlock(String),
+    /// Reject the focused inline Approval block in the transcript (J.1.4).
+    #[allow(dead_code)]
+    RejectInlineBlock(String),
+    /// Escalate the focused inline Approval block in the transcript (J.1.4).
+    #[allow(dead_code)]
+    EscalateInlineBlock(String),
     /// No-op — used when a key doesn't match any binding.  Reducing to
     /// this instead of returning `Option<Action>` lets the dispatch table
     /// stay a plain `match`.

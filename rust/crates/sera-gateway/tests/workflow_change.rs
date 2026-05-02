@@ -66,6 +66,7 @@ async fn change_gate_resolves_when_state_becomes_terminal() {
         None,
         Some(Arc::clone(&change_store) as Arc<dyn ChangeArtifactStateStore>),
         None,
+        None,
     )
     .await;
     assert_eq!(resolved, 0, "unknown artifact state must not resolve");
@@ -82,6 +83,7 @@ async fn change_gate_resolves_when_state_becomes_terminal() {
         Arc::new(InMemoryMailLookup::new()),
         None,
         Some(Arc::clone(&change_store) as Arc<dyn ChangeArtifactStateStore>),
+        None,
         None,
     )
     .await;
@@ -121,6 +123,7 @@ async fn change_gate_blocks_on_non_terminal_state() {
         None,
         Some(Arc::clone(&change_store) as Arc<dyn ChangeArtifactStateStore>),
         None,
+        None,
     )
     .await;
     assert_eq!(resolved, 0, "approved (non-terminal) artifact must not resolve");
@@ -157,6 +160,7 @@ async fn change_gate_resolves_on_rejected_too() {
         Arc::new(InMemoryMailLookup::new()),
         None,
         Some(Arc::clone(&change_store) as Arc<dyn ChangeArtifactStateStore>),
+        None,
         None,
     )
     .await;

@@ -67,6 +67,7 @@ async fn sqlite_store_round_trips_through_scheduler_tick() {
         None,
         None,
         None,
+        None,
     )
     .await;
     assert_eq!(resolved, 1, "elapsed timer must resolve on reopened store");
@@ -111,6 +112,7 @@ async fn sqlite_store_blocks_future_timer_across_restart() {
     let resolved = tick(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
         Arc::new(InMemoryMailLookup::new()),
+        None,
         None,
         None,
         None,

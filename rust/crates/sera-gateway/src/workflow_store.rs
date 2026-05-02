@@ -1,9 +1,9 @@
-//! Workflow task store — Wave E Phase 1 (sera-kgi8) + persistence (sera-d2xh) + GhRun gate (sera-4fel) + Change gate (sera-7ggi) + Human gate (sera-dgk1).
+//! Workflow task store — Wave E Phase 1 (sera-kgi8) + persistence (sera-d2xh) + GhRun gate (sera-4fel) + Change gate (sera-7ggi) + Human gate (sera-dgk1) + GhPr gate (sera-comg).
 //!
 //! Holds the set of pending [`WorkflowTask`]s the scheduler enumerates every
-//! tick. Timer, GhRun, Change, and Human gates are fully wired end-to-end; other `AwaitType`
+//! tick. Timer, GhRun, Change, Human, and GhPr gates are fully wired end-to-end; other `AwaitType`
 //! variants are accepted at creation time but will not transition to "resolved"
-//! until their dedicated gate beads land (GhPr: sera-comg, Mail: sera-0zch).
+//! until their dedicated gate beads land (Mail: sera-0zch).
 //!
 //! Two implementations ship today:
 //! - [`InMemoryWorkflowTaskStore`] — `HashMap`-backed, used by tests and the
@@ -23,7 +23,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use sera_hitl::{ApprovalId, TicketStatus};
 use sera_types::evolution::ChangeArtifactId;
-use sera_workflow::task::{ChangeState, GhRunId, GhRunStatus};
+use sera_workflow::task::{ChangeState, GhPrId, GhPrState, GhRunId, GhRunStatus};
 use sera_workflow::WorkflowTask;
 use sera_workflow::ready::HitlLookup;
 
@@ -760,5 +760,69 @@ impl SnapshotHitlLookup {
 impl HitlLookup for SnapshotHitlLookup {
     fn ticket_status(&self, id: &ApprovalId) -> Option<TicketStatus> {
         self.snapshot.get(id.as_str()).copied()
+    }
+}
+
+// ── GitHub PR state store (sera-comg) ────────────────────────────────────────
+
+/// Persistence boundary for GitHub PR states consulted by the scheduler.
+///
+/// The scheduler snapshots this store each tick and wraps it in a
+/// [`sera_workflow::ready::GhPrLookup`] impl so the ready-queue can evaluate
+/// [`sera_workflow::task::AwaitType::GhPr`] gates without holding the async
+/// store lock during the synchronous gate evaluation.
+///
+/// Phase 1 ships [`InMemoryGhPrStateStore`] only — the production GitHub API
+/// poller that pushes state changes here lives in a follow-up bead. Test code
+/// drives the store directly to exercise the wait-then-resume round trip.
+#[async_trait::async_trait]
+pub trait GhPrStateStore: Send + Sync {
+    /// Record (or overwrite) the current [`GhPrState`] for `pr_id`.
+    async fn upsert(&self, pr_id: GhPrId, state: GhPrState);
+
+    /// Return the current state for `pr_id`, or `None` when unknown.
+    async fn get_state(&self, pr_id: &GhPrId) -> Option<GhPrState>;
+
+    /// Snapshot all entries as a `HashMap<String, GhPrState>` for the
+    /// synchronous [`sera_workflow::ready::GhPrLookup`] bridge in the
+    /// scheduler. Keyed by the underlying PR id string so the scheduler does
+    /// not need to clone full [`GhPrId`] values.
+    async fn snapshot(&self) -> HashMap<String, GhPrState>;
+}
+
+/// Process-local GitHub PR state store backed by a `HashMap`.
+///
+/// Used as a mock in tests and as the default in-process backend until the
+/// production GitHub API poller lands.
+#[derive(Default)]
+pub struct InMemoryGhPrStateStore {
+    inner: RwLock<HashMap<String, GhPrState>>,
+}
+
+impl InMemoryGhPrStateStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn shared() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+}
+
+#[async_trait::async_trait]
+impl GhPrStateStore for InMemoryGhPrStateStore {
+    async fn upsert(&self, pr_id: GhPrId, state: GhPrState) {
+        let mut map = self.inner.write().await;
+        map.insert(pr_id.0, state);
+    }
+
+    async fn get_state(&self, pr_id: &GhPrId) -> Option<GhPrState> {
+        let map = self.inner.read().await;
+        map.get(pr_id.as_str()).cloned()
+    }
+
+    async fn snapshot(&self) -> HashMap<String, GhPrState> {
+        let map = self.inner.read().await;
+        map.clone()
     }
 }

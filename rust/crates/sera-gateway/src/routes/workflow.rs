@@ -1,4 +1,4 @@
-//! Workflow task HTTP routes — Wave E Phase 1 (sera-kgi8) + Mail gate (sera-0zch) + GhRun gate (sera-4fel) + Change gate (sera-7ggi) + Human gate (sera-dgk1).
+//! Workflow task HTTP routes — Wave E Phase 1 (sera-kgi8) + Mail gate (sera-0zch) + GhRun gate (sera-4fel) + Change gate (sera-7ggi) + Human gate (sera-dgk1) + GhPr gate (sera-comg).
 //!
 //! Routes:
 //!   POST /api/workflow/tasks                      — create a task (Timer, Mail, GhRun, Change, and Human gates)
@@ -8,9 +8,9 @@
 //!   POST /api/workflow/tasks/{id}/resolve-change  — push a ChangeState event
 //!   POST /api/workflow/tasks/{id}/resume          — resolve a Human-gated task
 //!
-//! Timer, Mail, GhRun, Change, and Human are fully wired end-to-end. Other non-Timer `await_type`
-//! values still return 501 Not Implemented — their wiring ships in follow-up
-//! beads (GhPr: sera-comg).
+//! Timer, Mail, GhRun, Change, and Human are fully wired end-to-end. GhPr creation
+//! returns 501 until the GitHub API poller ships (sera-comg follow-up). Other non-Timer
+//! `await_type` values also return 501 Not Implemented.
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -40,7 +40,7 @@ use sera_gateway::workflow_store::{
 ///
 /// Mirrors [`AwaitType`] but decoupled so the HTTP payload does not require
 /// callers to thread through e.g. GitHub repo metadata when all they want is
-/// a Timer gate. Timer, Mail, GhRun, Change, and Human are wired end-to-end; other variants return 501.
+/// a Timer gate. Timer, Mail, GhRun, Change, and Human are wired end-to-end; GhPr returns 501; other variants return 501.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AwaitTypeTag {
@@ -59,6 +59,7 @@ pub enum AwaitTypeTag {
 /// - `gh_run` gate: supply `run_id` and `repo` (in `owner/name` form).
 /// - `change` gate: supply `artifact_id` (64-char hex SHA-256 of the change artifact).
 /// - `human` gate: supply `approval_id`.
+/// - `gh_pr` gate: supply `pr_id` (and optional `repo` for operator debugging). Returns 501 until GitHub API poller ships.
 /// - `title` / `description` are always optional.
 #[derive(Debug, Deserialize)]
 pub struct CreateTaskRequest {
@@ -76,7 +77,7 @@ pub struct CreateTaskRequest {
     /// The numeric or opaque run identifier as a string.
     #[serde(default)]
     pub run_id: Option<String>,
-    /// Required for `gh_run` await_type; ignored otherwise.
+    /// Required for `gh_run` await_type; ignored otherwise. Also optional for `gh_pr`.
     #[serde(default)]
     pub repo: Option<String>,
     /// Required for `change` await_type: 64-char hex SHA-256 of the change
@@ -86,6 +87,10 @@ pub struct CreateTaskRequest {
     /// Required for `human` await_type; ignored otherwise.
     #[serde(default)]
     pub approval_id: Option<String>,
+    /// Required for `gh_pr` await_type: opaque pull-request identifier the
+    /// scheduler keys on. Ignored for other await types.
+    #[serde(default)]
+    pub pr_id: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
@@ -210,9 +215,10 @@ where
 {
     check_auth(state.api_key(), &headers)?;
 
-    // Timer, Mail, GhRun, Change, and Human are wired end-to-end. Other variants are
-    // accepted at the tag level but short-circuit with 501 — their gate wiring
-    // lands in follow-up beads (GhPr: sera-comg).
+    // Timer, Mail, GhRun, Change, and Human are wired end-to-end. GhPr creation
+    // is blocked (returns 501) until the GitHub API poller is wired — starting
+    // the scheduler with gh_pr_store=None would leave every GhPr-gated task
+    // permanently pending (sera-comg review feedback).
     let await_type = match body.await_type {
         AwaitTypeTag::Timer => {
             let deadline = body.deadline.ok_or(StatusCode::BAD_REQUEST)?;
@@ -243,7 +249,10 @@ where
                 approval_id: ApprovalId::new(id_str),
             }
         }
-        _ => return Err(StatusCode::NOT_IMPLEMENTED),
+        // GhPr creation is blocked until the GitHub API poller is wired (sera-comg
+        // follow-up). Scheduler starts with gh_pr_store=None so accepting the task
+        // would leave it permanently pending with no path to resolution.
+        AwaitTypeTag::GhPr => return Err(StatusCode::NOT_IMPLEMENTED),
     };
 
     let now = Utc::now();

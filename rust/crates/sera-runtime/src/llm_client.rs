@@ -345,6 +345,12 @@ impl LlmClient {
             "messages": messages,
             "max_tokens": self.max_tokens,
             "stream": true,
+            // Ask the provider to include token usage in the final SSE chunk
+            // (OpenAI spec §stream_options). Without this, most providers
+            // (LM Studio, Ollama, etc.) omit the `usage` field entirely from
+            // the stream, producing prompt_tokens=0, completion_tokens=0.
+            // Providers that don't recognise the field ignore it gracefully.
+            "stream_options": {"include_usage": true},
         });
 
         if !tools.is_empty() {

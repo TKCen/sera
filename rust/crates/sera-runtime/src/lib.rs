@@ -39,6 +39,7 @@ pub mod delegation;
 pub mod delegation_bus;
 pub mod handoff;
 pub mod harness;
+pub mod hitl_integration;
 pub mod hooks;
 pub mod memory_assembler;
 pub mod subagent;

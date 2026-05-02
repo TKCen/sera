@@ -1,14 +1,14 @@
-//! Workflow task HTTP routes — Wave E Phase 1 (sera-kgi8) + Mail gate (sera-0zch).
+//! Workflow task HTTP routes — Wave E Phase 1 (sera-kgi8) + Mail gate (sera-0zch) + GhRun gate (sera-4fel).
 //!
 //! Routes:
-//!   POST /api/workflow/tasks           — create a task (Timer and Mail gates)
+//!   POST /api/workflow/tasks           — create a task (Timer, Mail, and GhRun gates)
 //!   GET  /api/workflow/tasks           — list every known task
 //!   GET  /api/workflow/tasks/{id}      — fetch a single task
 //!   POST /api/workflow/mail/deliver    — deliver a mail event (in-memory; for tests)
 //!
-//! Timer and Mail are fully wired end-to-end. Other non-Timer `await_type`
+//! Timer, Mail, and GhRun are fully wired end-to-end. Other non-Timer `await_type`
 //! values still return 501 Not Implemented — their wiring ships in follow-up
-//! beads (Human: sera-dgk1, GhPr: sera-comg, GhRun: sera-4fel, Change: sera-7ggi).
+//! beads (Human: sera-dgk1, GhPr: sera-comg, Change: sera-7ggi).
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -22,7 +22,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use sera_mail::InMemoryMailLookup;
-use sera_workflow::task::{MailEvent, MailThreadId, WorkflowTaskInput};
+use sera_workflow::task::{GhRunId, MailEvent, MailThreadId, WorkflowTaskInput};
 use sera_workflow::{AwaitType, WorkflowTask, WorkflowTaskStatus, WorkflowTaskType};
 
 use sera_gateway::workflow_store::{
@@ -35,7 +35,7 @@ use sera_gateway::workflow_store::{
 ///
 /// Mirrors [`AwaitType`] but decoupled so the HTTP payload does not require
 /// callers to thread through e.g. GitHub repo metadata when all they want is
-/// a Timer gate. Phase 1 only accepts `timer`; other variants return 501.
+/// a Timer gate. Timer and Mail are wired end-to-end; other variants return 501.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AwaitTypeTag {
@@ -51,6 +51,7 @@ pub enum AwaitTypeTag {
 ///
 /// - `timer` gate: supply `deadline`.
 /// - `mail` gate: supply `thread_id` (opaque string identifying the email thread).
+/// - `gh_run` gate: supply `run_id` and `repo` (in `owner/name` form).
 /// - `title` / `description` are always optional.
 #[derive(Debug, Deserialize)]
 pub struct CreateTaskRequest {
@@ -64,6 +65,13 @@ pub struct CreateTaskRequest {
     /// 2822 Message-ID) the scheduler will watch for a terminal [`MailEvent`].
     #[serde(default)]
     pub thread_id: Option<String>,
+    /// Required for `gh_run` await_type; ignored otherwise.
+    /// The numeric or opaque run identifier as a string.
+    #[serde(default)]
+    pub run_id: Option<String>,
+    /// Reserved for future `gh_run` gate (sera-4fel); ignored for now.
+    #[serde(default)]
+    pub repo: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
@@ -146,10 +154,9 @@ where
 {
     check_auth(state.api_key(), &headers)?;
 
-    // Timer and Mail are wired end-to-end. Other variants are accepted at the
-    // tag level but short-circuit with 501 — their gate wiring lands in
-    // follow-up beads (Human: sera-dgk1, GhPr: sera-comg, GhRun: sera-4fel,
-    // Change: sera-7ggi).
+    // Timer, Mail, and GhRun are wired end-to-end. Other variants are accepted
+    // at the tag level but short-circuit with 501 — their gate wiring lands in
+    // follow-up beads (Human: sera-dgk1, GhPr: sera-comg, Change: sera-7ggi).
     let await_type = match body.await_type {
         AwaitTypeTag::Timer => {
             let deadline = body.deadline.ok_or(StatusCode::BAD_REQUEST)?;
@@ -158,6 +165,11 @@ where
         AwaitTypeTag::Mail => {
             let thread_id = body.thread_id.ok_or(StatusCode::BAD_REQUEST)?;
             AwaitType::Mail { thread_id: MailThreadId::new(thread_id) }
+        }
+        AwaitTypeTag::GhRun => {
+            let run_id = body.run_id.ok_or(StatusCode::BAD_REQUEST)?;
+            let repo = body.repo.ok_or(StatusCode::BAD_REQUEST)?;
+            AwaitType::GhRun { run_id: GhRunId::new(run_id), repo }
         }
         _ => return Err(StatusCode::NOT_IMPLEMENTED),
     };
@@ -372,6 +384,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_gh_run_returns_created() {
+        // GhRun gate is fully wired; POST /api/workflow/tasks with
+        // await_type=gh_run + run_id + repo must return 201.
+        let app = test_router(TestState::new(None));
+        let body = serde_json::json!({
+            "await_type": "gh_run",
+            "agent_id": "sera",
+            "resume_token": "tok-1",
+            "run_id": "12345",
+            "repo": "acme/my-repo",
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflow/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn create_gh_run_missing_run_id_is_bad_request() {
+        let app = test_router(TestState::new(None));
+        let body = serde_json::json!({
+            "await_type": "gh_run",
+            "agent_id": "sera",
+            "resume_token": "tok-1",
+            "repo": "acme/my-repo",
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflow/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn create_non_timer_returns_not_implemented() {
         let app = test_router(TestState::new(None));
         let body = serde_json::json!({
@@ -464,7 +521,6 @@ mod tests {
         assert_eq!(view.agent_id, "sera");
         assert_eq!(view.resume_token, "tok-mail-1");
         assert_eq!(view.status, SchedulerTaskStatus::Pending);
-        // await_type must be Mail with the supplied thread_id.
         assert!(matches!(
             view.await_type,
             Some(AwaitType::Mail { .. })
@@ -495,7 +551,6 @@ mod tests {
     async fn deliver_mail_returns_no_content() {
         let state = TestState::new(None);
         let app = test_router(Arc::clone(&state));
-        // First create a mail task so there's something to observe.
         let create_body = serde_json::json!({
             "await_type": "mail",
             "agent_id": "sera",
@@ -513,7 +568,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Deliver a reply_received event.
         let deliver_body = serde_json::json!({
             "thread_id": "<msg-003@example.com>",
             "event": "reply_received",
@@ -529,7 +583,6 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-        // The lookup should now reflect the terminal event.
         use sera_workflow::MailLookup;
         use sera_workflow::task::MailThreadId;
         let event = state

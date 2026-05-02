@@ -1,10 +1,10 @@
-//! Workflow task store — Wave E Phase 1 (sera-kgi8) + persistence (sera-d2xh).
+//! Workflow task store — Wave E Phase 1 (sera-kgi8) + persistence (sera-d2xh) + GhRun gate (sera-4fel).
 //!
 //! Holds the set of pending [`WorkflowTask`]s the scheduler enumerates every
-//! tick. Only Timer-gated tasks are fully wired end-to-end in Phase 1; other
-//! `AwaitType` variants are accepted at creation time but will not transition
-//! to "resolved" until their dedicated gate beads land (Human: sera-dgk1,
-//! GhPr: sera-comg, GhRun: sera-4fel, Change: sera-7ggi, Mail: sera-0zch).
+//! tick. Timer and GhRun gates are fully wired end-to-end; other `AwaitType`
+//! variants are accepted at creation time but will not transition to "resolved"
+//! until their dedicated gate beads land (Human: sera-dgk1, GhPr: sera-comg,
+//! Change: sera-7ggi, Mail: sera-0zch).
 //!
 //! Two implementations ship today:
 //! - [`InMemoryWorkflowTaskStore`] — `HashMap`-backed, used by tests and the
@@ -22,6 +22,7 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
+use sera_workflow::task::{GhRunId, GhRunStatus};
 use sera_workflow::WorkflowTask;
 
 /// Lifecycle status of a [`WorkflowTaskRecord`] as seen by the scheduler.
@@ -563,5 +564,60 @@ mod tests {
         // RFC3339 round-trip is exact at the second/sub-second level for
         // chrono::DateTime<Utc>, so equality holds.
         assert_eq!(restored.timestamp(), resolved_at.timestamp());
+    }
+}
+
+// ── GhRun state store (sera-4fel) ────────────────────────────────────────────
+
+/// Persistence boundary for GitHub Actions run states consulted by the scheduler.
+///
+/// The scheduler snapshots this store each tick and wraps it in a
+/// [`sera_workflow::ready::GhRunLookup`] impl so the ready-queue can evaluate
+/// [`sera_workflow::task::AwaitType::GhRun`] gates without holding the async
+/// store lock during the synchronous gate evaluation.
+#[async_trait::async_trait]
+pub trait GhRunStateStore: Send + Sync {
+    /// Record (or overwrite) the current [`GhRunStatus`] for `run_id`.
+    async fn upsert(&self, run_id: GhRunId, status: GhRunStatus);
+
+    /// Return the current status for `run_id`, or `None` when unknown.
+    async fn get_status(&self, run_id: &GhRunId) -> Option<GhRunStatus>;
+
+    /// Snapshot all entries as a `HashMap` for the synchronous
+    /// [`sera_workflow::ready::GhRunLookup`] bridge in the scheduler.
+    async fn snapshot(&self) -> HashMap<String, GhRunStatus>;
+}
+
+/// Process-local GhRun state store backed by a `HashMap`.
+#[derive(Default)]
+pub struct InMemoryGhRunStateStore {
+    inner: RwLock<HashMap<String, GhRunStatus>>,
+}
+
+impl InMemoryGhRunStateStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn shared() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+}
+
+#[async_trait::async_trait]
+impl GhRunStateStore for InMemoryGhRunStateStore {
+    async fn upsert(&self, run_id: GhRunId, status: GhRunStatus) {
+        let mut map = self.inner.write().await;
+        map.insert(run_id.0, status);
+    }
+
+    async fn get_status(&self, run_id: &GhRunId) -> Option<GhRunStatus> {
+        let map = self.inner.read().await;
+        map.get(run_id.as_str()).copied()
+    }
+
+    async fn snapshot(&self) -> HashMap<String, GhRunStatus> {
+        let map = self.inner.read().await;
+        map.clone()
     }
 }

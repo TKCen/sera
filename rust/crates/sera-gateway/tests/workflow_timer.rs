@@ -62,6 +62,7 @@ async fn timer_gate_resolves_after_deadline() {
     let resolved = tick(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
         Arc::new(InMemoryMailLookup::new()),
+        None,
     )
     .await;
     assert_eq!(resolved, 1, "timer gate with past deadline must resolve on first tick");
@@ -91,6 +92,7 @@ async fn timer_gate_blocks_before_deadline() {
     let resolved = tick(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
         Arc::new(InMemoryMailLookup::new()),
+        None,
     )
     .await;
     assert_eq!(resolved, 0, "future-deadline timer must not resolve");
@@ -112,6 +114,7 @@ async fn scheduler_background_task_resolves_pending_timer() {
     let handle = spawn_scheduler(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
         Arc::new(InMemoryMailLookup::new()),
+        None,
         Arc::clone(&shutting_down),
     );
 

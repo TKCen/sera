@@ -32,6 +32,7 @@ use tokio::sync::mpsc;
 mod app;
 mod client;
 mod config;
+mod highlight;
 mod input;
 mod keybindings;
 mod ui;

@@ -19,6 +19,7 @@ use tui_textarea::TextArea;
 use super::agent_list::make_block;
 use super::blocks::{ApprovalStatus, Block, ToolResult};
 use crate::client::{ConnectionState, SessionSummary, StreamEvent, TranscriptEntry};
+use crate::highlight;
 
 /// Which pane inside the Session view holds keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -482,8 +483,22 @@ fn block_to_list_items(block: &Block) -> Vec<ListItem<'static>> {
                     .add_modifier(Modifier::BOLD),
             )]);
             let mut items = vec![ListItem::new(header)];
-            for body_line in text.lines() {
-                items.push(ListItem::new(Line::from(Span::raw(body_line.to_owned()))));
+            // J.1.2 (sera-jie3): assistant messages may contain fenced
+            // code blocks; route through `highlight::render_message` so
+            // syntect colours each token.  User messages keep the
+            // verbatim path — they're operator input and don't carry
+            // styled markup.
+            match block {
+                Block::AssistantMessage { .. } => {
+                    for line in highlight::render_message(text) {
+                        items.push(ListItem::new(line));
+                    }
+                }
+                _ => {
+                    for body_line in text.lines() {
+                        items.push(ListItem::new(Line::from(Span::raw(body_line.to_owned()))));
+                    }
+                }
             }
             items.push(ListItem::new(Line::from("")));
             items

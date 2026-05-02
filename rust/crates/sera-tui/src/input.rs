@@ -78,10 +78,18 @@ pub fn translate(event: &KeyEvent, kb: &TuiKeybindings) -> Action {
 ///
 /// When `composer_focused` is false the transcript pane is active and we
 /// check tool-block bindings (J.0.3) before falling back to standard navigation.
+///
+/// `has_tool_blocks` controls whether Tab in transcript mode cycles tool
+/// blocks (`FocusNextToolBlock`) or returns focus to the composer
+/// (`ToggleComposerFocus`).  When `false` — i.e. the transcript is empty or
+/// contains no tool/task blocks — `FocusNextToolBlock` would be a no-op in
+/// `App::dispatch`, so we fall through to `ToggleComposerFocus` instead,
+/// preserving the Tab-back-to-composer path with default bindings.
 pub fn translate_session(
     event: &KeyEvent,
     kb: &TuiKeybindings,
     composer_focused: bool,
+    has_tool_blocks: bool,
 ) -> Action {
     // Global exits always win regardless of composer state.
     if matches_key(event, &kb.quit) {
@@ -118,14 +126,15 @@ pub fn translate_session(
     } else {
         // Transcript pane is active.
         // J.0.3: Tab cycles through tool blocks; Space toggles the focused one.
-        if matches_key(event, &kb.focus_next_tool_block) {
+        // Only emit FocusNextToolBlock when there are actual tool blocks;
+        // otherwise Tab falls through to ToggleComposerFocus so the user can
+        // always Tab back to the composer with default bindings.
+        if has_tool_blocks && matches_key(event, &kb.focus_next_tool_block) {
             return Action::FocusNextToolBlock;
         }
         if matches_key(event, &kb.toggle_tool_block) {
             return Action::ToggleToolBlock;
         }
-        // Fall back: toggle_composer_focus fires on Tab when there are no tool
-        // blocks (focus_next_tool_block has the same default binding).
         if matches_key(event, &kb.toggle_composer_focus) {
             return Action::ToggleComposerFocus;
         }
@@ -187,18 +196,29 @@ mod tests {
         // J.0.3: Tab from the composer always hands focus to the transcript.
         let kb = TuiKeybindings::defaults();
         assert_eq!(
-            translate_session(&ev(KeyCode::Tab), &kb, true),
+            translate_session(&ev(KeyCode::Tab), &kb, true, false),
             Action::ToggleComposerFocus,
         );
     }
 
     #[test]
     fn session_tab_when_transcript_focused_cycles_tool_blocks() {
-        // J.0.3: Tab from the transcript cycles through tool blocks.
+        // J.0.3: Tab from the transcript cycles through tool blocks when they exist.
         let kb = TuiKeybindings::defaults();
         assert_eq!(
-            translate_session(&ev(KeyCode::Tab), &kb, false),
+            translate_session(&ev(KeyCode::Tab), &kb, false, true),
             Action::FocusNextToolBlock,
+        );
+    }
+
+    #[test]
+    fn session_tab_when_transcript_focused_no_tool_blocks_returns_to_composer() {
+        // When there are no tool blocks, Tab must return focus to the composer
+        // rather than emitting a no-op FocusNextToolBlock.
+        let kb = TuiKeybindings::defaults();
+        assert_eq!(
+            translate_session(&ev(KeyCode::Tab), &kb, false, false),
+            Action::ToggleComposerFocus,
         );
     }
 
@@ -207,7 +227,7 @@ mod tests {
         // J.0.3: Space from the transcript toggles the focused tool block.
         let kb = TuiKeybindings::defaults();
         assert_eq!(
-            translate_session(&ev(KeyCode::Char(' ')), &kb, false),
+            translate_session(&ev(KeyCode::Char(' ')), &kb, false, true),
             Action::ToggleToolBlock,
         );
     }
@@ -218,7 +238,7 @@ mod tests {
         let kb = TuiKeybindings::defaults();
         let space = ev(KeyCode::Char(' '));
         assert_eq!(
-            translate_session(&space, &kb, true),
+            translate_session(&space, &kb, true, false),
             Action::ComposerInput(space),
         );
     }
@@ -228,11 +248,11 @@ mod tests {
         let kb = TuiKeybindings::defaults();
         let ctrl_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL);
         assert_eq!(
-            translate_session(&ctrl_enter, &kb, true),
+            translate_session(&ctrl_enter, &kb, true, false),
             Action::SubmitComposer,
         );
         assert_eq!(
-            translate_session(&ctrl_enter, &kb, false),
+            translate_session(&ctrl_enter, &kb, false, false),
             Action::SubmitComposer,
         );
     }
@@ -242,7 +262,7 @@ mod tests {
         let kb = TuiKeybindings::defaults();
         let key_h = ev(KeyCode::Char('h'));
         assert_eq!(
-            translate_session(&key_h, &kb, true),
+            translate_session(&key_h, &kb, true, false),
             Action::ComposerInput(key_h),
         );
     }
@@ -251,7 +271,7 @@ mod tests {
     fn session_plain_key_scrolls_when_transcript_focused() {
         let kb = TuiKeybindings::defaults();
         assert_eq!(
-            translate_session(&ev(KeyCode::Up), &kb, false),
+            translate_session(&ev(KeyCode::Up), &kb, false, false),
             Action::Up,
         );
     }
@@ -260,7 +280,7 @@ mod tests {
     fn session_quit_always_wins() {
         let kb = TuiKeybindings::defaults();
         assert_eq!(
-            translate_session(&ev(KeyCode::Char('q')), &kb, true),
+            translate_session(&ev(KeyCode::Char('q')), &kb, true, false),
             Action::Quit,
         );
     }

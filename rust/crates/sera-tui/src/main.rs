@@ -198,6 +198,7 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
                             &key,
                             &app.keybindings,
                             app.session.composer_focused(),
+                            app.session.has_tool_blocks(),
                         )
                     };
                     app.dispatch(action);

@@ -327,6 +327,15 @@ impl SessionView {
         self.focus == ComposerFocus::Composer
     }
 
+    /// Returns true when the transcript contains at least one focusable tool
+    /// block (ToolCall or Task).  Used by the input translator to decide
+    /// whether Tab should cycle tool blocks or return focus to the composer.
+    pub fn has_tool_blocks(&self) -> bool {
+        self.blocks
+            .iter()
+            .any(|b| matches!(b, Block::ToolCall { .. } | Block::Task { .. }))
+    }
+
     /// Forward a raw key event to the composer textarea.
     pub fn input_to_composer(&mut self, event: KeyEvent) {
         self.composer.input(event);

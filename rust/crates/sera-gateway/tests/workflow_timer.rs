@@ -19,6 +19,7 @@ use sera_gateway::scheduler::{spawn_scheduler, tick};
 use sera_gateway::workflow_store::{
     InMemoryWorkflowTaskStore, SchedulerTaskStatus, WorkflowTaskRecord, WorkflowTaskStore,
 };
+use sera_mail::InMemoryMailLookup;
 use sera_workflow::task::WorkflowTaskInput;
 use sera_workflow::{AwaitType, WorkflowTask, WorkflowTaskStatus, WorkflowTaskType};
 
@@ -58,7 +59,11 @@ async fn timer_gate_resolves_after_deadline() {
     };
     store.insert(record).await;
 
-    let resolved = tick(Arc::clone(&store) as Arc<dyn WorkflowTaskStore>).await;
+    let resolved = tick(
+        Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
+    )
+    .await;
     assert_eq!(resolved, 1, "timer gate with past deadline must resolve on first tick");
 
     let rec = store.get(&task_id).await.expect("record is still in store");
@@ -83,7 +88,11 @@ async fn timer_gate_blocks_before_deadline() {
     };
     store.insert(record).await;
 
-    let resolved = tick(Arc::clone(&store) as Arc<dyn WorkflowTaskStore>).await;
+    let resolved = tick(
+        Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
+    )
+    .await;
     assert_eq!(resolved, 0, "future-deadline timer must not resolve");
 
     let rec = store.get(&task_id).await.unwrap();
@@ -102,6 +111,7 @@ async fn scheduler_background_task_resolves_pending_timer() {
 
     let handle = spawn_scheduler(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
+        Arc::new(InMemoryMailLookup::new()),
         Arc::clone(&shutting_down),
     );
 

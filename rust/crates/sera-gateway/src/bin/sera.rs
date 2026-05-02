@@ -1219,9 +1219,11 @@ struct AppState {
     /// `POST /api/mail/inbound` webhook.
     mail_correlator: Arc<HeaderMailCorrelator>,
     /// Scheduler-side [`sera_workflow::MailLookup`] fed by the correlator.
-    /// Exported so workflow DI can consume it when the ready-queue wires
-    /// through here; the correlator pushes `ReplyReceived` events into it.
-    #[allow(dead_code)]
+    /// The scheduler consults this on every tick to resolve Mail-gate tasks;
+    /// the correlator pushes `ReplyReceived`/`Closed` events into it via
+    /// `POST /api/mail/inbound`. Also exposed via `WorkflowAppState::mail_lookup`
+    /// so the `POST /api/workflow/mail/deliver` test endpoint can inject events
+    /// directly without real SMTP/IMAP infrastructure.
     mail_lookup: Arc<InMemoryMailLookup>,
     // ── Phase-3 SPEC-interop ─────────────────────────────────────────────────
     /// Known A2A peers and the inbound router (SPEC-interop §4).
@@ -1543,6 +1545,9 @@ impl WorkflowAppState for AppState {
     }
     fn workflow_store(&self) -> Arc<dyn WorkflowTaskStore> {
         Arc::clone(&self.workflow_store)
+    }
+    fn mail_lookup(&self) -> Arc<InMemoryMailLookup> {
+        Arc::clone(&self.mail_lookup)
     }
 }
 
@@ -4835,13 +4840,14 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         event_loop(event_state, discord_rx).await;
     });
 
-    // 4a. Spawn workflow scheduler (sera-kgi8, Wave E Phase 1). Ticks every
+    // 4a. Spawn workflow scheduler (sera-kgi8 + sera-0zch). Ticks every
     // TICK_INTERVAL, asks sera-workflow which pending tasks are ready, and
-    // marks them resolved on the store. Only Timer gates are wired
-    // end-to-end in Phase 1 — other AwaitType variants stay pending until
-    // their dedicated beads add real lookups.
+    // marks them resolved on the store. Timer and Mail gates are wired
+    // end-to-end; other AwaitType variants stay pending until their dedicated
+    // beads add real lookups.
     spawn_scheduler(
         Arc::clone(&state.workflow_store),
+        Arc::clone(&state.mail_lookup),
         Arc::clone(&shutting_down),
     );
 
@@ -5239,7 +5245,7 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/api/hitl/requests/{id}/escalate",
             post(route_hitl::escalate_ticket::<AppState>),
         )
-        // ── sera-kgi8: workflow task scheduler (Wave E Phase 1) ──────────────
+        // ── sera-kgi8 / sera-0zch: workflow task scheduler ───────────────────
         .route(
             "/api/workflow/tasks",
             post(route_workflow::create_task::<AppState>)
@@ -5248,6 +5254,11 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/workflow/tasks/{id}",
             get(route_workflow::get_task::<AppState>),
+        )
+        // sera-0zch: in-memory mail delivery for test/dev — no real SMTP/IMAP.
+        .route(
+            "/api/workflow/mail/deliver",
+            post(route_workflow::deliver_mail::<AppState>),
         )
         // ── sera-7ivj: OpenAI-compatible inference proxy ─────────────────────
         .route(

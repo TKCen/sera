@@ -55,6 +55,7 @@ async fn rollback_cancels_registered_tokens_within_one_second() {
         for (_key, token) in map.drain() {
             token.cancel();
         }
+        Box::pin(async {})
     });
 
     // Give the listener a moment to bind.
@@ -132,6 +133,7 @@ async fn rollback_does_not_retroactively_cancel_late_registrations() {
         for (_key, token) in map.drain() {
             token.cancel();
         }
+        Box::pin(async {})
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
 

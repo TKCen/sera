@@ -13,10 +13,18 @@
 //!
 //! Source of truth: SPEC-gateway §7a.4 and SPEC-self-evolution §13.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
+
+/// A boxed async future returned by the `on_rollback` callback passed to
+/// [`spawn_admin_socket`]. The admin socket task awaits this future before
+/// writing the `"OK\n"` response, so all harness kills complete before the
+/// caller can issue `DISARM` and resume serving.
+pub type RollbackFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
 /// Default admin socket path (Unix).
 pub const DEFAULT_ADMIN_SOCK: &str = "/var/lib/sera/admin.sock";
@@ -184,14 +192,16 @@ pub enum KillSwitchError {
 /// dispatches via [`KillSwitch::handle_command`], writes the response, and
 /// closes. Authentication is by OS file ownership (`0600` permissions).
 ///
-/// `on_rollback` is called (synchronously within the task) after every
-/// successful `ROLLBACK` command — use it to emit DB audit events.
+/// `on_rollback` is called and **awaited** after every successful `ROLLBACK`
+/// command before the `"OK\n"` response is written back to the caller. This
+/// ensures that all harness kills complete (and serving cannot resume via
+/// `DISARM`) until the callback future resolves.
 ///
 /// This function is a no-op on non-Unix targets (see `#[cfg(unix)]`).
 #[cfg(unix)]
 pub fn spawn_admin_socket<F>(ks: Arc<KillSwitch>, socket_path: String, on_rollback: F)
 where
-    F: Fn() + Send + Sync + 'static,
+    F: Fn() -> RollbackFuture + Send + Sync + 'static,
 {
     use std::os::unix::fs::PermissionsExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -246,7 +256,10 @@ where
             let command = String::from_utf8_lossy(&buf[..n]);
             let (response, did_rollback) = ks.handle_command(&command);
             if did_rollback {
-                on_rollback();
+                // Await the callback before replying so all harness kills
+                // complete before the caller can issue DISARM and resume
+                // serving (sera-40y3).
+                on_rollback().await;
             }
             let _ = stream.write_all(response.as_bytes()).await;
         }
@@ -257,7 +270,7 @@ where
 #[cfg(not(unix))]
 pub fn spawn_admin_socket<F>(_ks: Arc<KillSwitch>, _socket_path: String, _on_rollback: F)
 where
-    F: Fn() + Send + Sync + 'static,
+    F: Fn() -> RollbackFuture + Send + Sync + 'static,
 {
     tracing::info!("Admin kill-switch socket not supported on this platform");
 }
@@ -445,6 +458,7 @@ mod socket_tests {
 
         spawn_admin_socket(Arc::clone(&ks), path.clone(), move || {
             flag.store(true, Ordering::SeqCst);
+            Box::pin(async {})
         });
 
         // Give the listener a moment to bind.
@@ -469,7 +483,7 @@ mod socket_tests {
         let ks = Arc::new(KillSwitch::new());
         let path = format!("/tmp/sera-test-status-{}.sock", std::process::id());
 
-        spawn_admin_socket(Arc::clone(&ks), path.clone(), || {});
+        spawn_admin_socket(Arc::clone(&ks), path.clone(), || Box::pin(async {}));
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let mut stream = UnixStream::connect(&path).unwrap();
@@ -486,7 +500,7 @@ mod socket_tests {
         let ks = Arc::new(KillSwitch::new());
         let path = format!("/tmp/sera-test-disarm-{}.sock", std::process::id());
 
-        spawn_admin_socket(Arc::clone(&ks), path.clone(), || {});
+        spawn_admin_socket(Arc::clone(&ks), path.clone(), || Box::pin(async {}));
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Arm it.

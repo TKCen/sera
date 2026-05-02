@@ -4885,19 +4885,21 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         let sock_path = admin_sock_path();
         // sera-bsem: the rollback callback also cancels every in-flight
         // turn/steer so wedged runtimes release their lane slots promptly.
-        // sera-40y3: it also kills every registered runtime harness so the
+        // sera-40y3: it also kills every registered runtime harness and
+        // awaits completion before replying to the admin socket so the
         // post-DISARM resume path cannot read stale TurnCompleted frames
         // from the previous (aborted) turn — see AgentTurnTransport::
         // kill_for_rollback.
         let rollback_state = Arc::clone(&state);
         spawn_admin_socket(ks, sock_path, move || {
-            let cancelled = rollback_state.cancel_all_in_flight();
-            // Spawn the harness kills onto the runtime — the on_rollback
-            // hook is a synchronous Fn() and `kill_for_rollback` is async.
-            let harness_state = Arc::clone(&rollback_state);
-            tokio::spawn(async move {
-                let count = harness_state.harnesses.len();
-                for (agent, harness) in harness_state.harnesses.iter() {
+            let state = Arc::clone(&rollback_state);
+            Box::pin(async move {
+                let cancelled = state.cancel_all_in_flight();
+                // Kill every registered harness inline so harness resets
+                // complete before the caller can issue DISARM and resume
+                // serving.
+                let count = state.harnesses.len();
+                for (agent, harness) in state.harnesses.iter() {
                     tracing::warn!(
                         agent = %agent,
                         "killing runtime harness after KillSwitch ROLLBACK"
@@ -4905,16 +4907,12 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
                     harness.kill_for_rollback().await;
                 }
                 tracing::warn!(
-                    event = "KILL_SWITCH_HARNESSES_KILLED",
+                    event = "KILL_SWITCH_ACTIVATED",
+                    cancelled_turns = cancelled,
                     harnesses_killed = count,
-                    "killed every registered runtime harness on ROLLBACK"
+                    "ROLLBACK received on admin socket — gateway halted"
                 );
-            });
-            tracing::warn!(
-                event = "KILL_SWITCH_ACTIVATED",
-                cancelled_turns = cancelled,
-                "ROLLBACK received on admin socket — gateway halted"
-            );
+            })
         });
     }
 

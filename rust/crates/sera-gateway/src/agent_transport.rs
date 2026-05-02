@@ -136,8 +136,10 @@ pub trait AgentTurnTransport: Send + Sync {
     }
 
     /// Discard any backing state pinned to an aborted turn (sera-40y3).
-    /// Called from the KillSwitch ROLLBACK callback after
-    /// `cancel_all_in_flight` cancels every in-flight cancellation token.
+    /// Called and **awaited** from the KillSwitch ROLLBACK callback after
+    /// `cancel_all_in_flight` cancels every in-flight cancellation token,
+    /// so all children are gone before the caller can issue `DISARM` and
+    /// resume serving.
     ///
     /// `cancel_all_in_flight` only flips Tokio cancellation tokens — the
     /// stdio child process keeps running and its NDJSON stdout pipe still

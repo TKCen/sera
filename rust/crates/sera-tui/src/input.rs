@@ -88,6 +88,7 @@ pub fn translate_session(
     composer_focused: bool,
     turn_streaming: bool,
     disconnected: bool,
+    popup_open: bool,
 ) -> Action {
     // Global exits always win regardless of composer or streaming state.
     if matches_key(event, &kb.quit) {
@@ -130,6 +131,24 @@ pub fn translate_session(
         return Action::RetryConnection;
     }
 
+
+    // J.0.5: popup intercept — navigation drives the popup, not the textarea.
+    if popup_open {
+        if matches_key(event, &kb.popup_up) {
+            return Action::PopupUp;
+        }
+        if matches_key(event, &kb.popup_down) {
+            return Action::PopupDown;
+        }
+        if matches_key(event, &kb.popup_select) {
+            return Action::PopupSelect;
+        }
+        if matches_key(event, &kb.popup_dismiss) {
+            return Action::PopupDismiss;
+        }
+        // Any other key dismisses popup; fall through to forward key to textarea.
+        return Action::PopupDismiss;
+    }
     if composer_focused {
         // All other keys go straight to the textarea widget.
         Action::ComposerInput(*event)

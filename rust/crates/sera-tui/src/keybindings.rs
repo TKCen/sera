@@ -100,6 +100,14 @@ pub struct TuiKeybindings {
     /// Trigger an immediate reconnect when the disconnected banner is shown
     /// (default: `r`).  J.0.7 (sera-j0o8).
     pub retry_connection: Vec<KeyBinding>,
+    /// Move the autocomplete popup selection up (default: Up arrow).
+    pub popup_up: Vec<KeyBinding>,
+    /// Move the autocomplete popup selection down (default: Down arrow).
+    pub popup_down: Vec<KeyBinding>,
+    /// Confirm the selected autocomplete item (default: Enter, Tab).
+    pub popup_select: Vec<KeyBinding>,
+    /// Dismiss the autocomplete popup without inserting (default: Esc).
+    pub popup_dismiss: Vec<KeyBinding>,
 }
 
 impl TuiKeybindings {
@@ -156,6 +164,13 @@ impl TuiKeybindings {
             )],
             cancel_turn: vec![KeyBinding::plain(KeyCode::Esc)],
             retry_connection: vec![KeyBinding::plain(KeyCode::Char('r'))],
+            popup_up: vec![KeyBinding::plain(KeyCode::Up)],
+            popup_down: vec![KeyBinding::plain(KeyCode::Down)],
+            popup_select: vec![
+                KeyBinding::plain(KeyCode::Enter),
+                KeyBinding::plain(KeyCode::Tab),
+            ],
+            popup_dismiss: vec![KeyBinding::plain(KeyCode::Esc)],
         }
     }
 }
@@ -224,6 +239,10 @@ mod tests {
         assert!(!kb.open_evolve_modal.is_empty());
         assert!(!kb.cancel_turn.is_empty());
         assert!(!kb.retry_connection.is_empty());
+        assert!(!kb.popup_up.is_empty());
+        assert!(!kb.popup_down.is_empty());
+        assert!(!kb.popup_select.is_empty());
+        assert!(!kb.popup_dismiss.is_empty());
     }
 
     #[test]

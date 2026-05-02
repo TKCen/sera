@@ -365,6 +365,48 @@ impl SessionView {
         }
     }
 
+
+    /// Replace the trigger token with the selected autocomplete item.
+    ///
+    /// Slash mode: the  prefix is replaced with the full command + space.
+    /// At-file mode:  is replaced with the chosen path.
+    pub fn insert_autocomplete(
+        &mut self,
+        mode: &crate::autocomplete::PopupMode,
+        filter: &str,
+        insert: &str,
+    ) {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use crate::autocomplete::PopupMode;
+        let current = self.composer.lines().join("
+");
+        let new_text = match mode {
+            PopupMode::Slash => {
+                // Replace leading /+filter with the full command token + space.
+                let trigger_len = 1 + filter.len();
+                format!("{} {}", insert, current.get(trigger_len..).unwrap_or("").trim_start())
+            }
+            PopupMode::AtFile => {
+                if let Some(at_pos) = current.rfind('@') {
+                    let before = &current[..at_pos];
+                    let after_at = &current[at_pos + 1..];
+                    let rest = after_at
+                        .find(char::is_whitespace)
+                        .map(|i| &after_at[i..])
+                        .unwrap_or("");
+                    format!("{before}@{insert}{rest}")
+                } else {
+                    current
+                }
+            }
+        };
+        let mut fresh = TextArea::default();
+        fresh.set_placeholder_text("Type a messageâ¦");
+        for ch in new_text.trim_end().chars() {
+            fresh.input(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        self.composer = fresh;
+    }
     /// Submit the current composer buffer: drain text → route to either
     /// `pending_slash` (if the text starts with `/`) or `pending_sends`.
     /// No-op when the buffer is blank.

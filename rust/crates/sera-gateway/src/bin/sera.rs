@@ -1309,8 +1309,9 @@ struct AppState {
     /// `SERA_CONSTITUTIONAL_RULES_PATH` (default `/etc/sera/constitutional_rules.yaml`).
     /// Empty when the file is absent — constitutional_gate hooks still run but
     /// find no rules to evaluate (fail-open vs fail-closed is the hook's choice).
-    /// Field is populated but not yet read by any hook handler; the
-    /// ConstitutionalGateHook that consults it is filed as sera-0yh3.
+    /// The same `Arc` is shared with `ConstitutionalGateHook` in the hook chain
+    /// so rules loaded at boot are immediately visible to the gate (sera-0yh3).
+    /// Retained here for future admin reload endpoint (`POST /admin/constitutional/reload`).
     #[allow(dead_code)]
     constitutional_registry: Arc<ConstitutionalRegistry>,
     /// Capability-policy registry (sera-ifjl). Loaded at boot from
@@ -4637,11 +4638,23 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         tracing::info!("API key authentication disabled (autonomous mode)");
     }
 
-    // Build the HookRegistry and wire in the ConstitutionalGate hook
-    // (bead sera-0yh3). The hook consults a shared ConstitutionalRegistry
-    // which is left empty here; seeding it from YAML is the job of the
-    // companion constitutional_config wiring (bead sera-b8uk / PR #1068).
-    let constitutional_registry = Arc::new(sera_meta::constitutional::ConstitutionalRegistry::new());
+    // Seed constitutional rules from SERA_CONSTITUTIONAL_RULES_PATH (or the
+    // default /etc/sera/constitutional_rules.yaml). Missing file → no-op (Ok(0)).
+    // Parse error → fail-fast (propagate Err so the process exits with context).
+    // Must happen before the HookRegistry is built so the ConstitutionalGateHook
+    // receives the populated registry (fixes sera-0yh3 split-Arc bug).
+    let constitutional_registry = Arc::new(ConstitutionalRegistry::new());
+    match constitutional_config::seed_registry_from_env(&constitutional_registry).await {
+        Ok(count) => {
+            tracing::info!(count, "Constitutional rules seeded from env path");
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!("Failed to load constitutional rules: {e}"));
+        }
+    }
+
+    // Build the HookRegistry and wire in the ConstitutionalGate hook (sera-0yh3).
+    // The hook receives the already-seeded registry so rules fire immediately.
     let mut hook_registry_inner = HookRegistry::new();
     sera_runtime::hooks::constitutional::ConstitutionalGateHook::register_into(
         &mut hook_registry_inner,
@@ -4876,19 +4889,6 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         Arc::new(InMemoryEnvelopeIndex::default()),
         Some(mail_lookup.clone()),
     ));
-
-    // Seed constitutional rules from SERA_CONSTITUTIONAL_RULES_PATH (or the
-    // default /etc/sera/constitutional_rules.yaml). Missing file → no-op (Ok(0)).
-    // Parse error → fail-fast (propagate Err so the process exits with context).
-    let constitutional_registry = Arc::new(ConstitutionalRegistry::new());
-    match constitutional_config::seed_registry_from_env(&constitutional_registry).await {
-        Ok(count) => {
-            tracing::info!(count, "Constitutional rules seeded from env path");
-        }
-        Err(e) => {
-            return Err(anyhow::anyhow!("Failed to load constitutional rules: {e}"));
-        }
-    }
 
     // sera-nrn9: admin HTTP server auth + audit log. Token comes from
     // SERA_ADMIN_TOKEN; in --local mode we mint a random token at boot and

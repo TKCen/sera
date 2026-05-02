@@ -1253,6 +1253,7 @@ mod tests {
             delta: "write the report".into(),
             tool: "writer-agent".into(),
             parent_task_id: None,
+            ..Default::default()
         });
         assert!(updated);
         assert_eq!(v.blocks.len(), 1);

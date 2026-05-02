@@ -67,7 +67,8 @@ use sera_gateway::session_store::{SessionStore, SqliteSessionStore};
 #[cfg(feature = "enterprise")]
 use sera_gateway::session_store::SqliteGitSessionStore;
 use sera_gateway::workflow_store::{
-    GhRunStateStore, InMemoryGhRunStateStore, InMemoryWorkflowTaskStore, WorkflowTaskStore,
+    GhRunStateStore, HumanGateStore, InMemoryGhRunStateStore, InMemoryHumanGateStore,
+    InMemoryWorkflowTaskStore, WorkflowTaskStore,
 };
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_mail::{
@@ -1342,6 +1343,10 @@ struct AppState {
     /// Consulted by the scheduler each tick via a snapshot lookup so GhRun-
     /// gated workflow tasks transition to resolved when their run completes.
     gh_run_store: Arc<dyn GhRunStateStore>,
+    /// Human gate ticket status store (sera-dgk1). Populated by
+    /// `POST /api/workflow/tasks/{id}/resume`; snapshotted each scheduler
+    /// tick so Human-gated tasks can resolve without holding an async lock.
+    human_gate_store: Arc<dyn HumanGateStore>,
     /// Admin HTTP auth (sera-nrn9, L.3). Separate token from the public
     /// API's `api_key`. `None` when the admin server is not started (e.g. in
     /// tests that don't exercise admin routes).
@@ -1598,6 +1603,9 @@ impl WorkflowAppState for AppState {
         // sera-7ggi: change-artifact store not yet provisioned in the binary.
         // Returning None makes Change-gated POST /api/workflow/tasks return 501.
         None
+    }
+    fn human_gate_store(&self) -> Option<Arc<dyn HumanGateStore>> {
+        Some(Arc::clone(&self.human_gate_store))
     }
 }
 
@@ -4925,6 +4933,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         ticket_store: Arc::new(InMemoryTicketStore::new()),
         workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
         gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+        human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
         admin_auth: Some(Arc::clone(&admin_auth)),
         admin_audit: Some(Arc::clone(&admin_audit)),
     });
@@ -4945,6 +4954,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         Arc::clone(&state.mail_lookup),
         Some(Arc::clone(&state.gh_run_store)),
         None,
+        Some(Arc::clone(&state.human_gate_store)),
         Arc::clone(&shutting_down),
     );
 
@@ -5376,6 +5386,11 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/workflow/mail/deliver",
             post(route_workflow::deliver_mail::<AppState>),
+        )
+        // ── sera-dgk1: Human gate resume ─────────────────────────────────
+        .route(
+            "/api/workflow/tasks/{id}/resume",
+            post(route_workflow::resume_task::<AppState>),
         )
         // ── sera-7ivj: OpenAI-compatible inference proxy ─────────────────────
         .route(

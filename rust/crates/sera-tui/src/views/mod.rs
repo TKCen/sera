@@ -5,6 +5,7 @@
 //! [`crate::app`] — views stay pure presentation + local UI state.
 
 pub mod agent_list;
+pub mod blocks;
 pub mod evolve_status;
 pub mod hitl_modal;
 pub mod hitl_queue;

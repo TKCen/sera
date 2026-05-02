@@ -438,8 +438,7 @@ impl App {
             }
             Action::ExecuteSlash(cmd) => match cmd {
                 SlashCommand::New => {
-                    self.session.transcript.clear();
-                    self.session.tool_log.clear();
+                    self.session.blocks.clear();
                     self.status = Status::info("new turn");
                 }
                 SlashCommand::Agent(name) => {
@@ -1079,8 +1078,11 @@ mod tests {
             delta: "hi".into(),
             tool: String::new(),
         }));
-        assert_eq!(app.session.transcript.len(), 1);
-        assert_eq!(app.session.transcript[0].text, "hi");
+        assert_eq!(app.session.blocks.len(), 1);
+        match &app.session.blocks[0] {
+            crate::views::blocks::Block::AssistantMessage { text, .. } => assert_eq!(text, "hi"),
+            other => panic!("expected AssistantMessage, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1146,16 +1148,20 @@ mod tests {
     // --- ExecuteSlash dispatch tests (G.1.1) ---
 
     #[test]
-    fn execute_slash_new_clears_transcript_and_tool_log() {
+    fn execute_slash_new_clears_block_transcript() {
         let mut app = App::new(client(), TuiKeybindings::defaults());
-        app.session.transcript.push(crate::client::TranscriptEntry {
-            role: "user".into(),
+        app.session.blocks.push(crate::views::blocks::Block::UserMessage {
             text: "old".into(),
         });
-        app.session.tool_log.push("old tool event".into());
+        app.session.blocks.push(crate::views::blocks::Block::ToolCall {
+            tool: "bash".into(),
+            summary: "echo".into(),
+            args: serde_json::Value::Null,
+            result: None,
+            expanded: false,
+        });
         app.dispatch(Action::ExecuteSlash(SlashCommand::New));
-        assert!(app.session.transcript.is_empty());
-        assert!(app.session.tool_log.is_empty());
+        assert!(app.session.blocks.is_empty());
         assert_eq!(app.status.text, "new turn");
     }
 
@@ -1199,7 +1205,7 @@ mod tests {
             crate::client::TranscriptEntry { role: "user".into(), text: "old message".into() },
         ]);
         app.dispatch(Action::SelectAgent("fresh-agent".to_owned()));
-        // Dispatch is pure — transcript not cleared yet (that's runtime's job).
+        // Dispatch is pure — blocks not cleared yet (that's runtime's job).
         // But active_agent_id is set and LoadSessionFor is queued.
         assert_eq!(app.active_agent_id.as_deref(), Some("fresh-agent"));
         assert!(matches!(

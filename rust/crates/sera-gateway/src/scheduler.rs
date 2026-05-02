@@ -1,4 +1,4 @@
-//! Workflow scheduler — Wave E Phase 1 (sera-kgi8) + Mail gate (sera-0zch) + GhRun gate (sera-4fel) + Change gate (sera-7ggi) + Human gate (sera-dgk1).
+//! Workflow scheduler — Wave E Phase 1 (sera-kgi8) + Mail gate (sera-0zch) + GhRun gate (sera-4fel) + Change gate (sera-7ggi) + Human gate (sera-dgk1) + GhPr gate (sera-comg).
 //!
 //! Wakes every [`TICK_INTERVAL`] and asks [`WorkflowTaskStore::list_pending`]
 //! for the current set of pending tasks. Each pending task is passed through
@@ -6,9 +6,9 @@
 //! `chrono::Utc::now` snapshot; tasks whose gates have resolved are marked
 //! resolved on the store.
 //!
-//! Timer, Mail, GhRun, Change, and Human gates are fully wired end-to-end.
-//! Other await types (GhPr: sera-comg) use no-op lookups and stay pending until
-//! their dedicated beads add real lookup sources.
+//! Timer, Mail, GhRun, Change, Human, and GhPr gates are fully wired end-to-end.
+//! Other await types use no-op lookups and stay pending until their dedicated
+//! beads add real lookup sources.
 //!
 //! Event emission: Phase 1 logs a `tracing::info!` line per resolution. Wiring
 //! to the session SSE stream / event bus is deferred to a follow-up bead — the
@@ -25,13 +25,13 @@ use sera_mail::InMemoryMailLookup;
 use sera_types::evolution::ChangeArtifactId;
 use sera_workflow::MailLookup;
 use sera_workflow::ready::{
-    ChangeLookup, GhRunLookup, HitlLookup, NoopChangeLookup, NoopGhRunLookup, ReadyContext,
-    ready_tasks_with_context,
+    ChangeLookup, GhPrLookup, GhRunLookup, HitlLookup, NoopChangeLookup, NoopGhPrLookup,
+    NoopGhRunLookup, ReadyContext, ready_tasks_with_context,
 };
-use sera_workflow::task::{ChangeState, GhRunId, GhRunStatus};
+use sera_workflow::task::{ChangeState, GhPrId, GhPrState, GhRunId, GhRunStatus};
 
 use crate::workflow_store::{
-    ChangeArtifactStateStore, GhRunStateStore, HumanGateStore, SnapshotHitlLookup,
+    ChangeArtifactStateStore, GhPrStateStore, GhRunStateStore, HumanGateStore, SnapshotHitlLookup,
     WorkflowTaskStore,
 };
 
@@ -61,6 +61,19 @@ impl ChangeLookup for SnapshotChangeLookup {
     }
 }
 
+/// Synchronous [`GhPrLookup`] bridge: wraps a snapshot of the GitHub PR state
+/// store so the ready-queue can evaluate GhPr gates without holding an async
+/// lock during the synchronous gate evaluation.
+struct SnapshotGhPrLookup {
+    snapshot: HashMap<String, GhPrState>,
+}
+
+impl GhPrLookup for SnapshotGhPrLookup {
+    fn pr_state(&self, id: &GhPrId) -> Option<GhPrState> {
+        self.snapshot.get(id.as_str()).cloned()
+    }
+}
+
 /// How often the scheduler runs `tick`. 5s matches the Wave E Phase 1 spec —
 /// short enough to feel responsive for Timer gates at second-granularity,
 /// long enough to keep CPU wake cost negligible when no tasks are pending.
@@ -87,6 +100,10 @@ pub const TICK_INTERVAL: Duration = Duration::from_secs(5);
 /// wires it into the [`ReadyContext`] so Human-gated tasks can resolve. When
 /// `None`, Human gates never resolve (equivalent to Phase 1 no-op behaviour).
 ///
+/// `gh_pr_store` — when `Some`, the scheduler snapshots the GitHub PR state
+/// map and uses it as a real [`GhPrLookup`] so GhPr-gated tasks can transition
+/// to resolved. When `None` the no-op lookup is used (GhPr tasks block).
+///
 /// Returns the number of tasks that transitioned from Pending → Resolved.
 /// Exposed as `pub` (not just `pub(crate)`) so integration tests can drive
 /// a single tick deterministically without racing the real ticker.
@@ -96,6 +113,7 @@ pub async fn tick(
     gh_run_store: Option<Arc<dyn GhRunStateStore>>,
     change_store: Option<Arc<dyn ChangeArtifactStateStore>>,
     hitl: Option<Arc<dyn HumanGateStore>>,
+    gh_pr_store: Option<Arc<dyn GhPrStateStore>>,
 ) -> usize {
     let pending = store.list_pending().await;
     if pending.is_empty() {
@@ -109,8 +127,9 @@ pub async fn tick(
 
     let now = Utc::now();
 
-    // Build the ReadyContext — GhRun, Change, and Hitl lookups use snapshots
-    // so the synchronous gate evaluation never touches the async store lock.
+    // Build the ReadyContext — GhRun, Change, Hitl, and GhPr lookups use
+    // snapshots so the synchronous gate evaluation never touches the async
+    // store lock.
     let noop_gh_run = NoopGhRunLookup;
     let snapshot_gh_run;
     let gh_run_lookup: &dyn GhRunLookup = match gh_run_store {
@@ -137,12 +156,22 @@ pub async fn tick(
     };
     let hitl_lookup = SnapshotHitlLookup::new(hitl_snapshot);
 
+    let noop_gh_pr = NoopGhPrLookup;
+    let snapshot_gh_pr;
+    let gh_pr_lookup: &dyn GhPrLookup = match gh_pr_store {
+        Some(ref s) => {
+            snapshot_gh_pr = SnapshotGhPrLookup { snapshot: s.snapshot().await };
+            &snapshot_gh_pr
+        }
+        None => &noop_gh_pr,
+    };
+
     let ctx = ReadyContext {
         mail: mail_lookup.as_ref() as &dyn MailLookup,
         gh_run: gh_run_lookup,
         change: change_lookup,
         hitl: &hitl_lookup as &dyn HitlLookup,
-        ..ReadyContext::default_noop()
+        gh_pr: gh_pr_lookup,
     };
     let ready = ready_tasks_with_context(&tasks, now, &ctx);
 
@@ -179,6 +208,10 @@ pub async fn tick(
 /// `hitl` — forwarded to each [`tick`] call. Pass `Some(store)` to enable
 /// Human gate resolution; `None` to keep Human gates blocked (Phase 1 compat).
 ///
+/// `gh_pr_store` — when `Some`, GhPr-gated tasks are evaluated against the
+/// PR state store each tick. Pass `None` to preserve the Phase 1 behaviour
+/// (GhPr tasks block until their dedicated gate bead wires in a real lookup).
+///
 /// Ticks every [`TICK_INTERVAL`]. The loop exits when `shutting_down` flips
 /// to `true` — observed between ticks so an in-flight `tick` call is never
 /// interrupted mid-way.
@@ -193,6 +226,7 @@ pub fn spawn_scheduler(
     gh_run_store: Option<Arc<dyn GhRunStateStore>>,
     change_store: Option<Arc<dyn ChangeArtifactStateStore>>,
     hitl: Option<Arc<dyn HumanGateStore>>,
+    gh_pr_store: Option<Arc<dyn GhPrStateStore>>,
     shutting_down: Arc<AtomicBool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -221,6 +255,7 @@ pub fn spawn_scheduler(
                 gh_run_store.clone(),
                 change_store.clone(),
                 hitl.as_ref().map(Arc::clone),
+                gh_pr_store.clone(),
             )
             .await;
             if resolved > 0 {

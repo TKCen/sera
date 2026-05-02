@@ -78,6 +78,7 @@ async fn human_gate_blocks_without_resolution() {
         None,
         None,
         Some(Arc::clone(&hitl) as Arc<dyn HumanGateStore>),
+        None,
     )
     .await;
     assert_eq!(resolved, 0, "human gate without resolution must not resolve");
@@ -115,6 +116,7 @@ async fn human_gate_resolves_after_approval() {
         None,
         None,
         Some(Arc::clone(&hitl) as Arc<dyn HumanGateStore>),
+        None,
     )
     .await;
     assert_eq!(resolved, 1, "approved human gate must resolve on first tick");
@@ -152,6 +154,7 @@ async fn human_gate_resolves_on_rejection() {
         None,
         None,
         Some(Arc::clone(&hitl) as Arc<dyn HumanGateStore>),
+        None,
     )
     .await;
     assert_eq!(resolved, 1, "rejected human gate must also resolve");
@@ -187,6 +190,7 @@ async fn human_gate_resolves_on_expiry() {
         None,
         None,
         Some(Arc::clone(&hitl) as Arc<dyn HumanGateStore>),
+        None,
     )
     .await;
     assert_eq!(resolved, 1, "expired human gate must also resolve");
@@ -212,6 +216,7 @@ async fn scheduler_background_task_resolves_human_gate() {
         None,
         None,
         Some(Arc::clone(&hitl) as Arc<dyn HumanGateStore>),
+        None,
         Arc::clone(&shutting_down),
     );
 
@@ -379,6 +384,7 @@ async fn http_create_human_task_and_resume_round_trip() {
         None,
         None,
         Some(Arc::clone(&state.hitl) as Arc<dyn HumanGateStoreTrait>),
+        None,
     )
     .await;
     assert_eq!(resolved, 1, "scheduler tick must resolve the human-gated task");

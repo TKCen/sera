@@ -4947,14 +4947,17 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
     // 4a. Spawn workflow scheduler (sera-kgi8 + sera-0zch). Ticks every
     // TICK_INTERVAL, asks sera-workflow which pending tasks are ready, and
     // marks them resolved on the store. Timer and Mail gates are wired
-    // end-to-end; other AwaitType variants stay pending until their dedicated
-    // beads add real lookups.
+    // end-to-end. GhPr lookup is passed as `None` here because the production
+    // GitHub API poller ships in a follow-up bead; POST /api/workflow/tasks
+    // returns 501 for gh_pr until then so callers are not silently queued on
+    // a path that can never resolve.
     spawn_scheduler(
         Arc::clone(&state.workflow_store),
         Arc::clone(&state.mail_lookup),
         Some(Arc::clone(&state.gh_run_store)),
         None,
         Some(Arc::clone(&state.human_gate_store)),
+        None,
         Arc::clone(&shutting_down),
     );
 

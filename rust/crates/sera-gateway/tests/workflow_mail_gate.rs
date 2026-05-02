@@ -65,7 +65,7 @@ async fn mail_gate_blocks_before_reply() {
     store.insert(pending_record(task, "tok-1")).await;
 
     // No mail delivered yet — tick must NOT resolve.
-    let resolved = tick(Arc::clone(&store) as Arc<dyn WorkflowTaskStore>, Arc::clone(&lookup), None, None, None).await;
+    let resolved = tick(Arc::clone(&store) as Arc<dyn WorkflowTaskStore>, Arc::clone(&lookup), None, None, None, None).await;
     assert_eq!(resolved, 0, "mail gate without reply must not resolve");
 
     let rec = store.get(&task_id).await.unwrap();
@@ -88,7 +88,7 @@ async fn mail_gate_resolves_after_reply_received() {
         .notify(GateId::new("test-gate"), &thread_id, MailEvent::ReplyReceived)
         .unwrap();
 
-    let resolved = tick(Arc::clone(&store) as Arc<dyn WorkflowTaskStore>, Arc::clone(&lookup), None, None, None).await;
+    let resolved = tick(Arc::clone(&store) as Arc<dyn WorkflowTaskStore>, Arc::clone(&lookup), None, None, None, None).await;
     assert_eq!(resolved, 1, "mail gate with reply must resolve on next tick");
 
     let rec = store.get(&task_id).await.expect("record must still exist");
@@ -111,7 +111,7 @@ async fn mail_gate_resolves_on_closed() {
         .notify(GateId::new("test-gate"), &thread_id, MailEvent::Closed)
         .unwrap();
 
-    let resolved = tick(Arc::clone(&store) as Arc<dyn WorkflowTaskStore>, Arc::clone(&lookup), None, None, None).await;
+    let resolved = tick(Arc::clone(&store) as Arc<dyn WorkflowTaskStore>, Arc::clone(&lookup), None, None, None, None).await;
     assert_eq!(resolved, 1, "mail gate with Closed event must resolve");
 
     let rec = store.get(&task_id).await.unwrap();
@@ -133,7 +133,7 @@ async fn mail_gate_stays_pending_on_non_terminal_event() {
         .notify(GateId::new("test-gate"), &thread_id, MailEvent::Pending)
         .unwrap();
 
-    let resolved = tick(Arc::clone(&store) as Arc<dyn WorkflowTaskStore>, Arc::clone(&lookup), None, None, None).await;
+    let resolved = tick(Arc::clone(&store) as Arc<dyn WorkflowTaskStore>, Arc::clone(&lookup), None, None, None, None).await;
     assert_eq!(resolved, 0, "non-terminal mail event must not resolve gate");
 
     let rec = store.get(&task_id).await.unwrap();
@@ -154,6 +154,7 @@ async fn scheduler_background_task_resolves_pending_mail() {
     let handle = spawn_scheduler(
         Arc::clone(&store) as Arc<dyn WorkflowTaskStore>,
         Arc::clone(&lookup),
+        None,
         None,
         None,
         None,

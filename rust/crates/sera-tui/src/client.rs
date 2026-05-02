@@ -293,6 +293,12 @@ pub struct StreamEvent {
     pub delta: String,
     #[serde(default)]
     pub tool: String,
+    /// Populated on events emitted while servicing a subagent invocation
+    /// (J.2.x / sera-pmil).  Used by `SessionView::apply_event` to route
+    /// the event into the matching `Task` block's child thread rather than
+    /// the parent transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_task_id: Option<String>,
 }
 
 impl StreamEvent {
@@ -336,6 +342,10 @@ impl StreamEvent {
                     .and_then(|f| f.as_str())
                     .unwrap_or("")
                     .to_owned(),
+                parent_task_id: v
+                    .get("parent_task_id")
+                    .and_then(|f| f.as_str())
+                    .map(str::to_owned),
             })
     }
 }

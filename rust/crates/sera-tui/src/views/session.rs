@@ -17,7 +17,7 @@ use ratatui::Frame;
 use tui_textarea::TextArea;
 
 use super::agent_list::make_block;
-use super::blocks::{ApprovalStatus, Block, ToolResult};
+use super::blocks::{ApprovalStatus, Block, ThreadView, ToolResult};
 use crate::client::{ConnectionState, SessionSummary, StreamEvent, TranscriptEntry};
 use crate::highlight;
 use crate::keybindings::{display_first, TuiKeybindings};
@@ -119,6 +119,19 @@ impl SessionView {
     ///   `ToolCall` block.
     pub fn apply_event(&mut self, ev: StreamEvent) -> bool {
         let et = ev.event_type.to_ascii_lowercase();
+
+        // J.2.1: subagent_start SSE frame → push a collapsed Task block.
+        // `tool` carries the agent id; `delta` is the initial summary;
+        // `session_id` is repurposed as the task_id for child-event routing.
+        if et == "subagent_start" {
+            let task_id = if !ev.session_id.is_empty() {
+                ev.session_id.clone()
+            } else {
+                ev.tool.clone()
+            };
+            self.push_task(task_id, ev.tool.clone(), ev.delta.clone());
+            return true;
+        }
 
         // J.1.4: approval_required SSE frame → push an inline Approval block.
         // The request_id comes in `session_id` (repurposed) or the `delta`
@@ -314,6 +327,21 @@ impl SessionView {
     #[allow(dead_code)] // J.0.4 will wire this on turn_completed
     pub fn push_turn_separator(&mut self) {
         self.blocks.push(Block::TurnSeparator);
+    }
+
+    /// Push a collapsed Task block for a subagent invocation.
+    ///
+    /// `task_id` is the stable routing key that matches `parent_task_id` on
+    /// child SSE events (sera-pmil).  J.2.3 (sera-mfj3) streams into
+    /// `child_thread`; J.2.2 (sera-9vkz) wires Enter/Esc drill-in.
+    pub fn push_task(&mut self, task_id: String, agent: String, summary: String) {
+        self.blocks.push(Block::Task {
+            task_id,
+            agent,
+            summary,
+            child_thread: ThreadView::default(),
+            expanded: false,
+        });
     }
 
     pub fn set_connection(&mut self, state: ConnectionState) {
@@ -539,10 +567,18 @@ fn block_to_list_items(block: &Block, kb: &TuiKeybindings) -> Vec<ListItem<'stat
             status,
             ..
         } => render_approval_block(tool, reason, *status, kb),
-        Block::ToolCall { .. } | Block::Task { .. } | Block::Error { .. } => {
+        // J.2.1: Task blocks get a dedicated renderer so the folded card is
+        // styled distinctly (Magenta) and can be extended by J.2.2/J.2.3.
+        Block::Task {
+            agent,
+            summary,
+            expanded,
+            child_thread,
+            ..
+        } => render_task_block(agent, summary, *expanded, child_thread),
+        Block::ToolCall { .. } | Block::Error { .. } => {
             let header_color = match block {
                 Block::ToolCall { .. } => Color::Yellow,
-                Block::Task { .. } => Color::Magenta,
                 Block::Error { .. } => Color::Red,
                 _ => unreachable!(),
             };
@@ -665,6 +701,34 @@ fn render_approval_block(tool: &str, reason: &str, status: ApprovalStatus, kb: &
     }
 }
 
+/// Render a collapsed or expanded [`Block::Task`] as styled list items.
+///
+/// Collapsed (J.2.1):
+/// ```text
+/// ⏺ Task(agent-name: initial summary) ▸
+/// ```
+/// Expanded (future — J.2.2 sets `expanded=true`):
+/// ```text
+/// ⏺ Task(agent-name: initial summary) ▾
+///   (child thread blocks rendered inline — wired by J.2.2)
+/// ```
+fn render_task_block(
+    agent: &str,
+    summary: &str,
+    expanded: bool,
+    _child_thread: &ThreadView,
+) -> Vec<ListItem<'static>> {
+    let arrow = if expanded { "▾" } else { "▸" };
+    let label = format!("⏺ Task({agent}: {summary}) {arrow}");
+    let item = ListItem::new(Line::from(Span::styled(
+        label,
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+    )));
+    vec![item, ListItem::new(Line::from(""))]
+}
+
 impl Default for SessionView {
     fn default() -> Self {
         Self::new()
@@ -694,6 +758,7 @@ mod tests {
             role: "assistant".into(),
             delta: "hello ".into(),
             tool: String::new(),
+            parent_task_id: None,
         });
         v.apply_event(StreamEvent {
             event_type: "message".into(),
@@ -701,6 +766,7 @@ mod tests {
             role: "assistant".into(),
             delta: "world".into(),
             tool: String::new(),
+            parent_task_id: None,
         });
         assert_eq!(v.blocks.len(), 1);
         match &v.blocks[0] {
@@ -721,6 +787,7 @@ mod tests {
             role: "user".into(),
             delta: "ping".into(),
             tool: String::new(),
+            parent_task_id: None,
         });
         v.apply_event(StreamEvent {
             event_type: "message".into(),
@@ -728,6 +795,7 @@ mod tests {
             role: "assistant".into(),
             delta: "pong".into(),
             tool: String::new(),
+            parent_task_id: None,
         });
         assert_eq!(v.blocks.len(), 2);
         assert!(matches!(&v.blocks[0], Block::UserMessage { text } if text == "ping"));
@@ -746,6 +814,7 @@ mod tests {
             role: String::new(),
             delta: "args".into(),
             tool: "bash".into(),
+            parent_task_id: None,
         });
         assert_eq!(v.blocks.len(), 1);
         match &v.blocks[0] {
@@ -772,6 +841,7 @@ mod tests {
             role: String::new(),
             delta: "args".into(),
             tool: "bash".into(),
+            parent_task_id: None,
         });
         v.apply_event(StreamEvent {
             event_type: "tool_end".into(),
@@ -779,6 +849,7 @@ mod tests {
             role: String::new(),
             delta: "exit 0".into(),
             tool: "bash".into(),
+            parent_task_id: None,
         });
         assert_eq!(v.blocks.len(), 1, "tool_end must NOT push a new block");
         match &v.blocks[0] {
@@ -801,6 +872,7 @@ mod tests {
             role: String::new(),
             delta: "{\"path\":".into(),
             tool: "Write".into(),
+            parent_task_id: None,
         });
         v.apply_event(StreamEvent {
             event_type: "tool".into(),
@@ -808,6 +880,7 @@ mod tests {
             role: String::new(),
             delta: "\"poem.md\"}".into(),
             tool: "Write".into(),
+            parent_task_id: None,
         });
         // Block count must still be 1, not 2.
         assert_eq!(v.blocks.len(), 1, "intermediate tool frame must NOT push a new block");
@@ -849,6 +922,7 @@ mod tests {
             role: "assistant".into(),
             delta: String::new(),
             tool: String::new(),
+            parent_task_id: None,
         });
         assert!(!updated);
         assert!(v.blocks.is_empty());
@@ -863,6 +937,7 @@ mod tests {
             role: "assistant".into(),
             delta: "answer".into(),
             tool: String::new(),
+            parent_task_id: None,
         });
         match &v.blocks[0] {
             Block::AssistantMessage { streaming, .. } => assert!(streaming),
@@ -1075,6 +1150,7 @@ mod tests {
             role: String::new(),
             delta: "write /tmp/secret".into(),
             tool: "Write".into(),
+            parent_task_id: None,
         });
         assert!(updated);
         assert_eq!(v.blocks.len(), 1);
@@ -1140,5 +1216,102 @@ mod tests {
         let text = v.blocks[0].plain_text();
         assert!(text.contains("Approved"), "expected Approved in: {text}");
         assert!(!text.contains("[a]pprove"), "should not show hints when resolved: {text}");
+    }
+
+    // --- J.2.1: Task block widget tests ---
+
+    #[test]
+    fn push_task_creates_collapsed_task_block() {
+        let mut v = SessionView::new();
+        v.push_task("task-1".into(), "coder-agent".into(), "write poem.md".into());
+        assert_eq!(v.blocks.len(), 1);
+        match &v.blocks[0] {
+            Block::Task {
+                task_id,
+                agent,
+                summary,
+                expanded,
+                child_thread,
+            } => {
+                assert_eq!(task_id, "task-1");
+                assert_eq!(agent, "coder-agent");
+                assert_eq!(summary, "write poem.md");
+                assert!(!expanded, "task blocks must start collapsed");
+                assert!(child_thread.blocks.is_empty(), "child thread starts empty");
+            }
+            other => panic!("expected Task block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn subagent_start_event_pushes_task_block() {
+        let mut v = SessionView::new();
+        let updated = v.apply_event(StreamEvent {
+            event_type: "subagent_start".into(),
+            session_id: "task-42".into(),
+            role: String::new(),
+            delta: "write the report".into(),
+            tool: "writer-agent".into(),
+            parent_task_id: None,
+        });
+        assert!(updated);
+        assert_eq!(v.blocks.len(), 1);
+        match &v.blocks[0] {
+            Block::Task {
+                task_id,
+                agent,
+                summary,
+                expanded,
+                ..
+            } => {
+                assert_eq!(task_id, "task-42");
+                assert_eq!(agent, "writer-agent");
+                assert_eq!(summary, "write the report");
+                assert!(!expanded);
+            }
+            other => panic!("expected Task block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn task_block_plain_text_shows_collapsed_arrow() {
+        let mut v = SessionView::new();
+        v.push_task("t1".into(), "coder".into(), "fix bug".into());
+        let text = v.blocks[0].plain_text();
+        assert!(text.contains("Task(coder: fix bug)"), "missing task label in: {text}");
+        assert!(text.contains("▸"), "collapsed task must show ▸ in: {text}");
+        assert!(!text.contains("▾"), "collapsed task must not show ▾ in: {text}");
+    }
+
+    #[test]
+    fn task_block_toggle_expanded_flips_flag() {
+        let mut v = SessionView::new();
+        v.push_task("t1".into(), "coder".into(), "fix bug".into());
+        assert_eq!(v.blocks[0].toggle_expanded(), Some(true));
+        let text = v.blocks[0].plain_text();
+        assert!(text.contains("▾"), "expanded task must show ▾ in: {text}");
+    }
+
+    #[test]
+    fn task_block_task_id_accessor() {
+        let mut v = SessionView::new();
+        v.push_task("route-key-99".into(), "agent".into(), "do work".into());
+        assert_eq!(v.blocks[0].task_id(), Some("route-key-99"));
+    }
+
+    #[test]
+    fn stream_event_parse_extracts_parent_task_id() {
+        use crate::client::StreamEvent;
+        let raw = r#"{"event_type":"message","delta":"hello","parent_task_id":"task-7"}"#;
+        let ev = StreamEvent::parse(raw).expect("should parse");
+        assert_eq!(ev.parent_task_id.as_deref(), Some("task-7"));
+    }
+
+    #[test]
+    fn stream_event_parse_parent_task_id_absent_is_none() {
+        use crate::client::StreamEvent;
+        let raw = r#"{"event_type":"message","delta":"hello"}"#;
+        let ev = StreamEvent::parse(raw).expect("should parse");
+        assert_eq!(ev.parent_task_id, None);
     }
 }

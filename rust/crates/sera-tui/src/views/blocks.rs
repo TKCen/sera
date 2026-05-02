@@ -29,6 +29,21 @@
 
 use serde_json::Value;
 
+/// State for a child thread opened when a subagent task is invoked.
+///
+/// J.2.1: the struct is shaped here so sera-9vkz (drill-in stack: Enter
+/// push, Esc pop) and sera-mfj3 (live streaming into child thread) can
+/// extend it without touching this file.  For J.2.1 the thread holds a
+/// flat block list and a focused-block cursor that sera-9vkz will wire up.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ThreadView {
+    /// Blocks streamed into this child thread (populated by J.2.3 / sera-mfj3).
+    pub blocks: Vec<Block>,
+    /// Index of the focused block when the drill-in stack is active
+    /// (managed by J.2.2 / sera-9vkz; unused in J.2.1).
+    pub focused_block: usize,
+}
+
 /// One entry in the transcript.  Variants are kept flat (no `Box`) since
 /// the largest payload is `Value` (already heap-allocated by serde_json).
 #[derive(Debug, Clone, PartialEq)]
@@ -50,12 +65,17 @@ pub enum Block {
         result: Option<ToolResult>,
         expanded: bool,
     },
-    /// A subagent task block.  Shape only in J.0.2; J.2.1 lands the
-    /// child `ThreadView` and the drill-in stack.
-    #[allow(dead_code)]
+    /// A subagent task block.  J.2.1 adds the child `ThreadView` and the
+    /// `task_id` routing key.  J.2.2 (sera-9vkz) wires Enter/Esc drill-in;
+    /// J.2.3 (sera-mfj3) streams events into `child_thread.blocks`.
     Task {
+        /// Stable id matching `parent_task_id` on child SSE events
+        /// (sera-pmil).  Used by J.2.3 to route events.
+        task_id: String,
         agent: String,
         summary: String,
+        /// Child thread state — extended by sera-9vkz and sera-mfj3.
+        child_thread: ThreadView,
         expanded: bool,
     },
     /// An inline HITL approval request.  Promoted from the modal in J.1.4.
@@ -143,6 +163,17 @@ impl Block {
         }
     }
 
+    /// Return the `task_id` of this block if it is a `Task` variant.
+    /// Used by J.2.3 (sera-mfj3) to route child SSE events.
+    #[allow(dead_code)] // consumed by sera-mfj3
+    pub fn task_id(&self) -> Option<&str> {
+        if let Block::Task { task_id, .. } = self {
+            Some(task_id.as_str())
+        } else {
+            None
+        }
+    }
+
     /// Plain-text rendering used by the J.0.2 transitional renderer.
     /// J.1.1 will add a markdown-aware path; this lives here so widgets
     /// don't have to match on every variant.
@@ -172,6 +203,7 @@ impl Block {
                 agent,
                 summary,
                 expanded,
+                ..
             } => {
                 let arrow = if *expanded { "▾" } else { "▸" };
                 format!("⏺ Task({agent}: {summary}) {arrow}")

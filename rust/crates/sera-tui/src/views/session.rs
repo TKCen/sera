@@ -2,11 +2,11 @@
 //!
 //! **J.0.2 (sera-s3gb)**: the flat `Vec<TranscriptEntry>` + `Vec<String>`
 //! tool log of waves G/J.0.1 was replaced by a typed [`Block`] enum (see
-//! [`crate::views::blocks`]).  Markdown is stubbed as plain text in this
-//! bead; J.1.1 (sera-7fpx) wires `pulldown-cmark` parsing and J.1.2
-//! (sera-jie3) adds `syntect` for code blocks.  Tool/task/approval/error
-//! variants are shaped here so the leaf beads (J.0.3, J.1.4, J.0.4) only
-//! need to fill in the SSE-event handlers.
+//! [`crate::views::blocks`]).  **J.1.1 (sera-7fpx)**: `AssistantMessage`
+//! blocks are now rendered with `pulldown-cmark` via
+//! [`super::markdown::md_to_lines`]; streaming blocks use
+//! [`super::markdown::split_at_boundary`] for flicker-free progressive
+//! render.  J.1.2 (sera-jie3) will add syntect code-block highlighting.
 
 use crossterm::event::KeyEvent;
 use ratatui::layout::Rect;
@@ -18,6 +18,7 @@ use tui_textarea::TextArea;
 
 use super::agent_list::make_block;
 use super::blocks::{ApprovalStatus, Block, ToolResult};
+use super::markdown::{md_to_lines, split_at_boundary};
 use crate::client::{ConnectionState, SessionSummary, StreamEvent, TranscriptEntry};
 
 /// Which pane inside the Session view holds keyboard focus.
@@ -428,22 +429,44 @@ fn block_to_list_items(block: &Block) -> Vec<ListItem<'static>> {
             items.push(ListItem::new(Line::from("")));
             items
         }
-        Block::UserMessage { text } | Block::AssistantMessage { text, .. } => {
-            let role = block.role_label();
-            let role_color = match role {
-                "user" => Color::Cyan,
-                "assistant" => Color::Green,
-                _ => Color::White,
-            };
+        Block::UserMessage { text } => {
             let header = Line::from(vec![Span::styled(
-                format!("[{role}]"),
-                Style::default()
-                    .fg(role_color)
-                    .add_modifier(Modifier::BOLD),
+                "[user]",
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             )]);
             let mut items = vec![ListItem::new(header)];
             for body_line in text.lines() {
                 items.push(ListItem::new(Line::from(Span::raw(body_line.to_owned()))));
+            }
+            items.push(ListItem::new(Line::from("")));
+            items
+        }
+        // **J.1.1 (sera-7fpx)**: render assistant markdown with pulldown-cmark.
+        // When the block is still streaming we split at the last blank-line
+        // boundary: committed text is fully parsed, the in-flight tail is
+        // appended as a plain line to avoid flicker on incomplete spans.
+        Block::AssistantMessage { text, streaming } => {
+            let header = Line::from(vec![Span::styled(
+                "[assistant]",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )]);
+            let mut items = vec![ListItem::new(header)];
+            if *streaming {
+                let (committed, in_flight) = split_at_boundary(text);
+                for line in md_to_lines(committed) {
+                    items.push(ListItem::new(line));
+                }
+                if !in_flight.is_empty() {
+                    items.push(ListItem::new(Line::from(Span::raw(
+                        in_flight.to_owned(),
+                    ))));
+                }
+            } else {
+                for line in md_to_lines(text) {
+                    items.push(ListItem::new(line));
+                }
             }
             items.push(ListItem::new(Line::from("")));
             items

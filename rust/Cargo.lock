@@ -5610,6 +5610,7 @@ dependencies = [
  "crossterm 0.28.1",
  "futures-util",
  "once_cell",
+ "pulldown-cmark",
  "ratatui",
  "reqwest 0.12.28",
  "sera-e2e-harness",

@@ -9,6 +9,7 @@ pub mod blocks;
 pub mod evolve_status;
 pub mod hitl_modal;
 pub mod hitl_queue;
+pub mod markdown;
 pub mod session;
 pub mod session_picker;
 pub mod status_bar;

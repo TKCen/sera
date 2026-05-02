@@ -240,6 +240,18 @@ pub struct App {
 
     /// Active autocomplete popup, or None when closed.
     pub autocomplete: Option<AutocompletePopup>,
+
+    /// Cumulative prompt tokens reported by the gateway across all completed
+    /// turns in this session (sera-c7bf). Updated when an SSE event carrying
+    /// non-zero usage tokens lands (typically the terminal `done` frame).
+    pub usage_prompt_tokens: u64,
+    /// Cumulative completion tokens — see [`Self::usage_prompt_tokens`].
+    pub usage_completion_tokens: u64,
+    /// Cumulative cost in USD computed from a per-1k-token rate table. The
+    /// MVS ships with $0/$0 defaults (local models are free) — a follow-up
+    /// bead will introduce a real pricing table; until then this stays 0.0
+    /// for local backends.
+    pub usage_cost_usd: f64,
 }
 
 impl App {
@@ -273,6 +285,9 @@ impl App {
             hitl_gen: 0,
             evolve_gen: 0,
             autocomplete: None,
+            usage_prompt_tokens: 0,
+            usage_completion_tokens: 0,
+            usage_cost_usd: 0.0,
         }
     }
 
@@ -681,6 +696,20 @@ impl App {
                 // held from a previous turn.
                 if !ev.session_id.is_empty() {
                     self.active_session_id = Some(ev.session_id.clone());
+                }
+                // Accumulate token counts when the gateway emits a usage-bearing
+                // frame (sera-c7bf — typically the terminal `done` frame on
+                // /api/chat). Cost stays at 0.0 for local-model defaults; a
+                // follow-up bead will introduce a per-model pricing table.
+                if ev.prompt_tokens > 0 || ev.completion_tokens > 0 {
+                    self.usage_prompt_tokens =
+                        self.usage_prompt_tokens.saturating_add(ev.prompt_tokens);
+                    self.usage_completion_tokens = self
+                        .usage_completion_tokens
+                        .saturating_add(ev.completion_tokens);
+                    // Local models: $0 in / $0 out per 1k tokens. Hosted
+                    // pricing will be threaded in via a separate bead.
+                    self.usage_cost_usd = 0.0;
                 }
                 self.session.apply_event(ev);
             }
@@ -1361,7 +1390,7 @@ mod tests {
             role: "assistant".into(),
             delta: "hi".into(),
             tool: String::new(),
-            parent_task_id: None,
+            ..Default::default()
         }));
         assert_eq!(app.session.blocks.len(), 1);
         match &app.session.blocks[0] {
@@ -1712,7 +1741,7 @@ mod tests {
             role: "assistant".into(),
             delta: "hi".into(),
             tool: String::new(),
-            parent_task_id: None,
+            ..Default::default()
         }));
         assert_eq!(app.active_session_id.as_deref(), Some("ses-xyz"));
     }
@@ -1730,7 +1759,7 @@ mod tests {
             role: "assistant".into(),
             delta: "hi".into(),
             tool: String::new(),
-            parent_task_id: None,
+            ..Default::default()
         }));
         assert_eq!(app.active_session_id.as_deref(), Some("ses-new"));
     }

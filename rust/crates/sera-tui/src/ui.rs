@@ -48,6 +48,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         agent,
         session_id,
         conn: app.connection,
+        prompt_tokens: app.usage_prompt_tokens,
+        completion_tokens: app.usage_completion_tokens,
+        cost_usd: app.usage_cost_usd,
     }
     .render(frame, chunks[0]);
 

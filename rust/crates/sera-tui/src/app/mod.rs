@@ -1361,6 +1361,7 @@ mod tests {
             role: "assistant".into(),
             delta: "hi".into(),
             tool: String::new(),
+            parent_task_id: None,
         }));
         assert_eq!(app.session.blocks.len(), 1);
         match &app.session.blocks[0] {
@@ -1711,6 +1712,7 @@ mod tests {
             role: "assistant".into(),
             delta: "hi".into(),
             tool: String::new(),
+            parent_task_id: None,
         }));
         assert_eq!(app.active_session_id.as_deref(), Some("ses-xyz"));
     }
@@ -1728,6 +1730,7 @@ mod tests {
             role: "assistant".into(),
             delta: "hi".into(),
             tool: String::new(),
+            parent_task_id: None,
         }));
         assert_eq!(app.active_session_id.as_deref(), Some("ses-new"));
     }

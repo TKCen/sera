@@ -1,15 +1,16 @@
-//! Workflow task HTTP routes — Wave E Phase 1 (sera-kgi8) + Mail gate (sera-0zch) + GhRun gate (sera-4fel) + Change gate (sera-7ggi).
+//! Workflow task HTTP routes — Wave E Phase 1 (sera-kgi8) + Mail gate (sera-0zch) + GhRun gate (sera-4fel) + Change gate (sera-7ggi) + Human gate (sera-dgk1).
 //!
 //! Routes:
-//!   POST /api/workflow/tasks                      — create a task (Timer, Mail, GhRun, and Change gates)
+//!   POST /api/workflow/tasks                      — create a task (Timer, Mail, GhRun, Change, and Human gates)
 //!   GET  /api/workflow/tasks                      — list every known task
 //!   GET  /api/workflow/tasks/{id}                 — fetch a single task
 //!   POST /api/workflow/mail/deliver               — deliver a mail event (in-memory; for tests)
 //!   POST /api/workflow/tasks/{id}/resolve-change  — push a ChangeState event
+//!   POST /api/workflow/tasks/{id}/resume          — resolve a Human-gated task
 //!
-//! Timer, Mail, GhRun, and Change are fully wired end-to-end. Other non-Timer `await_type`
+//! Timer, Mail, GhRun, Change, and Human are fully wired end-to-end. Other non-Timer `await_type`
 //! values still return 501 Not Implemented — their wiring ships in follow-up
-//! beads (Human: sera-dgk1, GhPr: sera-comg).
+//! beads (GhPr: sera-comg).
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -22,13 +23,15 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use sera_hitl::{ApprovalId, TicketStatus};
 use sera_mail::InMemoryMailLookup;
 use sera_types::evolution::ChangeArtifactId;
 use sera_workflow::task::{ChangeState, GhRunId, MailEvent, MailThreadId, WorkflowTaskInput};
 use sera_workflow::{AwaitType, WorkflowTask, WorkflowTaskStatus, WorkflowTaskType};
 
 use sera_gateway::workflow_store::{
-    ChangeArtifactStateStore, SchedulerTaskStatus, WorkflowTaskRecord, WorkflowTaskStore,
+    ChangeArtifactStateStore, HumanGateStore, SchedulerTaskStatus, WorkflowTaskRecord,
+    WorkflowTaskStore,
 };
 
 // ── Request / response shapes ────────────────────────────────────────────────
@@ -37,7 +40,7 @@ use sera_gateway::workflow_store::{
 ///
 /// Mirrors [`AwaitType`] but decoupled so the HTTP payload does not require
 /// callers to thread through e.g. GitHub repo metadata when all they want is
-/// a Timer gate. Timer, Mail, GhRun, and Change are wired end-to-end; other variants return 501.
+/// a Timer gate. Timer, Mail, GhRun, Change, and Human are wired end-to-end; other variants return 501.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AwaitTypeTag {
@@ -55,6 +58,7 @@ pub enum AwaitTypeTag {
 /// - `mail` gate: supply `thread_id` (opaque string identifying the email thread).
 /// - `gh_run` gate: supply `run_id` and `repo` (in `owner/name` form).
 /// - `change` gate: supply `artifact_id` (64-char hex SHA-256 of the change artifact).
+/// - `human` gate: supply `approval_id`.
 /// - `title` / `description` are always optional.
 #[derive(Debug, Deserialize)]
 pub struct CreateTaskRequest {
@@ -79,6 +83,9 @@ pub struct CreateTaskRequest {
     /// artifact. Ignored for other await types.
     #[serde(default)]
     pub artifact_id: Option<String>,
+    /// Required for `human` await_type; ignored otherwise.
+    #[serde(default)]
+    pub approval_id: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
@@ -94,6 +101,17 @@ pub struct CreateTaskRequest {
 pub struct ResolveChangeRequest {
     /// New state of the change artifact (e.g. `"applied"`, `"rejected"`).
     pub state: ChangeState,
+}
+
+/// Request body for `POST /api/workflow/tasks/{id}/resume`.
+///
+/// The caller supplies the terminal ticket status — the scheduler will pick
+/// up the resolved Human gate on the next tick and mark the task resolved.
+#[derive(Debug, Deserialize)]
+pub struct ResumeTaskRequest {
+    /// Terminal [`TicketStatus`] for the Human gate.
+    /// Must be one of `"approved"`, `"rejected"`, or `"expired"`.
+    pub ticket_status: TicketStatus,
 }
 
 /// JSON projection of a [`WorkflowTaskRecord`] returned by every route.
@@ -171,6 +189,12 @@ pub trait WorkflowAppState: Send + Sync + 'static {
     /// deployment — `create_task` for `await_type = "change"` returns 501 in
     /// that case, and `resolve-change` returns 501.
     fn change_artifact_store(&self) -> Option<Arc<dyn ChangeArtifactStateStore>>;
+    /// Returns the human gate store backing the Human gate (sera-dgk1).
+    /// Default returns `None` — deployments that don't wire the Human gate
+    /// will return 501 from the resume endpoint and never resolve Human tasks.
+    fn human_gate_store(&self) -> Option<Arc<dyn HumanGateStore>> {
+        None
+    }
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -186,9 +210,9 @@ where
 {
     check_auth(state.api_key(), &headers)?;
 
-    // Timer, Mail, GhRun, and Change are wired end-to-end. Other variants are
+    // Timer, Mail, GhRun, Change, and Human are wired end-to-end. Other variants are
     // accepted at the tag level but short-circuit with 501 — their gate wiring
-    // lands in follow-up beads (Human: sera-dgk1, GhPr: sera-comg).
+    // lands in follow-up beads (GhPr: sera-comg).
     let await_type = match body.await_type {
         AwaitTypeTag::Timer => {
             let deadline = body.deadline.ok_or(StatusCode::BAD_REQUEST)?;
@@ -212,6 +236,12 @@ where
             let raw = body.artifact_id.as_deref().ok_or(StatusCode::BAD_REQUEST)?;
             let artifact_id = parse_artifact_id(raw)?;
             AwaitType::Change { artifact_id }
+        }
+        AwaitTypeTag::Human => {
+            let id_str = body.approval_id.ok_or(StatusCode::BAD_REQUEST)?;
+            AwaitType::Human {
+                approval_id: ApprovalId::new(id_str),
+            }
         }
         _ => return Err(StatusCode::NOT_IMPLEMENTED),
     };
@@ -365,13 +395,64 @@ where
     Ok(Json(record.into()))
 }
 
+/// POST /api/workflow/tasks/{id}/resume
+///
+/// Resolves a Human-gated task by recording a terminal [`TicketStatus`] for
+/// its `approval_id`. The scheduler picks up the resolved gate on its next
+/// tick and transitions the task from Pending → Resolved.
+///
+/// Returns 200 with the current task view on success.
+/// Returns 404 when the task is not found.
+/// Returns 409 when the task is not Human-gated.
+/// Returns 422 when `ticket_status` is not terminal.
+/// Returns 501 when the human gate store is not configured.
+pub async fn resume_task<S>(
+    State(state): State<Arc<S>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<ResumeTaskRequest>,
+) -> Result<Json<WorkflowTaskView>, StatusCode>
+where
+    S: WorkflowAppState,
+{
+    check_auth(state.api_key(), &headers)?;
+
+    let hitl_store = state.human_gate_store().ok_or(StatusCode::NOT_IMPLEMENTED)?;
+
+    // Validate that the supplied status is terminal — resuming with a
+    // non-terminal status would leave the gate in a non-ready state.
+    if !body.ticket_status.is_terminal() {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    let record = state
+        .workflow_store()
+        .get(&id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Extract the approval_id — only Human-gated tasks can be resumed here.
+    let approval_id = match &record.task.await_type {
+        Some(AwaitType::Human { approval_id }) => approval_id.clone(),
+        _ => return Err(StatusCode::CONFLICT),
+    };
+
+    hitl_store
+        .set_ticket_status(approval_id, body.ticket_status)
+        .await;
+
+    // Return the current (still Pending) view — the scheduler transitions it
+    // to Resolved asynchronously on the next tick.
+    Ok(Json(record.into()))
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use sera_gateway::workflow_store::{
-        InMemoryChangeArtifactStateStore, InMemoryWorkflowTaskStore,
+        InMemoryChangeArtifactStateStore, InMemoryHumanGateStore, InMemoryWorkflowTaskStore,
     };
     use axum::{
         Router,
@@ -386,6 +467,7 @@ mod tests {
         store: Arc<InMemoryWorkflowTaskStore>,
         mail: Arc<InMemoryMailLookup>,
         change_store: Option<Arc<InMemoryChangeArtifactStateStore>>,
+        hitl: Arc<InMemoryHumanGateStore>,
     }
 
     impl TestState {
@@ -395,6 +477,7 @@ mod tests {
                 store: Arc::new(InMemoryWorkflowTaskStore::new()),
                 mail: Arc::new(InMemoryMailLookup::new()),
                 change_store: Some(Arc::new(InMemoryChangeArtifactStateStore::new())),
+                hitl: Arc::new(InMemoryHumanGateStore::new()),
             })
         }
 
@@ -404,6 +487,7 @@ mod tests {
                 store: Arc::new(InMemoryWorkflowTaskStore::new()),
                 mail: Arc::new(InMemoryMailLookup::new()),
                 change_store: None,
+                hitl: Arc::new(InMemoryHumanGateStore::new()),
             })
         }
     }
@@ -423,6 +507,9 @@ mod tests {
                 .as_ref()
                 .map(|s| Arc::clone(s) as Arc<dyn ChangeArtifactStateStore>)
         }
+        fn human_gate_store(&self) -> Option<Arc<dyn HumanGateStore>> {
+            Some(Arc::clone(&self.hitl) as Arc<dyn HumanGateStore>)
+        }
     }
 
     fn test_router(state: Arc<TestState>) -> Router {
@@ -437,6 +524,10 @@ mod tests {
             .route(
                 "/api/workflow/tasks/{id}/resolve-change",
                 post(resolve_change::<TestState>),
+            )
+            .route(
+                "/api/workflow/tasks/{id}/resume",
+                post(resume_task::<TestState>),
             )
             .with_state(state)
     }
@@ -622,10 +713,128 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_human_returns_not_implemented() {
+    async fn create_human_task_returns_created() {
         let app = test_router(TestState::new(None));
         let body = serde_json::json!({
             "await_type": "human",
+            "agent_id": "sera",
+            "resume_token": "tok-h1",
+            "approval_id": "appr-001",
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflow/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let view: WorkflowTaskView = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(view.status, SchedulerTaskStatus::Pending);
+        assert!(matches!(view.await_type, Some(AwaitType::Human { .. })));
+    }
+
+    #[tokio::test]
+    async fn create_human_task_missing_approval_id_is_bad_request() {
+        let app = test_router(TestState::new(None));
+        let body = serde_json::json!({
+            "await_type": "human",
+            "agent_id": "sera",
+            "resume_token": "tok-h2",
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/api/workflow/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn resume_non_human_task_returns_conflict() {
+        let state = TestState::new(None);
+        let app = test_router(Arc::clone(&state));
+        let deadline = Utc::now() + chrono::Duration::seconds(60);
+        let create_body = serde_json::json!({
+            "await_type": "timer",
+            "agent_id": "sera",
+            "resume_token": "tok-t1",
+            "deadline": deadline,
+        });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/api/workflow/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let view: WorkflowTaskView = serde_json::from_slice(&bytes).unwrap();
+        let resume_body = serde_json::json!({ "ticket_status": "approved" });
+        let resp = app
+            .oneshot(
+                Request::post(format!("/api/workflow/tasks/{}/resume", view.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&resume_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn resume_with_non_terminal_status_is_unprocessable() {
+        let state = TestState::new(None);
+        let app = test_router(Arc::clone(&state));
+        let create_body = serde_json::json!({
+            "await_type": "human",
+            "agent_id": "sera",
+            "resume_token": "tok-h3",
+            "approval_id": "appr-002",
+        });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/api/workflow/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let view: WorkflowTaskView = serde_json::from_slice(&bytes).unwrap();
+        let resume_body = serde_json::json!({ "ticket_status": "pending" });
+        let resp = app
+            .oneshot(
+                Request::post(format!("/api/workflow/tasks/{}/resume", view.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&resume_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn create_non_timer_non_human_returns_not_implemented() {
+        let app = test_router(TestState::new(None));
+        let body = serde_json::json!({
+            "await_type": "gh_pr",
             "agent_id": "sera",
             "resume_token": "tok-1",
         });

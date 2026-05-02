@@ -1,10 +1,9 @@
-//! Workflow task store — Wave E Phase 1 (sera-kgi8) + persistence (sera-d2xh) + GhRun gate (sera-4fel) + Change gate (sera-7ggi).
+//! Workflow task store — Wave E Phase 1 (sera-kgi8) + persistence (sera-d2xh) + GhRun gate (sera-4fel) + Change gate (sera-7ggi) + Human gate (sera-dgk1).
 //!
 //! Holds the set of pending [`WorkflowTask`]s the scheduler enumerates every
-//! tick. Timer, GhRun, and Change gates are fully wired end-to-end; other `AwaitType`
+//! tick. Timer, GhRun, Change, and Human gates are fully wired end-to-end; other `AwaitType`
 //! variants are accepted at creation time but will not transition to "resolved"
-//! until their dedicated gate beads land (Human: sera-dgk1, GhPr: sera-comg,
-//! Mail: sera-0zch).
+//! until their dedicated gate beads land (GhPr: sera-comg, Mail: sera-0zch).
 //!
 //! Two implementations ship today:
 //! - [`InMemoryWorkflowTaskStore`] — `HashMap`-backed, used by tests and the
@@ -22,9 +21,11 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
+use sera_hitl::{ApprovalId, TicketStatus};
 use sera_types::evolution::ChangeArtifactId;
 use sera_workflow::task::{ChangeState, GhRunId, GhRunStatus};
 use sera_workflow::WorkflowTask;
+use sera_workflow::ready::HitlLookup;
 
 /// Lifecycle status of a [`WorkflowTaskRecord`] as seen by the scheduler.
 ///
@@ -681,5 +682,83 @@ impl ChangeArtifactStateStore for InMemoryChangeArtifactStateStore {
     async fn snapshot(&self) -> HashMap<[u8; 32], ChangeState> {
         let map = self.inner.read().await;
         map.clone()
+    }
+}
+
+// ── Human gate store (sera-dgk1) ─────────────────────────────────────────────
+
+/// Async key-value store mapping [`ApprovalId`] → [`TicketStatus`].
+///
+/// The scheduler snapshots this store synchronously before each tick via
+/// [`HumanGateStore::snapshot`] and wraps the result in a
+/// [`SnapshotHitlLookup`], satisfying the synchronous [`HitlLookup`] contract
+/// required by `sera_workflow::ready::ReadyContext`.
+#[async_trait::async_trait]
+pub trait HumanGateStore: Send + Sync {
+    /// Record a terminal ticket status for `approval_id`.
+    async fn set_ticket_status(&self, approval_id: ApprovalId, status: TicketStatus);
+
+    /// Look up the current status for `approval_id`. Returns `None` when no
+    /// status has been recorded yet.
+    async fn get_ticket_status(&self, approval_id: &ApprovalId) -> Option<TicketStatus>;
+
+    /// Return a point-in-time snapshot of all recorded statuses. Used by the
+    /// scheduler to construct a [`SnapshotHitlLookup`] before the tick.
+    async fn snapshot(&self) -> HashMap<String, TicketStatus>;
+}
+
+/// In-memory implementation of [`HumanGateStore`]. Sufficient for Phase 1.
+#[derive(Default)]
+pub struct InMemoryHumanGateStore {
+    inner: RwLock<HashMap<String, TicketStatus>>,
+}
+
+impl InMemoryHumanGateStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn shared() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+}
+
+#[async_trait::async_trait]
+impl HumanGateStore for InMemoryHumanGateStore {
+    async fn set_ticket_status(&self, approval_id: ApprovalId, status: TicketStatus) {
+        let mut map = self.inner.write().await;
+        map.insert(approval_id.to_string(), status);
+    }
+
+    async fn get_ticket_status(&self, approval_id: &ApprovalId) -> Option<TicketStatus> {
+        let map = self.inner.read().await;
+        map.get(approval_id.as_str()).copied()
+    }
+
+    async fn snapshot(&self) -> HashMap<String, TicketStatus> {
+        let map = self.inner.read().await;
+        map.clone()
+    }
+}
+
+/// Synchronous [`HitlLookup`] backed by a pre-taken snapshot of the
+/// [`HumanGateStore`].
+///
+/// The scheduler calls [`HumanGateStore::snapshot`] once per tick to capture
+/// the current ticket statuses, then wraps the result in this struct so the
+/// pure-synchronous `ready_tasks_with_context` can consult it without async.
+pub struct SnapshotHitlLookup {
+    snapshot: HashMap<String, TicketStatus>,
+}
+
+impl SnapshotHitlLookup {
+    pub fn new(snapshot: HashMap<String, TicketStatus>) -> Self {
+        Self { snapshot }
+    }
+}
+
+impl HitlLookup for SnapshotHitlLookup {
+    fn ticket_status(&self, id: &ApprovalId) -> Option<TicketStatus> {
+        self.snapshot.get(id.as_str()).copied()
     }
 }

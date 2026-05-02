@@ -1150,6 +1150,40 @@ impl AgentTurnTransport for RuntimeChildSupervisor {
     fn dispatch_kind(&self) -> &'static str {
         "runtime"
     }
+
+    /// sera-40y3: kill the current child and clear the harness slot so the
+    /// next `acquire()` respawns fresh. Called from the KillSwitch ROLLBACK
+    /// callback after `cancel_all_in_flight` flips the cancellation tokens.
+    /// Without this, the runtime child keeps running and the next
+    /// post-DISARM submission could read a stale `TurnCompleted` frame
+    /// from the previous (aborted) turn.
+    async fn kill_for_rollback(&self) {
+        let mut state = self.state.lock().await;
+        if let Some(harness) = state.harness.as_ref() {
+            // Best-effort kill — the child may already be dead, in which
+            // case `start_kill` returns an error we just log.
+            let mut child = harness.child.lock().await;
+            if let Err(e) = child.start_kill() {
+                tracing::warn!(
+                    agent = %self.agent_id,
+                    generation = state.generation,
+                    error = %e,
+                    "kill_for_rollback: start_kill failed (child may already be gone)"
+                );
+            } else {
+                tracing::warn!(
+                    agent = %self.agent_id,
+                    generation = state.generation,
+                    event = "harness:killed_for_rollback",
+                    "killed runtime child after KillSwitch ROLLBACK"
+                );
+            }
+        }
+        // Drop the harness regardless — next acquire() will respawn. We do
+        // not bump generation here; respawn_locked will.
+        state.harness = None;
+        state.last_exit = Some("killed_for_rollback".to_string());
+    }
 }
 
 // ── Turn event types ────────────────────────────────────────────────────────
@@ -4851,9 +4885,31 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         let sock_path = admin_sock_path();
         // sera-bsem: the rollback callback also cancels every in-flight
         // turn/steer so wedged runtimes release their lane slots promptly.
+        // sera-40y3: it also kills every registered runtime harness so the
+        // post-DISARM resume path cannot read stale TurnCompleted frames
+        // from the previous (aborted) turn — see AgentTurnTransport::
+        // kill_for_rollback.
         let rollback_state = Arc::clone(&state);
         spawn_admin_socket(ks, sock_path, move || {
             let cancelled = rollback_state.cancel_all_in_flight();
+            // Spawn the harness kills onto the runtime — the on_rollback
+            // hook is a synchronous Fn() and `kill_for_rollback` is async.
+            let harness_state = Arc::clone(&rollback_state);
+            tokio::spawn(async move {
+                let count = harness_state.harnesses.len();
+                for (agent, harness) in harness_state.harnesses.iter() {
+                    tracing::warn!(
+                        agent = %agent,
+                        "killing runtime harness after KillSwitch ROLLBACK"
+                    );
+                    harness.kill_for_rollback().await;
+                }
+                tracing::warn!(
+                    event = "KILL_SWITCH_HARNESSES_KILLED",
+                    harnesses_killed = count,
+                    "killed every registered runtime harness on ROLLBACK"
+                );
+            });
             tracing::warn!(
                 event = "KILL_SWITCH_ACTIVATED",
                 cancelled_turns = cancelled,
@@ -8744,6 +8800,50 @@ spec:
                 "expected a shutting-down error, got: {err}"
             ),
         }
+    }
+
+    /// sera-40y3: `kill_for_rollback` kills the live child and clears the
+    /// harness slot so the next `acquire` respawns. Without this, the
+    /// runtime child keeps running and its NDJSON stdout still buffers
+    /// the aborted turn's `TurnCompleted` frame — the next post-DISARM
+    /// submission would read it as its own reply.
+    #[tokio::test]
+    async fn supervisor_kill_for_rollback_forces_respawn() {
+        let supervisor = RuntimeChildSupervisor::start_with_factory("agent", || async {
+            StdioHarness::spawn_mock().await
+        })
+        .await
+        .expect("initial spawn");
+
+        let gen0 = supervisor.current_generation().await;
+        // Warm the harness so a real child is live.
+        let _ = supervisor.acquire().await.expect("acquire before rollback");
+        assert_eq!(supervisor.current_generation().await, gen0);
+
+        // Operator fires ROLLBACK — kill the harness.
+        supervisor.kill_for_rollback().await;
+
+        // Next acquire must respawn (gen incremented) and produce a
+        // healthy harness — proves the stale child was disposed of.
+        let h1 = supervisor
+            .acquire()
+            .await
+            .expect("acquire after kill_for_rollback must respawn");
+        let gen1 = supervisor.current_generation().await;
+        assert!(
+            gen1 > gen0,
+            "kill_for_rollback must force a fresh generation \
+             (gen0={gen0} gen1={gen1})"
+        );
+        let events = h1
+            .send_turn(Vec::new(), "40y3-post-rollback")
+            .await
+            .expect("respawned harness answers normally");
+        assert_eq!(
+            events.response, "mock response",
+            "post-rollback harness must come from a fresh child, not a \
+             stale buffer"
+        );
     }
 
     /// End-to-end through `execute_turn`: a cold-crashed initial child must

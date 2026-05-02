@@ -134,6 +134,24 @@ pub trait AgentTurnTransport: Send + Sync {
     fn dispatch_kind(&self) -> &'static str {
         "unknown"
     }
+
+    /// Discard any backing state pinned to an aborted turn (sera-40y3).
+    /// Called from the KillSwitch ROLLBACK callback after
+    /// `cancel_all_in_flight` cancels every in-flight cancellation token.
+    ///
+    /// `cancel_all_in_flight` only flips Tokio cancellation tokens — the
+    /// stdio child process keeps running and its NDJSON stdout pipe still
+    /// holds whatever frames it had buffered (a stale `TurnCompleted`,
+    /// partial deltas, etc.). On DISARM-and-resume without a gateway
+    /// restart, the next submission would read those stale frames as its
+    /// own reply (cross-turn state corruption).
+    ///
+    /// Implementors are expected to terminate any subprocess they own and
+    /// drop any cached transport state so the next turn starts from a
+    /// clean slate. The default is a no-op for backends that have no
+    /// process/connection to invalidate (`EmbeddedRuntimeTransport`, test
+    /// doubles).
+    async fn kill_for_rollback(&self) {}
 }
 
 #[cfg(test)]

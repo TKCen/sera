@@ -58,7 +58,6 @@ pub mod tool_hooks;
 pub mod authz_builder;
 pub mod config;
 pub mod memory_budget;
-pub mod context;
 pub mod default_runtime;
 pub mod health;
 pub mod llm_client;

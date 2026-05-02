@@ -81,6 +81,8 @@ grpc = []
 webhook-back = []
 connector-discord = []
 enterprise = ["dep:git2"]
+# sera-ai4w: production GitHub poller for GhPr / GhRun gates.
+gh-api = []
 
 [dev-dependencies]
 sera-testing.workspace = true

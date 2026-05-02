@@ -11,6 +11,8 @@ pub mod constitutional_config;
 pub mod db_backend;
 pub mod envelope;
 pub mod generation;
+#[cfg(feature = "gh-api")]
+pub mod github_poller;
 pub mod harness_dispatch;
 pub mod hitl_gateway;
 pub mod kill_switch;

@@ -67,8 +67,8 @@ use sera_gateway::session_store::{SessionStore, SqliteSessionStore};
 #[cfg(feature = "enterprise")]
 use sera_gateway::session_store::SqliteGitSessionStore;
 use sera_gateway::workflow_store::{
-    GhRunStateStore, HumanGateStore, InMemoryGhRunStateStore, InMemoryHumanGateStore,
-    InMemoryWorkflowTaskStore, WorkflowTaskStore,
+    GhPrStateStore, GhRunStateStore, HumanGateStore, InMemoryGhPrStateStore,
+    InMemoryGhRunStateStore, InMemoryHumanGateStore, InMemoryWorkflowTaskStore, WorkflowTaskStore,
 };
 use sera_hooks::{ChainExecutor, HookRegistry};
 use sera_mail::{
@@ -1350,6 +1350,8 @@ struct AppState {
     /// Consulted by the scheduler each tick via a snapshot lookup so GhRun-
     /// gated workflow tasks transition to resolved when their run completes.
     gh_run_store: Arc<dyn GhRunStateStore>,
+    /// GitHub PR state store (sera-ai4w).
+    gh_pr_store: Arc<dyn GhPrStateStore>,
     /// Human gate ticket status store (sera-dgk1). Populated by
     /// `POST /api/workflow/tasks/{id}/resume`; snapshotted each scheduler
     /// tick so Human-gated tasks can resolve without holding an async lock.
@@ -1618,6 +1620,9 @@ impl WorkflowAppState for AppState {
     }
     fn human_gate_store(&self) -> Option<Arc<dyn HumanGateStore>> {
         Some(Arc::clone(&self.human_gate_store))
+    }
+    fn gh_pr_store(&self) -> Option<Arc<dyn GhPrStateStore>> {
+        Some(Arc::clone(&self.gh_pr_store))
     }
 }
 
@@ -4985,6 +4990,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
         workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
         gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+        gh_pr_store: Arc::new(InMemoryGhPrStateStore::new()),
         human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
         admin_auth: Some(Arc::clone(&admin_auth)),
         admin_audit: Some(Arc::clone(&admin_audit)),
@@ -5009,9 +5015,30 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         Some(Arc::clone(&state.gh_run_store)),
         None,
         Some(Arc::clone(&state.human_gate_store)),
-        None,
+        Some(Arc::clone(&state.gh_pr_store)),
         Arc::clone(&shutting_down),
     );
+
+    // sera-ai4w: production GitHub poller (gated behind gh-api feature).
+    #[cfg(feature = "gh-api")]
+    if let Some(poller_config) = sera_gateway::github_poller::GitHubPollerConfig::from_env() {
+        tracing::info!(
+            target: "sera_gateway::github_poller",
+            interval_secs = poller_config.interval.as_secs(),
+            "starting GitHub poller for GhPr / GhRun gates"
+        );
+        sera_gateway::github_poller::spawn_poller(
+            poller_config,
+            Some(Arc::clone(&state.gh_pr_store)),
+            Some(Arc::clone(&state.gh_run_store)),
+            Arc::clone(&shutting_down),
+        );
+    } else {
+        tracing::info!(
+            target: "sera_gateway::github_poller",
+            "SERA_GH_TOKEN unset — GitHub poller not started"
+        );
+    }
 
     // 4a. Spawn admin kill-switch Unix socket (SPEC-gateway §7a.4).
     {
@@ -5692,6 +5719,7 @@ mod tests {
             hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            gh_pr_store: Arc::new(InMemoryGhPrStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
@@ -5740,6 +5768,7 @@ mod tests {
             hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            gh_pr_store: Arc::new(InMemoryGhPrStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
@@ -5788,6 +5817,7 @@ mod tests {
             hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            gh_pr_store: Arc::new(InMemoryGhPrStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
@@ -5836,6 +5866,7 @@ mod tests {
             hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            gh_pr_store: Arc::new(InMemoryGhPrStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
@@ -6338,6 +6369,7 @@ spec:
             hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            gh_pr_store: Arc::new(InMemoryGhPrStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
@@ -6848,6 +6880,7 @@ spec:
             hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            gh_pr_store: Arc::new(InMemoryGhPrStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
@@ -6899,6 +6932,7 @@ spec:
             hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            gh_pr_store: Arc::new(InMemoryGhPrStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
@@ -6951,6 +6985,7 @@ spec:
             hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            gh_pr_store: Arc::new(InMemoryGhPrStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
@@ -7006,6 +7041,7 @@ spec:
             hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            gh_pr_store: Arc::new(InMemoryGhPrStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
@@ -9340,6 +9376,7 @@ spec:
             hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
             workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
             gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+            gh_pr_store: Arc::new(InMemoryGhPrStateStore::new()),
             human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
             admin_auth: None,
             admin_audit: None,
@@ -9430,6 +9467,7 @@ spec:
             hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
                 workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
                 gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+                gh_pr_store: Arc::new(InMemoryGhPrStateStore::new()),
                 human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
                 admin_auth: None,
                 admin_audit: None,
@@ -10165,6 +10203,7 @@ spec:
             hitl_resumed_tx: tokio::sync::broadcast::channel(64).0,
                 workflow_store: Arc::new(InMemoryWorkflowTaskStore::new()),
                 gh_run_store: Arc::new(InMemoryGhRunStateStore::new()),
+                gh_pr_store: Arc::new(InMemoryGhPrStateStore::new()),
                 human_gate_store: Arc::new(InMemoryHumanGateStore::new()),
                 admin_auth: None,
                 admin_audit: None,

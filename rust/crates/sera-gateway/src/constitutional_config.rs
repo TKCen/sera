@@ -151,6 +151,14 @@ mod tests {
     use super::*;
     use tempfile::NamedTempFile;
     use std::io::Write as _;
+    use std::sync::{Mutex, OnceLock};
+
+    /// Serialises all tests that read or write `SERA_CONSTITUTIONAL_RULES_PATH`
+    /// so they don't race each other when `cargo test` runs them in parallel.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_MUTEX.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     // ---- parse_rules -------------------------------------------------------
 
@@ -528,6 +536,7 @@ lol3: &lol3 [*lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2]
         tmp.write_all(yaml).unwrap();
 
         let path_str = tmp.path().to_str().unwrap().to_owned();
+        let _guard = env_lock();
         unsafe { std::env::set_var("SERA_CONSTITUTIONAL_RULES_PATH", &path_str); }
 
         let registry = ConstitutionalRegistry::new();
@@ -548,6 +557,7 @@ lol3: &lol3 [*lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2, *lol2]
         // When SERA_CONSTITUTIONAL_RULES_PATH is unset the loader falls back to
         // DEFAULT_RULES_PATH (/etc/sera/constitutional_rules.yaml). That file
         // almost certainly doesn't exist in CI, so the call must return Ok(0).
+        let _guard = env_lock();
         unsafe { std::env::remove_var("SERA_CONSTITUTIONAL_RULES_PATH"); }
 
         // Skip if the default path exists on this machine (e.g. a developer

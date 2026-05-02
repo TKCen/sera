@@ -140,7 +140,7 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
             && banner.retry_at <= std::time::Instant::now()
         {
             banner.advance();
-            if let Some((agent, message)) = app.pending_retry.clone() {
+            if let Some((agent, message)) = app.pending_retry.take() {
                 app.pending
                     .push(app::AppCommand::RetrySendChat { agent, message });
             }
@@ -213,6 +213,7 @@ async fn run<B: ratatui::backend::Backend + io::Write>(
                             &app.keybindings,
                             app.session.composer_focused(),
                             app.turn_streaming,
+                            app.disconnect_banner.is_some(),
                         )
                     };
                     app.dispatch(action);

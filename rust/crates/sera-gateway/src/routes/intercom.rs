@@ -11,7 +11,10 @@
 
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::{Arc, RwLock};
+use std::sync::{
+    Arc, RwLock,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use axum::{
     Json,
@@ -31,6 +34,12 @@ use sera_types::intercom::{IntercomMessage, MessageSource};
 /// Default broadcast channel capacity per topic. Lossy beyond this point.
 const DEFAULT_TOPIC_CAPACITY: usize = 256;
 
+#[derive(Debug, Clone)]
+struct TopicEntry {
+    tx: broadcast::Sender<IntercomMessage>,
+    subscriber_count: Arc<AtomicUsize>,
+}
+
 /// In-process pub/sub broker keyed by topic (channel) name.
 ///
 /// Each topic backs one [`tokio::sync::broadcast::Sender`]; subscribers get
@@ -42,7 +51,7 @@ const DEFAULT_TOPIC_CAPACITY: usize = 256;
 /// publishes, agent B receives") works without external services.
 #[derive(Debug, Default)]
 pub struct IntercomBroker {
-    topics: RwLock<HashMap<String, broadcast::Sender<IntercomMessage>>>,
+    topics: Arc<RwLock<HashMap<String, TopicEntry>>>,
 }
 
 impl IntercomBroker {
@@ -58,7 +67,7 @@ impl IntercomBroker {
         let topic = msg.channel.clone();
         let sender = {
             let topics = self.topics.read().expect("intercom topics rwlock poisoned");
-            topics.get(&topic).cloned()
+            topics.get(&topic).map(|entry| entry.tx.clone())
         };
         match sender {
             Some(tx) => tx.send(msg).unwrap_or(0),
@@ -67,28 +76,100 @@ impl IntercomBroker {
     }
 
     /// Subscribe to `topic`. Lazily creates the broadcast channel if no
-    /// publisher or other subscriber has touched it yet.
-    pub fn subscribe(&self, topic: &str) -> broadcast::Receiver<IntercomMessage> {
-        {
-            let topics = self.topics.read().expect("intercom topics rwlock poisoned");
-            if let Some(tx) = topics.get(topic) {
-                return tx.subscribe();
-            }
+    /// publisher or other subscriber has touched it yet. The topic is removed
+    /// from the broker when the last subscriber drops.
+    pub fn subscribe(&self, topic: &str) -> IntercomSubscription {
+        let entry = {
+            let mut topics = self.topics.write().expect("intercom topics rwlock poisoned");
+            topics
+                .entry(topic.to_string())
+                .or_insert_with(|| {
+                    let (tx, _) = broadcast::channel(DEFAULT_TOPIC_CAPACITY);
+                    TopicEntry {
+                        tx,
+                        subscriber_count: Arc::new(AtomicUsize::new(0)),
+                    }
+                })
+                .clone()
+        };
+        entry.subscriber_count.fetch_add(1, Ordering::Relaxed);
+        IntercomSubscription {
+            rx: entry.tx.subscribe(),
+            _cleanup: TopicCleanup {
+                topic: topic.to_string(),
+                topics: Arc::clone(&self.topics),
+                subscriber_count: entry.subscriber_count,
+            },
         }
-        let mut topics = self.topics.write().expect("intercom topics rwlock poisoned");
-        let tx = topics
-            .entry(topic.to_string())
-            .or_insert_with(|| broadcast::channel(DEFAULT_TOPIC_CAPACITY).0);
-        tx.subscribe()
     }
 
-    /// List currently known topic names. A topic appears here once it has
-    /// had at least one subscribe call.
+    /// List currently known topic names. A topic appears here while it has at
+    /// least one active subscriber.
     pub fn topics(&self) -> Vec<String> {
         let topics = self.topics.read().expect("intercom topics rwlock poisoned");
         let mut names: Vec<String> = topics.keys().cloned().collect();
         names.sort();
         names
+    }
+}
+
+pub struct IntercomSubscription {
+    rx: broadcast::Receiver<IntercomMessage>,
+    _cleanup: TopicCleanup,
+}
+
+impl IntercomSubscription {
+    #[cfg(test)]
+    async fn recv(&mut self) -> Result<IntercomMessage, broadcast::error::RecvError> {
+        self.rx.recv().await
+    }
+
+    fn into_stream(self) -> IntercomSubscriptionStream {
+        let Self { rx, _cleanup } = self;
+        IntercomSubscriptionStream {
+            stream: BroadcastStream::new(rx),
+            _cleanup,
+        }
+    }
+}
+
+pub struct IntercomSubscriptionStream {
+    stream: BroadcastStream<IntercomMessage>,
+    _cleanup: TopicCleanup,
+}
+
+impl futures_util::Stream for IntercomSubscriptionStream {
+    type Item = Result<IntercomMessage, tokio_stream::wrappers::errors::BroadcastStreamRecvError>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::pin::Pin::new(&mut self.stream).poll_next(cx)
+    }
+}
+
+struct TopicCleanup {
+    topic: String,
+    topics: Arc<RwLock<HashMap<String, TopicEntry>>>,
+    subscriber_count: Arc<AtomicUsize>,
+}
+
+impl Drop for TopicCleanup {
+    fn drop(&mut self) {
+        if self.subscriber_count.fetch_sub(1, Ordering::AcqRel) != 1 {
+            return;
+        }
+        let mut topics = self.topics.write().expect("intercom topics rwlock poisoned");
+        let Some(entry) = topics.get(&self.topic) else {
+            return;
+        };
+        if Arc::ptr_eq(&entry.subscriber_count, &self.subscriber_count)
+            && self.subscriber_count.load(Ordering::Acquire) == 0
+            && entry.tx.receiver_count() == 0
+        {
+            topics.remove(&self.topic);
+        }
     }
 }
 
@@ -192,9 +273,9 @@ where
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let rx = state.intercom_broker().subscribe(&topic);
+    let subscription = state.intercom_broker().subscribe(&topic);
 
-    let stream = BroadcastStream::new(rx).filter_map(|res| match res {
+    let stream = subscription.into_stream().filter_map(|res| match res {
         Ok(msg) => {
             let data = serde_json::to_string(&msg).unwrap_or_else(|_| "{}".into());
             Some(Ok::<Event, Infallible>(
@@ -271,6 +352,21 @@ mod tests {
         broker.publish(msg("beta", "for-b"));
         assert_eq!(rx_a.recv().await.unwrap().data["body"], "for-a");
         assert_eq!(rx_b.recv().await.unwrap().data["body"], "for-b");
+    }
+
+    #[tokio::test]
+    async fn broker_removes_topic_after_last_subscriber_drops() {
+        let broker = IntercomBroker::new();
+        let rx_a = broker.subscribe("alpha");
+        let rx_b = broker.subscribe("alpha");
+        assert_eq!(broker.topics(), vec!["alpha"]);
+
+        drop(rx_a);
+        assert_eq!(broker.topics(), vec!["alpha"]);
+
+        drop(rx_b);
+        assert!(broker.topics().is_empty());
+        assert_eq!(broker.publish(msg("alpha", "after-drop")), 0);
     }
 
     // ── HTTP handler tests ───────────────────────────────────────────────────

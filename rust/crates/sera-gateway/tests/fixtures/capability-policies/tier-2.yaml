@@ -3,6 +3,10 @@
 # Allows memory reads/writes plus `shell`. Used in capability_enforcement
 # integration tests to verify that an agent bound to this policy can call
 # shell while a tier-1-bound agent cannot.
+#
+# `file-list` is included so capability_policy_e2e.rs can exercise the
+# allow path against a real built-in handler (Read-risk) instead of an
+# unbound name; existing capability_enforcement tests are unaffected.
 apiVersion: sera/v1
 kind: CapabilityPolicy
 metadata:
@@ -11,3 +15,4 @@ allowedTools:
   - memory_read
   - memory_write
   - shell
+  - file-list

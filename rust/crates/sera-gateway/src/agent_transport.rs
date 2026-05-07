@@ -123,6 +123,24 @@ pub trait AgentTurnTransport: Send + Sync {
     /// streaming reply on a `__sera_readiness_probe__` session).
     async fn liveness_probe(&self) -> anyhow::Result<()>;
 
+    /// Whether this transport can make a newly-added helper allow-list visible
+    /// before the next turn. Callers must fail fast instead of relying on the
+    /// default no-op refresh when this is false.
+    fn supports_dynamic_subagents(&self) -> bool {
+        false
+    }
+
+    /// Refresh the backend's dynamic helper allow-list before a turn.
+    ///
+    /// Stdio runtime children derive handoff tools from
+    /// `SERA_AGENT_SUBAGENTS_ALLOWED` at process startup, so a caller that
+    /// changes `AgentSpec.subagents_allowed` must give the transport a chance
+    /// to update its spawn environment and respawn. Backends that compute tools
+    /// directly from the per-turn `AgentSpec` can keep this default no-op.
+    async fn refresh_subagents_allowed(&self, _allowed: &[String]) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// Diagnostic identifier for this transport backend. Mirrors the
     /// `dispatch_mode` field the boot log already records per-agent
     /// (`"runtime"` for `RuntimeChildSupervisor`, `"embedded"` for

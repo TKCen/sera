@@ -32,8 +32,7 @@ def is_interrupted_runtime_result(value: Any) -> bool:
 def is_llm_error_result(value: Any) -> bool:
     if not isinstance(value, str):
         return False
-    lowered = value.lower()
-    return "[llm error:" in lowered or "llm call failed" in lowered
+    return value.lstrip().lower().startswith("[llm error:")
 
 
 def container_api_key(container: str) -> str:

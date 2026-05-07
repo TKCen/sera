@@ -727,6 +727,21 @@ impl StdioHarness {
         Self::spawn_with_script(script).await
     }
 
+    /// Spawn a mock runtime that emits the live false-green sentinel seen in
+    /// `/tmp/sera-6zcb-live-smoke.json`: a terminal turn with an interrupted
+    /// doom-loop result string rather than a transport error.
+    async fn spawn_mock_interrupted_doom_loop() -> anyhow::Result<Self> {
+        let script = concat!(
+            r#"while IFS= read -r line; do "#,
+            r#"echo '{"id":"00000000-0000-0000-0000-000000000001","submission_id":"00000000-0000-0000-0000-000000000000","msg":{"type":"turn_started","turn_id":"00000000-0000-0000-0000-000000000002"},"timestamp":"2024-01-01T00:00:00Z"}'; "#,
+            r#"echo '{"id":"00000000-0000-0000-0000-000000000003","submission_id":"00000000-0000-0000-0000-000000000000","msg":{"type":"streaming_delta","delta":"[interrupted: doom loop: 3 consecutive act cycles]"},"timestamp":"2024-01-01T00:00:00Z"}'; "#,
+            r#"echo '{"id":"00000000-0000-0000-0000-000000000004","submission_id":"00000000-0000-0000-0000-000000000000","msg":{"type":"turn_completed","turn_id":"00000000-0000-0000-0000-000000000002"},"timestamp":"2024-01-01T00:00:00Z"}'; "#,
+            r#"done"#,
+        );
+
+        Self::spawn_with_script(script).await
+    }
+
     /// Spawn a mock runtime that consumes submissions but never emits events.
     /// Used to exercise the turn timeout path — a live child with an open
     /// stdout that simply never produces output.
@@ -1944,8 +1959,61 @@ struct OperatorTaskStatusCard {
     status: String,
     blocked: bool,
     result: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_action: Option<String>,
     audit_id: String,
     session_key: String,
+}
+
+struct OperatorTaskCloseout {
+    status: &'static str,
+    blocked: bool,
+    failure_class: Option<&'static str>,
+    next_action: Option<&'static str>,
+}
+
+fn classify_operator_task_turn(turn: &MvsTurnResult) -> OperatorTaskCloseout {
+    if turn.cancelled {
+        return OperatorTaskCloseout {
+            status: "blocked",
+            blocked: true,
+            failure_class: Some("runtime_cancelled"),
+            next_action: Some("retry_or_inspect_runtime"),
+        };
+    }
+
+    if turn.failure.is_some() {
+        return OperatorTaskCloseout {
+            status: "blocked",
+            blocked: true,
+            failure_class: Some("runtime_failure"),
+            next_action: Some("inspect_runtime"),
+        };
+    }
+
+    if is_interrupted_runtime_result(&turn.reply) {
+        return OperatorTaskCloseout {
+            status: "blocked",
+            blocked: true,
+            failure_class: Some("runtime_interrupted"),
+            next_action: Some("retry_or_inspect_runtime"),
+        };
+    }
+
+    OperatorTaskCloseout {
+        status: "complete",
+        blocked: false,
+        failure_class: None,
+        next_action: None,
+    }
+}
+
+fn is_interrupted_runtime_result(reply: &str) -> bool {
+    let lower = reply.to_ascii_lowercase();
+    lower.contains("[interrupted:")
+        || (lower.contains("interrupted") && lower.contains("doom loop:"))
 }
 
 /// Custom JSON extractor that maps axum's `JsonRejection` (which produces 422
@@ -3376,12 +3444,7 @@ async fn operator_task_handler(
         .filter(|id| id.starts_with(&format!("{session_key}/")))
         .count();
     let latest_event = format!("intercom:operator.task delivered={delivered}");
-    let status = if turn.cancelled || turn.failure.is_some() {
-        "blocked"
-    } else {
-        "complete"
-    }
-    .to_string();
+    let closeout = classify_operator_task_turn(&turn);
 
     Ok(Json(OperatorTaskStatusCard {
         accepted_task: task,
@@ -3395,9 +3458,11 @@ async fn operator_task_handler(
         },
         handoff_tool: format!("handoff_to_{helper}"),
         latest_event,
-        status: status.clone(),
-        blocked: status == "blocked",
+        status: closeout.status.to_string(),
+        blocked: closeout.blocked,
         result: turn.reply,
+        failure_class: closeout.failure_class.map(str::to_string),
+        next_action: closeout.next_action.map(str::to_string),
         audit_id,
         session_key,
     }))
@@ -7376,6 +7441,57 @@ spec:
         assert!(
             spec.subagents_allowed.iter().any(|agent| agent == "smoke-helper"),
             "operator helper should be persisted to the parent agent allow-list"
+        );
+    }
+
+    #[tokio::test]
+    async fn operator_task_interrupted_doom_loop_is_not_false_complete() {
+        let mut state = test_state_async().await;
+        let interrupted_sup: Arc<dyn AgentTurnTransport> =
+            RuntimeChildSupervisor::start_with_factory("sera", || async {
+                StdioHarness::spawn_mock_interrupted_doom_loop().await
+            })
+            .await
+            .unwrap();
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert("sera".to_string(), interrupted_sup);
+        let app = build_router(Arc::clone(&state));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/operator/tasks")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "task": "Summarize the deployment state",
+                            "agent": "sera",
+                            "helper": "smoke-helper"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_ne!(json["status"], "complete");
+        assert_eq!(json["status"], "blocked");
+        assert_eq!(json["blocked"], true);
+        assert_eq!(json["failure_class"], "runtime_interrupted");
+        assert_eq!(json["next_action"], "retry_or_inspect_runtime");
+        assert_eq!(
+            json["result"],
+            "[interrupted: doom loop: 3 consecutive act cycles]"
         );
     }
 

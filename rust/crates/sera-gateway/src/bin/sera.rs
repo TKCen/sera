@@ -3212,13 +3212,16 @@ async fn operator_task_handler(
     }
     {
         let mut manifests = state.manifests.write().unwrap();
-        ensure_operator_helper_manifest(&mut manifests, &helper, &agent_spec);
-        if helper_allowed_changed {
-            let mut agent_manifest = manifests
-                .agent(&agent_name)
-                .cloned()
-                .ok_or(StatusCode::NOT_FOUND)?;
-            agent_manifest.spec = serde_json::to_value(&agent_spec)
+        let mut agent_manifest = manifests
+            .agent(&agent_name)
+            .cloned()
+            .ok_or(StatusCode::NOT_FOUND)?;
+        let mut latest_spec: AgentSpec = serde_json::from_value(agent_manifest.spec.clone())
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        ensure_operator_helper_manifest(&mut manifests, &helper, &latest_spec);
+        if !latest_spec.subagents_allowed.iter().any(|a| a == &helper) {
+            latest_spec.subagents_allowed.push(helper.clone());
+            agent_manifest.spec = serde_json::to_value(latest_spec)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             manifests.upsert_agent(agent_manifest);
         }

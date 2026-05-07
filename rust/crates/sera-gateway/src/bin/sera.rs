@@ -77,7 +77,7 @@ use sera_mail::{
     MailCorrelator, parse_raw_message,
 };
 use sera_types::config_manifest::{
-    AgentSpec, ApiVersion, ConfigManifest, ConnectorSpec, ProviderSpec,
+    AgentSpec, AgentToolsSpec, ApiVersion, ConfigManifest, ConnectorSpec, ProviderSpec,
     ResourceKind, ResourceMetadata, CONFIG_VERSION,
 };
 use sera_types::event::IncomingEvent as DomainEvent;
@@ -800,7 +800,7 @@ impl StdioHarness {
 enum SpawnFactory {
     Process {
         runtime_bin: String,
-        env: std::collections::HashMap<String, String>,
+        env: Arc<std::sync::RwLock<std::collections::HashMap<String, String>>>,
     },
     #[cfg(test)]
     Mock(
@@ -816,7 +816,11 @@ impl SpawnFactory {
     async fn spawn_one(&self) -> anyhow::Result<StdioHarness> {
         match self {
             Self::Process { runtime_bin, env } => {
-                StdioHarness::spawn(runtime_bin, env.clone()).await
+                let env_snapshot = env
+                    .read()
+                    .map_err(|_| anyhow::anyhow!("runtime spawn env rwlock poisoned"))?
+                    .clone();
+                StdioHarness::spawn(runtime_bin, env_snapshot).await
             }
             #[cfg(test)]
             Self::Mock(f) => f().await,
@@ -862,7 +866,10 @@ impl RuntimeChildSupervisor {
     ) -> anyhow::Result<Arc<Self>> {
         let supervisor = Arc::new(Self {
             agent_id,
-            factory: SpawnFactory::Process { runtime_bin, env },
+            factory: SpawnFactory::Process {
+                runtime_bin,
+                env: Arc::new(std::sync::RwLock::new(env)),
+            },
             state: Mutex::new(SupervisorState {
                 harness: None,
                 generation: 0,
@@ -942,6 +949,58 @@ impl RuntimeChildSupervisor {
         }
     }
 
+
+    async fn update_subagents_allowed_env(&self, allowed: &[String]) -> anyhow::Result<()> {
+        #[cfg(test)]
+        let env = match &self.factory {
+            SpawnFactory::Process { env, .. } => env,
+            SpawnFactory::Mock(_) => return Ok(()),
+        };
+        #[cfg(not(test))]
+        let SpawnFactory::Process { env, .. } = &self.factory;
+        {
+            let mut guard = env
+                .write()
+                .map_err(|_| anyhow::anyhow!("runtime spawn env rwlock poisoned"))?;
+            guard.insert(
+                "SERA_AGENT_SUBAGENTS_ALLOWED".to_string(),
+                allowed.join(","),
+            );
+        }
+
+        let mut state = self.state.lock().await;
+        if let Some(harness) = state.harness.as_ref() {
+            let mut child = harness.child.lock().await;
+            match child.start_kill() {
+                Ok(()) => {
+                    let wait_result = tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        child.wait(),
+                    )
+                    .await;
+                    tracing::warn!(
+                        agent = %self.agent_id,
+                        generation = state.generation,
+                        event = "harness:killed_for_helper_refresh",
+                        reaped = wait_result.is_ok(),
+                        "killed runtime child so refreshed helper allow-list is visible on next turn"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        agent = %self.agent_id,
+                        generation = state.generation,
+                        error = %e,
+                        "helper allow-list refresh: start_kill failed (child may already be gone)"
+                    );
+                }
+            }
+        }
+        state.harness = None;
+        state.last_exit = Some("operator_helper_allow_list_changed".to_string());
+        Ok(())
+    }
+
     async fn respawn_locked(&self, state: &mut SupervisorState) -> anyhow::Result<()> {
         if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
             anyhow::bail!(
@@ -1017,6 +1076,14 @@ impl RuntimeChildSupervisor {
 
 #[async_trait::async_trait]
 impl AgentTurnTransport for RuntimeChildSupervisor {
+    fn supports_dynamic_subagents(&self) -> bool {
+        true
+    }
+
+    async fn refresh_subagents_allowed(&self, allowed: &[String]) -> anyhow::Result<()> {
+        self.update_subagents_allowed_env(allowed).await
+    }
+
     async fn send_turn(
         &self,
         messages: Vec<serde_json::Value>,
@@ -1839,6 +1906,46 @@ struct ChatRequest {
 #[derive(Deserialize)]
 struct ChatCancelRequest {
     session_id: String,
+}
+
+/// Request body for the tiny operator dogfood loop (sera-6zcb).
+#[derive(Deserialize)]
+struct OperatorTaskRequest {
+    /// Operator task to run. Required and must not be blank.
+    task: String,
+    /// Active agent to use for the runtime turn. Defaults to the first manifest agent.
+    #[serde(default)]
+    agent: Option<String>,
+    /// Helper agent to provision/spawn. Defaults to `operator-helper`.
+    #[serde(default)]
+    helper: Option<String>,
+    /// Optional prompt override for the helper. Defaults to the task text.
+    #[serde(default)]
+    helper_prompt: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SpawnedHelperStatus {
+    agent: String,
+    task_id: String,
+    status: String,
+    count: usize,
+    total: usize,
+}
+
+/// Bero-style status card returned by `POST /api/operator/tasks`.
+#[derive(Serialize)]
+struct OperatorTaskStatusCard {
+    accepted_task: String,
+    active_agent: String,
+    spawned_helper: SpawnedHelperStatus,
+    handoff_tool: String,
+    latest_event: String,
+    status: String,
+    blocked: bool,
+    result: String,
+    audit_id: String,
+    session_key: String,
 }
 
 /// Custom JSON extractor that maps axum's `JsonRejection` (which produces 422
@@ -2981,6 +3088,291 @@ async fn auth_me_handler(
         "roles": ["admin"],
         "mode": "autonomous"
     })))
+}
+
+/// Insert a runtime-only helper manifest if the requested helper is not already known.
+///
+/// This deliberately does not spawn a second runtime child yet: `sera-vuss` only
+/// committed the HTTP subagent manager surface. The dogfood loop still exercises
+/// runtime registration by making the helper visible through `/api/agents`, then
+/// spawns the helper through the subagent manager and ties both to the same audit id.
+fn ensure_operator_helper_manifest(
+    manifests: &mut ManifestSet,
+    helper: &str,
+    parent_spec: &AgentSpec,
+) -> bool {
+    if matches!(manifests.agent_spec(helper), Ok(Some(_))) {
+        return false;
+    }
+
+    let helper_spec = AgentSpec {
+        provider: parent_spec.provider.clone(),
+        model: parent_spec.model.clone(),
+        persona: None,
+        tools: Some(AgentToolsSpec { allow: vec![] }),
+        workspace: None,
+        policy_ref: parent_spec.policy_ref.clone(),
+        enforcement_mode: Some("autonomous".to_string()),
+        approval_policy: None,
+        subagents_allowed: Vec::new(),
+    };
+    let manifest = ConfigManifest {
+        api_version: ApiVersion {
+            group: "sera.dev".to_owned(),
+            version: "v1".to_owned(),
+        },
+        kind: ResourceKind::Agent,
+        metadata: ResourceMetadata {
+            name: helper.to_string(),
+            labels: std::collections::HashMap::new(),
+            annotations: std::collections::HashMap::new(),
+            change_artifact: None,
+            shadow: false,
+        },
+        config_version: CONFIG_VERSION,
+        spec: serde_json::to_value(helper_spec).unwrap_or(serde_json::Value::Null),
+    };
+    manifests.upsert_agent(manifest);
+    true
+}
+
+async fn operator_task_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    ValidatedJson(req): ValidatedJson<OperatorTaskRequest>,
+) -> Result<Json<OperatorTaskStatusCard>, StatusCode> {
+    validate_api_key(&state, &headers)?;
+
+    let task = req.task.trim().to_string();
+    if task.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let helper = req
+        .helper
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("operator-helper")
+        .to_string();
+    let helper_prompt = req
+        .helper_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&task)
+        .to_string();
+
+    let (agent_name, agent_spec, _helper_created, helper_allowed_changed) = {
+        let mut manifests = state.manifests.write().unwrap();
+        let name = req
+            .agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                manifests
+                    .agent_names()
+                    .into_iter()
+                    .next()
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| "sera".to_string());
+        let mut spec = manifests
+            .agent_spec(&name)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        let helper_created = ensure_operator_helper_manifest(&mut manifests, &helper, &spec);
+        let mut helper_allowed_changed = false;
+        if !spec.subagents_allowed.iter().any(|a| a == &helper) {
+            spec.subagents_allowed.push(helper.clone());
+            helper_allowed_changed = true;
+        }
+        (name, spec, helper_created, helper_allowed_changed)
+    };
+
+    let supervisor = state
+        .harnesses
+        .get(&agent_name)
+        .cloned()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    if helper_allowed_changed {
+        if !supervisor.supports_dynamic_subagents() {
+            tracing::warn!(
+                agent = %agent_name,
+                helper = %helper,
+                dispatch_kind = supervisor.dispatch_kind(),
+                "operator task requested a dynamic helper on a transport that cannot refresh handoff tools"
+            );
+            return Err(StatusCode::NOT_IMPLEMENTED);
+        }
+        supervisor
+            .refresh_subagents_allowed(&agent_spec.subagents_allowed)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    let audit_id = format!("operator-task:{}", uuid::Uuid::new_v4());
+    let session_id = audit_id.replace(':', "_");
+    let session_key = audit_id.clone();
+    {
+        let db = state.db.lock().await;
+        db.create_session(
+            &session_id,
+            &agent_name,
+            &session_key,
+            Some("operator-http"),
+        )
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        db.append_transcript(&session_id, "user", Some(&task), None, None)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    {
+        use sera_gateway::envelope::{Op, Submission, W3cTraceContext};
+        let envelope = Submission {
+            id: uuid::Uuid::new_v4(),
+            op: Op::UserTurn {
+                items: vec![serde_json::json!({
+                    "type": "text",
+                    "text": task,
+                    "helper": helper,
+                    "dogfood": "operator-task-with-helper"
+                })],
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model_override: None,
+                effort: None,
+                final_output_schema: None,
+            },
+            trace: W3cTraceContext {
+                traceparent: headers
+                    .get("traceparent")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned),
+                tracestate: headers
+                    .get("tracestate")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned),
+            },
+            change_artifact: None,
+            session_key: Some(session_key.clone()),
+            parent_session_key: None,
+            parent_task_id: None,
+        };
+        state
+            .session_store
+            .append_envelope(&session_key, &envelope)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    let handle = state
+        .subagent_manager
+        .spawn(
+            &helper,
+            &session_key,
+            serde_json::json!({
+                "prompt": helper_prompt,
+                "context": {
+                    "audit_id": audit_id,
+                    "parent_agent": agent_name,
+                    "handoff_tool": format!("handoff_to_{helper}")
+                }
+            }),
+        )
+        .await
+        .map_err(|e| match e {
+            sera_runtime::subagent::SubagentError::NotFound { .. } => StatusCode::NOT_FOUND,
+            sera_runtime::subagent::SubagentError::NotActive { .. } => StatusCode::CONFLICT,
+            sera_runtime::subagent::SubagentError::SpawnFailed { .. }
+            | sera_runtime::subagent::SubagentError::Internal(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
+
+    let delivered = state
+        .intercom_broker
+        .publish(sera_types::intercom::IntercomMessage {
+            channel: "operator.task".to_string(),
+            data: serde_json::json!({
+                "event": "accepted",
+                "audit_id": audit_id,
+                "session_key": session_key,
+                "agent": agent_name,
+                "helper": helper,
+                "task": task,
+            }),
+            source: Some(sera_types::intercom::MessageSource {
+                agent_id: Some(agent_name.clone()),
+                agent_name: Some(agent_name.clone()),
+                operator_id: Some("http-operator".to_string()),
+            }),
+        });
+
+    let transcript = {
+        let db = state.db.lock().await;
+        db.get_transcript(&session_id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    };
+    let cancel = state.register_cancellation_token(&session_key);
+    let cap_reg = state.capability_registry.read().await.clone();
+    let turn = execute_turn(
+        &agent_spec,
+        &transcript,
+        &task,
+        supervisor.as_ref(),
+        &session_key,
+        &state.skill_engine,
+        &state.semantic_store,
+        &agent_name,
+        &cancel,
+        cap_reg.as_ref(),
+        None,
+    )
+    .await;
+    state.deregister_cancellation_token(&session_key);
+
+    {
+        let db = state.db.lock().await;
+        db.append_transcript(&session_id, "assistant", Some(&turn.reply), None, None)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    let active_count = state
+        .subagent_manager
+        .list_active()
+        .await
+        .into_iter()
+        .filter(|id| id.starts_with(&format!("{session_key}/")))
+        .count();
+    let latest_event = format!("intercom:operator.task delivered={delivered}");
+    let status = if turn.cancelled || turn.failure.is_some() {
+        "blocked"
+    } else {
+        "complete"
+    }
+    .to_string();
+
+    Ok(Json(OperatorTaskStatusCard {
+        accepted_task: task,
+        active_agent: agent_name,
+        spawned_helper: SpawnedHelperStatus {
+            agent: helper.clone(),
+            task_id: handle.session_key.clone(),
+            status: format!("{:?}", handle.current_status()).to_lowercase(),
+            count: active_count,
+            total: 1,
+        },
+        handoff_tool: format!("handoff_to_{helper}"),
+        latest_event,
+        status: status.clone(),
+        blocked: status == "blocked",
+        result: turn.reply,
+        audit_id,
+        session_key,
+    }))
 }
 
 async fn agent_by_id_handler(
@@ -5629,6 +6021,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/health/ready", get(readiness_handler))
         .route("/api/auth/me", get(auth_me_handler))
         .route("/api/chat", post(chat_handler))
+        .route("/api/operator/tasks", post(operator_task_handler))
         // sera-mplr / J.0.4 ESC-cancel: abort the in-flight HTTP turn for a
         // session_id. Returns 204 on cancel, 404 when no turn is in flight.
         .route("/api/chat/cancel", post(chat_cancel_handler))
@@ -6882,6 +7275,70 @@ spec:
         assert!(json["usage"]["prompt_tokens"].is_number());
         assert!(json["usage"]["completion_tokens"].is_number());
         assert!(json["usage"]["total_tokens"].is_number());
+    }
+
+    #[tokio::test]
+    async fn operator_task_with_helper_returns_status_card_and_event_chain() {
+        let state = test_state_async().await;
+        let mut intercom_rx = state.intercom_broker.subscribe("operator.task");
+        let app = build_router(Arc::clone(&state));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/operator/tasks")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "task": "Summarize the deployment state",
+                            "agent": "sera",
+                            "helper": "smoke-helper"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["accepted_task"], "Summarize the deployment state");
+        assert_eq!(json["active_agent"], "sera");
+        assert_eq!(json["spawned_helper"]["agent"], "smoke-helper");
+        assert_eq!(json["spawned_helper"]["count"], 1);
+        assert_eq!(json["spawned_helper"]["total"], 1);
+        assert_eq!(json["handoff_tool"], "handoff_to_smoke-helper");
+        assert_eq!(json["status"], "complete");
+        assert!(json["latest_event"].as_str().unwrap().contains("intercom"));
+        assert!(json["result"].as_str().unwrap().contains("mock response"));
+        assert!(
+            json["audit_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("operator-task:")
+        );
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(1), intercom_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.channel, "operator.task");
+        assert_eq!(event.data["audit_id"], json["audit_id"]);
+        assert_eq!(event.data["helper"], "smoke-helper");
+
+        let active = state.subagent_manager.list_active().await;
+        assert!(
+            active
+                .iter()
+                .any(|task_id| task_id.ends_with("/smoke-helper")),
+            "helper subagent should be tracked under the operator task session"
+        );
     }
 
     /// sera-ygwe regression guard: POST /api/chat with a missing `message` field

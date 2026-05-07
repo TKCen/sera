@@ -120,7 +120,7 @@ pub struct IntercomSubscription {
 
 impl IntercomSubscription {
     #[cfg(test)]
-    async fn recv(&mut self) -> Result<IntercomMessage, broadcast::error::RecvError> {
+    pub(crate) async fn recv(&mut self) -> Result<IntercomMessage, broadcast::error::RecvError> {
         self.rx.recv().await
     }
 

@@ -130,13 +130,28 @@ impl RegistryDispatcher {
     /// servicing (sera-u4gj). When set, every `dispatch` call checks the
     /// dispatched tool's [`sera_types::tool::ToolMetadata::scope`] against
     /// `policy.allowed_tool_scopes` **before** the CapabilityRegistry gate,
-    /// the escalation gate, hooks, or `TraitToolRegistry::execute`. Unknown
-    /// tool names are not gated — they fall through to the existing
-    /// `NotFound` path so typos surface as tool-not-found, not as policy
-    /// violations.
+    /// the escalation gate, hooks, or `TraitToolRegistry::execute`; pre-hook
+    /// name rewrites are rechecked before execution. Unknown tool names are not
+    /// gated — they fall through to the existing `NotFound` path so typos
+    /// surface as tool-not-found, not as policy violations.
     pub fn with_principal_policy(mut self, policy: Arc<PrincipalPolicy>) -> Self {
         self.principal_policy = Some(policy);
         self
+    }
+
+    fn enforce_principal_policy_scope(&self, tool_name: &str) -> Result<(), ToolError> {
+        if let Some(policy) = self.principal_policy.as_ref()
+            && let Some(tool) = self.registry.get(tool_name)
+        {
+            let scope = tool.metadata().scope;
+            if !policy.allowed_tool_scopes.contains(&scope) {
+                return Err(ToolError::PolicyDenied(format!(
+                    "[sera-policy] tool '{}' denied by principal policy: scope {:?} not in allowed_tool_scopes",
+                    tool_name, scope
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Attach a [`EscalationAuthority`] and caller / required permission
@@ -226,17 +241,7 @@ impl ToolDispatcher for RegistryDispatcher {
         // existing NotFound path so a typoed name is reported as
         // tool-not-found rather than a policy violation (sera-zdky is the
         // separate bead that may pre-filter tool names at the gateway).
-        if let Some(policy) = self.principal_policy.as_ref()
-            && let Some(tool) = self.registry.get(&input.name)
-        {
-            let scope = tool.metadata().scope;
-            if !policy.allowed_tool_scopes.contains(&scope) {
-                return Err(ToolError::PolicyDenied(format!(
-                    "[sera-policy] tool '{}' denied by principal policy: scope {:?} not in allowed_tool_scopes",
-                    input.name, scope
-                )));
-            }
-        }
+        self.enforce_principal_policy_scope(&input.name)?;
 
         // ── Capability policy gate (sera-eo71) ───────────────────────────
         // Pre-dispatch check: a deny here returns before any hook fires and
@@ -330,6 +335,11 @@ impl ToolDispatcher for RegistryDispatcher {
                     ),
                 });
             }
+            // Re-run the principal-policy ToolScope gate after hook rewrites.
+            // A same/lower-risk rewrite can still cross scope boundaries
+            // (e.g. Execute → Network), so the pre-hook target must be checked
+            // before execution as well.
+            self.enforce_principal_policy_scope(&input.name)?;
         }
 
         // ── Execute ──────────────────────────────────────────────────────
@@ -1070,6 +1080,42 @@ mod tests {
                 );
             }
             other => panic!("expected PolicyDenied, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_scope_rechecks_after_pre_hook_rewrite() {
+        // Codex P1 regression guard: the initial call is shell-exec
+        // (ToolScope::Execute), which this policy allows. A pre-hook then
+        // rewrites the same Execute-risk call to http-request, whose scope is
+        // Network. The post-hook scope recheck must block the mutated target
+        // before execution, otherwise same-risk scope changes can bypass the
+        // principal policy.
+        let hooks = Arc::new(ToolHookRegistry::new());
+        hooks
+            .register(Arc::new(RewriteNameHook("shell-exec", "http-request")))
+            .await;
+        let dispatcher = RegistryDispatcher::new(Arc::new(TraitToolRegistry::with_builtins()))
+            .with_hooks(hooks)
+            .with_principal_policy(policy_with_scopes(&[ToolScope::Execute]));
+
+        let call = shell_exec_call("call-scope-rewrite-1");
+        let err = dispatcher
+            .dispatch(&call, &ToolContext::default())
+            .await
+            .unwrap_err();
+        match err {
+            ToolError::PolicyDenied(msg) => {
+                assert!(
+                    msg.contains("tool 'http-request' denied by principal policy"),
+                    "denial must name the rewritten tool: {msg}"
+                );
+                assert!(
+                    msg.contains("scope Network not in allowed_tool_scopes"),
+                    "denial must use the rewritten tool scope: {msg}"
+                );
+            }
+            other => panic!("expected PolicyDenied after hook rewrite, got {other:?}"),
         }
     }
 

@@ -2039,7 +2039,8 @@ fn is_interrupted_runtime_result(reply: &str) -> bool {
 }
 
 fn is_llm_unavailable_runtime_result(reply: &str) -> bool {
-    reply.trim_start().to_ascii_lowercase().starts_with("[llm error:")
+    let normalized = reply.trim_start().to_ascii_lowercase();
+    normalized.starts_with("[llm error:") || normalized.starts_with("[llm unavailable:")
 }
 
 fn is_llm_unavailable_structured_failure(failure: &str) -> bool {
@@ -7530,6 +7531,28 @@ spec:
         let turn = MvsTurnResult {
             reply: "[LLM error: LLM call failed: request error: HTTP 400: failed to load model]"
                 .to_string(),
+            tool_events: vec![],
+            usage: UsageInfo {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+            },
+            cancelled: false,
+            failure: None,
+        };
+
+        let closeout = classify_operator_task_turn(&turn);
+
+        assert_eq!(closeout.status, "blocked");
+        assert!(closeout.blocked);
+        assert_eq!(closeout.failure_class, Some("llm_unavailable"));
+        assert_eq!(closeout.next_action, Some("inspect_llm_provider"));
+    }
+
+    #[test]
+    fn operator_task_sanitized_empty_model_response_is_actionable_blocked_failure() {
+        let turn = MvsTurnResult {
+            reply: "[LLM unavailable: model returned an empty response; retry the turn.]".to_string(),
             tool_events: vec![],
             usage: UsageInfo {
                 prompt_tokens: 0,

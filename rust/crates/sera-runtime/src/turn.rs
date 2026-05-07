@@ -73,6 +73,21 @@ pub enum ThinkError {
     UnsupportedToolUseBehavior(String),
 }
 
+impl ThinkError {
+    /// True when a provider/model emitted an empty assistant message with no tool calls.
+    ///
+    /// This is a provider edge case, not useful user-facing detail. Callers
+    /// should keep the raw error in logs/audit and sanitize assistant-visible
+    /// content for this exact failure.
+    fn is_empty_assistant_message(&self) -> bool {
+        match self {
+            ThinkError::Llm(message) => message
+                .contains("provider returned assistant message with neither content nor tool_calls"),
+            ThinkError::Conversion(_) | ThinkError::UnsupportedToolUseBehavior(_) => false,
+        }
+    }
+}
+
 /// Trait for calling an LLM from the think step.
 ///
 /// Messages and tools use `serde_json::Value` to stay decoupled from any
@@ -314,9 +329,20 @@ pub async fn think(
         Some(provider) => match provider.chat_with_behavior(messages, tools, tool_use_behavior).await {
             Ok(result) => result,
             Err(e) => {
-                tracing::error!("LLM call failed in think step: {e}");
+                let content = if e.is_empty_assistant_message() {
+                    tracing::error!(
+                        provider_error_kind = "empty_assistant_message",
+                        error = %e,
+                        "LLM call failed in think step; sanitized assistant-visible response"
+                    );
+                    "[LLM unavailable: model returned an empty response; retry the turn.]"
+                        .to_string()
+                } else {
+                    tracing::error!("LLM call failed in think step: {e}");
+                    format!("[LLM error: {e}]")
+                };
                 ThinkResult {
-                    response: serde_json::json!({"role": "assistant", "content": format!("[LLM error: {e}]")}),
+                    response: serde_json::json!({"role": "assistant", "content": content}),
                     tool_calls: vec![],
                     tokens: TokenUsage::default(),
                     plan: None,
@@ -1611,6 +1637,56 @@ mod tests {
         assert!(
             content.contains("LLM error") && content.contains("tool_use_behavior"),
             "expected error stub mentioning unsupported tool_use_behavior, got: {content}"
+        );
+    }
+
+    struct LlmErrorProvider {
+        message: &'static str,
+    }
+
+    #[async_trait]
+    impl LlmProvider for LlmErrorProvider {
+        async fn chat(
+            &self,
+            _messages: &[serde_json::Value],
+            _tools: &[serde_json::Value],
+        ) -> Result<ThinkResult, ThinkError> {
+            Err(ThinkError::Llm(self.message.to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn think_sanitizes_empty_assistant_message_provider_error() {
+        let provider = LlmErrorProvider {
+            message: "request error: provider returned assistant message with neither content nor tool_calls",
+        };
+        let result = think(
+            &[],
+            &[],
+            &ReactMode::Default,
+            Some(&provider as &dyn LlmProvider),
+            &ToolUseBehavior::Auto,
+        )
+        .await;
+
+        assert!(
+            result.tool_calls.is_empty(),
+            "sanitized provider error must not invent tool calls"
+        );
+        let content = result
+            .response
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        assert!(
+            content.contains("model returned an empty response"),
+            "expected compact user-facing empty-response text, got: {content}"
+        );
+        assert!(
+            !content.contains("LLM call failed")
+                && !content.contains("provider returned assistant message")
+                && !content.contains("neither content nor tool_calls"),
+            "raw provider detail must not be user-visible: {content}"
         );
     }
 

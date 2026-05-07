@@ -184,6 +184,8 @@ def validation_errors(results: dict[str, Any]) -> list[str]:
     subagent_count = len(subagents_json.get("subagents", [])) if isinstance(subagents_json, dict) else 0
     session_key = card.get("session_key") if isinstance(card, dict) else None
     result = card.get("result") if isinstance(card, dict) else None
+    sse_lines = results.get("sse_lines") or []
+    sse_data_seen = any(isinstance(line, str) and line.startswith("data:") and "operator.task" in line for line in sse_lines)
 
     checks = [
         ((results.get("health") or {}).get("status") == 200, "health status must be 200"),
@@ -194,6 +196,7 @@ def validation_errors(results: dict[str, Any]) -> list[str]:
         (bool(session_key), "operator task card must include session_key"),
         ((results.get("subagents") or {}).get("status") == 200, "subagents status must be 200"),
         (subagent_count >= 1, "subagents response must include at least one subagent"),
+        (sse_data_seen, "SSE subscription must receive an operator.task data event"),
         (not is_interrupted_runtime_result(result), "operator task result must not be interrupted/doom-loop"),
     ]
     for ok, message in checks:

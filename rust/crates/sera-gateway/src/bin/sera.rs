@@ -3213,6 +3213,15 @@ async fn operator_task_handler(
     {
         let mut manifests = state.manifests.write().unwrap();
         ensure_operator_helper_manifest(&mut manifests, &helper, &agent_spec);
+        if helper_allowed_changed {
+            let mut agent_manifest = manifests
+                .agent(&agent_name)
+                .cloned()
+                .ok_or(StatusCode::NOT_FOUND)?;
+            agent_manifest.spec = serde_json::to_value(&agent_spec)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            manifests.upsert_agent(agent_manifest);
+        }
     }
 
     let audit_id = format!("operator-task:{}", uuid::Uuid::new_v4());
@@ -7341,6 +7350,16 @@ spec:
                 .iter()
                 .any(|task_id| task_id.ends_with("/smoke-helper")),
             "helper subagent should be tracked under the operator task session"
+        );
+
+        let manifests = state.manifests.read().unwrap();
+        let spec = manifests
+            .agent_spec("sera")
+            .unwrap()
+            .expect("sera agent spec should still exist");
+        assert!(
+            spec.subagents_allowed.iter().any(|agent| agent == "smoke-helper"),
+            "operator helper should be persisted to the parent agent allow-list"
         );
     }
 

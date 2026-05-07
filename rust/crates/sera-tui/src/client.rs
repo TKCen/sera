@@ -27,6 +27,10 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
+/// Hard cap on the in-progress SSE frame buffer. A peer that never emits the
+/// "\n\n" delimiter would otherwise let us accumulate unbounded memory.
+const MAX_SSE_FRAME_BYTES: usize = 1024 * 1024;
+
 /// Connection state surfaced by the UI footer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionState {
@@ -647,6 +651,14 @@ impl GatewayClient {
                                         }
                                     }
                                 }
+                                if buffer.len() > MAX_SSE_FRAME_BYTES {
+                                    eprintln!(
+                                        "sera-tui: oversized SSE frame: buffered {} bytes without delimiter (cap {} bytes); dropping connection",
+                                        buffer.len(),
+                                        MAX_SSE_FRAME_BYTES
+                                    );
+                                    break;
+                                }
                             }
                             break;
                         }
@@ -761,7 +773,11 @@ fn parse_sse_stream(
 ) -> impl tokio_stream::Stream<Item = Result<StreamEvent, ClientError>> {
     use futures_util::StreamExt;
     let mut buffer = String::new();
+    let mut aborted = false;
     bytes.flat_map(move |chunk| {
+        if aborted {
+            return tokio_stream::iter(Vec::new());
+        }
         let events: Vec<Result<StreamEvent, ClientError>> = match chunk {
             Err(e) => vec![Err(ClientError::Http(e))],
             Ok(bytes) => {
@@ -780,6 +796,15 @@ fn parse_sse_stream(
                                     out.push(Ok(ev));
                                 }
                             }
+                        }
+                        if buffer.len() > MAX_SSE_FRAME_BYTES {
+                            out.push(Err(ClientError::Parse(format!(
+                                "oversized SSE frame: buffered {} bytes without delimiter (cap {} bytes)",
+                                buffer.len(),
+                                MAX_SSE_FRAME_BYTES
+                            ))));
+                            buffer.clear();
+                            aborted = true;
                         }
                         out
                     }
@@ -958,6 +983,46 @@ mod tests {
         let mut stream = parse_sse_stream(bytes_stream);
         let ev = stream.next().await.unwrap().unwrap();
         assert_eq!(ev.delta, "chunk");
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn parse_sse_stream_rejects_oversized_frame() {
+        use tokio_stream::StreamExt;
+        // Chunk with no "\n\n" delimiter that exceeds the cap.
+        let mut raw = b"data: ".to_vec();
+        raw.extend(std::iter::repeat_n(b'x', MAX_SSE_FRAME_BYTES + 16));
+        let bytes_stream =
+            tokio_stream::iter(vec![Ok::<_, reqwest::Error>(bytes::Bytes::from(raw))]);
+        let mut stream = parse_sse_stream(bytes_stream);
+        let err = stream.next().await.expect("expected an error item");
+        match err {
+            Err(ClientError::Parse(msg)) => {
+                assert!(
+                    msg.contains("oversized SSE frame"),
+                    "unexpected parse error message: {msg}"
+                );
+            }
+            other => panic!("expected ClientError::Parse, got {other:?}"),
+        }
+        // After abort, the stream stops yielding further items.
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn parse_sse_stream_below_cap_succeeds() {
+        use tokio_stream::StreamExt;
+        // Build a single frame just under the cap (frame is fully delivered, so
+        // it drains via "\n\n" and the buffer never exceeds the cap).
+        let payload = "x".repeat(MAX_SSE_FRAME_BYTES - 256);
+        let frame = format!("data: {{\"event_type\":\"message\",\"delta\":\"{payload}\"}}\n\n");
+        let bytes_stream = tokio_stream::iter(vec![Ok::<_, reqwest::Error>(bytes::Bytes::from(
+            frame.into_bytes(),
+        ))]);
+        let mut stream = parse_sse_stream(bytes_stream);
+        let ev = stream.next().await.unwrap().unwrap();
+        assert_eq!(ev.event_type, "message");
+        assert_eq!(ev.delta.len(), MAX_SSE_FRAME_BYTES - 256);
         assert!(stream.next().await.is_none());
     }
 }

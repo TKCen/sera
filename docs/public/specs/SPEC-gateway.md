@@ -86,6 +86,72 @@ In **standalone/pet mode**, the runtime itself reads workspace files (`soul.md`,
 
 ---
 
+## 1d. Harness Modes — Pattern A vs Pattern B
+
+> **Glossary anchor — sera-9wce.** SPEC-gateway and SPEC-runtime use the word "harness" for two architecturally distinct concepts. This section names them, says when each applies, and pins down state ownership so the registration vocabulary in §3.1 (`Op::Register(RegisterOp)`) is unambiguous. New harness work picks one pattern explicitly; mixing them is a spec violation.
+
+### Pattern A — harness-as-runtime
+
+A **Pattern A harness** is an implementation of the `AgentRuntime` trait (SPEC-runtime §2.2). It is **turn-bounded**: the gateway allocates a `TurnContext`, calls `runtime.execute_turn(ctx)`, and receives a `TurnOutcome`. The runtime is the worker that does the "thinking + doing"; the gateway owns session state, dispatch, credentials, AuthZ, audit, and compaction (§1b, §1c, SPEC-runtime §1a).
+
+Concrete examples:
+- The default `sera-runtime` library mode (in-process call).
+- `sera-runtime --ndjson` over `StdioHarness` (current `dispatch_mode=runtime` MVS — see [`../decisions/2026-04-29-dispatch-ownership.md`](../decisions/2026-04-29-dispatch-ownership.md)).
+- BYOH harnesses connecting via the `Grpc` / `WebSocket` / `Reverse` transports of §7a — Hermes ACP, `sera-byoh-agent`, third-party Codex / Claude Code BYOH workers — **when the gateway owns turn dispatch and tool routing**.
+
+Pattern A harnesses register through the runtime/harness path and the gateway treats their turns as instrumented executions: every `tool_call_*` event passes through the gateway pipeline (`pre_tool` → `CapabilityPolicy` → dispatch → `post_tool` → audit) once `dispatch_mode={gateway,embedded}` is live.
+
+### Pattern B — profile-as-subagent
+
+A **Pattern B profile** is a **transport-attached external worker session** that the gateway delegates to as an opaque, session-bounded subagent. The gateway does not see individual turns or tool calls inside the profile session — it sees only the session boundary (start, end, surfaced output) and the events the profile chooses to emit upstream.
+
+Concrete examples:
+- A Claude Code tmux pane invoked as a subagent.
+- An OMC orchestrator pane fronted by a SERA agent.
+- A Hermes profile or other LLM CLI session reused as an opaque worker.
+- Any external A2A / ACP agent operating its own internal turn loop.
+
+Pattern B principals register as `ExternalAgentPrincipal` entries (SPEC-identity-authz §2, §4.3) with their `protocol`, `external_id`, and `trust_level` set, and with the delegating SERA `AgentPrincipal` recorded so the resulting subagent can be linked to its delegator. Pattern B does **not** implement `AgentRuntime`.
+
+> **Spec-gap callout — sera-pcvp.** `RegisterOp` (`sera-types::envelope::RegisterOp`) currently exposes `Agent { manifest }`, `Connector { config }`, and `Plugin { config }`. Pattern A harnesses fit `Agent` / `Connector`. Pattern B profiles need either a new variant or an `Agent`-variant manifest field that records `delegated_by` (the parent `AgentPrincipal`); choosing the variant shape and aligning it with `ExternalAgentPrincipal` is the scope of `sera-pcvp`. This section is the prerequisite glossary it depends on.
+
+### When to use which
+
+| Question | Pattern A | Pattern B |
+|---|---|---|
+| Gateway owns the turn loop? | Yes | No |
+| Gateway sees individual `tool_call_*` events? | Yes | No (opaque session) |
+| Implements `AgentRuntime` trait? | Yes | No |
+| Registered principal kind | `AgentPrincipal` | `ExternalAgentPrincipal` (with delegating principal recorded) |
+| Suitable for first-party SERA agents? | Yes | Only as escape hatch — see compaction tradeoff below |
+| Suitable for wrapping an existing CLI / pane / external agent? | Only if it can implement the harness protocol | Yes |
+
+Pick **Pattern A** when SERA owns the agent and policy enforcement, audit, and capability gating must apply to every tool call. Pick **Pattern B** when the worker is an external session whose internals are opaque or unmodifiable, and the cost of losing per-tool visibility is acceptable.
+
+### State ownership
+
+| Concern | Pattern A | Pattern B |
+|---|---|---|
+| Session record (manufacturing order) | Gateway | Gateway, but only at the profile-session boundary |
+| Per-turn transcript / `ContentBlock`s | Gateway (via runtime events) | Profile-internal, **not visible to gateway** |
+| Tool dispatch / `pre_tool` / `post_tool` chain | Gateway (per §1b target; runtime in MVS — see ADR) | Profile-internal — gateway cannot intercept |
+| `CapabilityPolicy` enforcement | Gateway, per tool call | At the profile boundary only (input/output filters, not per-call) |
+| Credentials | Gateway-injected (§1b) | Profile-owned — provisioned out-of-band; gateway cannot guarantee non-leakage |
+| Audit chain granularity | One entry per tool call | One entry per profile-session boundary event |
+| Memory writes / `after_turn` hooks | Gateway-driven (§1c) | Surfaced only if the profile emits them |
+
+### Pattern B compaction-invisibility tradeoff
+
+The gateway's compaction pipeline (`TurnOutcome::Compact`, `EventMsg::Condensation`, `ContextEngine::compact`) operates on the gateway-owned transcript. Because Pattern B sessions hold their own internal turn state, **anything that happens inside a Pattern B session is invisible to gateway-side compaction** — neither token-budget condensers nor `ContextEngine::compact` see the profile's internal `ContentBlock`s. Practical consequences:
+
+- The profile must run its own compaction strategy (e.g. Claude Code's built-in compactor, Codex `Op::Compact`).
+- The `forgotten_event_ids` carried on `EventMsg::Condensation` reflects only what the gateway saw; profile-internal forgetting is not auditable from SERA.
+- A long-running Pattern B session can outgrow its own context window without SERA being able to intervene; clients must treat the profile session as a black box with respect to context budget.
+
+This is the primary reason Pattern B is reserved for external workers and escape-hatch use cases: choosing it is choosing to give up gateway-level audit, capability enforcement, and compaction in exchange for being able to reuse an opaque session as a subagent.
+
+---
+
 ## 2. Responsibilities
 
 1. **Event ingress and egress routing** with hook pipeline support (`pre_route` / `post_route` chains)

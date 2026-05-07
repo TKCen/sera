@@ -17,6 +17,18 @@
 //! denial returns [`ToolError::PolicyDenied`]; the underlying tool handler is
 //! never invoked, so a denied tool truly does not start.
 //!
+//! # Principal-policy ToolScope gate (sera-u4gj)
+//!
+//! When a [`PrincipalPolicy`] is attached via
+//! [`RegistryDispatcher::with_principal_policy`], every dispatch checks the
+//! dispatched tool's [`sera_types::tool::ToolMetadata::scope`] against
+//! `policy.allowed_tool_scopes` **before** the CapabilityRegistry gate, the
+//! escalation gate, any pre-tool hook, or `TraitToolRegistry::execute`. A
+//! denial returns [`ToolError::PolicyDenied`] with the `[sera-policy] …`
+//! prefix used by the gateway audit filter. Unknown tool names fall through
+//! to the existing `NotFound` path — typoed names are reported as
+//! tool-not-found, not as policy violations.
+//!
 //! # Tool hooks and permission escalation (sera-ddz / GH#544, GH#545)
 //!
 //! `RegistryDispatcher` holds **additive** optional layers:
@@ -35,6 +47,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use sera_auth::policy::PrincipalPolicy;
 use sera_config::CapabilityRegistry;
 use sera_types::tool::{ToolContext, ToolInput, ToolOutput};
 
@@ -67,6 +80,14 @@ pub struct RegistryDispatcher {
     /// tool runs; a denial returns [`ToolError::PolicyDenied`] so the tool
     /// handler is never invoked.
     capability: Option<(Arc<CapabilityRegistry>, String)>,
+    /// Optional principal-policy ToolScope gate (sera-u4gj). When `Some`,
+    /// every dispatch checks the dispatched tool's
+    /// [`sera_types::tool::ToolMetadata::scope`] against
+    /// `policy.allowed_tool_scopes` **before** the CapabilityRegistry gate,
+    /// any escalation/hook layer, or `TraitToolRegistry::execute`. Unknown
+    /// tool names are not gated here — they fall through to the existing
+    /// `NotFound` path.
+    principal_policy: Option<Arc<PrincipalPolicy>>,
 }
 
 impl RegistryDispatcher {
@@ -79,6 +100,7 @@ impl RegistryDispatcher {
             caller_mode: PermissionMode::Standard,
             default_tool_mode: PermissionMode::Standard,
             capability: None,
+            principal_policy: None,
         }
     }
 
@@ -101,6 +123,19 @@ impl RegistryDispatcher {
         agent_id: impl Into<String>,
     ) -> Self {
         self.capability = Some((registry, agent_id.into()));
+        self
+    }
+
+    /// Attach a [`PrincipalPolicy`] for the agent run this dispatcher is
+    /// servicing (sera-u4gj). When set, every `dispatch` call checks the
+    /// dispatched tool's [`sera_types::tool::ToolMetadata::scope`] against
+    /// `policy.allowed_tool_scopes` **before** the CapabilityRegistry gate,
+    /// the escalation gate, hooks, or `TraitToolRegistry::execute`. Unknown
+    /// tool names are not gated — they fall through to the existing
+    /// `NotFound` path so typos surface as tool-not-found, not as policy
+    /// violations.
+    pub fn with_principal_policy(mut self, policy: Arc<PrincipalPolicy>) -> Self {
+        self.principal_policy = Some(policy);
         self
     }
 
@@ -182,6 +217,26 @@ impl ToolDispatcher for RegistryDispatcher {
             arguments,
             call_id: tool_call_id.to_string(),
         };
+
+        // ── Principal-policy ToolScope gate (sera-u4gj) ──────────────────
+        // PrincipalPolicy.allowed_tool_scopes must contain the dispatched
+        // tool's declared ToolScope BEFORE the CapabilityRegistry gate, the
+        // escalation gate, any pre-tool hook, or TraitToolRegistry::execute.
+        // Unknown tool names are NOT gated here — they fall through to the
+        // existing NotFound path so a typoed name is reported as
+        // tool-not-found rather than a policy violation (sera-zdky is the
+        // separate bead that may pre-filter tool names at the gateway).
+        if let Some(policy) = self.principal_policy.as_ref()
+            && let Some(tool) = self.registry.get(&input.name)
+        {
+            let scope = tool.metadata().scope;
+            if !policy.allowed_tool_scopes.contains(&scope) {
+                return Err(ToolError::PolicyDenied(format!(
+                    "[sera-policy] tool '{}' denied by principal policy: scope {:?} not in allowed_tool_scopes",
+                    input.name, scope
+                )));
+            }
+        }
 
         // ── Capability policy gate (sera-eo71) ───────────────────────────
         // Pre-dispatch check: a deny here returns before any hook fires and
@@ -866,5 +921,235 @@ mod tests {
             .await
             .expect("unbound agent passes the gate");
         assert_eq!(result["tool_call_id"], "call-cap-unbound-1");
+    }
+
+    // ── sera-u4gj: pre-dispatch ToolScope (PrincipalPolicy) gate ─────────
+
+    use sera_auth::policy::PrincipalPolicy;
+    use sera_types::principal::PrincipalKind;
+    use sera_types::tool::{
+        ExecutionTarget, FunctionParameters, RiskLevel, Tool, ToolMetadata, ToolSchema,
+        ToolScope,
+    };
+
+    /// Construct a `PrincipalPolicy` with exactly the supplied scope set.
+    /// Other fields use the default-deny shape from
+    /// [`PrincipalPolicy::empty`] — irrelevant to scope-gate tests.
+    fn policy_with_scopes(scopes: &[ToolScope]) -> Arc<PrincipalPolicy> {
+        let mut p = PrincipalPolicy::empty();
+        p.allowed_tool_scopes = scopes.iter().copied().collect();
+        Arc::new(p)
+    }
+
+    fn shell_exec_call(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "type": "function",
+            "function": {
+                "name": "shell-exec",
+                "arguments": "{\"command\":\"echo hi\"}"
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn dispatcher_scope_deny_blocks_handler_pre_dispatch() {
+        // Policy permits Read only; shell-exec is Execute. Denial must
+        // surface as PolicyDenied with the scope-shaped message before any
+        // shell process spawns.
+        let dispatcher = RegistryDispatcher::new(Arc::new(TraitToolRegistry::with_builtins()))
+            .with_principal_policy(policy_with_scopes(&[ToolScope::Read]));
+
+        let call = shell_exec_call("call-scope-deny-1");
+        let err = dispatcher
+            .dispatch(&call, &ToolContext::default())
+            .await
+            .unwrap_err();
+        match err {
+            ToolError::PolicyDenied(msg) => {
+                assert!(
+                    msg.starts_with("[sera-policy] tool 'shell-exec' denied by principal policy"),
+                    "unexpected message prefix: {msg}"
+                );
+                assert!(
+                    msg.contains("scope Execute not in allowed_tool_scopes"),
+                    "expected scope detail in message: {msg}"
+                );
+            }
+            other => panic!("expected PolicyDenied, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_scope_allow_runs_tool_normally() {
+        // Same policy permits Read; file-list is Read. The dispatcher must
+        // run the underlying tool and return the normal tool_call envelope.
+        let dispatcher = RegistryDispatcher::new(Arc::new(TraitToolRegistry::with_builtins()))
+            .with_principal_policy(policy_with_scopes(&[ToolScope::Read]));
+
+        let call = file_list_call("call-scope-allow-1");
+        let result = dispatcher
+            .dispatch(&call, &ToolContext::default())
+            .await
+            .expect("allowed scope dispatches normally");
+        assert_eq!(result["tool_call_id"], "call-scope-allow-1");
+        assert_eq!(result["role"], "tool");
+    }
+
+    #[tokio::test]
+    async fn dispatcher_scope_unknown_tool_falls_through_to_not_found() {
+        // Policy is attached but the tool name is unknown to the registry.
+        // The scope gate must NOT convert this into a policy denial — the
+        // existing NotFound path handles typos. (sera-zdky covers any
+        // gateway-side tool-list pre-filtering.)
+        let dispatcher = RegistryDispatcher::new(Arc::new(TraitToolRegistry::with_builtins()))
+            .with_principal_policy(policy_with_scopes(&[ToolScope::Read]));
+
+        let call = serde_json::json!({
+            "id": "call-scope-unknown-1",
+            "type": "function",
+            "function": {
+                "name": "does-not-exist",
+                "arguments": "{}"
+            }
+        });
+        let err = dispatcher
+            .dispatch(&call, &ToolContext::default())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ToolError::NotFound(_)),
+            "unknown tool name must fall through to NotFound, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatcher_scope_no_policy_attached_is_permissive() {
+        // Backwards-compat guard: a dispatcher built without
+        // `with_principal_policy` must behave identically to today.
+        let dispatcher = RegistryDispatcher::new(Arc::new(TraitToolRegistry::with_builtins()));
+
+        let call = file_list_call("call-scope-no-policy-1");
+        let result = dispatcher
+            .dispatch(&call, &ToolContext::default())
+            .await
+            .expect("no policy attached → permissive");
+        assert_eq!(result["tool_call_id"], "call-scope-no-policy-1");
+    }
+
+    #[tokio::test]
+    async fn dispatcher_scope_runs_before_capability_registry() {
+        // Both gates are armed: the scope policy denies Read (file-list is
+        // Read), AND the capability registry would also deny because
+        // file-list is not in its allow set. The error message must be the
+        // scope-shaped one — proving the scope gate runs first. This is the
+        // non-obvious test that catches future reorderings.
+        let cap_registry = capability_registry_with("alice", "deny-all", &[]);
+        let dispatcher = RegistryDispatcher::new(Arc::new(TraitToolRegistry::with_builtins()))
+            .with_capability_registry(cap_registry, "alice")
+            .with_principal_policy(policy_with_scopes(&[ToolScope::Execute]));
+
+        let call = file_list_call("call-scope-order-1");
+        let err = dispatcher
+            .dispatch(&call, &ToolContext::default())
+            .await
+            .unwrap_err();
+        match err {
+            ToolError::PolicyDenied(msg) => {
+                assert!(
+                    msg.contains("denied by principal policy"),
+                    "scope gate must fire first; got capability message: {msg}"
+                );
+                assert!(
+                    !msg.contains("denied by capability policy"),
+                    "scope gate must short-circuit before the capability gate: {msg}"
+                );
+                assert!(
+                    msg.contains("scope Read"),
+                    "denial must name the offending scope: {msg}"
+                );
+            }
+            other => panic!("expected PolicyDenied, got {other:?}"),
+        }
+    }
+
+    /// Synthetic Tool whose declared scope is [`ToolScope::Admin`]. Used by
+    /// `dispatcher_admin_scope_rejected_for_agent_kind_default` to exercise
+    /// the `PrincipalKind::Agent` default policy (which excludes Admin).
+    /// Built-in tools never carry the Admin scope today, so we register
+    /// this one ad-hoc for the test only.
+    struct AdminScopedTool;
+
+    #[async_trait]
+    impl Tool for AdminScopedTool {
+        fn metadata(&self) -> ToolMetadata {
+            ToolMetadata {
+                name: "test-admin-tool".to_string(),
+                description: "test-only Admin-scope tool for sera-u4gj".to_string(),
+                version: "1.0.0".to_string(),
+                author: None,
+                risk_level: RiskLevel::Admin,
+                execution_target: ExecutionTarget::InProcess,
+                tags: vec![],
+                scope: ToolScope::Admin,
+            }
+        }
+
+        fn schema(&self) -> ToolSchema {
+            ToolSchema {
+                parameters: FunctionParameters {
+                    schema_type: "object".to_string(),
+                    properties: Default::default(),
+                    required: vec![],
+                },
+            }
+        }
+
+        async fn execute(
+            &self,
+            _input: ToolInput,
+            _ctx: ToolContext,
+        ) -> Result<ToolOutput, ToolError> {
+            // Reaching this point would mean the scope gate failed open.
+            Ok(ToolOutput::success("admin-tool ran (gate failure)"))
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_admin_scope_rejected_for_agent_kind_default() {
+        // The Agent kind's default policy never carries Admin (the
+        // ExternalAgent / Service kinds are default-deny entirely; the
+        // Agent kind explicitly excludes Admin). A tool with scope=Admin
+        // must therefore be denied at the dispatcher.
+        let mut registry = TraitToolRegistry::with_builtins();
+        registry.register(Box::new(AdminScopedTool));
+        let dispatcher = RegistryDispatcher::new(Arc::new(registry))
+            .with_principal_policy(Arc::new(PrincipalPolicy::for_kind(PrincipalKind::Agent)));
+
+        let call = serde_json::json!({
+            "id": "call-scope-admin-1",
+            "type": "function",
+            "function": {
+                "name": "test-admin-tool",
+                "arguments": "{}"
+            }
+        });
+        let err = dispatcher
+            .dispatch(&call, &ToolContext::default())
+            .await
+            .unwrap_err();
+        match err {
+            ToolError::PolicyDenied(msg) => {
+                assert!(
+                    msg.contains("test-admin-tool"),
+                    "denial must name the offending tool: {msg}"
+                );
+                assert!(
+                    msg.contains("scope Admin"),
+                    "denial must name the Admin scope: {msg}"
+                );
+            }
+            other => panic!("expected PolicyDenied, got {other:?}"),
+        }
     }
 }

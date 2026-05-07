@@ -411,7 +411,15 @@ pub async fn act(
     think_result: &ThinkResult,
     tool_dispatcher: Option<&dyn ToolDispatcher>,
 ) -> ActResult {
-    // Doom loop check
+    // No tool calls — return empty results. Check this before doom-loop
+    // enforcement so a model that used several tool rounds and then emits a
+    // final answer is allowed to complete instead of being interrupted only
+    // because the previous act-cycle count reached the threshold.
+    if think_result.tool_calls.is_empty() {
+        return ActResult::ToolResults(vec![]);
+    }
+
+    // Doom loop check applies only when the model is trying another act cycle.
     if ctx.doom_loop_count >= DOOM_LOOP_THRESHOLD {
         return ActResult::Interruption {
             reason: format!(
@@ -512,11 +520,6 @@ pub async fn act(
                 ticket_id: ticket.id.clone(),
             };
         }
-    }
-
-    // No tool calls — return empty results
-    if think_result.tool_calls.is_empty() {
-        return ActResult::ToolResults(vec![]);
     }
 
     // Dispatch tool calls and capture the result
@@ -1145,6 +1148,42 @@ mod tests {
                 assert!(reason.contains("doom loop"));
             }
             other => panic!("expected doom_loop Interruption, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn act_allows_final_answer_after_threshold_tool_cycles() {
+        let mut ctx = make_turn_ctx(vec![]);
+        ctx.doom_loop_count = DOOM_LOOP_THRESHOLD;
+        let think_result = make_think_result("Deployment is healthy.");
+
+        let result = act(&mut ctx, &think_result, None).await;
+
+        assert!(
+            matches!(result, ActResult::ToolResults(ref results) if results.is_empty()),
+            "expected empty ToolResults so react can finish final output, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn act_interrupts_when_threshold_reached_and_model_calls_another_tool() {
+        let mut ctx = make_turn_ctx(vec![]);
+        ctx.doom_loop_count = DOOM_LOOP_THRESHOLD;
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "checking once more"}),
+            tool_calls: vec![make_tool_call("status_probe")],
+            tokens: TokenUsage::default(),
+            plan: None,
+        };
+
+        let result = act(&mut ctx, &think_result, None).await;
+
+        match result {
+            ActResult::Interruption { reason } => {
+                assert!(reason.contains("doom loop"), "unexpected reason: {reason}");
+            }
+            other => panic!("expected doom-loop Interruption, got {:?}", other),
         }
     }
 

@@ -102,8 +102,12 @@ async fn doom_loop_triggers_interruption() {
     };
 
     let think_result = ThinkResult {
-        response: serde_json::json!({}),
-        tool_calls: vec![],
+        response: serde_json::json!({"role": "assistant", "content": "checking once more"}),
+        tool_calls: vec![serde_json::json!({
+            "id": "call_1",
+            "type": "function",
+            "function": { "name": "noop", "arguments": "{}" }
+        })],
         tokens: TokenUsage::default(),
         plan: None,
     };

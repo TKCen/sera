@@ -3096,6 +3096,16 @@ async fn auth_me_handler(
 /// committed the HTTP subagent manager surface. The dogfood loop still exercises
 /// runtime registration by making the helper visible through `/api/agents`, then
 /// spawns the helper through the subagent manager and ties both to the same audit id.
+fn is_valid_operator_helper_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric()
+        && id.len() <= 64
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 fn ensure_operator_helper_manifest(
     manifests: &mut ManifestSet,
     helper: &str,
@@ -3161,6 +3171,9 @@ async fn operator_task_handler(
         .filter(|s| !s.is_empty())
         .unwrap_or(&task)
         .to_string();
+    if !is_valid_operator_helper_id(&helper) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
 
     let (agent_name, agent_spec, helper_allowed_changed) = {
         let manifests = state.manifests.read().unwrap();
@@ -7363,6 +7376,38 @@ spec:
         assert!(
             spec.subagents_allowed.iter().any(|agent| agent == "smoke-helper"),
             "operator helper should be persisted to the parent agent allow-list"
+        );
+    }
+
+    #[tokio::test]
+    async fn operator_task_rejects_invalid_helper_id() {
+        let state = test_state_async().await;
+        let app = build_router(Arc::clone(&state));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/operator/tasks")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "task": "Summarize the deployment state",
+                            "agent": "sera",
+                            "helper": "bad,helper"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let manifests = state.manifests.read().unwrap();
+        assert!(
+            manifests.agent_spec("bad,helper").unwrap().is_none(),
+            "invalid helper IDs must not create manifests"
         );
     }
 

@@ -3162,8 +3162,8 @@ async fn operator_task_handler(
         .unwrap_or(&task)
         .to_string();
 
-    let (agent_name, agent_spec, _helper_created, helper_allowed_changed) = {
-        let mut manifests = state.manifests.write().unwrap();
+    let (agent_name, agent_spec, helper_allowed_changed) = {
+        let manifests = state.manifests.read().unwrap();
         let name = req
             .agent
             .as_deref()
@@ -3182,13 +3182,12 @@ async fn operator_task_handler(
             .agent_spec(&name)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::NOT_FOUND)?;
-        let helper_created = ensure_operator_helper_manifest(&mut manifests, &helper, &spec);
         let mut helper_allowed_changed = false;
         if !spec.subagents_allowed.iter().any(|a| a == &helper) {
             spec.subagents_allowed.push(helper.clone());
             helper_allowed_changed = true;
         }
-        (name, spec, helper_created, helper_allowed_changed)
+        (name, spec, helper_allowed_changed)
     };
 
     let supervisor = state
@@ -3210,6 +3209,10 @@ async fn operator_task_handler(
             .refresh_subagents_allowed(&agent_spec.subagents_allowed)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    {
+        let mut manifests = state.manifests.write().unwrap();
+        ensure_operator_helper_manifest(&mut manifests, &helper, &agent_spec);
     }
 
     let audit_id = format!("operator-task:{}", uuid::Uuid::new_v4());

@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { parseChatSseEvent } from '@/lib/api';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { ApiError, parseChatSseEvent, runOperatorTask, setToken } from '@/lib/api';
 
 describe('parseChatSseEvent', () => {
   it('parses a message delta event', () => {
@@ -100,5 +100,89 @@ describe('parseChatSseEvent', () => {
 
     expect(accumulated).toBe('Hello world!');
     expect(done).toBe(true);
+  });
+});
+
+describe('runOperatorTask', () => {
+  beforeEach(() => {
+    setToken('test-key');
+  });
+  afterEach(() => {
+    setToken(null);
+    vi.restoreAllMocks();
+  });
+
+  it('POSTs to /api/operator/tasks with bearer auth and returns the status card', async () => {
+    const card = {
+      accepted_task: 'do thing',
+      active_agent: 'sera',
+      spawned_helper: { agent: 'serahelper', task_id: 'sera:abc/h1', status: 'idle', count: 1, total: 1 },
+      handoff_tool: 'handoff_to_serahelper',
+      latest_event: 'intercom:operator.task delivered=true',
+      status: 'complete',
+      blocked: false,
+      result: 'ok',
+      audit_id: 'aud_1',
+      session_key: 'sera:abc',
+    };
+
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify(card), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await runOperatorTask({
+      task: 'do thing',
+      agent: 'sera',
+      helper: 'serahelper',
+    });
+
+    expect(result).toEqual(card);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('/api/operator/tasks');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({
+      task: 'do thing',
+      agent: 'sera',
+      helper: 'serahelper',
+    });
+    const headers = new Headers(init.headers);
+    expect(headers.get('Authorization')).toBe('Bearer test-key');
+    expect(headers.get('Content-Type')).toBe('application/json');
+  });
+
+  it('throws ApiError with status 401 on auth failure', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ error: 'unauthorized' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(runOperatorTask({ task: 'hi' })).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 401,
+    });
+    await expect(runOperatorTask({ task: 'hi' })).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('tolerates a permissive response shape with missing optional fields', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ status: 'complete', result: 'ok' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await runOperatorTask({ task: 'hi' });
+    expect(result.status).toBe('complete');
+    expect(result.result).toBe('ok');
+    expect(result.spawned_helper).toBeUndefined();
   });
 });

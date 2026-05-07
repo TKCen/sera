@@ -288,3 +288,38 @@ export interface HooksList {
 }
 
 export const getHooks = () => apiFetch<HooksList>('/hooks');
+
+// ── Operator tasks (sera-6zcb dogfood loop) ────────────────────────────────
+
+export interface OperatorTaskRequest {
+  task: string;
+  agent?: string;
+  helper?: string;
+}
+
+export interface SpawnedHelperStatus {
+  agent?: string | null;
+  task_id?: string | null;
+  status?: string | null;
+  count?: number | null;
+  total?: number | null;
+}
+
+export interface OperatorTaskStatusCard {
+  accepted_task?: string | null;
+  active_agent?: string | null;
+  spawned_helper?: SpawnedHelperStatus | null;
+  handoff_tool?: string | null;
+  latest_event?: string | null;
+  status?: string | null;
+  blocked?: boolean | null;
+  result?: string | null;
+  audit_id?: string | null;
+  session_key?: string | null;
+}
+
+export const runOperatorTask = (body: OperatorTaskRequest) =>
+  apiFetch<OperatorTaskStatusCard>('/operator/tasks', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });

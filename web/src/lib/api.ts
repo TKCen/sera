@@ -314,6 +314,8 @@ export interface OperatorTaskStatusCard {
   status?: string | null;
   blocked?: boolean | null;
   result?: string | null;
+  failure_class?: string | null;
+  next_action?: string | null;
   audit_id?: string | null;
   session_key?: string | null;
 }

@@ -283,6 +283,8 @@ export function ChatView() {
                     : null
                 }
               />
+              <Field label="Failure" value={opCard.failure_class} />
+              <Field label="Next" value={opCard.next_action} />
             </div>
             {opCard.latest_event && (
               <div>

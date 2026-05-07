@@ -29,6 +29,12 @@ def is_interrupted_runtime_result(value: Any) -> bool:
     return "[interrupted:" in lowered or ("interrupted" in lowered and "doom loop:" in lowered)
 
 
+def is_llm_error_result(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    return value.lstrip().lower().startswith("[llm error:")
+
+
 def container_api_key(container: str) -> str:
     raw = subprocess.check_output(["docker", "inspect", container], text=True)
     data = json.loads(raw)[0]
@@ -164,6 +170,7 @@ def build_summary(results: dict[str, Any], out: str) -> dict[str, Any]:
         "failure_class": card.get("failure_class") if isinstance(card, dict) else None,
         "next_action": card.get("next_action") if isinstance(card, dict) else None,
         "interrupted_result": is_interrupted_runtime_result(card.get("result") if isinstance(card, dict) else None),
+        "llm_error_result": is_llm_error_result(card.get("result") if isinstance(card, dict) else None),
         "session_key_present": bool(card.get("session_key")) if isinstance(card, dict) else False,
         "handoff_tool": card.get("handoff_tool") if isinstance(card, dict) else None,
         "helper_agent": (card.get("spawned_helper") or {}).get("agent") if isinstance(card.get("spawned_helper") if isinstance(card, dict) else None, dict) else None,
@@ -186,6 +193,8 @@ def validation_errors(results: dict[str, Any]) -> list[str]:
     result = card.get("result") if isinstance(card, dict) else None
     sse_lines = results.get("sse_lines") or []
     sse_data_seen = any(isinstance(line, str) and line.startswith("data:") and "operator.task" in line for line in sse_lines)
+    interrupted_result = is_interrupted_runtime_result(result)
+    llm_error_result = is_llm_error_result(result)
 
     checks = [
         ((results.get("health") or {}).get("status") == 200, "health status must be 200"),
@@ -197,13 +206,17 @@ def validation_errors(results: dict[str, Any]) -> list[str]:
         ((results.get("subagents") or {}).get("status") == 200, "subagents status must be 200"),
         (subagent_count >= 1, "subagents response must include at least one subagent"),
         (sse_data_seen, "SSE subscription must receive an operator.task data event"),
-        (not is_interrupted_runtime_result(result), "operator task result must not be interrupted/doom-loop"),
+        (not interrupted_result, "operator task result must not be interrupted/doom-loop"),
+        (not llm_error_result or card.get("status") == "blocked", "LLM/provider errors must be status=blocked"),
+        (not llm_error_result or card.get("blocked") is True, "LLM/provider errors must set blocked=true"),
+        (not llm_error_result or bool(card.get("failure_class")), "LLM/provider errors must expose failure_class"),
+        (not llm_error_result or bool(card.get("next_action")), "LLM/provider errors must expose next_action"),
     ]
     for ok, message in checks:
         if not ok:
             errors.append(message)
 
-    if isinstance(card, dict) and is_interrupted_runtime_result(result):
+    if isinstance(card, dict) and interrupted_result:
         if card.get("status") == "complete" or card.get("blocked") is False:
             errors.append("interrupted operator task must not be status=complete or blocked=false")
         if not card.get("failure_class"):

@@ -1984,6 +1984,19 @@ fn classify_operator_task_turn(turn: &MvsTurnResult) -> OperatorTaskCloseout {
         };
     }
 
+    if turn
+        .failure
+        .as_deref()
+        .is_some_and(is_llm_unavailable_structured_failure)
+    {
+        return OperatorTaskCloseout {
+            status: "blocked",
+            blocked: true,
+            failure_class: Some("llm_unavailable"),
+            next_action: Some("inspect_llm_provider"),
+        };
+    }
+
     if turn.failure.is_some() {
         return OperatorTaskCloseout {
             status: "blocked",
@@ -2002,6 +2015,15 @@ fn classify_operator_task_turn(turn: &MvsTurnResult) -> OperatorTaskCloseout {
         };
     }
 
+    if is_llm_unavailable_runtime_result(&turn.reply) {
+        return OperatorTaskCloseout {
+            status: "blocked",
+            blocked: true,
+            failure_class: Some("llm_unavailable"),
+            next_action: Some("inspect_llm_provider"),
+        };
+    }
+
     OperatorTaskCloseout {
         status: "complete",
         blocked: false,
@@ -2014,6 +2036,14 @@ fn is_interrupted_runtime_result(reply: &str) -> bool {
     let lower = reply.to_ascii_lowercase();
     lower.contains("[interrupted:")
         || (lower.contains("interrupted") && lower.contains("doom loop:"))
+}
+
+fn is_llm_unavailable_runtime_result(reply: &str) -> bool {
+    reply.trim_start().to_ascii_lowercase().starts_with("[llm error:")
+}
+
+fn is_llm_unavailable_structured_failure(failure: &str) -> bool {
+    failure.to_ascii_lowercase().contains("llm call failed")
 }
 
 /// Custom JSON extractor that maps axum's `JsonRejection` (which produces 422
@@ -7493,6 +7523,74 @@ spec:
             json["result"],
             "[interrupted: doom loop: 3 consecutive act cycles]"
         );
+    }
+
+    #[test]
+    fn operator_task_llm_error_is_actionable_blocked_failure() {
+        let turn = MvsTurnResult {
+            reply: "[LLM error: LLM call failed: request error: HTTP 400: failed to load model]"
+                .to_string(),
+            tool_events: vec![],
+            usage: UsageInfo {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+            },
+            cancelled: false,
+            failure: None,
+        };
+
+        let closeout = classify_operator_task_turn(&turn);
+
+        assert_eq!(closeout.status, "blocked");
+        assert!(closeout.blocked);
+        assert_eq!(closeout.failure_class, Some("llm_unavailable"));
+        assert_eq!(closeout.next_action, Some("inspect_llm_provider"));
+    }
+
+    #[test]
+    fn operator_task_success_text_mentioning_llm_call_failed_stays_complete() {
+        let turn = MvsTurnResult {
+            reply: "Deployment review complete: historical logs mentioned `llm call failed`, but the current check is healthy."
+                .to_string(),
+            tool_events: vec![],
+            usage: UsageInfo {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+            },
+            cancelled: false,
+            failure: None,
+        };
+
+        let closeout = classify_operator_task_turn(&turn);
+
+        assert_eq!(closeout.status, "complete");
+        assert!(!closeout.blocked);
+        assert_eq!(closeout.failure_class, None);
+        assert_eq!(closeout.next_action, None);
+    }
+
+    #[test]
+    fn operator_task_structured_llm_failure_is_actionable_blocked_failure() {
+        let turn = MvsTurnResult {
+            reply: "[sera] Runtime error: LLM call failed: provider down".to_string(),
+            tool_events: vec![],
+            usage: UsageInfo {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+            },
+            cancelled: false,
+            failure: Some("LLM call failed: provider down".to_string()),
+        };
+
+        let closeout = classify_operator_task_turn(&turn);
+
+        assert_eq!(closeout.status, "blocked");
+        assert!(closeout.blocked);
+        assert_eq!(closeout.failure_class, Some("llm_unavailable"));
+        assert_eq!(closeout.next_action, Some("inspect_llm_provider"));
     }
 
     #[tokio::test]

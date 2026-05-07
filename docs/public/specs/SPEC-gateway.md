@@ -97,7 +97,7 @@ A **Pattern A harness** is an implementation of the `AgentRuntime` trait (SPEC-r
 Concrete examples:
 - The default `sera-runtime` library mode (in-process call).
 - `sera-runtime --ndjson` over `StdioHarness` (current `dispatch_mode=runtime` MVS — see [`../decisions/2026-04-29-dispatch-ownership.md`](../decisions/2026-04-29-dispatch-ownership.md)).
-- BYOH harnesses connecting via the `Grpc` / `WebSocket` / `Reverse` transports of §7a — Hermes ACP, `sera-byoh-agent`, third-party Codex / Claude Code BYOH workers — **when the gateway owns turn dispatch and tool routing**.
+- BYOH harnesses connecting via the `Grpc` / `WebSocket` / `WebhookBack` transports of §7a — Hermes ACP, `sera-byoh-agent`, third-party Codex / Claude Code BYOH workers — **when the gateway owns turn dispatch and tool routing**.
 
 Pattern A harnesses register through the runtime/harness path and the gateway treats their turns as instrumented executions: every `tool_call_*` event passes through the gateway pipeline (`pre_tool` → `CapabilityPolicy` → dispatch → `post_tool` → audit) once `dispatch_mode={gateway,embedded}` is live.
 

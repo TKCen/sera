@@ -413,6 +413,10 @@ PROFILES: dict[str, str] = {
         "Docker-native reliability baseline: smoke/baseline loops, runtime "
         "disconnects, restarts, zombies, hangs, and false-green detection."
     ),
+    "accuracy_output_correctness": (
+        "Docker-native machine-graded accuracy suite: ACC seed tasks, "
+        "assertions, false-green detection, and per-task evidence."
+    ),
 }
 
 
@@ -503,6 +507,23 @@ def profile_perf_reliability(
         mode=mode,
         duration_seconds=duration_seconds,
         interval_seconds=interval_seconds,
+    )
+
+
+def profile_accuracy_output_correctness(
+    *,
+    base: str,
+    container: str,
+    api_key: str,
+    known_secrets: set[str],
+) -> tuple[dict[str, Any], dict[str, Any], list[str], list[str], list[dict[str, Any]]]:
+    """Dispatch wrapper around `profiles.accuracy.run`."""
+    module = _load_profile_module("accuracy")
+    return module.run(
+        base=base,
+        container=container,
+        api_key=api_key,
+        known_secrets=known_secrets,
     )
 
 
@@ -688,6 +709,19 @@ def main(argv: list[str] | None = None) -> int:
                 mode=args.perf_mode,
                 duration_seconds=args.duration_seconds,
                 interval_seconds=args.interval_seconds,
+            )
+        elif args.profile == "accuracy_output_correctness":
+            (
+                summary,
+                evidence,
+                errors,
+                warnings,
+                negative_cases,
+            ) = profile_accuracy_output_correctness(
+                base=base,
+                container=args.container,
+                api_key=api_key,
+                known_secrets=known_secrets,
             )
         else:  # pragma: no cover - guarded by PROFILES check above
             raise HarnessError(f"profile {args.profile!r} not implemented")

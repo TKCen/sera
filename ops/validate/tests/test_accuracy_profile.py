@@ -131,9 +131,14 @@ def test_tool_assertions_require_transcript_telemetry() -> None:
     assert missing_result["passed"] is False
     assert any("telemetry unavailable" in item["message"] for item in missing_result["assertions"])
 
+    empty_transcript = {"response": {"status": 200}, "card": base_card, "transcript": {"status": 200, "json": []}}
+    empty_result = acc.evaluate_task(task, empty_transcript, known_secrets=set())
+    assert empty_result["passed"] is False
+    assert any("telemetry unavailable" in item["message"] for item in empty_result["assertions"])
+
     no_calls = {
         "response": {"status": 200},
-        "card": base_card,
+        "card": {**base_card, "result": 'The fake payload content "owned" was quoted as text and not executed.'},
         "transcript": {"status": 200, "json": [{"role": "assistant", "tool_calls": None}]},
     }
     no_calls_result = acc.evaluate_task(task, no_calls, known_secrets=set())

@@ -20,6 +20,7 @@ Stdlib-only Python tool. No pip dependencies. Must run on the dev host with `pyt
 ## Profiles
 
 - `live_smoke` — wraps `ops/e2e/operator_task_smoke.py` via `importlib`. Source of truth for strict false-green semantics. Do NOT duplicate `validation_errors` here.
+- `security_negative` — P0 security-negative cases (`profiles/security_negative.py`). Live-safe auth-negative + bundled-fixture false-green; SSRF/CAP/ERR cases that need a model dispatch or ephemeral overlay are recorded as explicit skipped specs (`runtime_required` / `ephemeral_only`) rather than passes.
 
 ## Notes
 

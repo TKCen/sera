@@ -3717,27 +3717,51 @@ fn turn_timeout() -> std::time::Duration {
 
 fn self_introspection_requested(user_message: &str) -> bool {
     let msg = user_message.to_lowercase();
+    let msg = msg.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    // Keep this trigger intentionally narrower than raw keyword matching. Words
+    // like "tool", "model", "session", or "container" are common in normal
+    // work requests; only inject the large probe snapshot for prompts that ask
+    // about this agent's own runtime, workspace, skills, or capabilities.
     [
-        "workspace",
-        "environment",
+        "what can you do",
+        "what is in your workspace",
+        "what's in your workspace",
+        "your workspace",
+        "what kind of environment",
+        "your environment",
         "where are you",
         "where am i",
-        "what can you do",
         "what do you have access to",
-        "access to",
-        "docker",
-        "container",
-        "wsl",
-        "skill",
-        "skills",
-        "tool",
-        "tools",
-        "capability",
-        "capabilities",
-        "provider",
-        "model",
-        "memory",
-        "session",
+        "what are you allowed to use",
+        "what tools do you",
+        "which tools do you",
+        "allowed tools",
+        "configured tools",
+        "what capabilities do you",
+        "which capabilities do you",
+        "what skills",
+        "which skills",
+        "skills do you",
+        "skill discovery",
+        "no skill discovery",
+        "what provider",
+        "which provider",
+        "provider are you",
+        "what model",
+        "which model",
+        "model are you",
+        "memory do you",
+        "what memory",
+        "session persistence",
+        "sessions do you",
+        "are you running in docker",
+        "are you running inside docker",
+        "accessing a docker",
+        "inside a docker container",
+        "running inside a docker",
+        "running on wsl",
+        "inside wsl",
     ]
     .iter()
     .any(|needle| msg.contains(needle))
@@ -9063,6 +9087,17 @@ spec:
             assert!(
                 self_introspection_requested(prompt),
                 "prompt should request self-introspection: {prompt}"
+            );
+        }
+
+        for prompt in [
+            "Please use the tool adapter model to plan the next session migration.",
+            "Can you model this domain with a container abstraction?",
+            "The provider SDK needs a memory-safe API wrapper.",
+        ] {
+            assert!(
+                !self_introspection_requested(prompt),
+                "ordinary work prompt should not request self-introspection: {prompt}"
             );
         }
     }

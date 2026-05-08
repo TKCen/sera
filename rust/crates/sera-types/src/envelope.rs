@@ -6,7 +6,9 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::principal::PrincipalRef;
 use crate::runtime::TokenUsage;
+use crate::sandbox::EgressEndpoint;
 
 // ── Submission (SQ input) ───────────────────────────────────────────────────
 
@@ -105,14 +107,75 @@ pub enum ApprovalDecision {
     Denied { reason: Option<String> },
 }
 
-/// Registration operations (agent, connector, plugin).
+/// Registration operations (agent, connector, plugin, external Pattern-B agent).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "register_op", rename_all = "snake_case")]
 pub enum RegisterOp {
     Agent { manifest: serde_json::Value },
     Connector { config: serde_json::Value },
     Plugin { config: serde_json::Value },
+    /// Pattern B (sera-pcvp): a profile-as-subagent session
+    /// (Claude Code tmux pane, OMC orchestrator pane, Hermes profile,
+    /// external A2A/ACP agent) registers itself as an ExternalAgentPrincipal
+    /// for the lifetime of one session. See SPEC-gateway §1d / §3.1.
+    ExternalAgent(ExternalAgentRegistration),
 }
+
+/// Pattern B registration payload. Every field is required.
+///
+/// Recorded by the gateway as the typed handshake that pins the declared
+/// scope of an external session at registration. The gateway MUST refuse a
+/// registration whose `delegated_by` resolves to an unknown principal —
+/// this is the anti-laundering invariant for Pattern B.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalAgentRegistration {
+    /// Wire protocol the external session speaks (A2A, ACP-compat, custom CLI).
+    pub protocol: ExternalProtocol,
+
+    /// Stable identifier the external session asserts about itself
+    /// (e.g. tmux session name, ACP agent id, A2A agent_card.name).
+    /// Combined with `protocol` to derive `Principal::id` =
+    /// `"ext:{protocol}:{external_id}"` for backwards-compat with
+    /// `Principal::external_agent`.
+    pub external_id: String,
+
+    /// The SERA principal that delegated this session into existence.
+    /// REQUIRED — gateway MUST refuse a registration whose `delegated_by`
+    /// is absent or whose principal id is unknown.
+    pub delegated_by: PrincipalRef,
+
+    /// Egress allowlist the registering session declares. Enforced by the
+    /// sera-eq0m kernel layer; recorded here so the gateway pins the
+    /// declared scope at registration rather than leaving it implicit.
+    /// `EgressEndpoint::InferenceLocal` is the canonical first entry for
+    /// any Pattern B session that talks to an LLM through the proxy.
+    pub declared_egress: Vec<EgressEndpoint>,
+
+    /// Opaque handle for the budget bucket this session is bound to.
+    /// In M1 this is just a newtype wrapper over a principal-id string;
+    /// sera-plcv's per-principal token bucket will key on it without
+    /// re-shaping the envelope.
+    pub budget_handle: BudgetHandle,
+}
+
+/// Wire protocol an external Pattern-B session speaks.
+///
+/// `Custom(String)` covers launchers / harnesses that do not negotiate over
+/// A2A or ACP-compat (e.g. a clawhip-launched Claude Code pane).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalProtocol {
+    A2a,
+    AcpCompat,
+    Custom(String),
+}
+
+/// Newtype wrapper over the budget bucket key. Today this is the principal
+/// id; the wrapper exists so sera-plcv can replace the inner shape without
+/// touching every RegisterOp consumer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct BudgetHandle(pub String);
 
 // ── Event (EQ output) ───────────────────────────────────────────────────────
 
@@ -514,5 +577,134 @@ mod tests {
         });
         let parsed: Submission = serde_json::from_value(legacy).unwrap();
         assert!(parsed.parent_task_id.is_none());
+    }
+
+    // ── RegisterOp::ExternalAgent (sera-pcvp) ────────────────────────────────
+
+    use crate::principal::{PrincipalId, PrincipalKind};
+
+    fn sample_external_agent_registration() -> ExternalAgentRegistration {
+        ExternalAgentRegistration {
+            protocol: ExternalProtocol::A2a,
+            external_id: "claude-code-pane-1".to_string(),
+            delegated_by: PrincipalRef {
+                id: PrincipalId::new("agent:parent-1"),
+                kind: PrincipalKind::Agent,
+            },
+            declared_egress: vec![EgressEndpoint::InferenceLocal],
+            budget_handle: BudgetHandle("ext:a2a:claude-code-pane-1".to_string()),
+        }
+    }
+
+    #[test]
+    fn external_agent_register_op_serde_roundtrip() {
+        let op = RegisterOp::ExternalAgent(sample_external_agent_registration());
+        let json = serde_json::to_value(&op).unwrap();
+        assert_eq!(json["register_op"], "external_agent");
+        assert_eq!(json["protocol"], "a2a");
+        assert_eq!(json["external_id"], "claude-code-pane-1");
+        assert_eq!(json["delegated_by"]["id"], "agent:parent-1");
+        assert_eq!(json["delegated_by"]["kind"], "agent");
+        assert_eq!(json["declared_egress"][0]["type"], "inference_local");
+        assert_eq!(json["budget_handle"], "ext:a2a:claude-code-pane-1");
+
+        let parsed: RegisterOp = serde_json::from_value(json).unwrap();
+        match parsed {
+            RegisterOp::ExternalAgent(r) => {
+                assert_eq!(r.external_id, "claude-code-pane-1");
+                assert_eq!(r.protocol, ExternalProtocol::A2a);
+                assert_eq!(r.delegated_by.id.0, "agent:parent-1");
+                assert_eq!(r.delegated_by.kind, PrincipalKind::Agent);
+                assert_eq!(r.declared_egress.len(), 1);
+                assert_eq!(r.budget_handle.0, "ext:a2a:claude-code-pane-1");
+            }
+            other => panic!("expected ExternalAgent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn external_agent_register_op_minimal_payload() {
+        // Missing `delegated_by` — must fail to deserialize.
+        let missing_delegator = serde_json::json!({
+            "register_op": "external_agent",
+            "protocol": "a2a",
+            "external_id": "x",
+            "declared_egress": [{"type": "inference_local"}],
+            "budget_handle": "k"
+        });
+        assert!(serde_json::from_value::<RegisterOp>(missing_delegator).is_err());
+
+        // Missing `declared_egress` — must fail to deserialize.
+        let missing_egress = serde_json::json!({
+            "register_op": "external_agent",
+            "protocol": "a2a",
+            "external_id": "x",
+            "delegated_by": {"id": "agent:p", "kind": "agent"},
+            "budget_handle": "k"
+        });
+        assert!(serde_json::from_value::<RegisterOp>(missing_egress).is_err());
+    }
+
+    #[test]
+    fn external_protocol_serde_snake_case() {
+        assert_eq!(
+            serde_json::to_value(ExternalProtocol::A2a).unwrap(),
+            serde_json::json!("a2a"),
+        );
+        assert_eq!(
+            serde_json::to_value(ExternalProtocol::AcpCompat).unwrap(),
+            serde_json::json!("acp_compat"),
+        );
+        assert_eq!(
+            serde_json::to_value(ExternalProtocol::Custom("hermes".to_string())).unwrap(),
+            serde_json::json!({"custom": "hermes"}),
+        );
+
+        // Round-trip the variants.
+        let parsed_a2a: ExternalProtocol = serde_json::from_value(serde_json::json!("a2a")).unwrap();
+        assert_eq!(parsed_a2a, ExternalProtocol::A2a);
+        let parsed_acp: ExternalProtocol =
+            serde_json::from_value(serde_json::json!("acp_compat")).unwrap();
+        assert_eq!(parsed_acp, ExternalProtocol::AcpCompat);
+        let parsed_custom: ExternalProtocol =
+            serde_json::from_value(serde_json::json!({"custom": "hermes"})).unwrap();
+        assert_eq!(parsed_custom, ExternalProtocol::Custom("hermes".to_string()));
+    }
+
+    #[test]
+    fn budget_handle_is_transparent_string() {
+        // Serializes to a bare string, not a wrapping object.
+        let handle = BudgetHandle("ext:a2a:bot".to_string());
+        let json = serde_json::to_value(&handle).unwrap();
+        assert_eq!(json, serde_json::json!("ext:a2a:bot"));
+
+        // And deserializes from a bare string — proves `#[serde(transparent)]`.
+        let parsed: BudgetHandle = serde_json::from_value(serde_json::json!("ext:a2a:bot")).unwrap();
+        assert_eq!(parsed.0, "ext:a2a:bot");
+    }
+
+    #[test]
+    fn register_op_legacy_variants_still_parse() {
+        // Adding `ExternalAgent` must not break the existing variants.
+        let agent: RegisterOp = serde_json::from_value(serde_json::json!({
+            "register_op": "agent",
+            "manifest": {"name": "old"}
+        }))
+        .unwrap();
+        assert!(matches!(agent, RegisterOp::Agent { .. }));
+
+        let connector: RegisterOp = serde_json::from_value(serde_json::json!({
+            "register_op": "connector",
+            "config": {"channel": "discord"}
+        }))
+        .unwrap();
+        assert!(matches!(connector, RegisterOp::Connector { .. }));
+
+        let plugin: RegisterOp = serde_json::from_value(serde_json::json!({
+            "register_op": "plugin",
+            "config": {"name": "p"}
+        }))
+        .unwrap();
+        assert!(matches!(plugin, RegisterOp::Plugin { .. }));
     }
 }

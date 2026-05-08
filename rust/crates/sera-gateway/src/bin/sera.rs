@@ -3727,7 +3727,6 @@ fn self_introspection_requested(user_message: &str) -> bool {
         "what can you do",
         "what is in your workspace",
         "what's in your workspace",
-        "your workspace",
         "what kind of environment",
         "your environment",
         "where are you",
@@ -9094,6 +9093,8 @@ spec:
             "Please use the tool adapter model to plan the next session migration.",
             "Can you model this domain with a container abstraction?",
             "The provider SDK needs a memory-safe API wrapper.",
+            "In your workspace, run tests and edit file X.",
+            "Before changing code in your workspace, inspect the current diff.",
         ] {
             assert!(
                 !self_introspection_requested(prompt),

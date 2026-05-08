@@ -115,6 +115,56 @@ def test_perf_latency_run_collects_thresholds_operator_and_docker_evidence() -> 
     assert cases == []
 
 
+def test_latency_thresholds_enforce_readiness_wait() -> None:
+    perf = _load_module("performance", PROFILE_PATH)
+
+    errors, warnings = perf._threshold_findings({"readiness_wait_ms": 31_000.0})
+
+    assert errors == []
+    assert warnings == ["readiness_wait_exceeds_warn_threshold: 31000.0ms"]
+
+    errors, warnings = perf._threshold_findings({"readiness_wait_ms": 91_000.0})
+
+    assert errors == ["readiness_wait_exceeds_fail_threshold: 91000.0ms"]
+    assert warnings == []
+
+
+def test_perf_latency_fails_ok_non_json_readiness_response() -> None:
+    perf = _load_module("performance_non_json_ready", PROFILE_PATH)
+    responses: dict[tuple[str, str], dict[str, Any]] = {
+        ("GET", "/health"): {"ok": True, "status": 200, "raw": "{}", "json": {"ok": True}},
+        ("GET", "/api/health/ready"): {"ok": True, "status": 200, "raw": "ready", "json": None},
+        ("GET", "/api/agents"): {"ok": True, "status": 200, "raw": "[]", "json": [{"id": "sera"}]},
+        ("POST", "/api/operator/tasks"): {"ok": True, "status": 200, "raw": "{}", "json": {"session_key": "s1", "status": "complete", "blocked": False, "result": "done"}},
+        ("GET", "/api/sessions/s1/subagents"): {"ok": True, "status": 200, "raw": "{}", "json": {"subagents": []}},
+    }
+
+    def fake_request(_base: str, _headers: dict[str, str], method: str, path: str, **_kwargs: Any) -> dict[str, Any]:
+        return dict(responses[(method, path)])
+
+    def fake_stats(_container: str, **_kwargs: Any) -> dict[str, Any]:
+        return {"ok": True, "restart_count": 0}
+
+    tick = {"value": 0.0}
+
+    def fake_monotonic() -> float:
+        tick["value"] += 0.01
+        return tick["value"]
+
+    _summary, _evidence, errors, _warnings, _cases = perf.run_latency(
+        base="http://127.0.0.1:3001",
+        container="rust-sera-1",
+        api_key="secret-key",
+        health_samples=1,
+        request_func=fake_request,
+        stats_func=fake_stats,
+        monotonic_func=fake_monotonic,
+        sleep_func=lambda _seconds: None,
+    )
+
+    assert "runtime_disconnected: readiness response missing JSON object" in errors
+
+
 def test_reliability_evaluation_hard_fails_runtime_restart_zombie_and_false_green() -> None:
     perf = _load_module("performance", PROFILE_PATH)
 

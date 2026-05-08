@@ -363,6 +363,14 @@ def _threshold_findings(summary: dict[str, Any]) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
 
+    readiness_wait = summary.get("readiness_wait_ms")
+    if isinstance(readiness_wait, (int, float)):
+        threshold = LATENCY_THRESHOLDS["readiness_wait_ms"]
+        if readiness_wait > threshold["fail"]:
+            errors.append(f"readiness_wait_exceeds_fail_threshold: {readiness_wait}ms")
+        elif readiness_wait > threshold["warn"]:
+            warnings.append(f"readiness_wait_exceeds_warn_threshold: {readiness_wait}ms")
+
     health_p95 = (summary.get("health") or {}).get("p95_ms")
     if isinstance(health_p95, (int, float)):
         threshold = LATENCY_THRESHOLDS["health_p95_ms"]
@@ -453,7 +461,9 @@ def run_latency(
 
     for sample in ready:
         payload = sample.get("json")
-        if isinstance(payload, dict) and payload.get("runtime_connected") is not True:
+        if sample.get("ok") and not isinstance(payload, dict):
+            errors.append("runtime_disconnected: readiness response missing JSON object")
+        elif isinstance(payload, dict) and payload.get("runtime_connected") is not True:
             errors.append("runtime_disconnected: readiness reported runtime_connected!=true")
     for task in operator_tasks:
         for fg_error in task.get("false_green_errors") or []:

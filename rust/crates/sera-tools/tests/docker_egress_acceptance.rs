@@ -512,7 +512,7 @@ fn sv76_3_forbidden_target_matrix_covers_metadata_private_link_local_and_ipv6() 
     assert!(urls.contains(&"http://192.168.0.1/"));
     assert!(urls.contains(&"http://[::1]/"));
     assert!(urls.contains(&"http://[fc00::1]/"));
-    assert!(urls.contains(&"http://[fe80::1]/"));
+    assert!(urls.contains(&"http://[fe80::1%25eth0]/"));
     assert!(targets.iter().all(|t| t.marker.ends_with("_exit=")));
 }
 

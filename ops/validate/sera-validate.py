@@ -37,8 +37,8 @@ from typing import Any, Callable
 
 DEFAULT_BASE = "http://127.0.0.1:3001"
 DEFAULT_CONTAINER = "rust-sera-1"
-SCHEMA_VERSION = "1.0.0"
-TOOL_VERSION = "0.1.0"
+SCHEMA_VERSION = "1.1.0"
+TOOL_VERSION = "0.2.0"
 REDACTION_RULES_VERSION = "1"
 
 EXIT_PASS = 0
@@ -398,7 +398,48 @@ def validate_only(path: str) -> tuple[int, dict[str, Any]]:
 
 PROFILES: dict[str, str] = {
     "live_smoke": "Strict operator-task live smoke against rust-sera-1.",
+    "security_negative": (
+        "P0 security-negative cases (auth, false-green, "
+        "and runtime/ephemeral-skipped specs)."
+    ),
 }
+
+
+# --- profile loader ----------------------------------------------------------
+
+
+def _load_profile_module(name: str) -> Any:
+    """Load a profile sub-module by name (e.g. 'security_negative')."""
+    candidate = Path(__file__).resolve().parent / "profiles" / f"{name}.py"
+    if not candidate.exists():
+        raise HarnessError(f"profile module missing: {candidate}")
+    spec = importlib.util.spec_from_file_location(
+        f"sera_validate_profile_{name}", candidate
+    )
+    if spec is None or spec.loader is None:
+        raise HarnessError(f"failed to load spec for profile module {candidate}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def profile_security_negative(
+    *,
+    base: str,
+    container: str,
+    api_key: str,
+    known_secrets: set[str],
+) -> tuple[
+    dict[str, Any], dict[str, Any], list[str], list[str], list[dict[str, Any]]
+]:
+    """Dispatch wrapper around `profiles.security_negative.run`."""
+    module = _load_profile_module("security_negative")
+    return module.run(
+        base=base,
+        container=container,
+        api_key=api_key,
+        known_secrets=known_secrets,
+    )
 
 
 # --- CLI ---------------------------------------------------------------------
@@ -480,10 +521,24 @@ def main(argv: list[str] | None = None) -> int:
         "compose_project": "rust",
     }
 
+    negative_cases: list[dict[str, Any]] = []
     try:
         if args.profile == "live_smoke":
             summary, evidence, errors, warnings = profile_live_smoke(
                 base=base, container=args.container, api_key=api_key
+            )
+        elif args.profile == "security_negative":
+            (
+                summary,
+                evidence,
+                errors,
+                warnings,
+                negative_cases,
+            ) = profile_security_negative(
+                base=base,
+                container=args.container,
+                api_key=api_key,
+                known_secrets=known_secrets,
             )
         else:  # pragma: no cover - guarded by PROFILES check above
             raise HarnessError(f"profile {args.profile!r} not implemented")
@@ -505,7 +560,7 @@ def main(argv: list[str] | None = None) -> int:
         evidence=evidence,
         errors=errors,
         warnings=warnings,
-        negative_cases=[],
+        negative_cases=negative_cases,
     )
 
     redacted, count = redact_artifact(artifact, known_secrets=known_secrets)

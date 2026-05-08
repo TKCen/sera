@@ -287,6 +287,22 @@ impl Principal {
         }
     }
 
+    /// Companion constructor for Pattern B (sera-pcvp) registrations.
+    ///
+    /// Produces the same `Principal` shape as [`Self::external_agent`] —
+    /// the `_delegated_by` reference is recorded on the registration payload
+    /// and (in PR2) on the gateway's external-agent registry, not on the
+    /// `Principal` struct itself. Reusing the existing id format
+    /// (`"ext:{protocol}:{external_id}"`) keeps `PrincipalPolicy::for_kind`
+    /// resolution and existing audit trails working unchanged.
+    pub fn external_agent_with_delegator(
+        protocol: &str,
+        external_id: &str,
+        _delegated_by: &PrincipalRef,
+    ) -> Self {
+        Self::external_agent(protocol, external_id)
+    }
+
     /// Create a principal for a service identity.
     pub fn service(service_name: &str) -> Self {
         Self {

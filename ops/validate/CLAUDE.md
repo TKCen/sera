@@ -24,6 +24,7 @@ Stdlib-only Python tool. No pip dependencies. Must run on the dev host with `pyt
 - `docker_security` — static + compose-config validation for `docker-compose.security.yml` (`profiles/docker_security.py`). Default CLI mode is non-destructive and does not start containers; explicit helper calls use an ephemeral `sera-sec-<runid>` project and must clean up with `down -v --rmi local --remove-orphans`.
 - `perf_latency` — live-safe latency baseline (`profiles/performance.py`) collecting health/ready/operator-task p50/p95/p99, error rate, provider/model, restart count, and Docker CPU/memory samples.
 - `perf_reliability` — live-safe reliability loop (`profiles/performance.py`) with `--perf-mode smoke` (5 min) or `baseline` (30 min), plus `--duration-seconds` overrides for bounded tests; runtime disconnects, restarts, zombie subagents, hangs, false-greens, and secret leaks are hard fails.
+- `accuracy_output_correctness` — machine-graded ACC-001..ACC-007 operator-task suite (`profiles/accuracy.py`); HTTP 200 is evidence only, each case needs assertions, and interrupted/doom-loop plus secret leaks are hard fails.
 
 ## Notes
 

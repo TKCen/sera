@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0.0",
+  "profile": "live_smoke",
+  "run_id": "fixture-false-green-interrupted",
+  "evidence": {
+    "health": {"ok": true, "status": 200, "raw": "ok", "json": {"ok": true}},
+    "ready": {"ok": true, "status": 200, "raw": "{}", "json": {"runtime_connected": true}},
+    "agents": {"ok": true, "status": 200, "raw": "[]", "json": [{"id": "sera"}]},
+    "operator_task": {
+      "ok": true,
+      "status": 200,
+      "raw": "{}",
+      "json": {
+        "session_key": "fixture-session-1",
+        "status": "complete",
+        "blocked": false,
+        "result": "[interrupted: doom loop: planner stuck]",
+        "failure_class": null,
+        "next_action": null,
+        "spawned_helper": {"agent": "operator-helper"},
+        "handoff_tool": "operator-task-card"
+      }
+    },
+    "subagents": {
+      "ok": true,
+      "status": 200,
+      "raw": "{}",
+      "json": {"subagents": [{"agent": "operator-helper", "session_key": "fixture-session-1"}]}
+    },
+    "sse_lines": [
+      "event: operator.task",
+      "data: {\"session_key\": \"fixture-session-1\", \"event\": \"operator.task\"}"
+    ],
+    "topics_before_operator_task": {"ok": true, "status": 200, "raw": "{}", "json": {"topics": []}},
+    "topics_after_operator_task": {"ok": true, "status": 200, "raw": "{}", "json": {"topics": []}}
+  }
+}

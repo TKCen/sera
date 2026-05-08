@@ -1,0 +1,29 @@
+# ops/validate — SERA Docker-native validation runner
+
+Stdlib-only Python tool. No pip dependencies. Must run on the dev host with `python3` and (optionally) `docker` available.
+
+## Layout
+
+- `sera-validate.py` — CLI entry point, profile registry, redaction, artifact writer.
+- `tests/` — unit + integration tests (run via `python -m pytest ops/validate/tests` or directly).
+- `fixtures/` — captured artifact fixtures used by `--validate-only` checks.
+
+## Exit-code rubric
+
+| Code | Meaning |
+|------|---------|
+| 0 | pass — all errors empty, all checks passed |
+| 1 | warn — non-empty `warnings`, empty `errors` |
+| 2 | fail — any strict check failed (false-green, secret leak, runtime down) |
+| 3 | harness error — Docker missing, container absent, artifact unreadable, etc. |
+
+## Profiles
+
+- `live_smoke` — wraps `ops/e2e/operator_task_smoke.py` via `importlib`. Source of truth for strict false-green semantics. Do NOT duplicate `validation_errors` here.
+
+## Notes
+
+- Do NOT modify `ops/e2e/operator_task_smoke.py` — wrapped via importlib.
+- Stdlib only. Adding `requests`, `httpx`, etc. is out of scope for this directory.
+- Redaction self-check is mandatory. A failed self-check is exit 2.
+- Artifacts: ephemeral runs go to `/tmp/sera-validate-*.json`. Important runs may be preserved under `artifacts/validation/<date>/<runid>/` (out of scope for sv76.1).

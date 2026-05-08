@@ -405,6 +405,14 @@ PROFILES: dict[str, str] = {
     "docker_security": (
         "Docker security overlay validation with structured compose skips/findings."
     ),
+    "perf_latency": (
+        "Docker-native latency baseline: health/ready/operator percentiles, "
+        "error rate, and container stats."
+    ),
+    "perf_reliability": (
+        "Docker-native reliability baseline: smoke/baseline loops, runtime "
+        "disconnects, restarts, zombies, hangs, and false-green detection."
+    ),
 }
 
 
@@ -460,6 +468,44 @@ def profile_docker_security(
     return module.run(run_compose=run_compose)
 
 
+def profile_perf_latency(
+    *,
+    base: str,
+    container: str,
+    api_key: str,
+    health_samples: int,
+) -> tuple[dict[str, Any], dict[str, Any], list[str], list[str], list[dict[str, Any]]]:
+    """Dispatch wrapper around `profiles.performance.run_latency`."""
+    module = _load_profile_module("performance")
+    return module.run_latency(
+        base=base,
+        container=container,
+        api_key=api_key,
+        health_samples=health_samples,
+    )
+
+
+def profile_perf_reliability(
+    *,
+    base: str,
+    container: str,
+    api_key: str,
+    mode: str,
+    duration_seconds: int | None,
+    interval_seconds: int,
+) -> tuple[dict[str, Any], dict[str, Any], list[str], list[str], list[dict[str, Any]]]:
+    """Dispatch wrapper around `profiles.performance.run_reliability`."""
+    module = _load_profile_module("performance")
+    return module.run_reliability(
+        base=base,
+        container=container,
+        api_key=api_key,
+        mode=mode,
+        duration_seconds=duration_seconds,
+        interval_seconds=interval_seconds,
+    )
+
+
 # --- CLI ---------------------------------------------------------------------
 
 
@@ -481,6 +527,30 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "docker_security only: explicitly start an ephemeral security "
             "compose project and clean it up"
         ),
+    )
+    parser.add_argument(
+        "--perf-mode",
+        choices=("smoke", "baseline"),
+        default="smoke",
+        help="perf_reliability mode: smoke=5 minutes, baseline=30 minutes",
+    )
+    parser.add_argument(
+        "--duration-seconds",
+        type=int,
+        default=None,
+        help="override perf_reliability mode duration for tests or bounded runs",
+    )
+    parser.add_argument(
+        "--interval-seconds",
+        type=int,
+        default=60,
+        help="perf_reliability sample interval (default: 60)",
+    )
+    parser.add_argument(
+        "--health-samples",
+        type=int,
+        default=10,
+        help="perf_latency health/ready sample count (default: 10)",
     )
     parser.add_argument("--quiet", action="store_true", help="single-line summary on green; full JSON on non-green")
     return parser
@@ -522,6 +592,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.run_compose and args.profile != "docker_security":
         sys.stderr.write("sera-validate: --run-compose is only supported with --profile docker_security\n")
+        return EXIT_HARNESS_ERROR
+    if args.duration_seconds is not None and args.duration_seconds < 0:
+        sys.stderr.write("sera-validate: --duration-seconds must be non-negative\n")
+        return EXIT_HARNESS_ERROR
+    if args.interval_seconds <= 0:
+        sys.stderr.write("sera-validate: --interval-seconds must be positive\n")
+        return EXIT_HARNESS_ERROR
+    if args.health_samples <= 0:
+        sys.stderr.write("sera-validate: --health-samples must be positive\n")
         return EXIT_HARNESS_ERROR
 
     base = args.base.rstrip("/")
@@ -582,6 +661,34 @@ def main(argv: list[str] | None = None) -> int:
                 warnings,
                 negative_cases,
             ) = profile_docker_security(run_compose=args.run_compose)
+        elif args.profile == "perf_latency":
+            (
+                summary,
+                evidence,
+                errors,
+                warnings,
+                negative_cases,
+            ) = profile_perf_latency(
+                base=base,
+                container=args.container,
+                api_key=api_key,
+                health_samples=args.health_samples,
+            )
+        elif args.profile == "perf_reliability":
+            (
+                summary,
+                evidence,
+                errors,
+                warnings,
+                negative_cases,
+            ) = profile_perf_reliability(
+                base=base,
+                container=args.container,
+                api_key=api_key,
+                mode=args.perf_mode,
+                duration_seconds=args.duration_seconds,
+                interval_seconds=args.interval_seconds,
+            )
         else:  # pragma: no cover - guarded by PROFILES check above
             raise HarnessError(f"profile {args.profile!r} not implemented")
     except HarnessError as exc:

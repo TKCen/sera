@@ -211,7 +211,10 @@ def run(
             )
         )
     else:
-        warnings.append(f"docker unavailable; compose validation skipped: {version.stderr or version.stdout}")
+        warnings.append(
+            "docker unavailable; compose validation skipped: "
+            f"{_safe_tail(version.stderr or version.stdout)}"
+        )
         cases.append(
             _case(
                 "DOCKER-PREREQ-01",
@@ -232,7 +235,7 @@ def run(
     if not config_passed:
         warnings.append(
             "docker compose config reported overlay incompatibility: "
-            f"{config_result.stderr or config_result.stdout}"
+            f"{_safe_tail(config_result.stderr or config_result.stdout)}"
         )
     cases.append(
         _case(
@@ -260,7 +263,7 @@ def run(
         if not up_passed:
             warnings.append(
                 "docker compose security overlay startup finding: "
-                f"{up.stderr or up.stdout}"
+                f"{_safe_tail(up.stderr or up.stdout)}"
             )
         cases.append(
             _case(
@@ -281,7 +284,7 @@ def run(
         }
         down_passed = down.returncode == 0
         if not down_passed:
-            errors.append(f"cleanup_failed: {down.stderr or down.stdout}")
+            errors.append(f"cleanup_failed: {_safe_tail(down.stderr or down.stdout)}")
         cases.append(
             _case(
                 "DOCKER-CLEANUP-01",

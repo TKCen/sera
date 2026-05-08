@@ -451,9 +451,12 @@ fn forbidden_egress_targets() -> &'static [ForbiddenEgressTarget] {
             marker: "ipv6_private_ula_exit=",
         },
         ForbiddenEgressTarget {
-            name: "ipv6_link_local",
-            url: "http://[fe80::1]/",
-            marker: "ipv6_link_local_exit=",
+            name: "ipv6_link_local_scoped",
+            // IPv6 link-local probes must include an interface scope to be
+            // routable; the percent-encoded zone id keeps this URL valid in
+            // wget/curl parsers while still exercising the policy path.
+            url: "http://[fe80::1%25eth0]/",
+            marker: "ipv6_link_local_scoped_exit=",
         },
     ]
 }

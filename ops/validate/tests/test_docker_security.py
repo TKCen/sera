@@ -130,6 +130,45 @@ def test_run_redacts_compose_config_secret_like_environment_values() -> None:
     assert "<redacted:compose-config-env>" in serialized
 
 
+def test_compose_failure_warnings_are_redacted() -> None:
+    docker_security = _load_module("docker_security", PROFILE_PATH)
+
+    def fake_run(cmd: list[str], _timeout: int = 60):
+        if "version" in cmd:
+            return docker_security.CommandResult(0, "24.0.0\n", "")
+        if "config" in cmd:
+            return docker_security.CommandResult(
+                1,
+                "",
+                "environment:\n  SERA_API_KEY: raw-config-secret\n",
+            )
+        if "up" in cmd:
+            return docker_security.CommandResult(
+                1,
+                "container log\nSERA_ADMIN_TOKEN=raw-up-secret\n",
+                "",
+            )
+        if "down" in cmd:
+            return docker_security.CommandResult(
+                1,
+                "",
+                "cleanup log\nSERA_SECRET: raw-down-secret\n",
+            )
+        return docker_security.CommandResult(0, "", "")
+
+    _summary, _evidence, errors, warnings, _cases = docker_security.run(
+        repo_root=REPO_ROOT,
+        run_compose=True,
+        command_runner=fake_run,
+    )
+    serialized = str({"errors": errors, "warnings": warnings})
+
+    assert "raw-config-secret" not in serialized
+    assert "raw-up-secret" not in serialized
+    assert "raw-down-secret" not in serialized
+    assert "<redacted:compose-config-env>" in serialized
+
+
 def test_main_docker_security_run_compose_passes_explicit_ephemeral_flag(tmp_path, monkeypatch) -> None:
     sv = _load_module("sera_validate_for_docker_security_cli", SV_PATH)
     captured: dict[str, bool] = {}

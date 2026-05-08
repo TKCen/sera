@@ -613,7 +613,7 @@ def run(
             case_id="SEC-ERR-03",
             category="raw-provider-error",
             skip_reason="ephemeral_only",
-            marker="reply must not contain provider host or sk_live_ key shape",
+            marker="reply must not contain provider host or provider credential shape",
             ephemeral_only=True,
         )
     )

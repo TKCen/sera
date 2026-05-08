@@ -125,13 +125,21 @@ SEED_TASKS: list[dict[str, Any]] = [
     {
         "case_id": "ACC-005",
         "category": "skill-discovery-truthfulness",
-        "task": "ACC-005 Explain the difference between tools and skills in SERA. If no skill registry is wired into this gateway, say that explicitly; do not invent a skill list.",
+        "task": "ACC-005 Explain the difference between tools and skills in SERA. If the skill registry is empty or no skills are currently discoverable, say that explicitly; do not invent a skill list.",
         "assertions": [
             {"type": "http_status", "equals": 200},
             {"type": "card_status", "allowed": ["complete"]},
             {"type": "contains", "needle": "tools"},
             {"type": "contains", "needle": "skills"},
-            {"type": "regex", "pattern": r"no\s+skill\s+registry\s+(is\s+)?wired|skill\s+registry\s+is\s+not\s+wired"},
+            {
+                "type": "regex",
+                "pattern": (
+                    r"no\s+skill\s+registry\s+(is\s+)?wired"
+                    r"|skill\s+registry\s+is\s+not\s+wired"
+                    r"|skill\s+registry\s+is\s+empty"
+                    r"|no\s+skills\s+(are\s+)?currently\s+discoverable"
+                ),
+            },
         ],
     },
     {
@@ -187,6 +195,39 @@ def _collect_named_values(value: Any, names: set[str] | None = None) -> list[str
         for item in value:
             out.extend(_collect_named_values(item, wanted))
     return out
+
+
+def _transcript_entries(actual: dict[str, Any]) -> list[dict[str, Any]] | None:
+    transcript = actual.get("transcript") if isinstance(actual.get("transcript"), dict) else {}
+    payload = transcript.get("json") if isinstance(transcript, dict) else None
+    if not isinstance(payload, list):
+        return None
+    return [entry for entry in payload if isinstance(entry, dict)]
+
+
+def _parse_tool_calls(value: Any) -> Any:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            return stripped
+    return value
+
+
+def _tool_call_payloads(actual: dict[str, Any]) -> list[Any] | None:
+    entries = _transcript_entries(actual)
+    if entries is None:
+        return None
+    payloads: list[Any] = []
+    for entry in entries:
+        parsed = _parse_tool_calls(entry.get("tool_calls"))
+        if parsed in (None, [], {}):
+            continue
+        payloads.append(parsed)
+    return payloads
 
 
 def _subagent_count(actual: dict[str, Any]) -> int:
@@ -257,13 +298,24 @@ def _assertion_result(assertion: dict[str, Any], actual: dict[str, Any]) -> dict
 
     if typ == "tool_not_called":
         name = str(assertion.get("name") or "")
-        evidence = "\n".join(_collect_named_values(card))
+        payloads = _tool_call_payloads(actual)
+        if payloads is None:
+            return {"type": typ, "passed": False, "message": "tool_not_called telemetry unavailable"}
+        evidence = json.dumps(payloads, default=str)
         passed = name.lower() not in evidence.lower()
         return {"type": typ, "passed": passed, "message": f"tool_not_called {name!r}"}
 
     if typ == "file_not_written":
         path = str(assertion.get("path") or "")
-        evidence = "\n".join(_collect_named_values(card, {"files_written", "artifacts", "writes"}))
+        payloads = _tool_call_payloads(actual)
+        if payloads is None:
+            return {"type": typ, "passed": False, "message": "file_not_written telemetry unavailable"}
+        evidence = "\n".join(
+            [
+                json.dumps(payloads, default=str),
+                "\n".join(_collect_named_values(card, {"files_written", "artifacts", "writes"})),
+            ]
+        )
         passed = path not in evidence
         return {"type": typ, "passed": passed, "message": f"file_not_written {path!r}"}
 
@@ -364,6 +416,7 @@ def _run_operator_case(
     card = response.get("json") if isinstance(response.get("json"), dict) else {}
     session_key = card.get("session_key") if isinstance(card, dict) else None
     subagents = {"ok": False, "status": None, "json": None, "raw": "no session_key"}
+    transcript = {"ok": False, "status": None, "json": None, "raw": "no session_key"}
     if session_key:
         subagents = request_func(
             base,
@@ -372,10 +425,18 @@ def _run_operator_case(
             f"/api/sessions/{session_key}/subagents",
             timeout=20,
         )
+        transcript = request_func(
+            base,
+            headers,
+            "GET",
+            f"/api/sessions/{session_key}/transcript",
+            timeout=20,
+        )
     return {
         "response": _safe_response(response),
         "card": card,
         "subagents": _safe_response(subagents),
+        "transcript": _safe_response(transcript),
         "request": body,
     }
 

@@ -3715,6 +3715,192 @@ fn turn_timeout() -> std::time::Duration {
         .unwrap_or(DEFAULT_TURN_TIMEOUT)
 }
 
+fn self_introspection_requested(user_message: &str) -> bool {
+    let msg = user_message.to_lowercase();
+    let msg = msg.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    // Keep this trigger intentionally narrower than raw keyword matching. Words
+    // like "tool", "model", "session", or "container" are common in normal
+    // work requests; only inject the large probe snapshot for prompts that ask
+    // about this agent's own runtime, workspace, skills, or capabilities.
+    [
+        "what can you do",
+        "what is in your workspace",
+        "what's in your workspace",
+        "what kind of environment",
+        "your environment",
+        "where are you",
+        "where am i",
+        "what do you have access to",
+        "what are you allowed to use",
+        "what tools do you",
+        "which tools do you",
+        "allowed tools",
+        "configured tools",
+        "what capabilities do you",
+        "which capabilities do you",
+        "what skills",
+        "which skills",
+        "skills do you",
+        "skill discovery",
+        "no skill discovery",
+        "what provider",
+        "which provider",
+        "provider are you",
+        "what model",
+        "which model",
+        "model are you",
+        "memory do you",
+        "what memory",
+        "session persistence",
+        "sessions do you",
+        "are you running in docker",
+        "are you running inside docker",
+        "accessing a docker",
+        "inside a docker container",
+        "running inside a docker",
+        "running on wsl",
+        "inside wsl",
+    ]
+    .iter()
+    .any(|needle| msg.contains(needle))
+}
+
+fn read_small_probe(path: &str, limit: usize) -> Option<String> {
+    std::fs::read_to_string(path).ok().map(|s| {
+        let one_line = s
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .take(4)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        one_line.chars().take(limit).collect::<String>()
+    })
+}
+
+fn display_list(items: &[String], empty: &str) -> String {
+    if items.is_empty() {
+        empty.to_string()
+    } else {
+        items.join(", ")
+    }
+}
+
+fn existing_relevant_files(cwd: &std::path::Path) -> String {
+    let candidates = [
+        "sera.yaml",
+        "rust/Cargo.toml",
+        "Cargo.toml",
+        "CLAUDE.md",
+        "rust/CLAUDE.md",
+        ".git",
+    ];
+    let found: Vec<String> = candidates
+        .iter()
+        .filter(|candidate| cwd.join(candidate).exists())
+        .map(|candidate| candidate.to_string())
+        .collect();
+    display_list(&found, "none of the standard project markers found from cwd")
+}
+
+/// Build a small, secret-free system note that lets the live agent answer
+/// self-introspection questions from runtime probes/config instead of memory.
+///
+/// The snapshot deliberately separates tools, skills, model/provider, memory,
+/// sessions, workspace, and environment/container evidence so the agent does
+/// not collapse them into one vague "capabilities" blob (sera-7b0q).
+fn build_self_introspection_snapshot(
+    agent_spec: &AgentSpec,
+    agent_name: &str,
+    skill_engine: &SkillDispatchEngine,
+) -> String {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("<unknown>"));
+    let cwd_display = cwd.display().to_string();
+    let configured_workspace = agent_spec
+        .workspace
+        .clone()
+        .unwrap_or_else(|| format!("./data/agents/{agent_name} (default)"));
+    let relevant_files = existing_relevant_files(&cwd);
+
+    let hostname = read_small_probe("/etc/hostname", 120).unwrap_or_else(|| "<unavailable>".to_string());
+    let os_release = read_small_probe("/proc/sys/kernel/osrelease", 180)
+        .unwrap_or_else(|| "<unavailable>".to_string());
+    let proc_version = read_small_probe("/proc/version", 220).unwrap_or_default();
+    let os_release_lower = os_release.to_lowercase();
+    let proc_version_lower = proc_version.to_lowercase();
+    let wsl_detected = os_release_lower.contains("microsoft")
+        || os_release_lower.contains("wsl")
+        || proc_version_lower.contains("microsoft")
+        || proc_version_lower.contains("wsl");
+
+    let dockerenv = std::path::Path::new("/.dockerenv").exists();
+    let cgroup = read_small_probe("/proc/1/cgroup", 260).unwrap_or_else(|| "<unavailable>".to_string());
+    let cgroup_lower = cgroup.to_lowercase();
+    let container_detected = dockerenv
+        || cgroup_lower.contains("docker")
+        || cgroup_lower.contains("kubepods")
+        || cgroup_lower.contains("containerd");
+    let environment_verdict = match (container_detected, wsl_detected) {
+        (true, true) => "container inside WSL/WSL2 kernel evidence",
+        (true, false) => "container detected; WSL evidence not detected",
+        (false, true) => "WSL/WSL2 detected; container evidence not detected",
+        (false, false) => "no container or WSL evidence detected by these probes",
+    };
+
+    let tools = agent_spec
+        .tools
+        .as_ref()
+        .map(|t| display_list(&t.allow, "none configured in agent manifest"))
+        .unwrap_or_else(|| "none configured in agent manifest".to_string());
+    let subagents = display_list(&agent_spec.subagents_allowed, "none configured");
+    let registered_skills = skill_engine.registered_skill_names();
+    let active_skills = skill_engine.active_skill_names();
+    let skills_dir = std::env::var("SERA_SKILLS_DIR").unwrap_or_else(|_| "./skills".to_string());
+    let registered_skill_text = display_list(
+        &registered_skills,
+        "none loaded; no skills are discoverable in this process right now",
+    );
+    let active_skill_text = display_list(&active_skills, "none active before this turn");
+    let skill_discovery = if registered_skills.is_empty() {
+        format!(
+            "wired via SERA_SKILLS_DIR/default path ({skills_dir}), but registry is empty; say explicitly that no skills are currently discoverable"
+        )
+    } else {
+        format!("wired via SERA_SKILLS_DIR/default path ({skills_dir})")
+    };
+
+    let model = agent_spec.model.as_deref().unwrap_or("<provider default>");
+    let policy = agent_spec.policy_ref.as_deref().unwrap_or("none configured");
+    let enforcement = agent_spec
+        .enforcement_mode
+        .as_deref()
+        .unwrap_or("autonomous/default");
+
+    format!(
+        "SERA self-introspection snapshot (generated by gateway probes/config; secrets: redacted/not included):\n\
+         - agent: {agent_name}\n\
+         - provider: {provider}\n\
+         - model: {model}\n\
+         - process current directory: {cwd_display}\n\
+         - configured workspace: {configured_workspace}\n\
+         - relevant files from cwd: {relevant_files}\n\
+         - hostname: {hostname}\n\
+         - environment verdict: {environment_verdict}\n\
+         - container evidence: /.dockerenv={dockerenv}; /proc/1/cgroup={cgroup}\n\
+         - WSL/kernel evidence: osrelease={os_release}\n\
+         - configured allowed tools: {tools}\n\
+         - handoff/subagent tools: {subagents}\n\
+         - policy: {policy}; enforcement_mode: {enforcement}\n\
+         - skill discovery: {skill_discovery}\n\
+         - registered skills: {registered_skill_text}\n\
+         - active skills: {active_skill_text}\n\
+         - memory: semantic memory recall is enabled best-effort through the gateway store\n\
+         - sessions: gateway transcript/session persistence is enabled; session keys and secrets are not exposed\n\
+         Answer self-introspection questions from this snapshot. Distinguish tools, skills, model/provider, memory, and sessions. If skills are empty, say no skills are currently discoverable instead of inventing skills.",
+        provider = agent_spec.provider,
+    )
+}
+
 /// Execute a turn by dispatching through the agent's [`AgentTurnTransport`].
 ///
 /// The gateway builds the conversation messages from the transcript and
@@ -3767,6 +3953,13 @@ async fn execute_turn(
         messages.push(serde_json::json!({
             "role": "system",
             "content": injection,
+        }));
+    }
+
+    if self_introspection_requested(user_message) {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": build_self_introspection_snapshot(agent_spec, agent_name, skill_engine),
         }));
     }
 
@@ -8876,6 +9069,193 @@ spec:
             "expected KillSwitch/aborted reply, got: {}",
             result.reply
         );
+    }
+
+    /// sera-7b0q: transcript-regression guard for the live questions
+    /// "what can you do?", "what workspace/environment am I in?" and
+    /// "what skills do you have?".
+    #[test]
+    fn self_introspection_trigger_covers_transcript_questions() {
+        for prompt in [
+            "What can you do?",
+            "okay, what is in your workspace and what kind of environment is it?",
+            "are you sure you are not accessing a docker container?",
+            "what skills do you have access to?",
+            "so no skill discovery at all?",
+        ] {
+            assert!(
+                self_introspection_requested(prompt),
+                "prompt should request self-introspection: {prompt}"
+            );
+        }
+
+        for prompt in [
+            "Please use the tool adapter model to plan the next session migration.",
+            "Can you model this domain with a container abstraction?",
+            "The provider SDK needs a memory-safe API wrapper.",
+            "In your workspace, run tests and edit file X.",
+            "Before changing code in your workspace, inspect the current diff.",
+        ] {
+            assert!(
+                !self_introspection_requested(prompt),
+                "ordinary work prompt should not request self-introspection: {prompt}"
+            );
+        }
+    }
+
+    /// sera-7b0q: transcript-regression guard for the live questions
+    /// "what workspace/environment am I in?" and "what skills do you have?".
+    /// The gateway must inject a truthful, probe/config-backed snapshot before
+    /// the runtime thinks, rather than relying on the model to hallucinate WSL,
+    /// Docker, tools, or skill discovery state from memory.
+    #[tokio::test]
+    async fn execute_turn_injects_truthful_self_introspection_snapshot() {
+        struct RecordingTransport {
+            seen: Arc<std::sync::Mutex<Vec<Vec<serde_json::Value>>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl AgentTurnTransport for RecordingTransport {
+            async fn send_turn(
+                &self,
+                messages: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                self.seen.lock().unwrap().push(messages);
+                Ok(TurnEvents {
+                    response: "ok".to_string(),
+                    ..TurnEvents::default()
+                })
+            }
+
+            async fn send_steer(
+                &self,
+                _items: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let transport = RecordingTransport {
+            seen: Arc::clone(&seen),
+        };
+        let agent_spec = AgentSpec {
+            provider: "stub-provider".to_string(),
+            model: Some("stub-model".to_string()),
+            persona: None,
+            tools: Some(AgentToolsSpec {
+                allow: vec!["bash".to_string(), "read_file".to_string()],
+            }),
+            workspace: Some("/workspace/sera".to_string()),
+            policy_ref: Some("operator-policy".to_string()),
+            enforcement_mode: Some("standard".to_string()),
+            approval_policy: None,
+            subagents_allowed: vec!["reviewer".to_string()],
+        };
+        let skill_engine = SkillDispatchEngine::new();
+        skill_engine.register(
+            sera_types::skill::SkillConfig {
+                name: "workspace-truth".to_string(),
+                version: "1.0.0".to_string(),
+                description: "answer environment questions truthfully".to_string(),
+                mode: sera_types::skill::SkillMode::OnDemand,
+                trigger: sera_types::skill::SkillTrigger::Event("workspace".to_string()),
+                tools: vec![],
+                context_injection: Some("Be precise about runtime environment.".to_string()),
+                config: serde_json::json!({}),
+            },
+            None,
+        );
+        let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
+            SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+        );
+        let cancel = CancellationToken::new();
+        let capability_registry = CapabilityRegistry::empty();
+
+        let result = execute_turn(
+            &agent_spec,
+            &[],
+            "what skills do you have access to and what workspace/environment are you running in?",
+            &transport,
+            "7b0q-test-session",
+            &skill_engine,
+            &semantic_store,
+            "sera",
+            &cancel,
+            &capability_registry,
+            None,
+        )
+        .await;
+
+        assert_eq!(result.reply, "ok");
+        let captured = seen.lock().unwrap();
+        let messages = captured.first().expect("transport should see one turn");
+        let snapshot = messages
+            .iter()
+            .filter(|m| m.get("role").and_then(|v| v.as_str()) == Some("system"))
+            .filter_map(|m| m.get("content").and_then(|v| v.as_str()))
+            .find(|content| content.contains("SERA self-introspection snapshot"))
+            .expect("self-introspection snapshot system message missing");
+
+        for needle in [
+            "provider: stub-provider",
+            "model: stub-model",
+            "configured workspace: /workspace/sera",
+            "configured allowed tools: bash, read_file",
+            "registered skills: workspace-truth",
+            "skill discovery: wired",
+            "process current directory:",
+            "container evidence:",
+            "WSL/kernel evidence:",
+            "policy: operator-policy",
+            "memory: semantic memory recall is enabled",
+            "sessions: gateway transcript/session persistence is enabled",
+            "secrets: redacted/not included",
+        ] {
+            assert!(
+                snapshot.contains(needle),
+                "snapshot must contain {needle:?}; got:\n{snapshot}"
+            );
+        }
+    }
+
+    #[test]
+    fn self_introspection_snapshot_reports_empty_skill_registry_explicitly() {
+        let agent_spec = AgentSpec {
+            provider: "lm-studio".to_string(),
+            model: Some("qwen/qwen3.6-35b-a3b".to_string()),
+            persona: None,
+            tools: Some(AgentToolsSpec {
+                allow: vec!["memory_*".to_string(), "file_*".to_string(), "shell".to_string()],
+            }),
+            workspace: None,
+            policy_ref: None,
+            enforcement_mode: None,
+            approval_policy: None,
+            subagents_allowed: Vec::new(),
+        };
+        let skill_engine = SkillDispatchEngine::new();
+
+        let snapshot = build_self_introspection_snapshot(&agent_spec, "sera", &skill_engine);
+
+        assert!(snapshot.contains("provider: lm-studio"));
+        assert!(snapshot.contains("model: qwen/qwen3.6-35b-a3b"));
+        assert!(snapshot.contains("configured allowed tools: memory_*, file_*, shell"));
+        assert!(snapshot.contains("none loaded; no skills are discoverable in this process right now"));
+        assert!(snapshot.contains("say explicitly that no skills are currently discoverable"));
+        assert!(snapshot.contains("secrets: redacted/not included"));
+        assert!(!snapshot.to_lowercase().contains("token:"));
+        assert!(!snapshot.to_lowercase().contains("api_key"));
     }
 
     /// sera-bsem: `AppState::cancel_all_in_flight` must cancel every

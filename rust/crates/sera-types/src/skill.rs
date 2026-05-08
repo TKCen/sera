@@ -286,6 +286,24 @@ impl SkillRegistry {
         self.skills.get(name)
     }
 
+    /// Return every registered skill config in deterministic name order.
+    ///
+    /// This intentionally exposes only config metadata — not arbitrary skill
+    /// bodies or secret-bearing runtime config — so callers can build truthful
+    /// self-introspection without leaking sensitive material.
+    pub fn skill_configs(&self) -> Vec<&SkillConfig> {
+        let mut configs: Vec<&SkillConfig> = self.skills.values().collect();
+        configs.sort_by(|a, b| a.name.cmp(&b.name));
+        configs
+    }
+
+    /// Return active skill names in deterministic order.
+    pub fn active_skill_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.active_states.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        names
+    }
+
     /// Returns the `context_injection` strings for all active skills that have one.
     pub fn context_injections(&self) -> Vec<&str> {
         self.active_states
@@ -532,6 +550,24 @@ parameters:
         assert_eq!(active[0].name, "my-skill");
         assert_eq!(active[0].mode, SkillMode::Active);
         assert!(active[0].activated_at.is_some());
+    }
+
+    #[test]
+    fn skill_introspection_lists_are_deterministic() {
+        let mut registry = SkillRegistry::new();
+        registry.register(make_config("zeta"));
+        registry.register(make_config("alpha"));
+        registry.register(make_config("middle"));
+        registry.activate("middle").unwrap();
+        registry.activate("alpha").unwrap();
+
+        let registered: Vec<&str> = registry
+            .skill_configs()
+            .into_iter()
+            .map(|cfg| cfg.name.as_str())
+            .collect();
+        assert_eq!(registered, vec!["alpha", "middle", "zeta"]);
+        assert_eq!(registry.active_skill_names(), vec!["alpha", "middle"]);
     }
 
     #[test]

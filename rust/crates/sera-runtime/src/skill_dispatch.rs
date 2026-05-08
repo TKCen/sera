@@ -122,6 +122,32 @@ impl SkillDispatchEngine {
             .dispatcher
             .len()
     }
+
+    /// Registered skill names in deterministic order for truthful capability
+    /// self-introspection. This exposes names only; callers should not leak
+    /// arbitrary skill bodies or config payloads into user-visible text.
+    pub fn registered_skill_names(&self) -> Vec<String> {
+        self.inner
+            .lock()
+            .expect("skill engine mutex poisoned")
+            .registry
+            .skill_configs()
+            .into_iter()
+            .map(|cfg| cfg.name.clone())
+            .collect()
+    }
+
+    /// Active skill names in deterministic order for self-introspection.
+    pub fn active_skill_names(&self) -> Vec<String> {
+        self.inner
+            .lock()
+            .expect("skill engine mutex poisoned")
+            .registry
+            .active_skill_names()
+            .into_iter()
+            .map(String::from)
+            .collect()
+    }
 }
 
 impl Default for SkillDispatchEngine {

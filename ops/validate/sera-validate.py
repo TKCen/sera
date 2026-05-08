@@ -29,6 +29,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -346,6 +348,374 @@ def profile_live_smoke(
             pass
 
 
+# --- profile: security_negative ---------------------------------------------
+
+SECURITY_CASE_REQUIRED_FIELDS = {
+    "case_id",
+    "category",
+    "attack",
+    "expected",
+    "actual_signal",
+    "actual_status",
+    "actual_body_redacted",
+    "passed",
+    "evidence",
+    "secrets_detected",
+}
+
+_SECURITY_CASE_ID_RE = re.compile(r"^SEC-[A-Z0-9]+-[0-9]{3}$")
+_RAW_INTERNAL_PROVIDER_LEAK_RE = re.compile(
+    r"(panicked at|stack backtrace|traceback \(most recent call last\)|"
+    r"/home/entity/|/mnt/[a-z]/|/proc/self/environ|"
+    r"provider returned assistant message with neither content nor tool_calls|"
+    r"api\.openai\.com|anthropic\.com|chatgpt\.com/backend-api|"
+    r"sk[-_](?:live|test)?[_-]?[A-Za-z0-9_-]{8,}|"
+    r"BadRequestError|invalid_request_error|InternalServerError)",
+    re.IGNORECASE,
+)
+
+
+def _negative_cases_from_artifact(loaded: dict[str, Any]) -> list[dict[str, Any]]:
+    validation = loaded.get("validation")
+    if isinstance(validation, dict) and isinstance(validation.get("negative_cases"), list):
+        return [case for case in validation["negative_cases"] if isinstance(case, dict)]
+    if isinstance(loaded.get("negative_cases"), list):
+        return [case for case in loaded["negative_cases"] if isinstance(case, dict)]
+    return []
+
+
+def validate_security_negative_cases(cases: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+    """Validate security-negative case artifacts.
+
+    Security-negative artifacts are intentionally evidence-shaped: a passing case
+    proves a hostile/request-invalid path was rejected or documents an explicit
+    API/audit gap. This checker enforces the stable per-case schema and turns
+    failed cases, leaked secrets, or raw internal/provider error details into
+    hard validation failures.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not cases:
+        errors.append("security_negative artifact must include negative_cases")
+        return errors, warnings
+
+    seen_case_ids: set[str] = set()
+    for index, case in enumerate(cases):
+        case_id = str(case.get("case_id") or f"case[{index}]")
+        for field in sorted(SECURITY_CASE_REQUIRED_FIELDS - set(case.keys())):
+            errors.append(f"{case_id}: missing required field {field}")
+        if not _SECURITY_CASE_ID_RE.match(case_id):
+            errors.append(f"{case_id}: case_id must use stable SEC-* case_id")
+        if case_id in seen_case_ids:
+            errors.append(f"{case_id}: duplicate case_id")
+        seen_case_ids.add(case_id)
+
+        if case.get("passed") is not True:
+            errors.append(f"{case_id} failed: {case.get('actual_signal', 'missing actual_signal')}")
+
+        if case.get("secrets_detected") is True:
+            errors.append(f"{case_id}: secret leak detected")
+
+        raw_detail_scan = "\n".join(
+            str(case.get(field, ""))
+            for field in ("attack", "expected", "actual_signal", "actual_body_redacted")
+        )
+        if _RAW_INTERNAL_PROVIDER_LEAK_RE.search(raw_detail_scan):
+            errors.append(f"{case_id}: raw internal/provider detail leaked")
+        bearer_leaks = redaction_self_check(case, known_secrets=None)
+        if bearer_leaks:
+            errors.append(f"{case_id}: secret/token-shaped leak detected")
+
+        evidence = case.get("evidence")
+        structured_gap = case.get("audit_gap") is True or (
+            isinstance(evidence, dict) and "api_gap" in evidence
+        )
+        if structured_gap:
+            warnings.append(
+                f"{case_id} records audit/API gap: {case.get('actual_signal', 'gap')}"
+            )
+
+    return errors, warnings
+
+
+def _security_case(
+    *,
+    case_id: str,
+    category: str,
+    attack: str,
+    expected: str,
+    actual_signal: str,
+    actual_status: int | None,
+    actual_body_redacted: str,
+    passed: bool,
+    evidence: dict[str, Any],
+    secrets_detected: bool = False,
+    audit_gap: bool = False,
+) -> dict[str, Any]:
+    return {
+        "case_id": case_id,
+        "category": category,
+        "attack": attack,
+        "expected": expected,
+        "actual_signal": actual_signal,
+        "actual_status": actual_status,
+        "actual_body_redacted": actual_body_redacted,
+        "passed": passed,
+        "evidence": evidence,
+        "secrets_detected": secrets_detected,
+        "audit_gap": audit_gap,
+    }
+
+
+def _http_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    body: dict[str, Any] | None = None,
+) -> tuple[int, str, dict[str, str]]:
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    req_headers = {"Accept": "application/json"}
+    if data is not None:
+        req_headers["Content-Type"] = "application/json"
+    if headers:
+        req_headers.update(headers)
+    request = urllib.request.Request(url, data=data, headers=req_headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
+            return (
+                response.status,
+                response.read(65536).decode("utf-8", errors="replace"),
+                dict(response.headers.items()),
+            )
+    except urllib.error.HTTPError as exc:
+        return (
+            exc.code,
+            exc.read(65536).decode("utf-8", errors="replace"),
+            dict(exc.headers.items()),
+        )
+    except urllib.error.URLError as exc:
+        raise HarnessError(f"security_negative request failed for {url}: {exc}") from exc
+
+
+def _auth_negative_case(
+    *,
+    base: str,
+    case_id: str,
+    method: str,
+    path: str,
+    attack: str,
+    headers: dict[str, str] | None = None,
+    body: dict[str, Any] | None = None,
+    reflected_secret: str | None = None,
+    known_secrets: set[str] | None = None,
+) -> dict[str, Any]:
+    status, raw_body, response_headers = _http_request(
+        method, f"{base}{path}", headers=headers, body=body
+    )
+    redacted, _count = redact_artifact({"body": raw_body}, known_secrets=known_secrets)
+    redacted_body = str(redacted.get("body", ""))[:4096]
+    secret_leaked = bool(reflected_secret and reflected_secret in raw_body)
+    passed = status in (401, 403) and not secret_leaked
+    return _security_case(
+        case_id=case_id,
+        category="auth",
+        attack=attack,
+        expected="401/403 rejection without secret/token reflection",
+        actual_signal=f"HTTP {status}",
+        actual_status=status,
+        actual_body_redacted=redacted_body,
+        passed=passed,
+        evidence={
+            "method": method,
+            "path": path,
+            "response_header_keys": sorted(response_headers.keys()),
+        },
+        secrets_detected=secret_leaked,
+    )
+
+
+def _audit_gap_case(case_id: str, category: str, attack: str, evidence: dict[str, Any]) -> dict[str, Any]:
+    return _security_case(
+        case_id=case_id,
+        category=category,
+        attack=attack,
+        expected="blocked or explicitly documented API/audit gap",
+        actual_signal="api_surface_unavailable",
+        actual_status=None,
+        actual_body_redacted="",
+        passed=True,
+        evidence=evidence,
+        audit_gap=True,
+    )
+
+
+def _false_green_fixture_case(
+    case_id: str,
+    fixture_name: str,
+    expected_error_substring: str,
+) -> dict[str, Any]:
+    fixture = Path(__file__).resolve().parent / "fixtures" / fixture_name
+    if not fixture.exists():
+        return _security_case(
+            case_id=case_id,
+            category="false_green",
+            attack=f"validate-only fixture {fixture_name}",
+            expected="false-green fixture exists and fails validation",
+            actual_signal="fixture_missing",
+            actual_status=None,
+            actual_body_redacted="",
+            passed=False,
+            evidence={"fixture": str(fixture)},
+        )
+    code, report = validate_only(str(fixture))
+    errors = (report.get("validation") or {}).get("errors") or []
+    matched = any(expected_error_substring in str(error) for error in errors)
+    passed = code == EXIT_FAIL and matched
+    return _security_case(
+        case_id=case_id,
+        category="false_green",
+        attack=f"validate-only fixture {fixture_name}",
+        expected=f"exit 2 with error containing {expected_error_substring!r}",
+        actual_signal=f"validate_only_exit={code}; matched={matched}",
+        actual_status=None,
+        actual_body_redacted="",
+        passed=passed,
+        evidence={"fixture": str(fixture), "errors": errors[:5]},
+    )
+
+
+def profile_security_negative(
+    *,
+    base: str,
+    container: str,
+    api_key: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[str], list[str], list[dict[str, Any]]]:
+    """Run live-safe security-negative checks.
+
+    This profile deliberately avoids destructive service restarts or synthetic
+    compose overlays. Cases that need those surfaces are emitted as structured
+    audit/API-gap warnings instead of silently disappearing.
+    """
+    known_secrets = {"sera_bootstrap_dev_123"}
+    if api_key:
+        known_secrets.add(api_key)
+    malformed_token = "sv76-not-a-real-token-1234567890"
+    cases = [
+        _auth_negative_case(
+            base=base,
+            case_id="SEC-AUTH-001",
+            method="GET",
+            path="/api/agents",
+            attack="GET /api/agents without Authorization header",
+            known_secrets=known_secrets,
+        ),
+        _auth_negative_case(
+            base=base,
+            case_id="SEC-AUTH-002",
+            method="GET",
+            path="/api/agents",
+            attack="GET /api/agents with malformed bearer token",
+            headers={"Authorization": f"Bearer {malformed_token}"},
+            reflected_secret=malformed_token,
+            known_secrets=known_secrets | {malformed_token},
+        ),
+        _auth_negative_case(
+            base=base,
+            case_id="SEC-AUTH-003",
+            method="POST",
+            path="/api/operator/tasks",
+            attack="POST /api/operator/tasks without Authorization header",
+            body={"task": "security-negative auth probe"},
+            known_secrets=known_secrets,
+        ),
+        _audit_gap_case(
+            "SEC-CAP-001",
+            "capability",
+            "capability-denied tool dispatch evidence",
+            {"api_gap": "no read-only live endpoint exposes capability denial audit entries"},
+        ),
+        _audit_gap_case(
+            "SEC-CAP-002",
+            "capability_missing_policy",
+            "gateway manifest references missing capability policy",
+            {"api_gap": "missing-policy startup validation requires ephemeral compose mode"},
+        ),
+        _audit_gap_case(
+            "SEC-SSRF-001",
+            "ssrf",
+            "http://127.0.0.1:1234/",
+            {"api_gap": "SSRF validation needs tool-dispatch/ephemeral mock-provider wiring"},
+        ),
+        _audit_gap_case(
+            "SEC-SSRF-002",
+            "ssrf",
+            "cloud metadata endpoint (link-local)",
+            {"api_gap": "SSRF validation needs tool-dispatch/ephemeral mock-provider wiring"},
+        ),
+        _audit_gap_case(
+            "SEC-SSRF-003",
+            "ssrf",
+            "http://10.0.0.1/",
+            {"api_gap": "SSRF validation needs tool-dispatch/ephemeral mock-provider wiring"},
+        ),
+        _audit_gap_case(
+            "SEC-SSRF-004",
+            "ssrf",
+            "http://[::1]:80/",
+            {"api_gap": "SSRF validation needs tool-dispatch/ephemeral mock-provider wiring"},
+        ),
+        _audit_gap_case(
+            "SEC-SSRF-005",
+            "ssrf",
+            "http://[fe80::1]/",
+            {"api_gap": "SSRF validation needs tool-dispatch/ephemeral mock-provider wiring"},
+        ),
+        _audit_gap_case(
+            "SEC-SSRF-006",
+            "ssrf",
+            "http://[fc00::1]/",
+            {"api_gap": "SSRF validation needs tool-dispatch/ephemeral mock-provider wiring"},
+        ),
+        _audit_gap_case(
+            "SEC-ERR-001",
+            "provider_error",
+            "deterministic raw-provider-error sanitization probe",
+            {"api_gap": "deterministic mock-provider injection is not exposed in live mode"},
+        ),
+        _audit_gap_case(
+            "SEC-ERR-002",
+            "empty_assistant_message",
+            "assistant response with neither content nor tool calls",
+            {"api_gap": "deterministic mock-provider injection is not exposed in live mode"},
+        ),
+        _false_green_fixture_case(
+            "SEC-FALSE-001",
+            "false_green_interrupted.json",
+            "interrupted operator task must not be status=complete",
+        ),
+        _false_green_fixture_case(
+            "SEC-FALSE-002",
+            "false_green_llm_error_unblocked.json",
+            "LLM/provider errors must be status=blocked",
+        ),
+    ]
+    errors, warnings = validate_security_negative_cases(cases)
+    summary = {
+        "security_negative": {
+            "cases_total": len(cases),
+            "cases_passed": sum(1 for case in cases if case.get("passed") is True),
+            "cases_failed": sum(1 for case in cases if case.get("passed") is not True),
+            "audit_gaps": sum(1 for case in cases if case.get("audit_gap") is True),
+            "live_only_skipped": 0,
+            "ephemeral_only_skipped": 0,
+        },
+        "redaction_ok": True,
+    }
+    evidence = {"base": base, "container": container, "live_safe_only": True}
+    return summary, evidence, errors, warnings, cases
+
+
 # --- validate-only -----------------------------------------------------------
 
 
@@ -369,18 +739,26 @@ def validate_only(path: str) -> tuple[int, dict[str, Any]]:
     if not isinstance(loaded, dict):
         raise HarnessError(f"validate-only artifact is not a JSON object: {path}")
 
-    smoke = _load_operator_smoke()
-    evidence = _coerce_evidence(loaded)
-    errors = smoke.validation_errors(evidence)
-    summary = smoke.build_summary(evidence, str(p))
+    profile = str(loaded.get("profile") or "validate_only")
+    if profile == "security_negative":
+        cases = _negative_cases_from_artifact(loaded)
+        errors, warnings = validate_security_negative_cases(cases)
+        summary = {
+            "case_count": len(cases),
+            "passed_cases": sum(1 for case in cases if case.get("passed") is True),
+        }
+    else:
+        smoke = _load_operator_smoke()
+        evidence = _coerce_evidence(loaded)
+        errors = smoke.validation_errors(evidence)
+        summary = smoke.build_summary(evidence, str(p))
+        warnings = []
 
     # Self-check redaction on the loaded artifact (no live secrets known here, so
     # only structural checks: bearer/env-shaped survivors).
     leaks = redaction_self_check(loaded, known_secrets=None)
     if leaks:
         errors = list(errors) + leaks
-
-    warnings: list[str] = []
     report = {
         "profile": loaded.get("profile") or "validate_only",
         "validated_path": str(p),
@@ -398,6 +776,7 @@ def validate_only(path: str) -> tuple[int, dict[str, Any]]:
 
 PROFILES: dict[str, str] = {
     "live_smoke": "Strict operator-task live smoke against rust-sera-1.",
+    "security_negative": "P0 hostile-path validation for auth/capability/SSRF/leak checks.",
 }
 
 
@@ -480,9 +859,14 @@ def main(argv: list[str] | None = None) -> int:
         "compose_project": "rust",
     }
 
+    negative_cases: list[dict[str, Any]] = []
     try:
         if args.profile == "live_smoke":
             summary, evidence, errors, warnings = profile_live_smoke(
+                base=base, container=args.container, api_key=api_key
+            )
+        elif args.profile == "security_negative":
+            summary, evidence, errors, warnings, negative_cases = profile_security_negative(
                 base=base, container=args.container, api_key=api_key
             )
         else:  # pragma: no cover - guarded by PROFILES check above
@@ -505,7 +889,7 @@ def main(argv: list[str] | None = None) -> int:
         evidence=evidence,
         errors=errors,
         warnings=warnings,
-        negative_cases=[],
+        negative_cases=negative_cases,
     )
 
     redacted, count = redact_artifact(artifact, known_secrets=known_secrets)

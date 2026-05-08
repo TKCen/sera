@@ -10,6 +10,7 @@ pub mod connector;
 pub mod constitutional_config;
 pub mod db_backend;
 pub mod envelope;
+pub mod external_agent_registry;
 pub mod generation;
 #[cfg(feature = "gh-api")]
 pub mod github_poller;

@@ -402,6 +402,9 @@ PROFILES: dict[str, str] = {
         "P0 security-negative cases (auth, false-green, "
         "and runtime/ephemeral-skipped specs)."
     ),
+    "docker_security": (
+        "Docker security overlay validation with structured compose skips/findings."
+    ),
 }
 
 
@@ -442,6 +445,21 @@ def profile_security_negative(
     )
 
 
+def profile_docker_security(
+    *, run_compose: bool = False
+) -> tuple[dict[str, Any], dict[str, Any], list[str], list[str], list[dict[str, Any]]]:
+    """Dispatch wrapper around `profiles.docker_security.run`.
+
+    The default CLI run is non-destructive: it validates the overlay file and
+    compose rendering, but does not start containers. Passing ``--run-compose``
+    explicitly exercises an ephemeral `sera-sec-<runid>` compose lifecycle and
+    records startup incompatibilities as findings while still attempting
+    cleanup.
+    """
+    module = _load_profile_module("docker_security")
+    return module.run(run_compose=run_compose)
+
+
 # --- CLI ---------------------------------------------------------------------
 
 
@@ -456,6 +474,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key", default=None, help="bearer token; defaults to SERA_API_KEY discovery")
     parser.add_argument("--out", default=None, help="path for the artifact JSON")
     parser.add_argument("--validate-only", metavar="PATH", help="validate an existing artifact without live side effects")
+    parser.add_argument(
+        "--run-compose",
+        action="store_true",
+        help=(
+            "docker_security only: explicitly start an ephemeral security "
+            "compose project and clean it up"
+        ),
+    )
     parser.add_argument("--quiet", action="store_true", help="single-line summary on green; full JSON on non-green")
     return parser
 
@@ -494,6 +520,10 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"sera-validate: unknown profile {args.profile!r}\n")
         return EXIT_HARNESS_ERROR
 
+    if args.run_compose and args.profile != "docker_security":
+        sys.stderr.write("sera-validate: --run-compose is only supported with --profile docker_security\n")
+        return EXIT_HARNESS_ERROR
+
     base = args.base.rstrip("/")
     if "://" not in base:
         sys.stderr.write(f"sera-validate: invalid --base URL: {args.base!r}\n")
@@ -502,7 +532,11 @@ def main(argv: list[str] | None = None) -> int:
     out_path = args.out or f"/tmp/sera-validate-{args.profile}.json"
 
     try:
-        api_key = discover_api_key(args.api_key, args.container)
+        api_key = (
+            ""
+            if args.profile == "docker_security"
+            else discover_api_key(args.api_key, args.container)
+        )
     except HarnessError as exc:
         sys.stderr.write(f"sera-validate: harness error: {exc}\n")
         return EXIT_HARNESS_ERROR
@@ -540,6 +574,14 @@ def main(argv: list[str] | None = None) -> int:
                 api_key=api_key,
                 known_secrets=known_secrets,
             )
+        elif args.profile == "docker_security":
+            (
+                summary,
+                evidence,
+                errors,
+                warnings,
+                negative_cases,
+            ) = profile_docker_security(run_compose=args.run_compose)
         else:  # pragma: no cover - guarded by PROFILES check above
             raise HarnessError(f"profile {args.profile!r} not implemented")
     except HarnessError as exc:

@@ -1,0 +1,30 @@
+# Security hardening overlay for ephemeral SERA validation projects.
+#
+# Intended usage (never against the long-lived production compose project):
+#   docker compose \
+#     -f rust/docker-compose.sera.yml \
+#     -f ops/validate/docker-compose.security.yml \
+#     -p sera-sec-<runid> up -d --build --wait
+#
+# Cleanup must use the same -f/-p tuple plus `down -v --remove-orphans`.
+# The overlay is deliberately conservative: if the app cannot run under these
+# hardening knobs, the validation harness records an incompatibility finding
+# rather than mutating the production compose file or falsely passing.
+
+services:
+  sera:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /var/tmp:rw,noexec,nosuid,size=16m
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: "2.0"
+    pids_limit: 256
+    # Reset inherited host-published ports so ephemeral validation can run
+    # alongside the live rust-sera-1 stack without binding 0.0.0.0:3001.
+    ports: !reset []

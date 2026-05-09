@@ -2323,18 +2323,22 @@ async fn submission_handler(
         return Err(StatusCode::BAD_REQUEST);
     }
 
+    let mut registered_session_key = None;
     let event = match &submission.op {
         sera_gateway::envelope::Op::Register(sera_gateway::envelope::RegisterOp::ExternalAgent(registration)) => {
             match submission.session_key.clone() {
                 Some(session_key) => match state.external_agent_registry.register(&session_key, registration) {
-                    Ok(session) => submission_event(
-                        &submission,
-                        sera_gateway::envelope::EventMsg::ExternalAgentRegistered {
-                            session_key,
-                            principal: session.principal_ref,
-                            delegated_by: session.delegated_by,
-                        },
-                    ),
+                    Ok(session) => {
+                        registered_session_key = Some(session_key.clone());
+                        submission_event(
+                            &submission,
+                            sera_gateway::envelope::EventMsg::ExternalAgentRegistered {
+                                session_key,
+                                principal: session.principal_ref,
+                                delegated_by: session.delegated_by,
+                            },
+                        )
+                    }
                     Err(err) => submission_error_event(&submission, err.code(), err.to_string()),
                 },
                 None => submission_error_event(
@@ -2359,11 +2363,17 @@ async fn submission_handler(
         submission,
         emissions: vec![event.clone()],
     };
-    state
+    if state
         .session_store
         .append_submission(&session_key, &bundle)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .is_err()
+    {
+        if let Some(session_key) = registered_session_key.as_deref() {
+            state.external_agent_registry.unregister(session_key);
+        }
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     Ok(Json(event))
 }
@@ -7317,6 +7327,33 @@ mod tests {
         }
     }
 
+    struct FailingSessionStore;
+
+    #[async_trait::async_trait]
+    impl SessionStore for FailingSessionStore {
+        async fn append_submission(
+            &self,
+            _session_id: &str,
+            _bundle: &StoredSubmission,
+        ) -> Result<sera_gateway::session_store::SubmissionRef, sera_gateway::session_store::SessionStoreError> {
+            Err(std::io::Error::other("forced session-store append failure").into())
+        }
+
+        async fn head(
+            &self,
+            _session_id: &str,
+        ) -> Result<Option<sera_gateway::session_store::SubmissionRef>, sera_gateway::session_store::SessionStoreError> {
+            Ok(None)
+        }
+
+        async fn replay(
+            &self,
+            _session_id: &str,
+        ) -> Result<Vec<sera_gateway::envelope::Submission>, sera_gateway::session_store::SessionStoreError> {
+            Ok(Vec::new())
+        }
+    }
+
     #[tokio::test]
     async fn submissions_route_registers_external_agent_and_emits_event() {
         let state = test_state();
@@ -7376,6 +7413,33 @@ mod tests {
         assert_eq!(json["msg"]["type"], "error");
         assert_eq!(json["msg"]["code"], "register_op_invalid_delegator");
         assert_eq!(registry.registered_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn submissions_route_rolls_back_registration_when_persistence_fails() {
+        let mut state = test_state();
+        let registry = Arc::clone(&state.external_agent_registry);
+        Arc::get_mut(&mut state)
+            .expect("test keeps sole AppState reference until router build")
+            .session_store = Arc::new(FailingSessionStore);
+        let app = build_router(state);
+        let submission = external_agent_register_submission("ext-session-rollback", "agent:sera");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/submissions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&submission).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(registry.registered_count(), 0);
+        assert!(registry.get("ext-session-rollback").is_none());
     }
 
     #[tokio::test]

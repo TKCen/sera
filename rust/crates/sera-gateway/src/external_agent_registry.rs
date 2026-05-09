@@ -264,6 +264,19 @@ impl ExternalAgentRegistry {
             .cloned()
     }
 
+    /// Remove a registered Pattern B session by SQ envelope `session_key`.
+    ///
+    /// This is intentionally narrow: production request handling uses it only
+    /// to roll back an in-memory registration when durable submission append
+    /// fails, so callers do not strand a reserved session key after returning
+    /// HTTP 500.
+    pub fn unregister(&self, session_key: &str) -> Option<ExternalAgentSession> {
+        self.sessions
+            .write()
+            .expect("sessions lock poisoned")
+            .remove(session_key)
+    }
+
     /// Number of currently-registered Pattern B sessions. Test introspection.
     pub fn registered_count(&self) -> usize {
         self.sessions.read().expect("sessions lock poisoned").len()

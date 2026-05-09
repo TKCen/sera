@@ -246,6 +246,12 @@ pub enum EventMsg {
         ticket_id: String,
         session_key: String,
     },
+    /// Pattern B external-agent registration was accepted and pinned by the gateway.
+    ExternalAgentRegistered {
+        session_key: String,
+        principal: crate::principal::PrincipalRef,
+        delegated_by: crate::principal::PrincipalRef,
+    },
     /// Guardian pre-approval LLM risk assessment (sera-k600 / SPEC-hitl-approval §2b).
     /// Emitted by the runtime when a `SecurityAnalyzer` returns a structured
     /// `GuardianAssessment` for a proposed tool call. Carries the analyzer

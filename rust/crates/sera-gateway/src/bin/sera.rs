@@ -2335,12 +2335,21 @@ async fn submission_handler(
     }
 
     let mut registered_session_key = None;
+    // Captured registration identity for the OCSF audit emission. Held back
+    // until `append_submission` succeeds so the audit chain never records a
+    // successful registration that the rollback path then unregistered.
+    let mut pending_audit: Option<(String, String, String)> = None;
     let event = match &submission.op {
         sera_gateway::envelope::Op::Register(sera_gateway::envelope::RegisterOp::ExternalAgent(registration)) => {
             match submission.session_key.clone() {
                 Some(session_key) => match state.external_agent_registry.register(&session_key, registration) {
                     Ok(session) => {
                         registered_session_key = Some(session_key.clone());
+                        pending_audit = Some((
+                            session_key.clone(),
+                            session.principal_ref.id.0.clone(),
+                            session.delegated_by.id.0.clone(),
+                        ));
                         submission_event(
                             &submission,
                             sera_gateway::envelope::EventMsg::ExternalAgentRegistered {
@@ -2384,6 +2393,15 @@ async fn submission_handler(
             state.external_agent_registry.unregister(session_key);
         }
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    if let Some((audit_session_key, principal_id, delegated_by_id)) = pending_audit {
+        emit_external_agent_register_audit(
+            &audit_session_key,
+            &principal_id,
+            &delegated_by_id,
+        )
+        .await;
     }
 
     Ok(Json(event))
@@ -4394,6 +4412,78 @@ async fn emit_hitl_required_audit(
     };
     if let Err(e) = audit_append(entry).await {
         tracing::debug!(error = %e, "audit backend unavailable for HITL gate");
+    }
+}
+
+/// OCSF v1.7.0 class_uid for the [`make_external_agent_register_audit_entry`]
+/// emission. `3001` is "Account Change" — the closest OCSF class for "a new
+/// principal was created and bound to a session". `activity_id=1` is "Create".
+const EXTERNAL_AGENT_REGISTER_OCSF_CLASS_UID: u32 = 3001;
+
+/// Build the OCSF audit payload for a successful Pattern B external-agent
+/// registration. Pure (no I/O) so the M1 AC4 "non-empty audit chain entry per
+/// delegation" contract is unit-testable without the global audit backend.
+///
+/// Carries the three identity fields that the audit chain needs to attribute
+/// later actions back to the delegating parent:
+/// - `session_key` — SQ envelope binding for this Pattern B session
+/// - `principal_id` — the freshly-minted ExternalAgentPrincipal id
+/// - `delegated_by_id` — the parent principal that authorized the registration
+fn make_external_agent_register_audit_entry(
+    session_key: &str,
+    principal_id: &str,
+    delegated_by_id: &str,
+) -> sera_telemetry::audit::AuditEntry {
+    use sera_telemetry::audit::AuditEntry;
+
+    let payload = serde_json::json!({
+        "activity_id": 1, // "Create" in OCSF Account Change
+        "action_id": "allowed",
+        "category_uid": 3, // Identity & Access Management
+        "class_uid": EXTERNAL_AGENT_REGISTER_OCSF_CLASS_UID,
+        "severity_id": 1, // Informational
+        "actor": { "user": { "name": delegated_by_id } },
+        "user": { "name": principal_id, "type": "ExternalAgent" },
+        "resource": { "name": session_key, "type": "session" },
+        "status": "Success",
+        "status_detail": "external_agent_registered",
+    });
+    let this_hash = AuditEntry::compute_hash(
+        EXTERNAL_AGENT_REGISTER_OCSF_CLASS_UID,
+        &payload,
+        &[0u8; 32],
+    );
+    AuditEntry {
+        ocsf_class_uid: EXTERNAL_AGENT_REGISTER_OCSF_CLASS_UID,
+        payload,
+        prev_hash: [0u8; 32],
+        this_hash,
+        signature: None,
+    }
+}
+
+/// Emit an OCSF v1.7.0 Account Change (class_uid=3001, activity_id=Create)
+/// audit entry for a Pattern B external-agent registration (sera-plcv M1
+/// AC4 — "non-empty audit chain entry per delegation"). Best-effort: an
+/// uninitialised backend logs a warning and continues; the registration is
+/// already pinned in the in-memory registry by the time we reach here.
+async fn emit_external_agent_register_audit(
+    session_key: &str,
+    principal_id: &str,
+    delegated_by_id: &str,
+) {
+    use sera_telemetry::audit::audit_append;
+
+    let entry = make_external_agent_register_audit_entry(
+        session_key,
+        principal_id,
+        delegated_by_id,
+    );
+    if let Err(e) = audit_append(entry).await {
+        tracing::debug!(
+            error = %e,
+            "audit backend unavailable for external-agent registration"
+        );
     }
 }
 
@@ -7424,6 +7514,95 @@ mod tests {
         assert_eq!(json["msg"]["type"], "error");
         assert_eq!(json["msg"]["code"], "register_op_invalid_delegator");
         assert_eq!(registry.registered_count(), 0);
+    }
+
+    // ── External-agent registration audit entry (sera-plcv M1 AC4) ─────────
+    //
+    // The pure builder portion of `emit_external_agent_register_audit` is
+    // unit-tested here so the M1 acceptance criterion "non-empty audit chain
+    // entry per delegation" has a deterministic guard against payload drift.
+    // The async emission path itself is best-effort against a global
+    // set-once backend (mirroring `emit_policy_denial_audit`); exercising the
+    // global from a binary integration test is intentionally out of scope
+    // because `set_audit_backend` panics on double-set.
+
+    #[test]
+    fn external_agent_register_audit_entry_has_ocsf_account_change_shape() {
+        let entry = make_external_agent_register_audit_entry(
+            "ext-session-7",
+            "ext:a2a:claude-pane-7",
+            "agent:sera",
+        );
+
+        assert_eq!(entry.ocsf_class_uid, EXTERNAL_AGENT_REGISTER_OCSF_CLASS_UID);
+        assert_eq!(entry.ocsf_class_uid, 3001);
+        assert_eq!(entry.payload["class_uid"], 3001);
+        assert_eq!(entry.payload["activity_id"], 1);
+        assert_eq!(entry.payload["category_uid"], 3);
+        assert_eq!(entry.payload["action_id"], "allowed");
+        assert_eq!(entry.payload["status"], "Success");
+        assert_eq!(entry.payload["status_detail"], "external_agent_registered");
+    }
+
+    #[test]
+    fn external_agent_register_audit_entry_attributes_principal_and_delegator() {
+        let entry = make_external_agent_register_audit_entry(
+            "ext-session-attr",
+            "ext:a2a:claude-pane-attr",
+            "agent:sera-parent",
+        );
+
+        // The parent that authorized the delegation goes in `actor.user.name`
+        // — this is the audit-chain attribution surface.
+        assert_eq!(entry.payload["actor"]["user"]["name"], "agent:sera-parent");
+        // The freshly minted ExternalAgentPrincipal goes in `user.name`/`type`.
+        assert_eq!(entry.payload["user"]["name"], "ext:a2a:claude-pane-attr");
+        assert_eq!(entry.payload["user"]["type"], "ExternalAgent");
+        // The SQ envelope binding goes in `resource`.
+        assert_eq!(entry.payload["resource"]["name"], "ext-session-attr");
+        assert_eq!(entry.payload["resource"]["type"], "session");
+    }
+
+    #[test]
+    fn external_agent_register_audit_entry_hash_is_well_formed() {
+        use sera_telemetry::audit::AuditEntry;
+
+        let entry = make_external_agent_register_audit_entry(
+            "ext-session-hash",
+            "ext:a2a:claude-pane-hash",
+            "agent:sera",
+        );
+
+        // Genesis-style entry: prev_hash is all-zeros and this_hash is the
+        // SHA-256 over (class_uid, payload, prev_hash). Pin it so the M1 AC4
+        // contract keeps a stable hash-chain link.
+        assert_eq!(entry.prev_hash, [0u8; 32]);
+        assert_ne!(entry.this_hash, [0u8; 32]);
+        let recomputed = AuditEntry::compute_hash(
+            entry.ocsf_class_uid,
+            &entry.payload,
+            &entry.prev_hash,
+        );
+        assert_eq!(entry.this_hash, recomputed);
+        assert!(entry.signature.is_none());
+    }
+
+    #[test]
+    fn external_agent_register_audit_entry_distinguishes_delegators() {
+        // Two registrations under the same session_key + principal but
+        // different delegators must produce different hashes — otherwise the
+        // audit chain would collide and lose attribution provenance.
+        let e1 = make_external_agent_register_audit_entry(
+            "sess-dist",
+            "ext:a2a:p",
+            "agent:sera-a",
+        );
+        let e2 = make_external_agent_register_audit_entry(
+            "sess-dist",
+            "ext:a2a:p",
+            "agent:sera-b",
+        );
+        assert_ne!(e1.this_hash, e2.this_hash);
     }
 
     #[tokio::test]

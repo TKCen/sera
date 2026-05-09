@@ -57,6 +57,7 @@ use sera_gateway::admin::{
 use sera_gateway::agent_transport::{AgentTurnTransport, ToolEvent, TurnEvents, UsageInfo};
 use sera_gateway::capability_enforcement::{CapabilityRegistry, PolicyDenial};
 use sera_gateway::embedded_transport::EmbeddedRuntimeTransport;
+use sera_gateway::external_agent_registry::{ExternalAgentRegistry, InMemoryDelegatorValidator};
 use sera_gateway::hitl_gateway::{
     HitlAppState, InMemoryTicketStore, TicketStore, resolve_approval_routing, resolve_hitl_mode,
 };
@@ -64,7 +65,7 @@ use sera_gateway::kill_switch::{KillSwitch, admin_sock_path, spawn_admin_socket}
 use sera_gateway::scheduler::spawn_scheduler;
 #[cfg(test)]
 use sera_gateway::session_store::InMemorySessionStore;
-use sera_gateway::session_store::{SessionStore, SqliteSessionStore};
+use sera_gateway::session_store::{SessionStore, SqliteSessionStore, StoredSubmission};
 #[cfg(feature = "enterprise")]
 use sera_gateway::session_store::SqliteGitSessionStore;
 use sera_gateway::workflow_store::{
@@ -1320,6 +1321,10 @@ struct AppState {
     /// Shared Discord connector for sending replies. `None` when no Discord
     /// connector is configured.
     discord: Option<Arc<DiscordConnector>>,
+    /// Pattern B external-agent registry. `POST /api/submissions` routes
+    /// `Op::Register(RegisterOp::ExternalAgent)` here so opaque profile
+    /// sessions get a pinned ExternalAgentPrincipal before doing work.
+    external_agent_registry: Arc<ExternalAgentRegistry>,
     /// API key for authenticating requests. `None` means auth is disabled
     /// (autonomous mode — all access allowed per MVS §6.5).
     api_key: Option<String>,
@@ -2228,6 +2233,23 @@ fn validate_api_key(state: &AppState, headers: &HeaderMap) -> Result<(), StatusC
     }
 }
 
+fn external_agent_registry_from_manifests(
+    manifests: &ManifestSet,
+    inference_proxy_enabled: bool,
+) -> Arc<ExternalAgentRegistry> {
+    let mut validator = InMemoryDelegatorValidator::new();
+    for agent in &manifests.agents {
+        validator.add(PrincipalRef {
+            id: PrincipalId::new(format!("agent:{}", agent.metadata.name)),
+            kind: PrincipalKind::Agent,
+        });
+    }
+    Arc::new(ExternalAgentRegistry::new(
+        inference_proxy_enabled,
+        Arc::new(validator),
+    ))
+}
+
 // ── HTTP handlers ───────────────────────────────────────────────────────────
 
 /// Liveness — the gateway process is up and serving HTTP. Mirrors the
@@ -2236,6 +2258,87 @@ fn validate_api_key(state: &AppState, headers: &HeaderMap) -> Result<(), StatusC
 /// for traffic-gate semantics.
 async fn health_handler() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
+}
+
+fn submission_event(
+    submission: &sera_gateway::envelope::Submission,
+    msg: sera_gateway::envelope::EventMsg,
+) -> sera_gateway::envelope::Event {
+    sera_gateway::envelope::Event {
+        id: uuid::Uuid::new_v4(),
+        submission_id: submission.id,
+        msg,
+        trace: submission.trace.clone(),
+        timestamp: chrono::Utc::now(),
+        parent_session_key: submission.parent_session_key.clone(),
+        parent_task_id: submission.parent_task_id.clone(),
+    }
+}
+
+fn submission_error_event(
+    submission: &sera_gateway::envelope::Submission,
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> sera_gateway::envelope::Event {
+    submission_event(
+        submission,
+        sera_gateway::envelope::EventMsg::Error {
+            code: code.into(),
+            message: message.into(),
+        },
+    )
+}
+
+async fn submission_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    ValidatedJson(submission): ValidatedJson<sera_gateway::envelope::Submission>,
+) -> Result<Json<sera_gateway::envelope::Event>, StatusCode> {
+    validate_api_key(&state, &headers)?;
+
+    let event = match &submission.op {
+        sera_gateway::envelope::Op::Register(sera_gateway::envelope::RegisterOp::ExternalAgent(registration)) => {
+            match submission.session_key.clone() {
+                Some(session_key) => match state.external_agent_registry.register(&session_key, registration) {
+                    Ok(session) => submission_event(
+                        &submission,
+                        sera_gateway::envelope::EventMsg::ExternalAgentRegistered {
+                            session_key,
+                            principal: session.principal_ref,
+                            delegated_by: session.delegated_by,
+                        },
+                    ),
+                    Err(err) => submission_error_event(&submission, err.code(), err.to_string()),
+                },
+                None => submission_error_event(
+                    &submission,
+                    "register_op_missing_session_key",
+                    "external-agent registration requires submission.session_key",
+                ),
+            }
+        }
+        _ => submission_error_event(
+            &submission,
+            "unsupported_submission_op",
+            "submission queue currently accepts only RegisterOp::ExternalAgent",
+        ),
+    };
+
+    let session_key = submission
+        .session_key
+        .clone()
+        .unwrap_or_else(|| format!("submission:{}", submission.id));
+    let bundle = StoredSubmission {
+        submission,
+        emissions: vec![event.clone()],
+    };
+    state
+        .session_store
+        .append_submission(&session_key, &bundle)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(event))
 }
 
 /// Default per-harness probe timeout when `SERA_READINESS_PROBE_TIMEOUT_SECS`
@@ -5813,11 +5916,13 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
     })?);
     let admin_audit_path = AdminAuditLogger::default_path(&data_root);
     let admin_audit = AdminAuditLogger::shared(admin_audit_path);
+    let external_agent_registry = external_agent_registry_from_manifests(&manifests, true);
 
     let state = Arc::new(AppState {
         db: Arc::new(Mutex::new(db)),
         manifests: Arc::new(std::sync::RwLock::new(manifests)),
         discord: shared_discord,
+        external_agent_registry,
         api_key,
         lane_queue: Mutex::new(LaneQueue::new_with_counter_store(
             10,
@@ -6337,6 +6442,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         // before dispatching real turns.
         .route("/api/health/ready", get(readiness_handler))
         .route("/api/auth/me", get(auth_me_handler))
+        .route("/api/submissions", post(submission_handler))
+        .route("/api/sq", post(submission_handler))
         .route("/api/chat", post(chat_handler))
         .route("/api/operator/tasks", post(operator_task_handler))
         // sera-mplr / J.0.4 ESC-cancel: abort the in-flight HTTP turn for a
@@ -6668,6 +6775,10 @@ mod tests {
         parse_manifests(TEMPLATE_YAML).unwrap()
     }
 
+    fn test_external_agent_registry() -> Arc<ExternalAgentRegistry> {
+        external_agent_registry_from_manifests(&test_manifests(), true)
+    }
+
     async fn test_harnesses() -> std::collections::HashMap<String, Arc<dyn AgentTurnTransport>> {
         let mut h: std::collections::HashMap<String, Arc<dyn AgentTurnTransport>> =
             std::collections::HashMap::new();
@@ -6687,6 +6798,7 @@ mod tests {
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
+            external_agent_registry: test_external_agent_registry(),
             api_key: None,
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
@@ -6739,6 +6851,7 @@ mod tests {
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
+            external_agent_registry: test_external_agent_registry(),
             api_key: None,
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
@@ -6791,6 +6904,7 @@ mod tests {
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
+            external_agent_registry: test_external_agent_registry(),
             api_key: Some(key.to_owned()),
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
@@ -6843,6 +6957,7 @@ mod tests {
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
+            external_agent_registry: test_external_agent_registry(),
             api_key: Some(key.to_owned()),
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
@@ -7143,6 +7258,95 @@ mod tests {
         assert_eq!(json["status"], "ok");
     }
 
+    fn external_agent_register_submission(
+        session_key: &str,
+        delegated_by: &str,
+    ) -> sera_gateway::envelope::Submission {
+        use sera_gateway::envelope::{
+            BudgetHandle, ExternalAgentRegistration, ExternalProtocol, Op, RegisterOp,
+            W3cTraceContext,
+        };
+        sera_gateway::envelope::Submission {
+            id: uuid::Uuid::new_v4(),
+            op: Op::Register(RegisterOp::ExternalAgent(ExternalAgentRegistration {
+                protocol: ExternalProtocol::A2a,
+                external_id: format!("worker-{session_key}"),
+                delegated_by: PrincipalRef {
+                    id: PrincipalId::new(delegated_by),
+                    kind: PrincipalKind::Agent,
+                },
+                declared_egress: vec![sera_types::sandbox::EgressEndpoint::InferenceLocal],
+                budget_handle: BudgetHandle(format!("budget:{session_key}")),
+            })),
+            trace: W3cTraceContext::default(),
+            change_artifact: None,
+            session_key: Some(session_key.to_string()),
+            parent_session_key: None,
+            parent_task_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn submissions_route_registers_external_agent_and_emits_event() {
+        let state = test_state();
+        let registry = Arc::clone(&state.external_agent_registry);
+        let app = build_router(state);
+        let submission = external_agent_register_submission("ext-session-1", "agent:sera");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/submissions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&submission).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["submission_id"], submission.id.to_string());
+        assert_eq!(json["msg"]["type"], "external_agent_registered");
+        assert_eq!(json["msg"]["session_key"], "ext-session-1");
+        assert_eq!(json["msg"]["delegated_by"]["id"], "agent:sera");
+        assert_eq!(registry.registered_count(), 1);
+        assert!(registry.get("ext-session-1").is_some());
+    }
+
+    #[tokio::test]
+    async fn submissions_route_register_failure_emits_error_event() {
+        let state = test_state();
+        let registry = Arc::clone(&state.external_agent_registry);
+        let app = build_router(state);
+        let submission = external_agent_register_submission("ext-session-bad", "agent:unknown");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sq")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&submission).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["msg"]["type"], "error");
+        assert_eq!(json["msg"]["code"], "register_op_invalid_delegator");
+        assert_eq!(registry.registered_count(), 0);
+    }
+
     // -- Readiness endpoint (empty-reply race fix) --
     //
     // The race: after `docker restart`, axum binds and `/api/health` answers
@@ -7353,6 +7557,7 @@ spec:
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: Arc::new(std::sync::RwLock::new(parse_manifests(STRICT_AGENT_YAML).unwrap())),
             discord: None,
+            external_agent_registry: test_external_agent_registry(),
             api_key: None,
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
@@ -8112,6 +8317,7 @@ spec:
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
+            external_agent_registry: test_external_agent_registry(),
             api_key: None,
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
@@ -8167,6 +8373,7 @@ spec:
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
+            external_agent_registry: test_external_agent_registry(),
             api_key: Some("my-key".to_owned()),
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
@@ -8223,6 +8430,7 @@ spec:
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
+            external_agent_registry: test_external_agent_registry(),
             api_key: Some("my-key".to_owned()),
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
@@ -8282,6 +8490,7 @@ spec:
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
+            external_agent_registry: test_external_agent_registry(),
             api_key: Some("my-key".to_owned()),
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
@@ -10960,6 +11169,7 @@ spec:
             db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
             manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
             discord: None,
+            external_agent_registry: test_external_agent_registry(),
             api_key: None,
             lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
             hook_registry,
@@ -11054,6 +11264,7 @@ spec:
                 db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
                 manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
                 discord: None,
+            external_agent_registry: test_external_agent_registry(),
                 api_key: Some("secret".to_owned()),
                 lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
                 hook_registry,
@@ -11147,6 +11358,7 @@ spec:
                 db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
                 manifests: Arc::new(std::sync::RwLock::new(test_manifests())),
                 discord: None,
+            external_agent_registry: test_external_agent_registry(),
                 api_key: Some("secret".to_owned()),
                 lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
                 hook_registry,
@@ -11898,6 +12110,7 @@ spec:
                 db: Arc::new(Mutex::new(SqliteDb::open_in_memory().unwrap())),
                 manifests: Arc::new(std::sync::RwLock::new(manifests)),
                 discord: None,
+            external_agent_registry: test_external_agent_registry(),
                 api_key: None,
                 lane_queue: Mutex::new(LaneQueue::new(10, QueueMode::Collect)),
                 hook_registry,

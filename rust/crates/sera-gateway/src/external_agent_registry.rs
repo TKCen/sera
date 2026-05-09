@@ -25,16 +25,12 @@
 //! 4. Mint the principal via [`Principal::external_agent_with_delegator`] so
 //!    the call-site explicitly threads `delegated_by`.
 //!
-//! ## Integration seam (deferred to PR3)
+//! ## Production dispatch
 //!
-//! There is no production `Op::Register` dispatch arm in
-//! `sera-gateway/src/bin/sera.rs` today — `Op::Register(_)` is a wildcard
-//! audit arm in [`session_store::op_kind_label`] and a no-op in
-//! [`sera_runtime::stdio`]. PR2 ships the pure handler + module-seam
-//! integration tests; the production wire-up (call this registry from a
-//! `Submission` arrival, emit `EventMsg::SessionTransition` on success and
-//! `EventMsg::Error { code, message }` on failure) is the smallest PR3
-//! delta. See `tests/register_op_external_agent.rs` for the seam shape.
+//! `sera-gateway/src/bin/sera.rs` wires `POST /api/submissions` and
+//! `POST /api/sq` to this registry for `Op::Register(RegisterOp::ExternalAgent)`.
+//! The route appends each accepted submission plus the emitted EventMsg to the
+//! session store before returning the event to the caller.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};

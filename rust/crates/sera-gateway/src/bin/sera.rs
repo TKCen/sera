@@ -2335,18 +2335,21 @@ async fn submission_handler(
     }
 
     let mut registered_session_key = None;
+    // Captured registration identity for the OCSF audit emission. Held back
+    // until `append_submission` succeeds so the audit chain never records a
+    // successful registration that the rollback path then unregistered.
+    let mut pending_audit: Option<(String, String, String)> = None;
     let event = match &submission.op {
         sera_gateway::envelope::Op::Register(sera_gateway::envelope::RegisterOp::ExternalAgent(registration)) => {
             match submission.session_key.clone() {
                 Some(session_key) => match state.external_agent_registry.register(&session_key, registration) {
                     Ok(session) => {
                         registered_session_key = Some(session_key.clone());
-                        emit_external_agent_register_audit(
-                            &session_key,
-                            &session.principal_ref.id.0,
-                            &session.delegated_by.id.0,
-                        )
-                        .await;
+                        pending_audit = Some((
+                            session_key.clone(),
+                            session.principal_ref.id.0.clone(),
+                            session.delegated_by.id.0.clone(),
+                        ));
                         submission_event(
                             &submission,
                             sera_gateway::envelope::EventMsg::ExternalAgentRegistered {
@@ -2390,6 +2393,15 @@ async fn submission_handler(
             state.external_agent_registry.unregister(session_key);
         }
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    if let Some((audit_session_key, principal_id, delegated_by_id)) = pending_audit {
+        emit_external_agent_register_audit(
+            &audit_session_key,
+            &principal_id,
+            &delegated_by_id,
+        )
+        .await;
     }
 
     Ok(Json(event))

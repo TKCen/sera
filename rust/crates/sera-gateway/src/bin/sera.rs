@@ -57,7 +57,7 @@ use sera_gateway::admin::{
 use sera_gateway::agent_transport::{AgentTurnTransport, ToolEvent, TurnEvents, UsageInfo};
 use sera_gateway::capability_enforcement::{CapabilityRegistry, PolicyDenial};
 use sera_gateway::embedded_transport::EmbeddedRuntimeTransport;
-use sera_gateway::external_agent_registry::{ExternalAgentRegistry, InMemoryDelegatorValidator};
+use sera_gateway::external_agent_registry::{DelegatorValidator, ExternalAgentRegistry};
 use sera_gateway::hitl_gateway::{
     HitlAppState, InMemoryTicketStore, TicketStore, resolve_approval_routing, resolve_hitl_mode,
 };
@@ -2233,20 +2233,33 @@ fn validate_api_key(state: &AppState, headers: &HeaderMap) -> Result<(), StatusC
     }
 }
 
+struct ManifestDelegatorValidator {
+    manifests: Arc<std::sync::RwLock<ManifestSet>>,
+}
+
+impl DelegatorValidator for ManifestDelegatorValidator {
+    fn is_valid(&self, delegator: &PrincipalRef) -> bool {
+        if !matches!(delegator.kind, PrincipalKind::Agent) {
+            return false;
+        }
+        let Some(agent_name) = delegator.id.0.strip_prefix("agent:") else {
+            return false;
+        };
+        let manifests = self.manifests.read().unwrap();
+        manifests
+            .agents
+            .iter()
+            .any(|agent| agent.metadata.name == agent_name)
+    }
+}
+
 fn external_agent_registry_from_manifests(
-    manifests: &ManifestSet,
+    manifests: Arc<std::sync::RwLock<ManifestSet>>,
     inference_proxy_enabled: bool,
 ) -> Arc<ExternalAgentRegistry> {
-    let mut validator = InMemoryDelegatorValidator::new();
-    for agent in &manifests.agents {
-        validator.add(PrincipalRef {
-            id: PrincipalId::new(format!("agent:{}", agent.metadata.name)),
-            kind: PrincipalKind::Agent,
-        });
-    }
     Arc::new(ExternalAgentRegistry::new(
         inference_proxy_enabled,
-        Arc::new(validator),
+        Arc::new(ManifestDelegatorValidator { manifests }),
     ))
 }
 
@@ -2289,12 +2302,26 @@ fn submission_error_event(
     )
 }
 
+fn safe_submission_session_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'.' | b'_' | b'-'))
+        && key.split(':').all(|part| part != "." && part != "..")
+}
+
 async fn submission_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     ValidatedJson(submission): ValidatedJson<sera_gateway::envelope::Submission>,
 ) -> Result<Json<sera_gateway::envelope::Event>, StatusCode> {
     validate_api_key(&state, &headers)?;
+
+    if let Some(session_key) = submission.session_key.as_deref()
+        && !safe_submission_session_key(session_key)
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
 
     let event = match &submission.op {
         sera_gateway::envelope::Op::Register(sera_gateway::envelope::RegisterOp::ExternalAgent(registration)) => {
@@ -5916,11 +5943,12 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
     })?);
     let admin_audit_path = AdminAuditLogger::default_path(&data_root);
     let admin_audit = AdminAuditLogger::shared(admin_audit_path);
-    let external_agent_registry = external_agent_registry_from_manifests(&manifests, true);
+    let manifests = Arc::new(std::sync::RwLock::new(manifests));
+    let external_agent_registry = external_agent_registry_from_manifests(Arc::clone(&manifests), true);
 
     let state = Arc::new(AppState {
         db: Arc::new(Mutex::new(db)),
-        manifests: Arc::new(std::sync::RwLock::new(manifests)),
+        manifests,
         discord: shared_discord,
         external_agent_registry,
         api_key,
@@ -6776,7 +6804,10 @@ mod tests {
     }
 
     fn test_external_agent_registry() -> Arc<ExternalAgentRegistry> {
-        external_agent_registry_from_manifests(&test_manifests(), true)
+        external_agent_registry_from_manifests(
+            Arc::new(std::sync::RwLock::new(test_manifests())),
+            true,
+        )
     }
 
     async fn test_harnesses() -> std::collections::HashMap<String, Arc<dyn AgentTurnTransport>> {
@@ -7345,6 +7376,66 @@ mod tests {
         assert_eq!(json["msg"]["type"], "error");
         assert_eq!(json["msg"]["code"], "register_op_invalid_delegator");
         assert_eq!(registry.registered_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn submissions_route_register_rejects_unsafe_session_key() {
+        let state = test_state();
+        let registry = Arc::clone(&state.external_agent_registry);
+        let app = build_router(state);
+        let submission = external_agent_register_submission("../escape", "agent:sera");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/submissions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&submission).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(registry.registered_count(), 0);
+    }
+
+    #[test]
+    fn submissions_route_register_validator_tracks_manifest_updates() {
+        let manifests = Arc::new(std::sync::RwLock::new(test_manifests()));
+        let registry = external_agent_registry_from_manifests(Arc::clone(&manifests), true);
+        let submission = external_agent_register_submission("dynamic-session-1", "agent:runtime-added");
+        let registration = match &submission.op {
+            sera_gateway::envelope::Op::Register(
+                sera_gateway::envelope::RegisterOp::ExternalAgent(registration),
+            ) => registration,
+            _ => unreachable!("test helper always builds external-agent registration"),
+        };
+
+        assert_eq!(
+            registry.register("dynamic-session-1", registration).unwrap_err().code(),
+            "register_op_invalid_delegator"
+        );
+
+        let spec = {
+            let guard = manifests.read().unwrap();
+            guard.agent_spec("sera").unwrap().unwrap()
+        };
+        manifests
+            .write()
+            .unwrap()
+            .upsert_agent(agent_manifest_from_request(RegisterAgentRequest {
+                name: "runtime-added".to_string(),
+                spec,
+            }));
+        assert!(registry.register("dynamic-session-2", registration).is_ok());
+
+        manifests.write().unwrap().remove_agent("runtime-added");
+        assert_eq!(
+            registry.register("dynamic-session-3", registration).unwrap_err().code(),
+            "register_op_invalid_delegator"
+        );
     }
 
     // -- Readiness endpoint (empty-reply race fix) --

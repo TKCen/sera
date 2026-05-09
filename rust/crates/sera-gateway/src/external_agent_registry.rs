@@ -90,6 +90,12 @@ pub enum RegisterError {
     )]
     EgressInvalid,
 
+    /// The protocol or external id would make an ambiguous
+    /// `ext:{protocol}:{external_id}` principal id. Wire code
+    /// `register_op_invalid_principal_id`.
+    #[error("register_op_invalid_principal_id: {0}")]
+    InvalidPrincipalId(String),
+
     /// Another Pattern B session is already registered under this
     /// `session_key`. Wire code `register_op_duplicate_session`. Replace
     /// semantics are intentionally NOT supported — see module docs.
@@ -104,6 +110,7 @@ impl RegisterError {
         match self {
             Self::InvalidDelegator(_) => "register_op_invalid_delegator",
             Self::EgressInvalid => "register_op_egress_invalid",
+            Self::InvalidPrincipalId(_) => "register_op_invalid_principal_id",
             Self::DuplicateSession(_) => "register_op_duplicate_session",
         }
     }
@@ -154,10 +161,8 @@ impl DelegatorValidator for InMemoryDelegatorValidator {
     fn is_valid(&self, delegator: &PrincipalRef) -> bool {
         // Wrong-kind rejection is structural — only Agent/Human may delegate
         // a Pattern B session. The allow-list check is the existence gate.
-        matches!(
-            delegator.kind,
-            PrincipalKind::Agent | PrincipalKind::Human
-        ) && self.known.contains(delegator)
+        matches!(delegator.kind, PrincipalKind::Agent | PrincipalKind::Human)
+            && self.known.contains(delegator)
     }
 }
 
@@ -199,6 +204,15 @@ impl ExternalAgentRegistry {
         session_key: &str,
         registration: &ExternalAgentRegistration,
     ) -> Result<ExternalAgentSession, RegisterError> {
+        if !matches!(
+            registration.delegated_by.kind,
+            PrincipalKind::Agent | PrincipalKind::Human
+        ) {
+            return Err(RegisterError::InvalidDelegator(
+                registration.delegated_by.id.0.clone(),
+            ));
+        }
+
         if !self
             .delegator_validator
             .is_valid(&registration.delegated_by)
@@ -222,8 +236,12 @@ impl ExternalAgentRegistry {
             return Err(RegisterError::DuplicateSession(session_key.to_string()));
         }
 
+        let protocol = protocol_label(&registration.protocol);
+        validate_principal_component("protocol", &protocol)?;
+        validate_principal_component("external_id", &registration.external_id)?;
+
         let principal = Principal::external_agent_with_delegator(
-            protocol_label(&registration.protocol).as_str(),
+            protocol.as_str(),
             &registration.external_id,
             &registration.delegated_by,
         );
@@ -252,10 +270,7 @@ impl ExternalAgentRegistry {
 
     /// Number of currently-registered Pattern B sessions. Test introspection.
     pub fn registered_count(&self) -> usize {
-        self.sessions
-            .read()
-            .expect("sessions lock poisoned")
-            .len()
+        self.sessions.read().expect("sessions lock poisoned").len()
     }
 }
 
@@ -266,6 +281,15 @@ fn protocol_label(protocol: &ExternalProtocol) -> String {
         ExternalProtocol::AcpCompat => "acp_compat".to_string(),
         ExternalProtocol::Custom(s) => s.clone(),
     }
+}
+
+fn validate_principal_component(field: &str, value: &str) -> Result<(), RegisterError> {
+    if value.contains(':') {
+        return Err(RegisterError::InvalidPrincipalId(format!(
+            "{field} must not contain ':'"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -301,6 +325,14 @@ mod tests {
         }
     }
 
+    struct PermissiveDelegatorValidator;
+
+    impl DelegatorValidator for PermissiveDelegatorValidator {
+        fn is_valid(&self, _delegator: &PrincipalRef) -> bool {
+            true
+        }
+    }
+
     fn registry_with_known(known: PrincipalRef) -> ExternalAgentRegistry {
         let validator = Arc::new(InMemoryDelegatorValidator::new().with_known(known));
         ExternalAgentRegistry::new(true, validator)
@@ -319,7 +351,10 @@ mod tests {
         assert_eq!(session.principal_ref.id.0, "ext:a2a:claude-pane-1");
         assert_eq!(session.principal_ref.kind, PrincipalKind::ExternalAgent);
         assert_eq!(session.delegated_by, parent);
-        assert_eq!(session.declared_egress, vec![EgressEndpoint::InferenceLocal]);
+        assert_eq!(
+            session.declared_egress,
+            vec![EgressEndpoint::InferenceLocal]
+        );
         assert_eq!(session.budget_handle.0, "ext:bucket:claude-pane-1");
 
         let stored = registry.get("sess-001").expect("session stored");
@@ -334,7 +369,10 @@ mod tests {
         let registry = registry_with_known(known);
 
         let err = registry
-            .register("sess-002", &registration(ExternalProtocol::A2a, "x", stranger))
+            .register(
+                "sess-002",
+                &registration(ExternalProtocol::A2a, "x", stranger),
+            )
             .unwrap_err();
 
         assert_eq!(err.code(), "register_op_invalid_delegator");
@@ -367,6 +405,25 @@ mod tests {
     }
 
     #[test]
+    fn wrong_kind_delegator_rejected_even_when_validator_accepts_it() {
+        let registry = ExternalAgentRegistry::new(true, Arc::new(PermissiveDelegatorValidator));
+        let external_agent_delegator = PrincipalRef {
+            id: PrincipalId::new("ext:a2a:child"),
+            kind: PrincipalKind::ExternalAgent,
+        };
+
+        let err = registry
+            .register(
+                "sess-permissive-wrong-kind",
+                &registration(ExternalProtocol::A2a, "x", external_agent_delegator),
+            )
+            .unwrap_err();
+
+        assert_eq!(err.code(), "register_op_invalid_delegator");
+        assert_eq!(registry.registered_count(), 0);
+    }
+
+    #[test]
     fn human_delegator_accepted() {
         let operator = human_ref("admin");
         let registry = registry_with_known(operator.clone());
@@ -388,7 +445,10 @@ mod tests {
         let registry = registry_with_known(parent.clone());
 
         registry
-            .register("sess-dup", &registration(ExternalProtocol::A2a, "first", parent.clone()))
+            .register(
+                "sess-dup",
+                &registration(ExternalProtocol::A2a, "first", parent.clone()),
+            )
             .expect("first registration should succeed");
 
         let err = registry
@@ -487,6 +547,44 @@ mod tests {
     }
 
     #[test]
+    fn delimiter_bearing_external_id_rejected_before_principal_minting() {
+        let parent = agent_ref("agent:parent");
+        let registry = registry_with_known(parent.clone());
+
+        let err = registry
+            .register(
+                "sess-delimiter-external-id",
+                &registration(ExternalProtocol::A2a, "x:y", parent),
+            )
+            .unwrap_err();
+
+        assert_eq!(err.code(), "register_op_invalid_principal_id");
+        assert!(
+            matches!(err, RegisterError::InvalidPrincipalId(ref msg) if msg.contains("external_id"))
+        );
+        assert_eq!(registry.registered_count(), 0);
+    }
+
+    #[test]
+    fn delimiter_bearing_custom_protocol_rejected_before_principal_minting() {
+        let parent = agent_ref("agent:parent");
+        let registry = registry_with_known(parent.clone());
+
+        let err = registry
+            .register(
+                "sess-delimiter-protocol",
+                &registration(ExternalProtocol::Custom("a2a:x".to_string()), "y", parent),
+            )
+            .unwrap_err();
+
+        assert_eq!(err.code(), "register_op_invalid_principal_id");
+        assert!(
+            matches!(err, RegisterError::InvalidPrincipalId(ref msg) if msg.contains("protocol"))
+        );
+        assert_eq!(registry.registered_count(), 0);
+    }
+
+    #[test]
     fn register_error_codes_are_stable_wire_strings() {
         // PR3's dispatch arm copies these into EventMsg::Error::code; pin
         // them so a refactor cannot silently break the wire contract.
@@ -494,7 +592,14 @@ mod tests {
             RegisterError::InvalidDelegator("x".into()).code(),
             "register_op_invalid_delegator"
         );
-        assert_eq!(RegisterError::EgressInvalid.code(), "register_op_egress_invalid");
+        assert_eq!(
+            RegisterError::EgressInvalid.code(),
+            "register_op_egress_invalid"
+        );
+        assert_eq!(
+            RegisterError::InvalidPrincipalId("protocol must not contain ':'".into()).code(),
+            "register_op_invalid_principal_id"
+        );
         assert_eq!(
             RegisterError::DuplicateSession("k".into()).code(),
             "register_op_duplicate_session"

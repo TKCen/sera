@@ -139,6 +139,35 @@ def test_redact_response_body_strips_bearer(sec) -> None:  # type: ignore[no-unt
     assert "<redacted:bearer>" in redacted
 
 
+def test_auth_case_detects_leaks_before_redacting_response(sec, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    secret = "secret_abc123def"
+    bearer = "Bearer abcdef1234567890"
+
+    def fake_send(method, url, headers, body):  # type: ignore[no-untyped-def]
+        return 401, {"Authorization": bearer}, f"reflected {secret}".encode(), None
+
+    monkeypatch.setattr(sec, "_http_send", fake_send)
+
+    case = sec._auth_case(
+        case_id="SEC-AUTH-LEAK-REGRESSION",
+        base="http://localhost:3001",
+        method="GET",
+        path="/api/agents",
+        headers=None,
+        body=None,
+        expected_status=401,
+        forbidden_in_body=[],
+        known_secrets={secret},
+    )
+
+    assert case["passed"] is False
+    assert case["secrets_detected"] is True
+    assert "known_secret_present" in case["fail_reason"]
+    assert "bearer_token_shape_present" in case["fail_reason"]
+    assert case["actual"]["body_redacted"] == "reflected <redacted:known-secret>"
+    assert case["actual"]["headers_redacted"]["Authorization"] == "<redacted:header>"
+
+
 # --- validate-only false-green cases ---------------------------------------
 
 

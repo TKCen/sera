@@ -106,12 +106,17 @@ def _http_send(
         return None, {}, b"", f"{type(exc).__name__}: {exc}"
 
 
+def _decode_response_body(body_bytes: bytes) -> str:
+    """Best-effort utf-8 decode for response inspection and artifacts."""
+    try:
+        return body_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return body_bytes.decode("utf-8", "replace")
+
+
 def _redact_response_body(body_bytes: bytes, known_secrets: set[str]) -> str:
     """Decode + redact for storage in artifact. Best-effort utf-8 decode."""
-    try:
-        text = body_bytes.decode("utf-8")
-    except UnicodeDecodeError:
-        text = body_bytes.decode("utf-8", "replace")
+    text = _decode_response_body(body_bytes)
     for s in known_secrets:
         if s and s in text:
             text = text.replace(s, "<redacted:known-secret>")
@@ -224,6 +229,7 @@ def _auth_case(
     )
     case["ended_at"] = _now_iso()
 
+    body_raw = _decode_response_body(resp_body)
     body_redacted = _redact_response_body(resp_body, known_secrets)
     headers_redacted = {
         k: ("<redacted:header>" if k.lower() in {"set-cookie", "authorization"} else v)
@@ -240,7 +246,7 @@ def _auth_case(
     elif status != expected_status:
         fail_reasons.append(f"status {status} != expected {expected_status}")
 
-    leak_haystacks = [body_redacted] + [str(v) for v in headers_redacted.values()]
+    leak_haystacks = [body_raw] + [str(v) for v in resp_headers.values()]
     leaks = _detect_leaks(
         leak_haystacks, known_secrets, forbidden_substrings=forbidden_in_body
     )

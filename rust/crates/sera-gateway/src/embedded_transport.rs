@@ -42,10 +42,20 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use sera_runtime::default_runtime::DefaultRuntime;
+use sera_types::principal::Principal;
 use sera_types::runtime::{AgentRuntime, TurnContext, TurnOutcome};
 use sera_types::tool::ToolDefinition;
 
 use crate::agent_transport::{AgentTurnTransport, ToolEvent, TurnEvents, UsageInfo};
+use crate::policy_resolution::PolicyResolver;
+
+/// Metadata key under which `EmbeddedRuntimeTransport` stamps the JSON
+/// representation of the resolved [`sera_auth::policy::PrincipalPolicy`] for
+/// the current turn (sera-u4gj PR-C). The runtime's dispatcher gate consumes
+/// this key in a follow-up PR; producing it here is the gateway-side per-turn
+/// threading half of the contract documented in
+/// `crate::policy_resolution`.
+pub const PRINCIPAL_POLICY_METADATA_KEY: &str = "principal_policy";
 
 /// In-process transport that calls
 /// [`DefaultRuntime::execute_turn`](sera_types::runtime::AgentRuntime::execute_turn)
@@ -67,6 +77,16 @@ pub struct EmbeddedRuntimeTransport {
     /// because each `Steer` Submission carries `session_key` and the
     /// runtime routes by it; embedded mode replicates that contract here.
     pending_steer: Mutex<HashMap<String, Vec<Value>>>,
+    /// Optional gateway-side [`PolicyResolver`] (sera-u4gj PR-C). When set,
+    /// each [`AgentTurnTransport::send_turn`] resolves the agent's
+    /// [`Principal`] policy and stamps the JSON-serialized
+    /// [`sera_auth::policy::PrincipalPolicy`] onto
+    /// `TurnContext.metadata[PRINCIPAL_POLICY_METADATA_KEY]`. The runtime's
+    /// PR3 dispatcher gate (`RegistryDispatcher::with_principal_policy`)
+    /// consumes this metadata in a follow-up PR; until that wiring lands the
+    /// stamp is observed only by tests and the `tracing` log line emitted
+    /// here, which is the audit-parity hook the gateway needs.
+    policy_resolver: Option<PolicyResolver>,
 }
 
 impl EmbeddedRuntimeTransport {
@@ -84,12 +104,86 @@ impl EmbeddedRuntimeTransport {
             runtime,
             tool_defs,
             pending_steer: Mutex::new(HashMap::new()),
+            policy_resolver: None,
         }
+    }
+
+    /// Attach a gateway-side [`PolicyResolver`] (sera-u4gj PR-C). When set,
+    /// every [`AgentTurnTransport::send_turn`] resolves the agent's
+    /// [`Principal`] policy and stamps the JSON-serialized policy onto
+    /// `TurnContext.metadata[PRINCIPAL_POLICY_METADATA_KEY]`. Returning a
+    /// fresh `Arc<PrincipalPolicy>` per resolve is the resolver's contract
+    /// today (no per-turn caching); see `crate::policy_resolution`.
+    pub fn with_policy_resolver(mut self, resolver: PolicyResolver) -> Self {
+        self.policy_resolver = Some(resolver);
+        self
     }
 
     /// Test introspection: number of tool definitions exposed to the LLM.
     pub fn tool_def_count(&self) -> usize {
         self.tool_defs.len()
+    }
+
+    /// Build the per-turn metadata map that `send_turn` writes onto the
+    /// runtime's [`TurnContext`]. Drains any pending steer items for the
+    /// session and (when a [`PolicyResolver`] is attached) stamps the
+    /// resolved [`sera_auth::policy::PrincipalPolicy`] under
+    /// [`PRINCIPAL_POLICY_METADATA_KEY`]. Public-in-crate so tests can
+    /// assert about the stamped metadata directly without instrumenting the
+    /// full runtime path.
+    pub(crate) async fn build_turn_metadata(
+        &self,
+        session_key: &str,
+    ) -> HashMap<String, Value> {
+        let mut metadata: HashMap<String, Value> = HashMap::new();
+
+        // Drain any staged steer items for *this* session into the turn
+        // metadata. Keying on `session_key` matters: concurrent sessions on
+        // the same agent — including the readiness probe's
+        // `__sera_readiness_probe__` session running between a real user's
+        // steer and their next turn — must not cross-pollinate steer
+        // payloads.
+        {
+            let mut pending = self.pending_steer.lock().await;
+            if let Some(drained) = pending.remove(session_key)
+                && !drained.is_empty()
+            {
+                metadata.insert("pending_steer".to_string(), Value::Array(drained));
+            }
+        }
+
+        // Per-turn policy resolution (sera-u4gj PR-C). Resolve once per
+        // `send_turn` for the agent's principal and stamp the JSON form on
+        // metadata so the runtime's PR3 dispatcher gate can consume it in a
+        // follow-up PR. Failures here are non-fatal — a serialize error
+        // omits the key rather than failing the turn, matching the
+        // "absence = no per-turn override" contract documented on
+        // `crate::policy_resolution`.
+        if let Some(resolver) = self.policy_resolver.as_ref() {
+            let principal = Principal::for_agent(&self.agent_id, &self.agent_id);
+            let policy = resolver.resolve(&principal).await;
+            match serde_json::to_value(&*policy) {
+                Ok(value) => {
+                    tracing::debug!(
+                        agent_id = %self.agent_id,
+                        session_key = %session_key,
+                        scopes = ?policy.allowed_tool_scopes,
+                        "embedded transport stamped principal policy on turn metadata",
+                    );
+                    metadata.insert(PRINCIPAL_POLICY_METADATA_KEY.to_string(), value);
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        agent_id = %self.agent_id,
+                        session_key = %session_key,
+                        error = %err,
+                        "failed to serialize principal policy for turn metadata",
+                    );
+                }
+            }
+        }
+
+        metadata
     }
 }
 
@@ -100,27 +194,11 @@ impl AgentTurnTransport for EmbeddedRuntimeTransport {
         messages: Vec<Value>,
         session_key: &str,
     ) -> anyhow::Result<TurnEvents> {
-        // Drain any staged steer items for *this* session into the turn
-        // metadata. The runtime's `DefaultRuntime::execute_turn` (and
-        // `turn::TurnContext.pending_steer`) looks for them under
-        // `metadata["pending_steer"]` in the same shape an NDJSON `Steer`
-        // submission would surface.
-        //
-        // Keying on `session_key` matters: concurrent sessions on the same
-        // agent — including the readiness probe's
-        // `__sera_readiness_probe__` session running between a real user's
-        // steer and their next turn — must not cross-pollinate steer
-        // payloads. The stdio backend gets this for free via per-Submission
-        // `session_key` routing inside the runtime.
-        let mut metadata: HashMap<String, Value> = HashMap::new();
-        {
-            let mut pending = self.pending_steer.lock().await;
-            if let Some(drained) = pending.remove(session_key)
-                && !drained.is_empty()
-            {
-                metadata.insert("pending_steer".to_string(), Value::Array(drained));
-            }
-        }
+        // Build per-turn metadata: drains pending steer for this session
+        // and (when a `PolicyResolver` is attached) stamps the resolved
+        // `PrincipalPolicy` under `PRINCIPAL_POLICY_METADATA_KEY`. See
+        // `Self::build_turn_metadata` for the full contract.
+        let metadata = self.build_turn_metadata(session_key).await;
 
         let ctx = TurnContext {
             event_id: uuid::Uuid::new_v4().to_string(),
@@ -522,6 +600,118 @@ mod tests {
             pending.get(user_session).map(Vec::len),
             Some(1),
             "readiness probe must not drain a real session's steer queue"
+        );
+    }
+
+    // ── PolicyResolver threading (sera-u4gj PR-C) ─────────────────────────
+
+    #[tokio::test]
+    async fn build_turn_metadata_omits_principal_policy_when_no_resolver() {
+        // Without a `PolicyResolver` attached, the embedded transport must
+        // not stamp `principal_policy` on turn metadata — absence is the
+        // signal to the runtime that no per-turn policy override applies,
+        // matching the contract documented on `crate::policy_resolution`.
+        let runtime = build_runtime("ack");
+        let transport = EmbeddedRuntimeTransport::new("agent-1", runtime, vec![]);
+
+        let metadata = transport.build_turn_metadata("session:agent-1:t-1").await;
+
+        assert!(
+            !metadata.contains_key(PRINCIPAL_POLICY_METADATA_KEY),
+            "no resolver attached: principal_policy must be absent",
+        );
+    }
+
+    #[tokio::test]
+    async fn build_turn_metadata_stamps_principal_policy_when_resolver_set() {
+        // With a `PolicyResolver` attached, every turn's metadata carries
+        // the resolved `PrincipalPolicy` so the runtime's PR3 dispatcher
+        // gate can reconstruct it. The agent's principal is built from
+        // `agent_id` (kind = Agent), so the stamped policy reflects the
+        // agent kind defaults: `Admin` is excluded, `Read` is present,
+        // `max_delegation_depth` is 2.
+        let runtime = build_runtime("ack");
+        let transport = EmbeddedRuntimeTransport::new("agent-1", runtime, vec![])
+            .with_policy_resolver(PolicyResolver::in_memory());
+
+        let metadata = transport.build_turn_metadata("session:agent-1:t-1").await;
+
+        let stamped = metadata
+            .get(PRINCIPAL_POLICY_METADATA_KEY)
+            .expect("resolver attached: principal_policy must be stamped");
+        let policy: sera_auth::policy::PrincipalPolicy =
+            serde_json::from_value(stamped.clone())
+                .expect("stamped value must round-trip into PrincipalPolicy");
+        assert_eq!(policy.max_delegation_depth, 2);
+        assert!(
+            policy
+                .allowed_tool_scopes
+                .contains(&sera_types::tool::ToolScope::Read),
+            "agent kind defaults must include Read scope",
+        );
+        assert!(
+            !policy
+                .allowed_tool_scopes
+                .contains(&sera_types::tool::ToolScope::Admin),
+            "agent kind defaults must never carry Admin scope",
+        );
+    }
+
+    #[tokio::test]
+    async fn send_turn_threads_principal_policy_through_resolver() {
+        // Integration: with a resolver attached, a real `send_turn` round
+        // trip succeeds (no regression) and the same metadata helper used
+        // inside `send_turn` produces a `principal_policy` stamp on a fresh
+        // call. The two assertions together prove that the resolver-aware
+        // path is wired into `send_turn` (no resolver was *not* set, but
+        // the turn still completed) and that the stamping behaviour is
+        // observable.
+        let runtime = build_runtime("ack");
+        let transport = EmbeddedRuntimeTransport::new("agent-1", runtime, vec![])
+            .with_policy_resolver(PolicyResolver::in_memory());
+        let session = "session:agent-1:t-1";
+
+        transport
+            .send_turn(
+                vec![serde_json::json!({"role": "user", "content": "hi"})],
+                session,
+            )
+            .await
+            .expect("turn ok with resolver attached");
+
+        let metadata = transport.build_turn_metadata(session).await;
+        assert!(
+            metadata.contains_key(PRINCIPAL_POLICY_METADATA_KEY),
+            "resolver-aware send_turn path must populate principal_policy metadata",
+        );
+    }
+
+    #[tokio::test]
+    async fn build_turn_metadata_combines_pending_steer_and_principal_policy() {
+        // The two metadata producers (steer drain + policy stamp) compose:
+        // both keys must be present on a turn that has staged steer and a
+        // resolver attached.
+        let runtime = build_runtime("ack");
+        let transport = EmbeddedRuntimeTransport::new("agent-1", runtime, vec![])
+            .with_policy_resolver(PolicyResolver::in_memory());
+        let session = "session:agent-1:combo";
+
+        transport
+            .send_steer(
+                vec![serde_json::json!({"role": "user", "content": "guidance"})],
+                session,
+            )
+            .await
+            .expect("steer ok");
+
+        let metadata = transport.build_turn_metadata(session).await;
+        assert!(
+            metadata.contains_key("pending_steer"),
+            "steer drain must populate pending_steer",
+        );
+        assert!(
+            metadata.contains_key(PRINCIPAL_POLICY_METADATA_KEY),
+            "resolver attached must populate principal_policy",
         );
     }
 

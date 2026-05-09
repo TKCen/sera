@@ -1278,6 +1278,16 @@ impl AgentTurnTransport for RuntimeChildSupervisor {
                     "kill_for_rollback: start_kill failed (child may already be gone)"
                 );
             } else {
+                // Reap the killed child so it doesn't linger as a zombie /
+                // orphan. SIGKILL delivers near-instantly; the timeout is a
+                // safety bound — if the child somehow refuses to exit within
+                // 2s the rollback callback gives up and the kill switch
+                // remains armed, which is still operator-observable.
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    child.wait(),
+                )
+                .await;
                 tracing::warn!(
                     agent = %self.agent_id,
                     generation = state.generation,

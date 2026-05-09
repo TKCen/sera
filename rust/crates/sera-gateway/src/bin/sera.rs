@@ -2239,18 +2239,29 @@ struct ManifestDelegatorValidator {
 
 impl DelegatorValidator for ManifestDelegatorValidator {
     fn is_valid(&self, delegator: &PrincipalRef) -> bool {
-        if !matches!(delegator.kind, PrincipalKind::Agent) {
-            return false;
+        match delegator.kind {
+            PrincipalKind::Agent => {
+                let Some(agent_name) = delegator.id.0.strip_prefix("agent:") else {
+                    return false;
+                };
+                let manifests = self.manifests.read().unwrap();
+                manifests
+                    .agents
+                    .iter()
+                    .any(|agent| agent.metadata.name == agent_name)
+            }
+            PrincipalKind::Human => valid_manifest_human_delegator(&delegator.id.0),
+            _ => false,
         }
-        let Some(agent_name) = delegator.id.0.strip_prefix("agent:") else {
-            return false;
-        };
-        let manifests = self.manifests.read().unwrap();
-        manifests
-            .agents
-            .iter()
-            .any(|agent| agent.metadata.name == agent_name)
     }
+}
+
+fn valid_manifest_human_delegator(id: &str) -> bool {
+    id == "admin"
+        || id == "http-chat"
+        || id
+            .strip_prefix("discord:")
+            .is_some_and(|discord_id| !discord_id.is_empty())
 }
 
 fn external_agent_registry_from_manifests(
@@ -7494,6 +7505,36 @@ mod tests {
                 spec,
             }));
         assert!(registry.register("dynamic-session-2", registration).is_ok());
+
+        let mut human_submission = external_agent_register_submission("human-session-1", "discord:123456");
+        let human_registration = match &mut human_submission.op {
+            sera_gateway::envelope::Op::Register(
+                sera_gateway::envelope::RegisterOp::ExternalAgent(registration),
+            ) => {
+                registration.delegated_by.kind = PrincipalKind::Human;
+                registration
+            }
+            _ => unreachable!("test helper always builds external-agent registration"),
+        };
+        assert!(registry.register("human-session-1", human_registration).is_ok());
+
+        let mut unknown_human_submission = external_agent_register_submission("human-session-2", "mallory");
+        let unknown_human_registration = match &mut unknown_human_submission.op {
+            sera_gateway::envelope::Op::Register(
+                sera_gateway::envelope::RegisterOp::ExternalAgent(registration),
+            ) => {
+                registration.delegated_by.kind = PrincipalKind::Human;
+                registration
+            }
+            _ => unreachable!("test helper always builds external-agent registration"),
+        };
+        assert_eq!(
+            registry
+                .register("human-session-2", unknown_human_registration)
+                .unwrap_err()
+                .code(),
+            "register_op_invalid_delegator"
+        );
 
         manifests.write().unwrap().remove_agent("runtime-added");
         assert_eq!(

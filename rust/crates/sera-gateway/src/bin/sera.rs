@@ -3165,6 +3165,33 @@ async fn chat_handler(
                 .into_response());
         }
 
+        // sera-3l1l (t_2b542367): a runtime backend error or per-turn timeout
+        // must surface as a structured 502, not as a successful turn whose
+        // assistant transcript row is the synthetic `[sera] Runtime error: …`
+        // / `[sera] Runtime timed out after Ns` placeholder. Mirrors the
+        // streaming branch's `result.failure.as_ref()` gate so the sync and
+        // SSE paths agree: failed/errored/timed-out turns leave no fake
+        // assistant row and emit no `response_sent` audit. The lane slot has
+        // already been released above, so a follow-up `/api/chat` admission
+        // is not stuck behind 429 lane_busy.
+        if let Some(reason) = result.failure.as_ref() {
+            tracing::error!(
+                session_id = %session_id,
+                agent = %agent_name,
+                reason = %reason,
+                "Sync chat turn failed via runtime; skipping transcript persist"
+            );
+            return Ok((
+                StatusCode::BAD_GATEWAY,
+                axum::Json(serde_json::json!({
+                    "error": "runtime_failure",
+                    "reason": reason,
+                    "session_id": session_id,
+                })),
+            )
+                .into_response());
+        }
+
         // Guard: an empty reply is a silent failure — the runtime returned
         // Ok(events) but produced no text. Log richly so the root cause can
         // be chased later, then return 502 so callers don't silently discard
@@ -10548,6 +10575,211 @@ spec:
         assert!(
             rows.iter().any(|r| r.role == "user"),
             "the user message must still be persisted; got rows: {rows:?}"
+        );
+
+        // sera-3l1l (t_2b542367): the lane slot must be released after the
+        // streaming runtime failure so a follow-up `/api/chat` admission is
+        // not permanently stuck behind 429 `lane_busy`. The spawned turn
+        // task's cleanup runs `complete_run` regardless of the failure path
+        // taken inside `execute_turn`; if a regression detaches that
+        // cleanup, this assertion catches it before live PA-3 is wedged.
+        let active = state.lane_queue.lock().await.active_runs();
+        assert_eq!(
+            active, 0,
+            "active_runs must drop to 0 after a streaming runtime failure; \
+             a stale lane slot blocks the next turn with 429 lane_busy"
+        );
+
+        let response2 = build_router(Arc::clone(&state))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "follow up", "stream": false })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            response2.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "follow-up turn must be admitted after streaming failure; \
+             got {} (lane_busy regression)",
+            response2.status()
+        );
+    }
+
+    /// sera-3l1l / t_2b542367 — Chat API lane leak regression after a
+    /// **failed sync turn**.
+    ///
+    /// AC1: `lane_queue.active_runs()` must drop to 0 after `execute_turn`
+    /// returns a runtime failure (provider error / decode error / timeout)
+    /// in the synchronous JSON branch of `chat_handler`, so a follow-up
+    /// `POST /api/chat` is admitted instead of being stuck at 429
+    /// `lane_busy`.
+    ///
+    /// AC2: the failure response must be a structured 502 with
+    /// `error: runtime_failure` — **not** a 200 wrapping the synthetic
+    /// `[sera] Runtime error: …` reply. No assistant transcript row may be
+    /// persisted, and no `response_sent` audit may be emitted, so the
+    /// transcript and audit chain stay truthful for downstream consumers
+    /// (Operator Workcell v1 / PA-3 recovery-restart truth).
+    ///
+    /// Pre-fix: the sync branch only gated on `result.reply.is_empty()`.
+    /// `execute_turn`'s failure case returns a non-empty synthetic reply,
+    /// so the gate did not trip; the synthetic `[sera] Runtime error: …`
+    /// was persisted as the assistant content and `response_sent` was
+    /// audited. Visible reply and persisted/audited history disagreed.
+    #[tokio::test]
+    async fn chat_handler_sync_runtime_failure_releases_lane_and_skips_transcript() {
+        use async_trait::async_trait;
+        use serde_json::Value;
+        use tokio::sync::mpsc::Sender;
+
+        struct FailingTransport;
+
+        #[async_trait]
+        impl AgentTurnTransport for FailingTransport {
+            async fn send_turn(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                anyhow::bail!("simulated runtime stream decode error")
+            }
+
+            async fn send_turn_streaming(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+                _delta_tx: Sender<String>,
+            ) -> anyhow::Result<TurnEvents> {
+                anyhow::bail!("simulated runtime stream decode error")
+            }
+
+            async fn send_steer(
+                &self,
+                _items: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut state = test_state_async().await;
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert(
+                "sera".to_string(),
+                Arc::new(FailingTransport) as Arc<dyn AgentTurnTransport>,
+            );
+
+        let session_id = {
+            let db = state.db.lock().await;
+            db.get_or_create_session("sera").unwrap().id
+        };
+
+        // Baseline: no active runs before we start.
+        assert_eq!(state.lane_queue.lock().await.active_runs(), 0);
+
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "hi", "stream": false })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // AC2: structured 502, not a faked 200.
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_GATEWAY,
+            "runtime failure must surface as 502, not as a successful turn"
+        );
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(
+            body["error"], "runtime_failure",
+            "body.error must identify the failure category; got: {body}"
+        );
+        assert!(
+            body["reason"]
+                .as_str()
+                .map(|r| r.contains("simulated runtime stream decode error"))
+                .unwrap_or(false),
+            "body.reason must surface the runtime failure detail; got: {body}"
+        );
+
+        // AC1: the lane slot must be released so a follow-up admission
+        // is not permanently stuck at 429 `lane_busy`.
+        let active = state.lane_queue.lock().await.active_runs();
+        assert_eq!(
+            active, 0,
+            "active_runs must drop to 0 after a sync runtime failure; \
+             a stale lane slot blocks the next turn with 429 lane_busy"
+        );
+
+        // AC2: no assistant transcript row, no synthetic
+        // `[sera] Runtime error: …` placeholder.
+        let rows = {
+            let db = state.db.lock().await;
+            db.get_transcript(&session_id).expect("get transcript")
+        };
+        let assistant_rows: Vec<_> =
+            rows.iter().filter(|r| r.role == "assistant").collect();
+        assert!(
+            assistant_rows.is_empty(),
+            "no assistant transcript row should be persisted on sync runtime \
+             failure; got: {assistant_rows:?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.role == "user"),
+            "the user message must still be persisted; got rows: {rows:?}"
+        );
+
+        // AC1 (live wedge regression): a follow-up POST must be admitted.
+        let response2 = build_router(Arc::clone(&state))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "retry", "stream": false })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            response2.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "follow-up turn must be admitted after lane release; \
+             got {} (lane_busy regression — t_4de556f5 PA-3 wedge)",
+            response2.status()
         );
     }
 

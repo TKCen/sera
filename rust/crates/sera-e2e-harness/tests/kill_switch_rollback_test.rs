@@ -76,15 +76,30 @@ fn collect_child_pids(parent_pid: u32) -> Vec<u32> {
     children
 }
 
-/// `kill -0 <pid>` returns 0 only while the process is alive.
-async fn pid_alive(pid: u32) -> bool {
-    tokio::process::Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+/// Direct `kill(pid, 0)` syscall: returns true while the process is alive.
+///
+/// Using the syscall instead of shelling out to `kill -0` avoids false-passing
+/// in minimal CI/container images where the `kill` binary may be missing or
+/// unrunnable: with the previous `Command::output().unwrap_or(false)`, a
+/// launch error silently made this return `false`, vacuously passing the AC5
+/// reap assertion. The syscall is always available on Unix and matches the
+/// `libc_kill` FFI shim used elsewhere in this crate (see `lib.rs`).
+fn pid_alive(pid: u32) -> bool {
+    // SAFETY: `kill` is declared with the standard POSIX FFI signature; with
+    // `sig = 0` it only performs the existence probe and does not deliver a
+    // signal. Same pattern as `libc_kill` in `sera-e2e-harness/src/lib.rs`.
+    unsafe extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    let rc = unsafe { kill(pid as i32, 0) };
+    if rc == 0 {
+        return true;
+    }
+    // ESRCH (3 on Linux/macOS/*BSD) means no such process. Any other errno
+    // (e.g. EPERM) means the PID exists but we lack permission to signal it —
+    // the process is still alive, so don't false-green the reap assertion.
+    const ESRCH: i32 = 3;
+    std::io::Error::last_os_error().raw_os_error() != Some(ESRCH)
 }
 
 fn bins_or_skip() -> Option<(PathBuf, PathBuf)> {
@@ -224,7 +239,7 @@ async fn ac5_kill_switch_rollback_reaps_runtime_and_resumes_serving() -> Result<
     loop {
         still_alive = Vec::new();
         for &pid in &pre_rollback_pids {
-            if pid_alive(pid).await {
+            if pid_alive(pid) {
                 still_alive.push(pid);
             }
         }
@@ -245,7 +260,7 @@ async fn ac5_kill_switch_rollback_reaps_runtime_and_resumes_serving() -> Result<
 
     // ── AC5 evidence #2: gateway itself stayed up ──
     anyhow::ensure!(
-        pid_alive(gateway_pid).await,
+        pid_alive(gateway_pid),
         "gateway pid {gateway_pid} died after ROLLBACK; AC5 forbids gateway corruption"
     );
 

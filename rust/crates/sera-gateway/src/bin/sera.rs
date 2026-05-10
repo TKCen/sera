@@ -7692,6 +7692,78 @@ mod tests {
         assert_eq!(registry.registered_count(), 0);
     }
 
+    /// sera-plcv M1 AC2/AC3 invariant: `parent_session_key` on a Pattern B
+    /// `Op::Register(ExternalAgent)` envelope must survive end-to-end so a
+    /// Pattern A turn (parent) and a Pattern B child registration land under
+    /// "exactly one EventStream with both nested" (bead AC4). Two surfaces
+    /// must keep the link:
+    ///   1. The emitted `ExternalAgentRegistered` event echoes
+    ///      `parent_session_key` so live consumers can stitch the
+    ///      registration onto the parent's stream as it happens.
+    ///   2. The persisted submission in `session_store` retains
+    ///      `parent_session_key` so an offline replay of the child session
+    ///      can reproduce the parent linkage without re-querying live state.
+    ///
+    /// Both surfaces already wire `parent_session_key` through (see
+    /// `submission_event` and `submission_handler`'s `StoredSubmission`
+    /// build); this test pins that contract so a future seam refactor can't
+    /// silently drop the field and erase the M1 nesting evidence.
+    #[tokio::test]
+    async fn submissions_route_register_preserves_parent_session_key_for_nesting() {
+        let state = test_state();
+        let session_store = Arc::clone(&state.session_store);
+        let app = build_router(state);
+
+        let mut submission =
+            external_agent_register_submission("ext-nested-child", "agent:sera");
+        submission.parent_session_key = Some("parent-session-A".to_string());
+        let submission_id = submission.id;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/submissions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&submission).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let event: sera_gateway::envelope::Event =
+            serde_json::from_slice(&body).expect("response decodes as Event");
+        assert!(
+            matches!(
+                event.msg,
+                sera_gateway::envelope::EventMsg::ExternalAgentRegistered { .. }
+            ),
+            "expected ExternalAgentRegistered, got {:?}",
+            event.msg,
+        );
+        assert_eq!(
+            event.parent_session_key.as_deref(),
+            Some("parent-session-A"),
+            "emitted event must echo parent_session_key for one-EventStream nesting",
+        );
+
+        let replayed = session_store.replay("ext-nested-child").await.unwrap();
+        assert_eq!(replayed.len(), 1, "registration must persist exactly once");
+        assert_eq!(
+            replayed[0].id, submission_id,
+            "persisted submission must be the one we sent",
+        );
+        assert_eq!(
+            replayed[0].parent_session_key.as_deref(),
+            Some("parent-session-A"),
+            "persisted submission must retain parent_session_key for offline replay",
+        );
+    }
+
     #[test]
     fn submissions_route_register_validator_tracks_manifest_updates() {
         let manifests = Arc::new(std::sync::RwLock::new(test_manifests()));

@@ -262,6 +262,15 @@ impl InProcessGateway {
         Ok(gateway)
     }
 
+    /// The spawned gateway child's process ID, if it has one. Tests that
+    /// need to reason about the gateway's process tree (e.g. the AC5 kill
+    /// switch rollback test asserting that a killed runtime child is no
+    /// longer parented to the gateway) read this and walk `/proc/*/status`
+    /// `PPid:` from there.
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child.id()
+    }
+
     /// Parse the address we bound to as a [`SocketAddr`] — handy when a test
     /// wants to exercise raw TCP or open a second connection of its own.
     pub fn socket_addr(&self) -> SocketAddr {
@@ -376,6 +385,16 @@ async fn spawn_gateway(
         // the harness manifest does not declare a policy file.  Integration
         // tests explicitly opt into the permissive mode.
         .env("SERA_ALLOW_MISSING_CONSTITUTIONAL_GATE", "1")
+        // sera-nrn9: the gateway's admin HTTP layer (`AdminAuth::resolve`)
+        // refuses to boot when `SERA_ADMIN_TOKEN` is unset outside `--local`
+        // mode. The harness invokes `start` (not `start --local`), so we
+        // supply a deterministic test token by default so the gateway can
+        // bind its admin server. Scenarios that need a specific token can
+        // override via `extra_env` (last-writer-wins).
+        .env(
+            "SERA_ADMIN_TOKEN",
+            "sera-e2e-harness-admin-token-32-bytes",
+        )
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);

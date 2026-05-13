@@ -1,0 +1,393 @@
+{
+  "$schema_note": "Schema (informal): { components: Component[], flows: Flow[] }. Component = { id, name, summary, category, kind, status, position:{col,row}, source? }. Flow = { id, name, summary, status, tags?, steps: Step[] }. Step = { from, to, label, note?, kind? } where kind ∈ 'request'|'response'|'internal'|'async'|'persist'|'external'. status ∈ 'active'|'partial'|'speculative'|'legacy'. Categories drive column placement; (col,row) gives a stable layout in the explorer.",
+  "version": "1",
+  "categories": [
+    { "id": "clients",    "label": "Clients",          "col": 0 },
+    { "id": "gateway",    "label": "Gateway",          "col": 1 },
+    { "id": "runtime",    "label": "Runtime",          "col": 2 },
+    { "id": "subsystems", "label": "Subsystems",       "col": 3 },
+    { "id": "storage",    "label": "Storage / Infra",  "col": 4 },
+    { "id": "externals",  "label": "External services",  "col": 5 },
+    { "id": "legacy",     "label": "Legacy (pre-Rust)", "col": 6 }
+  ],
+  "components": [
+    { "id": "client-http",           "name": "HTTP / SDK client",       "summary": "Any HTTP caller — curl, SDK, IDE plugin. Auth: Bearer API key (dev: sera_bootstrap_dev_123).", "category": "clients",    "kind": "external",  "status": "active",      "position": {"col":0,"row":0} },
+    { "id": "sera-tui",              "name": "sera-tui",                "summary": "Ratatui terminal dashboard (rust/crates/sera-tui). Talks to gateway over HTTP only.",                                  "category": "clients",    "kind": "rust-bin",  "status": "active",      "position": {"col":0,"row":1} },
+    { "id": "sera-cli",              "name": "sera-cli",                "summary": "Rust CLI (rust/crates/sera-cli). Replaces legacy Go CLI; talks to gateway HTTP API.",                                   "category": "clients",    "kind": "rust-bin",  "status": "active",      "position": {"col":0,"row":2} },
+    { "id": "external-mcp",          "name": "External MCP client",     "summary": "Any MCP-compliant tool (Claude Desktop, Cursor, etc.) reaching sera-mcp.",                                              "category": "clients",    "kind": "external",  "status": "active",      "position": {"col":0,"row":3} },
+    { "id": "external-a2a",          "name": "External A2A peer",       "summary": "Remote A2A-protocol agent peer exchanging envelopes with sera-a2a.",                                                    "category": "clients",    "kind": "external",  "status": "active",      "position": {"col":0,"row":4} },
+    { "id": "discord-user",          "name": "Discord user",            "summary": "Human chatting via a Discord channel routed through gateway-discord connector.",                                       "category": "clients",    "kind": "external",  "status": "active",      "position": {"col":0,"row":5} },
+    { "id": "mail-server",           "name": "Inbound mail server",     "summary": "External SMTP/forwarder posting MIME to /api/mail/inbound.",                                                            "category": "clients",    "kind": "external",  "status": "active",      "position": {"col":0,"row":6} },
+
+    { "id": "sera-gateway",          "name": "sera-gateway",            "summary": "Main axum API server (rust/crates/sera-gateway/src/bin/sera.rs). Hosts /api/*, /admin/*, /v1/* routes.",               "category": "gateway",    "kind": "rust-bin",  "status": "active",      "position": {"col":1,"row":0} },
+    { "id": "gateway-auth",          "name": "sera-auth",               "summary": "API-key / JWT / OIDC middleware. All /api/* (except /api/health) require Authorization: Bearer.",                       "category": "gateway",    "kind": "rust-lib",  "status": "active",      "position": {"col":1,"row":1} },
+    { "id": "gateway-session-store", "name": "session_store + lane_queue", "summary": "Per-session lane queue, prevents concurrent turn wedge, enforces turn timeout (SERA_TURN_TIMEOUT_SECS).",            "category": "gateway",    "kind": "module",    "status": "active",      "position": {"col":1,"row":2} },
+    { "id": "gateway-kill-switch",   "name": "kill_switch",             "summary": "Admin-armable global halt (/admin/killswitch/*) — pauses lanes and kills runtimes for rollback.",                        "category": "gateway",    "kind": "module",    "status": "active",      "position": {"col":1,"row":3} },
+    { "id": "gateway-signals",       "name": "signals",                 "summary": "Out-of-band signal push (/api/signals/push) into running turns.",                                                       "category": "gateway",    "kind": "module",    "status": "active",      "position": {"col":1,"row":4} },
+    { "id": "gateway-discord",       "name": "discord connector",       "summary": "discord.rs sidecar bridging Discord channels into session lanes (replaces legacy/tools/discord-bridge).",              "category": "gateway",    "kind": "module",    "status": "active",      "position": {"col":1,"row":5} },
+    { "id": "gateway-hitl-route",    "name": "hitl_gateway",            "summary": "HTTP surface for HITL approvals (/api/hitl/requests).",                                                                 "category": "gateway",    "kind": "module",    "status": "active",      "position": {"col":1,"row":6} },
+    { "id": "gateway-byoh",          "name": "byoh_dispatch_interceptor", "summary": "Production-path BYOH dispatch interceptor (PR #1254). Selects BYOH runtime over Stdio.",                              "category": "gateway",    "kind": "module",    "status": "active",      "position": {"col":1,"row":7} },
+    { "id": "gateway-openai-compat", "name": "openai_compat + llm_proxy", "summary": "/v1/chat/completions, /v1/messages, /v1/models passthrough for OpenAI- and Anthropic-shaped clients.",                "category": "gateway",    "kind": "module",    "status": "active",      "position": {"col":1,"row":8} },
+
+    { "id": "sera-runtime",          "name": "sera-runtime",            "summary": "Agent worker (rust/crates/sera-runtime). Bin + lib. Hosts harness, reasoning turn, llm_client, tools.",                 "category": "runtime",    "kind": "rust-both", "status": "active",      "position": {"col":2,"row":0} },
+    { "id": "runtime-harness",       "name": "harness",                 "summary": "Per-agent process manager. Spawn once, reuse for every turn. Uses NDJSON stdio transport.",                            "category": "runtime",    "kind": "module",    "status": "active",      "position": {"col":2,"row":1} },
+    { "id": "runtime-turn",          "name": "turn (reasoning loop)",   "summary": "turn.rs (74KB). Drives one user→assistant turn: prompt assembly, tool invocations, completion stream.",                "category": "runtime",    "kind": "module",    "status": "active",      "position": {"col":2,"row":2} },
+    { "id": "runtime-llm-client",    "name": "llm_client",              "summary": "Provider abstraction for OpenAI, Anthropic, LM Studio. Streaming via reqwest (rustls).",                                "category": "runtime",    "kind": "module",    "status": "active",      "position": {"col":2,"row":3} },
+    { "id": "runtime-tool-hooks",    "name": "tool_hooks",              "summary": "Tool invocation pipeline. Pre/post hooks, HITL gating, sandbox enforcement.",                                          "category": "runtime",    "kind": "module",    "status": "active",      "position": {"col":2,"row":4} },
+    { "id": "runtime-context-engine","name": "context_engine + memory_assembler", "summary": "Builds the prompt context window: pinned, recent, retrieved memory, summaries.",                              "category": "runtime",    "kind": "module",    "status": "active",      "position": {"col":2,"row":5} },
+    { "id": "runtime-skill-dispatch","name": "skill_dispatch",          "summary": "Resolves SkillRef (semver), loads steps from sera-skills, runs them via tool_hooks.",                                  "category": "runtime",    "kind": "module",    "status": "active",      "position": {"col":2,"row":6} },
+    { "id": "runtime-stdio",         "name": "stdio (NDJSON)",          "summary": "stdio.rs — newline-delimited JSON transport between gateway and runtime workers.",                                     "category": "runtime",    "kind": "module",    "status": "active",      "position": {"col":2,"row":7} },
+
+    { "id": "sera-hooks",            "name": "sera-hooks",              "summary": "In-process hook registry + chain executor. Async-trait Hook; WasmHookAdapter planned.",                                "category": "subsystems", "kind": "rust-lib",  "status": "active",      "position": {"col":3,"row":0} },
+    { "id": "sera-hitl",             "name": "sera-hitl",               "summary": "HITL approval routing + escalation chains. Bridges runtime tool-hooks with operator approvals.",                         "category": "subsystems", "kind": "rust-lib",  "status": "active",      "position": {"col":3,"row":1} },
+    { "id": "sera-workflow",         "name": "sera-workflow",           "summary": "Workflow engine, dreaming config, cron scheduling. Driven by /api/workflow/tasks.",                                    "category": "subsystems", "kind": "rust-lib",  "status": "active",      "position": {"col":3,"row":2} },
+    { "id": "sera-meta",             "name": "sera-meta",               "summary": "Self-evolution: 3-tier policy, shadow sessions, evolution proposals.",                                                  "category": "subsystems", "kind": "rust-lib",  "status": "active",      "position": {"col":3,"row":3} },
+    { "id": "sera-plugins",          "name": "sera-plugins",            "summary": "gRPC plugin registry + SDK + circuit breaker (SPEC-plugins).",                                                          "category": "subsystems", "kind": "rust-lib",  "status": "active",      "position": {"col":3,"row":4} },
+    { "id": "sera-mcp",              "name": "sera-mcp",                "summary": "MCP server + client bridge (SPEC-interop §3). Wraps external MCP tools.",                                              "category": "subsystems", "kind": "rust-lib",  "status": "active",      "position": {"col":3,"row":5} },
+    { "id": "sera-a2a",              "name": "sera-a2a",                "summary": "A2A protocol adapter, vendored types (SPEC-interop §4). Peer-to-peer agent envelopes.",                                "category": "subsystems", "kind": "rust-lib",  "status": "active",      "position": {"col":3,"row":6} },
+    { "id": "sera-agui",             "name": "sera-agui",               "summary": "AG-UI streaming protocol, 17 event types (SPEC-interop §6).",                                                          "category": "subsystems", "kind": "rust-lib",  "status": "active",      "position": {"col":3,"row":7} },
+    { "id": "sera-skills",           "name": "sera-skills",             "summary": "Skill pack loading, filesystem discovery, SkillRef semver resolution.",                                                 "category": "subsystems", "kind": "rust-lib",  "status": "active",      "position": {"col":3,"row":8} },
+    { "id": "sera-models",           "name": "sera-models",             "summary": "ModelProvider trait + provider implementations consumed by runtime-llm-client.",                                        "category": "subsystems", "kind": "rust-lib",  "status": "active",      "position": {"col":3,"row":9} },
+    { "id": "sera-byoh-agent",       "name": "sera-byoh-agent",         "summary": "Reference BYOH (Bring Your Own Harness) agent binary. Talks NDJSON to the gateway.",                                    "category": "subsystems", "kind": "rust-bin",  "status": "active",      "position": {"col":3,"row":10} },
+    { "id": "sera-commands",         "name": "sera-commands",           "summary": "Slash-command-style intents shared by CLI / TUI.",                                                                     "category": "subsystems", "kind": "rust-lib",  "status": "partial",     "position": {"col":3,"row":11} },
+    { "id": "sera-eval",             "name": "sera-eval",               "summary": "Evaluation harness for agents/skills (see sera-eval-design.md).",                                                       "category": "subsystems", "kind": "rust-lib",  "status": "partial",     "position": {"col":3,"row":12} },
+
+    { "id": "sera-db",               "name": "sera-db",                 "summary": "Storage. sqlx (PostgreSQL, enterprise) + rusqlite (SQLite, local default). Migrations + repositories.",               "category": "storage",    "kind": "rust-lib",  "status": "active",      "position": {"col":4,"row":0} },
+    { "id": "sera-memory",           "name": "sera-memory",             "summary": "SemanticMemoryStore trait + SQLite FTS5 basic tier (local).",                                                          "category": "storage",    "kind": "rust-lib",  "status": "active",      "position": {"col":4,"row":1} },
+    { "id": "sera-memory-hindsight", "name": "sera-memory-hindsight",   "summary": "hindsight backend adapter — enterprise/plugin path for SemanticMemoryStore.",                                          "category": "storage",    "kind": "rust-lib",  "status": "partial",     "position": {"col":4,"row":2} },
+    { "id": "sera-secrets",          "name": "sera-secrets",            "summary": "Secrets management scaffold. Resolves SERA_SECRET_* env refs in manifests.",                                            "category": "storage",    "kind": "rust-lib",  "status": "partial",     "position": {"col":4,"row":3} },
+    { "id": "sera-cache",            "name": "sera-cache",              "summary": "Cache layer scaffold.",                                                                                                "category": "storage",    "kind": "rust-lib",  "status": "partial",     "position": {"col":4,"row":4} },
+    { "id": "sera-mail",             "name": "sera-mail",               "summary": "Mail intake + delivery, drives /api/mail/inbound → /api/workflow/mail/deliver.",                                        "category": "storage",    "kind": "rust-lib",  "status": "active",      "position": {"col":4,"row":5} },
+    { "id": "sera-queue",            "name": "sera-queue",              "summary": "QueueBackend trait, LocalQueueBackend, GlobalThrottle.",                                                              "category": "storage",    "kind": "rust-lib",  "status": "active",      "position": {"col":4,"row":6} },
+    { "id": "sera-telemetry",        "name": "sera-telemetry",          "summary": "OTel tracing, AuditBackend, LaneFailureClass, Centrifugo pub/sub, legacy audit hash-chain.",                          "category": "storage",    "kind": "rust-lib",  "status": "active",      "position": {"col":4,"row":7} },
+    { "id": "sera-tools",            "name": "sera-tools",              "summary": "SandboxProvider, SsrfValidator, BashAstChecker — security primitives used by runtime-tool-hooks.",                     "category": "storage",    "kind": "rust-lib",  "status": "active",      "position": {"col":4,"row":8} },
+    { "id": "sera-oci",              "name": "sera-oci",                "summary": "OCI image / container helpers used by sandbox provider and BYOH packaging.",                                          "category": "storage",    "kind": "rust-lib",  "status": "active",      "position": {"col":4,"row":9} },
+
+    { "id": "ext-postgres",          "name": "PostgreSQL",              "summary": "Enterprise data backend with pgvector. Optional for local dev (SQLite is default).",                                   "category": "externals",  "kind": "external",  "status": "active",      "position": {"col":5,"row":0} },
+    { "id": "ext-sqlite",            "name": "SQLite (local)",          "summary": "Default local backend via rusqlite (FTS5 enabled). File at rust/sera.db.",                                            "category": "externals",  "kind": "external",  "status": "active",      "position": {"col":5,"row":1} },
+    { "id": "ext-docker",            "name": "Docker / OCI sandbox",    "summary": "bollard client. Hosts tool sandboxes and BYOH containers. WSL2 caveat: bridge networking only.",                     "category": "externals",  "kind": "external",  "status": "active",      "position": {"col":5,"row":2} },
+    { "id": "ext-llm-providers",     "name": "LLM providers",           "summary": "OpenAI, Anthropic, LM Studio (host.docker.internal:1234), etc. Called via runtime-llm-client with rustls.",            "category": "externals",  "kind": "external",  "status": "active",      "position": {"col":5,"row":3} },
+    { "id": "ext-centrifugo",        "name": "Centrifugo",              "summary": "Optional pub/sub. Enterprise multi-pod scalability only — local setups must not require it.",                         "category": "externals",  "kind": "external",  "status": "partial",     "position": {"col":5,"row":4} },
+    { "id": "ext-squid",             "name": "Squid egress proxy",      "summary": "Egress filter for sandboxed tools. Note: PID file persists across docker restart (see top-level CLAUDE.md).",         "category": "externals",  "kind": "external",  "status": "active",      "position": {"col":5,"row":5} },
+    { "id": "ext-hindsight",         "name": "hindsight (Docker)",      "summary": "Local hindsight container — conformance canary for SemanticMemoryStore alongside hermes-agent.",                       "category": "externals",  "kind": "external",  "status": "partial",     "position": {"col":5,"row":6} },
+    { "id": "ext-discord",           "name": "Discord (gateway/sidecar)", "summary": "Discord API endpoint reached by the gateway discord connector.",                                                     "category": "externals",  "kind": "external",  "status": "active",      "position": {"col":5,"row":7} },
+
+    { "id": "legacy-core",           "name": "legacy/core",             "summary": "Former TypeScript API server (sera-core). Archived; kept for reference until Rust parity is finished.",               "category": "legacy",     "kind": "ts",        "status": "legacy",      "position": {"col":6,"row":0} },
+    { "id": "legacy-web",            "name": "legacy/web",              "summary": "Former dashboard. No active development.",                                                                            "category": "legacy",     "kind": "ts",        "status": "legacy",      "position": {"col":6,"row":1} },
+    { "id": "legacy-cli",            "name": "legacy/cli",              "summary": "Former Go CLI (auth flows). Superseded by sera-cli.",                                                                 "category": "legacy",     "kind": "go",        "status": "legacy",      "position": {"col":6,"row":2} },
+    { "id": "legacy-tui",            "name": "legacy/tui",              "summary": "Pre-reboot Rust TUI. Superseded by sera-tui.",                                                                        "category": "legacy",     "kind": "rust-bin",  "status": "legacy",      "position": {"col":6,"row":3} },
+    { "id": "legacy-discord-bridge", "name": "legacy/tools/discord-bridge", "summary": "Former Discord sidecar. Now folded into sera-gateway's discord.rs connector.",                                    "category": "legacy",     "kind": "ts",        "status": "legacy",      "position": {"col":6,"row":4} },
+    { "id": "legacy-centrifugo-cfg", "name": "legacy/centrifugo",       "summary": "Old Centrifugo config. Current pub/sub access goes through sera-telemetry.",                                          "category": "legacy",     "kind": "config",    "status": "legacy",      "position": {"col":6,"row":5} }
+  ],
+
+  "flows": [
+    {
+      "id": "chat-turn",
+      "name": "Chat turn (HTTP)",
+      "summary": "User sends a message via POST /api/chat. Gateway authenticates, queues on the session lane, forwards to a per-agent runtime over NDJSON stdio, runtime drives the reasoning loop and streams completion deltas back as SSE. Transcript persists to sera-db.",
+      "status": "active",
+      "tags": ["foundational", "http", "sse"],
+      "steps": [
+        { "from": "client-http",           "to": "sera-gateway",           "label": "POST /api/chat {message, agent?, stream?}",          "note": "Bearer auth header required (dev key: sera_bootstrap_dev_123). No /v1/ prefix; sessions are server-managed.", "kind": "request" },
+        { "from": "sera-gateway",          "to": "gateway-auth",           "label": "verify API key / JWT",                                "kind": "internal" },
+        { "from": "sera-gateway",          "to": "gateway-session-store",  "label": "resolve session, enqueue on lane",                   "note": "Lane queue prevents concurrent turn wedge; if lane busy → 429 queued.", "kind": "internal" },
+        { "from": "gateway-session-store", "to": "runtime-harness",        "label": "spawn or reuse harness for agent",                   "note": "process_manager keeps one runtime per agent and reuses it across turns.", "kind": "internal" },
+        { "from": "sera-gateway",          "to": "runtime-stdio",          "label": "send_turn NDJSON: {user content blocks}",            "note": "Wrapped in tokio::time::timeout (SERA_TURN_TIMEOUT_SECS, default 120s) to avoid lane wedge.", "kind": "request" },
+        { "from": "runtime-stdio",         "to": "runtime-harness",        "label": "deliver turn frame",                                  "kind": "internal" },
+        { "from": "runtime-harness",       "to": "runtime-turn",           "label": "drive reasoning loop",                                "kind": "internal" },
+        { "from": "runtime-turn",          "to": "runtime-context-engine", "label": "assemble context (recent + retrieved memory + skills)", "kind": "internal" },
+        { "from": "runtime-turn",          "to": "runtime-llm-client",     "label": "chat completion request (stream)",                   "kind": "request" },
+        { "from": "runtime-llm-client",    "to": "ext-llm-providers",      "label": "POST /v1/chat/completions (rustls)",                 "kind": "external" },
+        { "from": "ext-llm-providers",     "to": "runtime-llm-client",     "label": "streamed completion deltas",                          "kind": "response" },
+        { "from": "runtime-turn",          "to": "runtime-stdio",          "label": "emit NDJSON assistant_message deltas",                "kind": "internal" },
+        { "from": "runtime-stdio",         "to": "sera-gateway",           "label": "forward deltas to gateway",                           "kind": "response" },
+        { "from": "sera-gateway",          "to": "client-http",            "label": "SSE / JSON stream (assistant message)",              "kind": "response" },
+        { "from": "sera-gateway",          "to": "sera-db",                "label": "transcript_persist (turn rows)",                     "note": "ContentBlock transcript stored for session replay.", "kind": "persist" }
+      ]
+    },
+
+    {
+      "id": "chat-cancel",
+      "name": "Cancel turn",
+      "summary": "Operator or client cancels an in-flight turn. Gateway flips the session's cancel flag; the active runtime aborts the turn and lane returns to idle.",
+      "status": "active",
+      "tags": ["http", "control"],
+      "steps": [
+        { "from": "client-http",           "to": "sera-gateway",           "label": "POST /api/chat/cancel {session_id}",                 "kind": "request" },
+        { "from": "sera-gateway",          "to": "gateway-session-store",  "label": "cancel_http_chat_session",                            "note": "AppState marks the matching turn cancellable; lane becomes idle once aborted.", "kind": "internal" },
+        { "from": "gateway-session-store", "to": "runtime-harness",        "label": "send cancel signal",                                  "kind": "internal" },
+        { "from": "runtime-harness",       "to": "runtime-turn",           "label": "abort current turn",                                  "kind": "internal" },
+        { "from": "sera-gateway",          "to": "client-http",            "label": "200 OK",                                              "kind": "response" }
+      ]
+    },
+
+    {
+      "id": "hitl-approval",
+      "name": "HITL approval round-trip",
+      "summary": "Runtime hits a tool that requires human approval. tool_hooks pauses, sera-hitl persists a request, operator approves via /api/hitl/requests/{id}/approve, runtime resumes the tool call.",
+      "status": "active",
+      "tags": ["safety", "human-in-the-loop"],
+      "steps": [
+        { "from": "runtime-turn",          "to": "runtime-tool-hooks",     "label": "tool_call(name, args)",                              "kind": "internal" },
+        { "from": "runtime-tool-hooks",    "to": "sera-hooks",             "label": "before_tool_call chain",                              "kind": "internal" },
+        { "from": "sera-hooks",            "to": "sera-hitl",              "label": "enqueue ApprovalRequest",                             "note": "Includes tool name, args summary, risk class.", "kind": "internal" },
+        { "from": "sera-hitl",             "to": "sera-db",                "label": "persist hitl_request row",                            "kind": "persist" },
+        { "from": "client-http",           "to": "sera-gateway",           "label": "GET /api/hitl/requests",                              "kind": "request" },
+        { "from": "sera-gateway",          "to": "gateway-hitl-route",     "label": "list pending approvals",                              "kind": "internal" },
+        { "from": "gateway-hitl-route",    "to": "sera-hitl",              "label": "query store",                                         "kind": "internal" },
+        { "from": "client-http",           "to": "sera-gateway",           "label": "POST /api/hitl/requests/{id}/approve",                "kind": "request" },
+        { "from": "sera-gateway",          "to": "sera-hitl",              "label": "mark approved + notify waiter",                       "kind": "internal" },
+        { "from": "sera-hitl",             "to": "runtime-tool-hooks",     "label": "resume tool call",                                    "kind": "async" },
+        { "from": "runtime-tool-hooks",    "to": "ext-docker",             "label": "execute sandboxed tool",                              "note": "Sandbox + SSRF guards from sera-tools; egress via ext-squid.", "kind": "external" },
+        { "from": "runtime-tool-hooks",    "to": "runtime-turn",           "label": "tool_result block",                                   "kind": "response" }
+      ]
+    },
+
+    {
+      "id": "workflow-run",
+      "name": "Workflow task run",
+      "summary": "Client schedules a workflow task. sera-workflow persists it, scheduler activates at cron time, sera-runtime executes one or more turns, results land back in the workflow store.",
+      "status": "active",
+      "tags": ["workflow", "scheduler"],
+      "steps": [
+        { "from": "client-http",     "to": "sera-gateway",   "label": "POST /api/workflow/tasks {kind, payload, cron?}", "kind": "request" },
+        { "from": "sera-gateway",    "to": "sera-workflow",  "label": "enqueue task",                                     "kind": "internal" },
+        { "from": "sera-workflow",   "to": "sera-db",        "label": "persist workflow_tasks row",                       "kind": "persist" },
+        { "from": "sera-workflow",   "to": "sera-runtime",   "label": "schedule activation (cron or immediate)",          "kind": "async" },
+        { "from": "sera-runtime",    "to": "runtime-turn",   "label": "drive turn with workflow payload",                  "kind": "internal" },
+        { "from": "runtime-turn",    "to": "sera-workflow",  "label": "report result",                                    "kind": "response" },
+        { "from": "sera-workflow",   "to": "sera-db",        "label": "update task status / output",                      "kind": "persist" },
+        { "from": "client-http",     "to": "sera-gateway",   "label": "GET /api/workflow/tasks/{id}",                     "kind": "request" }
+      ]
+    },
+
+    {
+      "id": "byoh-dispatch",
+      "name": "BYOH agent dispatch (production path)",
+      "summary": "Bring Your Own Harness: gateway detects BYOH agent in the chat request and routes the turn to sera-byoh-agent over Stdio instead of the default runtime. Lands via sera-plcv PR #1252 (probe) and #1254 (interceptor).",
+      "status": "active",
+      "tags": ["byoh", "dispatch", "hermes"],
+      "steps": [
+        { "from": "client-http",      "to": "sera-gateway",   "label": "POST /api/chat {agent: \"byoh-...\"}",          "kind": "request" },
+        { "from": "sera-gateway",     "to": "gateway-byoh",   "label": "classify BYOH agent (Pattern A dispatch)",      "kind": "internal" },
+        { "from": "gateway-byoh",     "to": "sera-byoh-agent","label": "spawn / select BYOH runtime over Stdio",        "note": "byoh_catalog tracks registered BYOH runtimes; Stdio transport reused.", "kind": "internal" },
+        { "from": "sera-byoh-agent",  "to": "runtime-llm-client", "label": "drive turn — same provider plumbing",       "kind": "internal" },
+        { "from": "runtime-llm-client","to": "ext-llm-providers", "label": "chat completion",                            "kind": "external" },
+        { "from": "sera-byoh-agent",  "to": "sera-gateway",   "label": "NDJSON deltas",                                  "kind": "response" },
+        { "from": "sera-gateway",     "to": "client-http",    "label": "SSE deltas",                                     "kind": "response" }
+      ]
+    },
+
+    {
+      "id": "agui-stream",
+      "name": "AG-UI event stream",
+      "summary": "Front-end / client opens an AG-UI SSE stream; sera-agui forwards the 17-event protocol from runtime emissions and client-side emits.",
+      "status": "active",
+      "tags": ["interop", "sse"],
+      "steps": [
+        { "from": "client-http",   "to": "sera-gateway",  "label": "GET /api/agui/stream (SSE)",                "kind": "request" },
+        { "from": "sera-gateway",  "to": "sera-agui",     "label": "subscribe to event channel",                "kind": "internal" },
+        { "from": "sera-runtime",  "to": "sera-agui",     "label": "emit AG-UI events (17 types)",              "note": "Run lifecycle, text deltas, tool calls, state, errors.", "kind": "async" },
+        { "from": "sera-agui",     "to": "sera-gateway",  "label": "forward events to subscriber",              "kind": "internal" },
+        { "from": "sera-gateway",  "to": "client-http",   "label": "SSE event frames",                          "kind": "response" },
+        { "from": "client-http",   "to": "sera-gateway",  "label": "POST /api/agui/emit (client-side event)",   "kind": "request" }
+      ]
+    },
+
+    {
+      "id": "plugin-call",
+      "name": "Plugin call (gRPC)",
+      "summary": "Client invokes a registered plugin by id. sera-plugins dispatches via gRPC SDK with a circuit breaker; result returns to the caller. Hot-reload available via /api/plugins/hot-reload.",
+      "status": "active",
+      "tags": ["plugins", "grpc"],
+      "steps": [
+        { "from": "client-http",  "to": "sera-gateway",  "label": "POST /api/plugins/{id}/call {input}",  "kind": "request" },
+        { "from": "sera-gateway", "to": "sera-plugins",  "label": "lookup + dispatch (circuit breaker)",  "kind": "internal" },
+        { "from": "sera-plugins", "to": "ext-docker",    "label": "gRPC out to plugin container",         "note": "Plugin processes typically run as side-car containers; SDK lives in sera-plugins.", "kind": "external" },
+        { "from": "ext-docker",   "to": "sera-plugins",  "label": "gRPC response",                         "kind": "response" },
+        { "from": "sera-plugins", "to": "sera-gateway",  "label": "wrap into HTTP response",              "kind": "internal" },
+        { "from": "sera-gateway", "to": "client-http",   "label": "200 {output}",                          "kind": "response" }
+      ]
+    },
+
+    {
+      "id": "evolution-apply",
+      "name": "Evolution proposal apply",
+      "summary": "Self-evolution: shadow sessions in sera-meta surface candidate rule changes. Operator approves a proposal, supplies an operator key, then applies — sera-meta persists and hot-applies the policy to running runtimes.",
+      "status": "active",
+      "tags": ["meta", "policy", "self-evolution"],
+      "steps": [
+        { "from": "sera-runtime", "to": "sera-meta",    "label": "shadow session proposes rule",                                   "kind": "async" },
+        { "from": "sera-meta",    "to": "sera-gateway", "label": "expose via POST /api/evolution/proposals",                       "kind": "internal" },
+        { "from": "client-http",  "to": "sera-gateway", "label": "POST /api/evolution/proposals/{id}/approve",                     "kind": "request" },
+        { "from": "sera-gateway", "to": "sera-meta",    "label": "record approval, await operator key",                            "kind": "internal" },
+        { "from": "client-http",  "to": "sera-gateway", "label": "POST /api/evolution/proposals/{id}/operator-key",                "kind": "request" },
+        { "from": "client-http",  "to": "sera-gateway", "label": "POST /api/evolution/proposals/{id}/apply",                       "kind": "request" },
+        { "from": "sera-gateway", "to": "sera-meta",    "label": "validate + apply",                                                "kind": "internal" },
+        { "from": "sera-meta",    "to": "sera-db",      "label": "persist new policy / rule version",                              "kind": "persist" },
+        { "from": "sera-meta",    "to": "sera-runtime", "label": "hot-apply rules to running runtimes",                            "kind": "async" }
+      ]
+    },
+
+    {
+      "id": "mail-to-workflow",
+      "name": "Mail-to-workflow",
+      "summary": "Inbound mail server posts MIME to /api/mail/inbound. sera-mail normalises it and hands off to sera-workflow, which triggers an agent turn carrying the email payload.",
+      "status": "active",
+      "tags": ["ingress", "workflow"],
+      "steps": [
+        { "from": "mail-server",  "to": "sera-gateway",  "label": "POST /api/mail/inbound (MIME)",                "kind": "request" },
+        { "from": "sera-gateway", "to": "sera-mail",     "label": "parse + normalise",                            "kind": "internal" },
+        { "from": "sera-mail",    "to": "sera-workflow", "label": "POST /api/workflow/mail/deliver (internal)",   "kind": "internal" },
+        { "from": "sera-workflow","to": "sera-runtime",  "label": "trigger agent turn (email payload)",           "kind": "async" },
+        { "from": "sera-runtime", "to": "sera-mail",     "label": "outbound reply if needed",                     "kind": "response" }
+      ]
+    },
+
+    {
+      "id": "openai-compat",
+      "name": "OpenAI / Anthropic-compat passthrough",
+      "summary": "Existing OpenAI- or Anthropic-shaped clients can talk to SERA without code changes. /v1/chat/completions and /v1/messages translate to the internal runtime path and shape the response back.",
+      "status": "active",
+      "tags": ["compat", "http"],
+      "steps": [
+        { "from": "client-http",            "to": "sera-gateway",          "label": "POST /v1/chat/completions  or  /v1/messages",       "kind": "request" },
+        { "from": "sera-gateway",           "to": "gateway-auth",          "label": "verify API key / JWT",                              "kind": "internal" },
+        { "from": "sera-gateway",           "to": "gateway-openai-compat", "label": "translate to internal turn",                        "kind": "internal" },
+        { "from": "gateway-openai-compat",  "to": "runtime-llm-client",    "label": "drive turn or proxy",                               "note": "openai_compat.rs vs llm_proxy.rs split: the former drives an agent turn; the latter is a pure provider passthrough.", "kind": "internal" },
+        { "from": "runtime-llm-client",     "to": "ext-llm-providers",     "label": "chat completion",                                    "kind": "external" },
+        { "from": "sera-gateway",           "to": "client-http",           "label": "OpenAI- / Anthropic-shaped response",               "kind": "response" }
+      ]
+    },
+
+    {
+      "id": "a2a-peer",
+      "name": "A2A peer exchange",
+      "summary": "A remote A2A-compliant agent hands an envelope to SERA via /api/a2a/accept; sera-a2a validates and routes to the addressed local agent. Reverse direction posts to peers via /api/a2a/send.",
+      "status": "active",
+      "tags": ["interop", "peer"],
+      "steps": [
+        { "from": "external-a2a", "to": "sera-gateway",  "label": "POST /api/a2a/accept (envelope)",   "kind": "request" },
+        { "from": "sera-gateway", "to": "sera-a2a",      "label": "validate envelope + auth",          "kind": "internal" },
+        { "from": "sera-a2a",     "to": "sera-db",       "label": "persist peer message",              "kind": "persist" },
+        { "from": "sera-a2a",     "to": "sera-runtime",  "label": "deliver to target agent's turn",    "kind": "async" },
+        { "from": "sera-runtime", "to": "sera-a2a",      "label": "outbound envelope to peer",         "kind": "async" },
+        { "from": "sera-a2a",     "to": "sera-gateway",  "label": "POST /api/a2a/send to peer",        "kind": "internal" },
+        { "from": "sera-gateway", "to": "external-a2a",  "label": "deliver envelope",                  "kind": "external" }
+      ]
+    },
+
+    {
+      "id": "skill-exec",
+      "name": "Skill execution",
+      "summary": "Runtime resolves a SkillRef (semver), loads its steps from sera-skills, and runs them through tool_hooks. Bash-style steps go through the sandbox.",
+      "status": "active",
+      "tags": ["skills"],
+      "steps": [
+        { "from": "runtime-turn",         "to": "runtime-skill-dispatch", "label": "resolve SkillRef@semver",            "kind": "internal" },
+        { "from": "runtime-skill-dispatch","to": "sera-skills",           "label": "load skill pack (filesystem)",       "kind": "internal" },
+        { "from": "runtime-skill-dispatch","to": "runtime-tool-hooks",    "label": "run steps as tool chain",            "kind": "internal" },
+        { "from": "runtime-tool-hooks",   "to": "sera-tools",             "label": "BashAstChecker / SsrfValidator",     "note": "Security primitives mandatory before sandbox dispatch.", "kind": "internal" },
+        { "from": "runtime-tool-hooks",   "to": "ext-docker",             "label": "sandboxed execution",                "kind": "external" },
+        { "from": "runtime-skill-dispatch","to": "runtime-turn",          "label": "skill output block",                 "kind": "response" }
+      ]
+    },
+
+    {
+      "id": "memory-write",
+      "name": "Memory write (episodic + semantic)",
+      "summary": "End of turn, context_engine decides what to persist. Local default is SQLite FTS5 via sera-memory. Enterprise/plugin paths route through sera-memory-hindsight (hindsight Docker, or pgvector on PG).",
+      "status": "active",
+      "tags": ["memory", "pluggable"],
+      "steps": [
+        { "from": "runtime-turn",            "to": "runtime-context-engine", "label": "summarise + decide memory write",       "kind": "internal" },
+        { "from": "runtime-context-engine",  "to": "sera-memory",            "label": "write episodic entry",                    "kind": "internal" },
+        { "from": "sera-memory",             "to": "sera-db",                "label": "default: SQLite FTS5",                    "note": "Local-first basic tier.", "kind": "persist" },
+        { "from": "sera-memory",             "to": "sera-memory-hindsight",  "label": "plugin backend (optional)",               "kind": "async" },
+        { "from": "sera-memory-hindsight",   "to": "ext-hindsight",          "label": "HTTP write to hindsight container",       "kind": "external" },
+        { "from": "sera-memory-hindsight",   "to": "ext-postgres",           "label": "pgvector store (enterprise tier)",        "note": "Postgres + pgvector are an enterprise upgrade, not a local hard prereq.", "kind": "external" }
+      ]
+    },
+
+    {
+      "id": "kill-switch-arm",
+      "name": "Kill switch arm (admin)",
+      "summary": "Operator arms the global kill switch. Gateway pauses all session lanes and instructs runtimes to kill their current turns for rollback. Status visible via /admin/killswitch/status.",
+      "status": "active",
+      "tags": ["safety", "admin"],
+      "steps": [
+        { "from": "client-http",         "to": "sera-gateway",          "label": "POST /admin/killswitch/arm {reason}",  "kind": "request" },
+        { "from": "sera-gateway",        "to": "gateway-kill-switch",   "label": "arm + record reason",                  "kind": "internal" },
+        { "from": "gateway-kill-switch", "to": "gateway-session-store", "label": "pause all lanes",                      "kind": "internal" },
+        { "from": "gateway-kill-switch", "to": "runtime-harness",       "label": "kill_for_rollback on all harnesses",   "kind": "internal" },
+        { "from": "client-http",         "to": "sera-gateway",          "label": "GET /admin/killswitch/status",         "kind": "request" }
+      ]
+    },
+
+    {
+      "id": "discord-turn",
+      "name": "Discord-driven chat turn",
+      "summary": "A Discord user posts in a channel; gateway-discord maps channel → session and drives a turn just like the HTTP chat path. Reply is posted back to the channel.",
+      "status": "active",
+      "tags": ["discord", "ingress"],
+      "steps": [
+        { "from": "discord-user",          "to": "ext-discord",            "label": "user message in channel",             "kind": "external" },
+        { "from": "ext-discord",           "to": "gateway-discord",        "label": "gateway connector receives message",  "kind": "internal" },
+        { "from": "gateway-discord",       "to": "gateway-session-store",  "label": "resolve session by channel id",       "kind": "internal" },
+        { "from": "gateway-discord",       "to": "runtime-harness",        "label": "send_turn",                             "kind": "internal" },
+        { "from": "runtime-harness",       "to": "runtime-turn",           "label": "drive reasoning loop",                  "kind": "internal" },
+        { "from": "runtime-turn",          "to": "runtime-llm-client",     "label": "completion request",                    "kind": "request" },
+        { "from": "runtime-llm-client",    "to": "ext-llm-providers",      "label": "completion",                            "kind": "external" },
+        { "from": "gateway-discord",       "to": "ext-discord",            "label": "post reply to channel",                 "kind": "external" }
+      ]
+    },
+
+    {
+      "id": "mcp-tool",
+      "name": "MCP tool call",
+      "summary": "An external MCP-compliant client connects to sera-mcp and invokes a SERA-exposed tool. sera-mcp bridges to runtime tool_hooks; tool result is mapped back to MCP.",
+      "status": "active",
+      "tags": ["interop", "mcp"],
+      "steps": [
+        { "from": "external-mcp",      "to": "sera-mcp",           "label": "MCP connection + invoke(tool, args)", "kind": "request" },
+        { "from": "sera-mcp",          "to": "runtime-tool-hooks", "label": "translate to tool_hooks call",        "kind": "internal" },
+        { "from": "runtime-tool-hooks","to": "sera-tools",         "label": "policy + sandbox checks",              "kind": "internal" },
+        { "from": "runtime-tool-hooks","to": "ext-docker",         "label": "sandboxed execution",                  "kind": "external" },
+        { "from": "runtime-tool-hooks","to": "sera-mcp",           "label": "tool result",                          "kind": "response" },
+        { "from": "sera-mcp",          "to": "external-mcp",       "label": "MCP response",                         "kind": "response" }
+      ]
+    },
+
+    {
+      "id": "invite-user",
+      "name": "Invite new user (speculative)",
+      "summary": "There is no concrete invite endpoint in the active Rust gateway today — production auth uses API-key bootstrap + JWT / OIDC. This flow is a sketch of what a SERA-native invite would touch, marked speculative so it doesn't get mistaken for shipped behaviour.",
+      "status": "speculative",
+      "tags": ["auth", "planned"],
+      "steps": [
+        { "from": "client-http",  "to": "sera-gateway", "label": "POST /api/auth/invite {email, role}   (planned)", "kind": "request" },
+        { "from": "sera-gateway", "to": "gateway-auth", "label": "mint invite token",                                "kind": "internal" },
+        { "from": "gateway-auth", "to": "sera-db",      "label": "persist invite row",                               "kind": "persist" },
+        { "from": "sera-gateway", "to": "sera-mail",    "label": "send invite email",                                "kind": "internal" },
+        { "from": "sera-mail",    "to": "mail-server",  "label": "outbound SMTP",                                    "kind": "external" },
+        { "from": "client-http",  "to": "sera-gateway", "label": "POST /api/auth/accept {token, password}  (planned)", "kind": "request" },
+        { "from": "sera-gateway", "to": "gateway-auth", "label": "mint API key + create user record",                "kind": "internal" },
+        { "from": "gateway-auth", "to": "sera-db",      "label": "persist user + key",                               "kind": "persist" }
+      ]
+    },
+
+    {
+      "id": "local-bringup",
+      "name": "Local dev bring-up (sera-local)",
+      "summary": "Ops flow, included for orientation. scripts/sera-local up brings up the docker compose stack: gateway on :3001 (bridge networking), SQLite as default backend, optional Centrifugo / hindsight off by default.",
+      "status": "active",
+      "tags": ["ops", "local-first"],
+      "steps": [
+        { "from": "client-http",  "to": "ext-docker",   "label": "scripts/sera-local up  →  docker compose up", "note": "WSL2: never use network_mode: host; publish on both 0.0.0.0 and [::] for Windows 11.", "kind": "external" },
+        { "from": "ext-docker",   "to": "sera-gateway", "label": "container starts on :3001 (bridge)",          "kind": "internal" },
+        { "from": "sera-gateway", "to": "ext-sqlite",   "label": "rusqlite migrations on first run",            "kind": "persist" },
+        { "from": "client-http",  "to": "sera-gateway", "label": "GET /api/health/ready  (verify)",             "kind": "request" }
+      ]
+    }
+  ]
+}

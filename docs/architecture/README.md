@@ -29,9 +29,10 @@ Or open `workflow-map.html` directly and use the **Load JSON…** button to pick
 ### Status conventions
 
 - **active** — handler present in the active Rust gateway/runtime.
-- **partial** — module exists but is a scaffold (e.g. `sera-cache`, `sera-secrets`, `sera-eval`) or is one of two parallel implementations (e.g. hindsight backend).
+- **partial** — module exists but is a scaffold (e.g. `sera-cache`, `sera-secrets`, `sera-eval`), is library-only with no HTTP surface wired yet (e.g. `gateway-signals` push, `gateway-byoh-register`), or is one of two parallel implementations (e.g. hindsight backend).
 - **speculative** — flow is not implemented (e.g. *invite new user*). Kept in the JSON so the diagram doesn't pretend it ships, and so the gap is obvious.
 - **legacy** — lives under `legacy/`. Reference only.
+- **unknown** — explicitly absent today and not confirmed planned. Listed so the absence is visible (e.g. the desktop-packager slot — no ToDesktop/electron/tauri was found in the tree as of 2026-05-13). Distinct from `speculative`: speculative is "we expect this shape if it ships"; unknown is "we don't know what would fit here, and don't want to fabricate."
 
 ### JSON schema (informal)
 

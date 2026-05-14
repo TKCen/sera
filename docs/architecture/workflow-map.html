@@ -18,6 +18,7 @@
     --speculative: #f5a623;
     --legacy: #6b6b6b;
     --partial: #b18bff;
+    --unknown: #4a5060;
     --kind-request: #4ea7ff;
     --kind-response: #2ecc71;
     --kind-internal: #b18bff;
@@ -75,6 +76,7 @@
   .flow-item .tag.status-speculative { background: rgba(245,166,35,0.15); color: var(--speculative); }
   .flow-item .tag.status-legacy { background: rgba(107,107,107,0.2); color: #aaa; }
   .flow-item .tag.status-partial { background: rgba(177,139,255,0.15); color: var(--partial); }
+  .flow-item .tag.status-unknown { background: rgba(74,80,96,0.25); color: #9aa1b3; }
   .flow-item:hover { background: var(--panel-2); border-color: var(--border); }
   .flow-item.active { background: var(--panel-2); border-color: var(--accent); color: #fff; }
   .flow-item .summary { display: block; color: var(--text-dim); font-size: 11px; margin-top: 2px; }
@@ -121,6 +123,8 @@
   .node.status-legacy rect { fill: #14151a; }
   .node.status-legacy text.title { fill: #7a7f8b; font-style: italic; }
   .node.status-partial rect { stroke: var(--partial); stroke-dasharray: 4 3; }
+  .node.status-unknown rect { fill: #14151a; stroke: var(--unknown); stroke-dasharray: 2 4; }
+  .node.status-unknown text.title { fill: #7a7f8b; font-style: italic; }
 
   .edge { fill: none; stroke-width: 1.5; }
   .edge.kind-request  { stroke: var(--kind-request); }
@@ -227,7 +231,7 @@
     <div class="lk"><i style="background:var(--kind-persist)"></i>persist</div>
     <div class="lk"><i style="background:var(--kind-external)"></i>external</div>
     <strong style="margin-top:10px">Component status</strong>
-    <div>Solid = active · Dashed = speculative/partial · Italic grey = legacy</div>
+    <div>Solid = active · Dashed = speculative / partial · Italic grey = legacy · Dotted dim = unknown (explicitly absent)</div>
   </div>
 </aside>
 

@@ -458,12 +458,11 @@ impl LlmClient {
                     .collect::<Vec<_>>()
             });
 
-        // Guard: reject assistant messages that carry neither content nor tool
-        // calls — they would otherwise produce silent empty StreamingDelta /
-        // TurnCompleted events and a gateway 502 (sera-8h23). sera-qts: when
-        // the provider only emitted `reasoning_content`, promote it to
-        // `content` so the turn isn't sanitised into a bogus
-        // `llm_unavailable` failure.
+        // Guard: reject assistant messages that carry neither content nor
+        // tool calls — they would otherwise produce silent empty
+        // StreamingDelta / TurnCompleted events and a gateway 502
+        // (sera-8h23). sera-qts: distinguish reasoning-only from
+        // truly-empty by byte length, without exposing the reasoning body.
         let content_empty = choice
             .message
             .content
@@ -472,17 +471,22 @@ impl LlmClient {
         let tool_calls_empty = tool_calls
             .as_deref()
             .is_none_or(|tc| tc.is_empty());
-        let mut content = choice.message.content;
+        let reasoning_byte_len = choice
+            .message
+            .reasoning_content
+            .as_deref()
+            .map(str::len)
+            .unwrap_or(0);
         if content_empty && tool_calls_empty {
-            match choice.message.reasoning_content {
-                Some(r) if !r.is_empty() => content = Some(r),
-                _ => {
-                    return Err(LlmError::RequestError(
-                        "provider returned assistant message with neither content nor tool_calls"
-                            .to_string(),
-                    ));
-                }
+            if reasoning_byte_len > 0 {
+                return Err(LlmError::RequestError(format!(
+                    "provider emitted reasoning_content ({reasoning_byte_len} bytes) but no assistant content or tool_calls"
+                )));
             }
+            return Err(LlmError::RequestError(
+                "provider returned assistant message with neither content nor tool_calls"
+                    .to_string(),
+            ));
         }
 
         let usage = parsed.usage.unwrap_or_default();
@@ -490,7 +494,7 @@ impl LlmClient {
         Ok(LlmChatResult {
             message: ChatMessage {
                 role: "assistant".to_string(),
-                content,
+                content: choice.message.content,
                 tool_calls,
                 tool_call_id: None,
                 name: None,
@@ -679,12 +683,13 @@ impl LlmClient {
         response: reqwest::Response,
     ) -> Result<LlmChatResult, LlmError> {
         let mut content = String::new();
-        // sera-qts: Qwen/DeepSeek (and LM Studio fronting them) stream
-        // chain-of-thought as `reasoning_content` deltas. Accumulate so a
-        // reasoning-only response can be surfaced instead of misclassified
-        // as `empty_assistant_message` (which the runtime translates to
-        // `[LLM unavailable: …]` → gateway `failure_class=llm_unavailable`).
-        let mut reasoning_content = String::new();
+        // sera-qts: Qwen / DeepSeek (and LM Studio fronting them) stream
+        // chain-of-thought as `reasoning_content` deltas. We deliberately do
+        // NOT keep the body — only its byte length, so a "reasoning emitted
+        // but no assistant reply / tool call" outcome is distinguishable
+        // from a totally-empty stream without ever exposing the model's
+        // hidden reasoning to callers or audit-visible assistant text.
+        let mut reasoning_byte_len: usize = 0;
         let mut tool_calls_map: HashMap<usize, ToolCallAccumulator> = HashMap::new();
         let mut usage = SseUsage::default();
         let mut finish_reason = String::from("stop");
@@ -744,23 +749,25 @@ impl LlmClient {
                         )
                     };
 
-                    // Guard: reject assistant messages that carry neither content
-                    // nor tool calls — they would produce silent empty
-                    // StreamingDelta / TurnCompleted events (sera-8h23).
-                    // sera-qts: when the provider only streamed
-                    // `reasoning_content` (Qwen/DeepSeek behaviour on tight
-                    // budgets), promote it to `content` so the turn carries
-                    // the model's chain-of-thought instead of being sanitised
-                    // into a bogus `llm_unavailable` failure.
+                    // Guard: reject assistant messages that carry neither
+                    // content nor tool calls — they would produce silent
+                    // empty StreamingDelta / TurnCompleted events
+                    // (sera-8h23). sera-qts: distinguish the
+                    // reasoning-only case (Qwen / DeepSeek burned the
+                    // budget thinking) from a truly-empty stream so the
+                    // runtime can sanitise it into the `[Model no-action: …]`
+                    // path instead of a bogus `llm_unavailable` failure.
+                    // Neither branch surfaces the reasoning body.
                     if content.is_empty() && tool_calls.is_none() {
-                        if !reasoning_content.is_empty() {
-                            content = reasoning_content;
-                        } else {
-                            return Err(LlmError::RequestError(
-                                "provider returned assistant message with neither content nor tool_calls"
-                                    .to_string(),
-                            ));
+                        if reasoning_byte_len > 0 {
+                            return Err(LlmError::RequestError(format!(
+                                "provider emitted reasoning_content ({reasoning_byte_len} bytes) but no assistant content or tool_calls"
+                            )));
                         }
+                        return Err(LlmError::RequestError(
+                            "provider returned assistant message with neither content nor tool_calls"
+                                .to_string(),
+                        ));
                     }
 
                     return Ok(LlmChatResult {
@@ -806,9 +813,12 @@ impl LlmClient {
                             if let Some(c) = delta.content {
                                 content.push_str(&c);
                             }
-                            // Reasoning-content delta (sera-qts).
+                            // Reasoning-content delta (sera-qts): count bytes
+                            // for diagnostics, then drop the body — hidden
+                            // chain-of-thought must never reach an assistant
+                            // reply or an audit-visible field.
                             if let Some(r) = delta.reasoning_content {
-                                reasoning_content.push_str(&r);
+                                reasoning_byte_len = reasoning_byte_len.saturating_add(r.len());
                             }
                             // Tool call deltas
                             if let Some(tc_deltas) = delta.tool_calls {
@@ -858,19 +868,21 @@ impl LlmClient {
             )
         };
 
-        // Guard: reject assistant messages that carry neither content nor tool
-        // calls — they would produce silent empty StreamingDelta /
-        // TurnCompleted events (sera-8h23). sera-qts: same reasoning-content
-        // fallback as the `[DONE]` branch above.
+        // Guard: reject assistant messages that carry neither content nor
+        // tool calls — they would produce silent empty StreamingDelta /
+        // TurnCompleted events (sera-8h23). sera-qts: mirror the [DONE]
+        // branch's reasoning-only distinction without surfacing any
+        // reasoning body.
         if content.is_empty() && tool_calls.is_none() {
-            if !reasoning_content.is_empty() {
-                content = reasoning_content;
-            } else {
-                return Err(LlmError::RequestError(
-                    "provider returned assistant message with neither content nor tool_calls"
-                        .to_string(),
-                ));
+            if reasoning_byte_len > 0 {
+                return Err(LlmError::RequestError(format!(
+                    "provider emitted reasoning_content ({reasoning_byte_len} bytes) but no assistant content or tool_calls"
+                )));
             }
+            return Err(LlmError::RequestError(
+                "provider returned assistant message with neither content nor tool_calls"
+                    .to_string(),
+            ));
         }
 
         Ok(LlmChatResult {
@@ -2164,16 +2176,22 @@ mod tests {
     // =========================================================================
     // sera-qts — LM Studio / Qwen streaming tool-call boundary
     //
-    // The live operator-workcell smoke against LM Studio + Qwen3.6 was failing
-    // with `failure_class=llm_unavailable`, traced back to two streaming wire
-    // cases the parser had to keep distinct:
-    //   1. Empty assistant content + valid streaming tool_calls (handoff path)
-    //      — must NOT error; the call must come through as a real tool call.
+    // The live operator-workcell smoke against LM Studio + Qwen3 was failing
+    // with `failure_class=llm_unavailable`. Two streaming wire cases must
+    // stay distinct here:
+    //   1. Empty assistant content + valid streaming `tool_calls` (handoff
+    //      path) — must NOT error.
     //   2. Empty content + no tool_calls but non-empty `reasoning_content`
-    //      (Qwen burns its budget thinking) — must NOT error as a sanitized
-    //      "empty assistant message"; the reasoning is promoted to content so
-    //      the runtime sees a real message and the gateway does not classify
-    //      the turn as `llm_unavailable`.
+    //      (Qwen burns its budget thinking) — must error with a *distinct*
+    //      message that downstream layers translate into the
+    //      `[Model no-action: …]` sanitised reply (handled in turn.rs) and
+    //      the `failure_class=model_no_act` operator-task closeout (handled
+    //      in sera-gateway). The reasoning body itself must NEVER reach a
+    //      caller-visible field — only its byte length surfaces, and only
+    //      for diagnostics.
+    //   3. Truly empty (no content, no tool_calls, no reasoning) — the
+    //      existing sera-8h23 "neither content nor tool_calls" guard still
+    //      trips.
     // =========================================================================
 
     fn sse_stream_response_to_chat_result(sse_body: &str) -> Result<LlmChatResult, LlmError> {
@@ -2202,6 +2220,24 @@ mod tests {
             let client = LlmClient::with_params(&server.uri(), "qwen-test", None, 5_000);
             client.chat(&[], &[]).await
         })
+    }
+
+    /// Reusable assertion: the reasoning-only error must carry a byte-count
+    /// breadcrumb but must NEVER contain the reasoning body itself.
+    fn assert_reasoning_only_error_does_not_leak_body(err: &LlmError, leaked_body: &str) {
+        match err {
+            LlmError::RequestError(msg) => {
+                assert!(
+                    msg.contains("provider emitted reasoning_content"),
+                    "expected reasoning-only error message, got: {msg}",
+                );
+                assert!(
+                    !msg.contains(leaked_body),
+                    "reasoning body leaked into error message: {msg}",
+                );
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
     }
 
     #[test]
@@ -2241,39 +2277,37 @@ mod tests {
     }
 
     #[test]
-    fn sera_qts_streaming_only_reasoning_content_is_promoted_to_content() {
+    fn sera_qts_streaming_only_reasoning_content_errors_as_no_action_without_leaking_body() {
         // Qwen3 over LM Studio sometimes consumes its whole budget in
         // `reasoning_content` and emits no `content`/`tool_calls` deltas.
-        // Before sera-qts the parser dropped the reasoning silently and
-        // returned a "neither content nor tool_calls" error, which the
-        // runtime sanitised into `[LLM unavailable: …]` and the gateway
-        // classified as `llm_unavailable`. The chunks below must instead
-        // surface the reasoning text as the assistant's content.
-        let sse_body = concat!(
-            "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"The user\"},\"finish_reason\":null}]}\n\n",
-            "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\" wants \"},\"finish_reason\":null}]}\n\n",
-            "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"a handoff.\"},\"finish_reason\":null}]}\n\n",
-            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
-            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":300,\"completion_tokens\":150,\"completion_tokens_details\":{\"reasoning_tokens\":150}}}\n\n",
-            "data: [DONE]\n\n",
+        // The parser must produce a *distinct* error from the truly-empty
+        // case so the runtime/gateway can sanitise to `[Model no-action: …]`
+        // / `failure_class=model_no_act` — without ever surfacing the
+        // reasoning body itself.
+        let leaked = "secret-internal-chain-of-thought-that-must-not-leak";
+        let sse_body = format!(
+            concat!(
+                "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"role\":\"assistant\",\"reasoning_content\":\"{leaked}\"}},\"finish_reason\":null}}]}}\n\n",
+                "data: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"length\"}}]}}\n\n",
+                "data: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":300,\"completion_tokens\":150,\"completion_tokens_details\":{{\"reasoning_tokens\":150}}}}}}\n\n",
+                "data: [DONE]\n\n",
+            ),
+            leaked = leaked,
         );
 
-        let result = sse_stream_response_to_chat_result(sse_body)
-            .expect("reasoning-only stream must not be classified as empty");
-        assert_eq!(result.finish_reason, "length");
-        assert_eq!(
-            result.message.content.as_deref(),
-            Some("The user wants a handoff."),
-            "reasoning_content must be promoted to content when the response is otherwise empty",
-        );
-        assert!(result.message.tool_calls.is_none());
+        let err = match sse_stream_response_to_chat_result(&sse_body) {
+            Ok(_) => panic!("reasoning-only stream must not return Ok"),
+            Err(e) => e,
+        };
+        assert_reasoning_only_error_does_not_leak_body(&err, leaked);
     }
 
     #[test]
     fn sera_qts_streaming_truly_empty_still_errors() {
         // Sanity: if there is no content, no tool_calls, and no
-        // reasoning_content, the empty-message guard (sera-8h23) still trips.
-        // Without this, the runtime would emit a silent empty TurnCompleted.
+        // reasoning_content, the empty-message guard (sera-8h23) still
+        // trips with its original message — distinct from the
+        // reasoning-only error above.
         let sse_body = concat!(
             "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n",
             "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
@@ -2285,20 +2319,26 @@ mod tests {
                     msg.contains("neither content nor tool_calls"),
                     "unexpected error message: {msg}",
                 );
+                assert!(
+                    !msg.contains("reasoning_content"),
+                    "truly-empty stream must not look like reasoning-only: {msg}",
+                );
             }
             Err(other) => panic!("unexpected error variant: {other:?}"),
             Ok(_) => panic!("truly-empty stream must still error"),
         }
     }
 
-    // sera-qts: mirror the streaming fallback for the non-streaming path.
+    // sera-qts: mirror the streaming distinction for the non-streaming path.
     // Same Qwen-style "only reasoning_content survived" wire shape, but at
-    // the message level — guard must not classify it as empty.
+    // the message level — guard must produce the reasoning-only error
+    // without ever exposing the reasoning body.
     #[tokio::test]
-    async fn sera_qts_non_streaming_only_reasoning_content_is_promoted_to_content() {
+    async fn sera_qts_non_streaming_only_reasoning_content_errors_as_no_action_without_leaking_body() {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
+        let leaked = "private-cot-content-must-not-leak";
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -2307,7 +2347,7 @@ mod tests {
                     "message": {
                         "role": "assistant",
                         "content": null,
-                        "reasoning_content": "I reasoned but never replied.",
+                        "reasoning_content": leaked,
                         "tool_calls": null
                     },
                     "finish_reason": "length"
@@ -2318,15 +2358,10 @@ mod tests {
             .await;
 
         let client = LlmClient::with_params(&server.uri(), "qwen-test", None, 5_000);
-        let result = client
-            .chat_non_streaming(&[], &[])
-            .await
-            .expect("reasoning-only response must not be classified as empty");
-        assert_eq!(
-            result.message.content.as_deref(),
-            Some("I reasoned but never replied."),
-        );
-        assert!(result.message.tool_calls.is_none());
-        assert_eq!(result.finish_reason, "length");
+        let err = match client.chat_non_streaming(&[], &[]).await {
+            Ok(_) => panic!("non-streaming reasoning-only must not return Ok"),
+            Err(e) => e,
+        };
+        assert_reasoning_only_error_does_not_leak_body(&err, leaked);
     }
 }

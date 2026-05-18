@@ -29,8 +29,17 @@ pub struct TaskOutput {
 }
 
 /// A chat message in the conversation.
+///
+/// Wire format is the OpenAI chat-completion spec: snake_case keys
+/// (`tool_calls`, `tool_call_id`). The struct field names already match,
+/// so there is no `rename_all` here — adding one would silently rewrite
+/// the keys (`tool_call_id` → `toolCallId`), which LM Studio's
+/// llama-server backend rejects with:
+/// "Engine protocol tools capability gap for 'llama-server':
+///  OpenAI-compatible tool result messages require a tool call id."
+/// (sera-qts, traced from live operator-task smoke against PR #1264
+/// head 87a87981).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
     pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]

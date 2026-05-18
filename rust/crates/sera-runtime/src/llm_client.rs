@@ -788,6 +788,29 @@ impl LlmClient {
                     });
                 }
 
+                // sera-qts: providers (notably LM Studio fronting
+                // llama-server) sometimes return a 200 OK with an SSE
+                // `event: error` followed by `data: {"error":{...}}` and
+                // no chunks. The original parser skipped `event:` lines
+                // and the chunk parsed cleanly as an empty `SseChunk`,
+                // so we silently fell through to the end-of-stream
+                // empty-message guard — the smoke surfaced this as a
+                // bogus `llm_unavailable`. Detect the error envelope
+                // before the structural parse and surface it.
+                if let Ok(raw) = serde_json::from_str::<serde_json::Value>(data)
+                    && let Some(err_obj) = raw.get("error")
+                {
+                    let message = err_obj
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| err_obj.as_str())
+                        .unwrap_or("provider returned SSE error event");
+                    return Err(LlmError::RequestError(format!(
+                        "provider SSE error event: {}",
+                        truncate_error(message)
+                    )));
+                }
+
                 // Parse the JSON chunk
                 let chunk: SseChunk = match serde_json::from_str(data) {
                     Ok(c) => c,
@@ -816,7 +839,10 @@ impl LlmClient {
                             // Reasoning-content delta (sera-qts): count bytes
                             // for diagnostics, then drop the body — hidden
                             // chain-of-thought must never reach an assistant
-                            // reply or an audit-visible field.
+                            // reply or an audit-visible field. The byte count
+                            // is also what separates "reasoning-only" from
+                            // "truly empty" in the empty-message guards
+                            // below.
                             if let Some(r) = delta.reasoning_content {
                                 reasoning_byte_len = reasoning_byte_len.saturating_add(r.len());
                             }
@@ -1039,11 +1065,25 @@ impl LlmProvider for LlmClient {
             })
             .collect();
 
+        // sera-qts: the assistant `response` value is the message the
+        // runtime turn loop pushes onto its conversation history before
+        // the matching `tool` result messages. The OpenAI spec requires
+        // the assistant turn carrying `tool_calls` to be present in the
+        // history so each `tool` message can be paired against the call
+        // it answers — LM Studio's llama-server backend rejects the
+        // unpaired form outright. Previously this value carried only
+        // `role` + `content`, so the tool_calls were silently dropped on
+        // re-entry.
+        let mut response = serde_json::json!({
+            "role": "assistant",
+            "content": result.message.content,
+        });
+        if !tool_calls.is_empty() {
+            response["tool_calls"] = serde_json::Value::Array(tool_calls.clone());
+        }
+
         Ok(ThinkResult {
-            response: serde_json::json!({
-                "role": "assistant",
-                "content": result.message.content,
-            }),
+            response,
             tool_calls,
             tokens: TokenUsage {
                 prompt_tokens: result.prompt_tokens,
@@ -2326,6 +2366,154 @@ mod tests {
             }
             Err(other) => panic!("unexpected error variant: {other:?}"),
             Ok(_) => panic!("truly-empty stream must still error"),
+        }
+    }
+
+    /// sera-qts: the OpenAI wire format requires `tool_call_id` / `tool_calls`
+    /// (snake_case). LM Studio's llama-server backend rejects camelCased
+    /// variants with "OpenAI-compatible tool result messages require a tool
+    /// call id". The runtime round-trips messages through `ChatMessage`, so
+    /// the struct's serialization must keep the spec keys.
+    #[test]
+    fn sera_qts_chat_message_serializes_with_snake_case_openai_keys() {
+        let msg = ChatMessage {
+            role: "tool".to_string(),
+            content: Some("result body".to_string()),
+            tool_calls: None,
+            tool_call_id: Some("call_abc".to_string()),
+            name: None,
+        };
+        let serialized = serde_json::to_value(&msg).unwrap();
+        // Spec keys present.
+        assert_eq!(serialized["role"], "tool");
+        assert_eq!(serialized["tool_call_id"], "call_abc");
+        // Camel-cased shadow keys absent — would otherwise be unknown to
+        // OpenAI / LM Studio and the tool message would orphan.
+        assert!(
+            serialized.get("toolCallId").is_none(),
+            "ChatMessage must not emit camelCased OpenAI fields: {serialized}",
+        );
+
+        let assistant = ChatMessage {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "call_abc".to_string(),
+                call_type: "function".to_string(),
+                function: ToolCallFunction {
+                    name: "fn".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            }]),
+            tool_call_id: None,
+            name: None,
+        };
+        let s = serde_json::to_value(&assistant).unwrap();
+        assert!(s["tool_calls"].is_array());
+        assert!(s.get("toolCalls").is_none());
+    }
+
+    /// sera-qts: round-tripping an OpenAI-shaped JSON message (snake_case)
+    /// through `ChatMessage` must NOT drop `tool_calls` / `tool_call_id` on
+    /// the way back out. That round-trip happens once per LLM call inside
+    /// `LlmProvider::chat_with_behavior`.
+    #[test]
+    fn sera_qts_chat_message_round_trips_openai_snake_case() {
+        let incoming = serde_json::json!({
+            "role": "tool",
+            "content": "ok",
+            "tool_call_id": "call_xyz"
+        });
+        let parsed: ChatMessage = serde_json::from_value(incoming.clone()).unwrap();
+        assert_eq!(parsed.tool_call_id.as_deref(), Some("call_xyz"));
+        let reserialized = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(reserialized, incoming);
+    }
+
+    /// sera-qts: the LLM provider must put the model's `tool_calls` on the
+    /// `ThinkResult.response` value too — that is the JSON the runtime turn
+    /// loop pushes onto its conversation history before the matching
+    /// `tool` result messages. If `response` carries only `role` + `content`,
+    /// the next iteration sends an assistant message with no tool_calls,
+    /// orphaning the tool results and tripping the LM Studio error envelope
+    /// that exposed this whole bug class.
+    #[tokio::test]
+    async fn sera_qts_chat_with_behavior_response_carries_tool_calls_for_history() {
+        use crate::turn::LlmProvider;
+        use sera_types::tool::ToolUseBehavior;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let sse_body = concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call_hist\",\"type\":\"function\",\"function\":{\"name\":\"handoff_to_operator-helper\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4}}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .insert_header("cache-control", "no-cache")
+                    .set_body_string(sse_body.to_string()),
+            )
+            .mount(&server)
+            .await;
+        let client = LlmClient::with_params(&server.uri(), "qwen-test", None, 5_000);
+
+        let think = client
+            .chat_with_behavior(&[], &[], &ToolUseBehavior::Auto)
+            .await
+            .expect("provider must return Ok for streaming tool_calls");
+
+        let response_tcs = think
+            .response
+            .get("tool_calls")
+            .and_then(|v| v.as_array())
+            .expect("`response.tool_calls` must be present so the turn loop can push it onto history");
+        assert_eq!(response_tcs.len(), 1);
+        assert_eq!(response_tcs[0]["id"], "call_hist");
+        assert_eq!(response_tcs[0]["function"]["name"], "handoff_to_operator-helper");
+        // And the parallel ThinkResult.tool_calls field is still populated
+        // for the act-step dispatch path.
+        assert_eq!(think.tool_calls.len(), 1);
+        assert_eq!(think.tool_calls[0]["id"], "call_hist");
+    }
+
+    /// sera-qts: live LM Studio + llama-server smoke responded with a 200 OK
+    /// SSE `event: error` envelope when the runtime sent a tool result
+    /// without a `tool_call_id`. The previous parser dropped `event:` lines
+    /// and treated the empty data chunk as a no-stream — the smoke
+    /// surfaced this as a bogus `llm_unavailable`. The parser must instead
+    /// surface the error envelope as a real `LlmError`.
+    #[test]
+    fn sera_qts_streaming_sse_error_event_is_surfaced_not_dropped() {
+        let sse_body = concat!(
+            "event: error\n",
+            "data: {\"error\":{\"message\":\"Engine protocol tools capability gap for 'llama-server': OpenAI-compatible tool result messages require a tool call id.\"},\"message\":\"Engine protocol tools capability gap for 'llama-server': OpenAI-compatible tool result messages require a tool call id.\"}\n\n",
+        );
+
+        match sse_stream_response_to_chat_result(sse_body) {
+            Err(LlmError::RequestError(msg)) => {
+                assert!(
+                    msg.contains("provider SSE error event"),
+                    "expected SSE error surfaced, got: {msg}",
+                );
+                assert!(
+                    msg.contains("tool call id")
+                        || msg.contains("tool result messages"),
+                    "SSE error message must preserve the provider's diagnostic: {msg}",
+                );
+                assert!(
+                    !msg.contains("neither content nor tool_calls"),
+                    "SSE error must NOT fall through to the sera-8h23 empty guard: {msg}",
+                );
+            }
+            Err(other) => panic!("unexpected error variant: {other:?}"),
+            Ok(_) => panic!("SSE error event must not return Ok"),
         }
     }
 

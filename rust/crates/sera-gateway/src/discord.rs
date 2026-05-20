@@ -382,6 +382,76 @@ impl BotPolicyDecision {
     }
 }
 
+/// Top-level routing gate for an inbound Discord message. Composes the
+/// peer-bot policy with the human DM/mention filter so the gate order is
+/// expressed in one pure function instead of inline in `process_message`.
+///
+/// Rationale (sera-yeg.1 repair): the original `process_message` returned
+/// early on `!is_explicit_handoff` *before* running `decide_bot_policy`,
+/// which silently dropped unrelated bots in public channels and peer bots
+/// without handoff — including the audit log entry the spec requires.
+/// Routing now goes through this helper so bot-authored messages always
+/// run through the peer-bot policy (auditable) while human messages keep
+/// the cheap "not a DM, not mentioned → ignore" fast path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageGateDecision {
+    /// Message should proceed to the turn pipeline.
+    Accept,
+    /// Human author posting in a guild channel without @-mention — drop
+    /// silently (debug log only) to keep public channels low-noise.
+    IgnoreHumanNoHandoff,
+    /// Bot author was denied by the peer-bot policy; carries the reason so
+    /// the caller can audit-log it under `discord_message_ignored`.
+    IgnoreBot(BotPolicyDecision),
+}
+
+/// Decide whether to admit an inbound Discord message to the turn pipeline.
+///
+/// Order of gates (sera-yeg.1):
+/// * Bot authors always go through [`decide_bot_policy`] regardless of
+///   DM/mention status, so self bots, unrelated bots, and peer bots
+///   without explicit handoff all produce an [`IgnoreBot`] decision the
+///   caller must audit. This is what makes `ignored_peer_bot_no_handoff`
+///   and `ignored_unrelated_bot` actually appear in the live audit log
+///   instead of being dropped silently by the human-channel filter.
+/// * Human authors keep the original behavior: non-DM messages without an
+///   @-mention return [`IgnoreHumanNoHandoff`] (silent ignore, no audit
+///   row), everything else returns [`Accept`].
+///
+/// `is_explicit_handoff` must be `msg.is_dm || msg.mentions_bot` — the
+/// caller computes it once and passes it in.
+///
+/// [`IgnoreBot`]: MessageGateDecision::IgnoreBot
+/// [`IgnoreHumanNoHandoff`]: MessageGateDecision::IgnoreHumanNoHandoff
+/// [`Accept`]: MessageGateDecision::Accept
+pub fn gate_message(
+    is_bot: bool,
+    author_id: &str,
+    username: &str,
+    self_bot_id: Option<&str>,
+    is_explicit_handoff: bool,
+    peer_bots: &[String],
+) -> MessageGateDecision {
+    if is_bot {
+        let policy = decide_bot_policy(
+            true,
+            author_id,
+            username,
+            self_bot_id,
+            is_explicit_handoff,
+            peer_bots,
+        );
+        return match policy {
+            BotPolicyDecision::Accept => MessageGateDecision::Accept,
+            denied => MessageGateDecision::IgnoreBot(denied),
+        };
+    }
+    if !is_explicit_handoff {
+        return MessageGateDecision::IgnoreHumanNoHandoff;
+    }
+    MessageGateDecision::Accept
+}
+
 /// Decide whether to accept a Discord message under the peer-bot policy.
 ///
 /// Loop-safety contract (sera-yeg.1):
@@ -1740,6 +1810,103 @@ mod tests {
             BotPolicyDecision::IgnoreNoHandoff.audit_reason(),
             "ignored_peer_bot_no_handoff",
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Routing gate composition (sera-yeg.1 repair)
+    //
+    // These tests model the gate order in `process_message`: bots must run
+    // through the peer-bot policy *before* the generic human/public-channel
+    // filter, so unrelated bots and peer-without-handoff in public channels
+    // still produce auditable decisions.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn gate_human_dm_accepted() {
+        assert_eq!(
+            gate_message(false, "u1", "alice", Some("self"), true, &[]),
+            MessageGateDecision::Accept,
+        );
+    }
+
+    #[test]
+    fn gate_human_mention_accepted() {
+        // is_explicit_handoff carries either is_dm OR mentions_bot.
+        assert_eq!(
+            gate_message(false, "u1", "alice", Some("self"), true, &[]),
+            MessageGateDecision::Accept,
+        );
+    }
+
+    #[test]
+    fn gate_human_no_handoff_silently_ignored() {
+        // Public channel + no mention → silent ignore (no audit row).
+        // This preserves the original low-noise behavior for humans.
+        assert_eq!(
+            gate_message(false, "u1", "alice", Some("self"), false, &[]),
+            MessageGateDecision::IgnoreHumanNoHandoff,
+        );
+    }
+
+    #[test]
+    fn gate_self_bot_ignored_even_in_public_channel() {
+        // Loop safety: self bot id is hard-ignored regardless of channel
+        // context. Parse-time filter already drops these, but the gate
+        // is defense-in-depth and must still emit an auditable decision.
+        let peers: Vec<String> = vec!["self-id".into()];
+        assert_eq!(
+            gate_message(true, "self-id", "sera", Some("self-id"), false, &peers),
+            MessageGateDecision::IgnoreBot(BotPolicyDecision::IgnoreSelf),
+        );
+    }
+
+    #[test]
+    fn gate_unrelated_bot_in_public_channel_audited_not_silent() {
+        // BUG REPAIR: before this fix, an unrelated bot posting in a public
+        // channel (is_dm=false, mentions_bot=false) was silently dropped by
+        // the `!is_explicit_handoff` early return. It must now surface as
+        // IgnoreBot so the caller writes a `discord_message_ignored` audit
+        // row with reason `ignored_unrelated_bot`.
+        let peers: Vec<String> = vec!["allowed-peer".into()];
+        assert_eq!(
+            gate_message(true, "stranger", "stranger", Some("self"), false, &peers),
+            MessageGateDecision::IgnoreBot(BotPolicyDecision::IgnoreUnrelated),
+        );
+    }
+
+    #[test]
+    fn gate_peer_bot_without_handoff_in_public_channel_audited_not_silent() {
+        // BUG REPAIR: a configured peer bot that posts in a public channel
+        // without DM/mention used to disappear via the human early return.
+        // It must now surface as IgnoreBot with `IgnoreNoHandoff` so the
+        // caller audits the failure mode under
+        // `ignored_peer_bot_no_handoff`.
+        let peers: Vec<String> = vec!["peer-1".into()];
+        assert_eq!(
+            gate_message(true, "peer-1", "hermes", Some("self"), false, &peers),
+            MessageGateDecision::IgnoreBot(BotPolicyDecision::IgnoreNoHandoff),
+        );
+    }
+
+    #[test]
+    fn gate_peer_bot_with_explicit_handoff_accepted() {
+        let peers: Vec<String> = vec!["peer-1".into()];
+        assert_eq!(
+            gate_message(true, "peer-1", "hermes", Some("self"), true, &peers),
+            MessageGateDecision::Accept,
+        );
+    }
+
+    #[test]
+    fn gate_bot_runs_before_human_handoff_check() {
+        // Sanity: even though a bot author lacks is_explicit_handoff (i.e.
+        // would have been silently dropped by the old early return), the
+        // gate routes via bot policy first. The decision must be policy-
+        // driven (IgnoreUnrelated here), never the silent human path.
+        let peers: Vec<String> = vec![];
+        let d = gate_message(true, "x", "y", Some("self"), false, &peers);
+        assert!(matches!(d, MessageGateDecision::IgnoreBot(_)));
+        assert_ne!(d, MessageGateDecision::IgnoreHumanNoHandoff);
     }
 
     // -----------------------------------------------------------------------

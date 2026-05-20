@@ -4739,23 +4739,12 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         "Received Discord message"
     );
 
-    // Filter: Only respond to DMs or when mentioned.
-    // Ignore messages in other channels that don't mention the bot.
+    // Gate the message through `gate_message` so bot-authored messages run
+    // through the peer-bot policy *before* the generic human/public-channel
+    // filter (sera-yeg.1 repair). Without this ordering, unrelated bots and
+    // peer bots without handoff in public channels were silently dropped
+    // before any audit row was written.
     let is_explicit_handoff = msg.is_dm || msg.mentions_bot;
-    if !is_explicit_handoff {
-        tracing::debug!(
-            user = %msg.username,
-            channel = %msg.channel_id,
-            "Ignoring message - not a DM and bot not mentioned"
-        );
-        return Ok(());
-    }
-
-    // Peer-bot policy (sera-yeg.1). Reads configured `peer_bots` from the
-    // Discord connector spec. Self bot is already dropped at parse time but
-    // we keep the defense-in-depth check; unrelated bots and peer bots
-    // without explicit handoff are recorded in the audit log with a reason
-    // so this failure mode stays visible to operators.
     let peer_bots: Vec<String> = {
         let manifests = state.manifests.read().unwrap();
         manifests
@@ -4776,7 +4765,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         .discord
         .as_ref()
         .and_then(|dc| dc.bot_user_id());
-    let policy = crate::discord::decide_bot_policy(
+    let gate = crate::discord::gate_message(
         msg.is_bot,
         &msg.user_id,
         &msg.username,
@@ -4784,34 +4773,45 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         is_explicit_handoff,
         &peer_bots,
     );
-    if policy != crate::discord::BotPolicyDecision::Accept {
-        tracing::info!(
-            user = %msg.username,
-            user_id = %msg.user_id,
-            channel = %msg.channel_id,
-            reason = %policy.audit_reason(),
-            "Ignoring bot message under peer-bot policy"
-        );
-        {
-            let db = state.db.lock().await;
-            let _ = db.append_audit(
-                "discord_message_ignored",
-                &msg.user_id,
-                "agent",
-                Some(
-                    &serde_json::json!({
-                        "username": msg.username,
-                        "channel_id": msg.channel_id,
-                        "reason": policy.audit_reason(),
-                        "is_bot": msg.is_bot,
-                        "mentions_bot": msg.mentions_bot,
-                        "is_dm": msg.is_dm,
-                    })
-                    .to_string(),
-                ),
+    match gate {
+        crate::discord::MessageGateDecision::IgnoreHumanNoHandoff => {
+            tracing::debug!(
+                user = %msg.username,
+                channel = %msg.channel_id,
+                "Ignoring message - not a DM and bot not mentioned"
             );
+            return Ok(());
         }
-        return Ok(());
+        crate::discord::MessageGateDecision::IgnoreBot(decision) => {
+            tracing::info!(
+                user = %msg.username,
+                user_id = %msg.user_id,
+                channel = %msg.channel_id,
+                reason = %decision.audit_reason(),
+                "Ignoring bot message under peer-bot policy"
+            );
+            {
+                let db = state.db.lock().await;
+                let _ = db.append_audit(
+                    "discord_message_ignored",
+                    &msg.user_id,
+                    "agent",
+                    Some(
+                        &serde_json::json!({
+                            "username": msg.username,
+                            "channel_id": msg.channel_id,
+                            "reason": decision.audit_reason(),
+                            "is_bot": msg.is_bot,
+                            "mentions_bot": msg.mentions_bot,
+                            "is_dm": msg.is_dm,
+                        })
+                        .to_string(),
+                    ),
+                );
+            }
+            return Ok(());
+        }
+        crate::discord::MessageGateDecision::Accept => {}
     }
 
     // Principal kind: peer-bot handoffs are classified as Agent so audit /
@@ -8874,6 +8874,134 @@ spec:
         assert_eq!(transcript[1].role, "assistant");
         // The reply will be an error (no real LLM), but it should be recorded.
         assert!(transcript[1].content.is_some());
+    }
+
+    /// Patch the discord connector spec in `state.manifests` to set
+    /// `peer_bots = peers`. Tests below need this because the default
+    /// `TEMPLATE_YAML` leaves peer_bots empty.
+    fn inject_peer_bots(state: &AppState, peers: &[&str]) {
+        let mut manifests = state.manifests.write().unwrap();
+        for cm in &mut manifests.connectors {
+            if let Some(obj) = cm.spec.as_object_mut()
+                && obj.get("kind").and_then(|k| k.as_str()) == Some("discord")
+            {
+                obj.insert(
+                    "peer_bots".to_string(),
+                    serde_json::json!(peers.iter().map(|p| p.to_string()).collect::<Vec<_>>()),
+                );
+            }
+        }
+    }
+
+    /// Repair regression test (sera-yeg.1): an unrelated bot posting in a
+    /// guild channel without DM/@-mention used to be silently dropped by
+    /// the `!is_explicit_handoff` early return *before* the peer-bot
+    /// policy ran. `process_message` must now route through the bot
+    /// policy first and emit a `discord_message_ignored` audit row with
+    /// reason `ignored_unrelated_bot`.
+    #[tokio::test]
+    async fn process_message_audits_unrelated_bot_in_public_channel() {
+        let state = test_state_async().await;
+        inject_peer_bots(&state, &["peer-1"]);
+
+        let msg = DiscordMessage {
+            channel_id: "ch_pub".into(),
+            user_id: "stranger-bot".into(),
+            username: "stranger".into(),
+            content: "noise".into(),
+            message_id: "msg_unrelated_pub".into(),
+            // The key scenario: not a DM, no @-mention. Pre-repair this
+            // would have hit the silent human early-return.
+            is_dm: false,
+            mentions_bot: false,
+            is_bot: true,
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        let ignored: Vec<&_> = audits
+            .iter()
+            .filter(|a| a.event_type == "discord_message_ignored")
+            .collect();
+        assert_eq!(ignored.len(), 1, "expected one ignored audit row");
+        let row = ignored[0];
+        assert_eq!(row.actor_id, "stranger-bot");
+        let details: serde_json::Value =
+            serde_json::from_str(row.details.as_deref().expect("details")).unwrap();
+        assert_eq!(details["reason"], "ignored_unrelated_bot");
+        assert_eq!(details["is_bot"], true);
+        assert_eq!(details["is_dm"], false);
+        assert_eq!(details["mentions_bot"], false);
+    }
+
+    /// Repair regression test (sera-yeg.1): a *configured* peer bot
+    /// posting in a guild channel without DM/@-mention must surface as
+    /// `ignored_peer_bot_no_handoff` in the live audit log. Pre-repair
+    /// this path also disappeared via the human early return.
+    #[tokio::test]
+    async fn process_message_audits_peer_bot_without_handoff() {
+        let state = test_state_async().await;
+        inject_peer_bots(&state, &["peer-1"]);
+
+        let msg = DiscordMessage {
+            channel_id: "ch_pub".into(),
+            user_id: "peer-1".into(),
+            username: "hermes".into(),
+            content: "drive-by chatter".into(),
+            message_id: "msg_peer_no_handoff".into(),
+            is_dm: false,
+            mentions_bot: false,
+            is_bot: true,
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        let ignored: Vec<&_> = audits
+            .iter()
+            .filter(|a| a.event_type == "discord_message_ignored")
+            .collect();
+        assert_eq!(ignored.len(), 1, "expected one ignored audit row");
+        let details: serde_json::Value = serde_json::from_str(
+            ignored[0].details.as_deref().expect("details"),
+        )
+        .unwrap();
+        assert_eq!(details["reason"], "ignored_peer_bot_no_handoff");
+    }
+
+    /// Preserve the original human behavior: a human message in a guild
+    /// channel without an @-mention must still be silently ignored — no
+    /// `discord_message_ignored` audit row, no LLM call. The bug repair
+    /// changed bot ordering but must not have made humans noisier.
+    #[tokio::test]
+    async fn process_message_human_no_handoff_stays_silent() {
+        let state = test_state_async().await;
+
+        let msg = DiscordMessage {
+            channel_id: "ch_pub".into(),
+            user_id: "alice".into(),
+            username: "alice".into(),
+            content: "hey channel".into(),
+            message_id: "msg_human_pub".into(),
+            is_dm: false,
+            mentions_bot: false,
+            is_bot: false,
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        assert!(
+            audits
+                .iter()
+                .all(|a| a.event_type != "discord_message_ignored"),
+            "human non-handoff must not create an ignored audit row",
+        );
+        assert!(
+            audits.iter().all(|a| a.event_type != "discord_message"),
+            "human non-handoff must not record a received audit either",
+        );
     }
 
     #[tokio::test]

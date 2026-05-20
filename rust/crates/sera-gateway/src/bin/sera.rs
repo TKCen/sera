@@ -4729,6 +4729,46 @@ async fn event_loop(state: Arc<AppState>, mut rx: mpsc::Receiver<DiscordMessage>
     }
 }
 
+/// Look up the `peer_bots` allowlist for the Discord connector that produced
+/// a given message.
+///
+/// Multiple Discord connectors can be spawned from one manifest set, each
+/// with its own `peer_bots` list. The selection boundary at
+/// [`process_message`] must therefore key off the connector identity stamped
+/// on the inbound [`DiscordMessage`] rather than folding across all
+/// connectors. The previous implementation took `.next()` on the iterator —
+/// meaning a message from connector B could be evaluated against connector
+/// A's allowlist, denying valid peer-bot handoffs or accepting unauthorized
+/// bots depending on list ordering (Codex review comment 3274130773).
+///
+/// Returns an empty `Vec` when no matching connector is found or when the
+/// message has no `connector_name` stamped (synthetic test messages that
+/// don't set one are conservatively treated as untrusted — no peer-bot
+/// admission). Extracted as a free function so tests can exercise the
+/// selection boundary directly without spinning up multiple gateway
+/// listeners.
+fn peer_bots_for_connector(
+    manifests: &sera_config::manifest_loader::ManifestSet,
+    connector_name: Option<&str>,
+) -> Vec<String> {
+    let Some(name) = connector_name else {
+        return Vec::new();
+    };
+    manifests
+        .connectors
+        .iter()
+        .find(|c| c.metadata.name == name)
+        .and_then(|c| {
+            let spec: ConnectorSpec = serde_json::from_value(c.spec.clone()).ok()?;
+            if spec.kind == "discord" {
+                Some(spec.peer_bots)
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default()
+}
+
 async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Result<()> {
     tracing::info!(
         user = %msg.username,
@@ -4747,19 +4787,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
     let is_explicit_handoff = msg.is_dm || msg.mentions_bot;
     let peer_bots: Vec<String> = {
         let manifests = state.manifests.read().unwrap();
-        manifests
-            .connectors
-            .iter()
-            .filter_map(|c| {
-                let spec: ConnectorSpec = serde_json::from_value(c.spec.clone()).ok()?;
-                if spec.kind == "discord" {
-                    Some(spec.peer_bots)
-                } else {
-                    None
-                }
-            })
-            .next()
-            .unwrap_or_default()
+        peer_bots_for_connector(&manifests, msg.connector_name.as_deref())
     };
     let self_bot_id = state
         .discord
@@ -6001,6 +6029,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         let connector = Arc::new(DiscordConnector::new(
             &token,
             &agent_name,
+            &cm.metadata.name,
             discord_tx.clone(),
             Arc::clone(&shutting_down),
         ));
@@ -8850,6 +8879,7 @@ spec:
             is_dm: true, // Must be DM or mention bot to trigger processing
             mentions_bot: false,
             is_bot: false,
+            connector_name: None,
         })
         .await
         .unwrap();
@@ -8915,6 +8945,7 @@ spec:
             is_dm: false,
             mentions_bot: false,
             is_bot: true,
+            connector_name: Some("discord-main".into()),
         };
         process_message(&state, &msg).await.expect("process_message");
 
@@ -8953,6 +8984,7 @@ spec:
             is_dm: false,
             mentions_bot: false,
             is_bot: true,
+            connector_name: Some("discord-main".into()),
         };
         process_message(&state, &msg).await.expect("process_message");
 
@@ -8987,6 +9019,7 @@ spec:
             is_dm: false,
             mentions_bot: false,
             is_bot: false,
+            connector_name: None,
         };
         process_message(&state, &msg).await.expect("process_message");
 
@@ -9002,6 +9035,152 @@ spec:
             audits.iter().all(|a| a.event_type != "discord_message"),
             "human non-handoff must not record a received audit either",
         );
+    }
+
+    /// Patch `state.manifests` to contain two Discord connectors named
+    /// `connector-a` and `connector-b` with the supplied `peer_bots` lists.
+    /// Replaces the single TEMPLATE_YAML `discord-main` connector so tests
+    /// can exercise per-connector `peer_bots` selection at the actual
+    /// boundary in `process_message` (sera-yeg.1 follow-up — Codex 3274130773).
+    ///
+    /// We clone the template connector (rather than constructing one) so
+    /// the test fixture stays decoupled from the `ConfigManifest` envelope
+    /// shape — only the connector identity and `peer_bots` differ between
+    /// the two clones.
+    fn inject_two_discord_connectors(state: &AppState, a_peers: &[&str], b_peers: &[&str]) {
+        let mut manifests = state.manifests.write().unwrap();
+        let template = manifests
+            .connectors
+            .iter()
+            .find(|c| {
+                serde_json::from_value::<ConnectorSpec>(c.spec.clone())
+                    .map(|s| s.kind == "discord")
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .expect("TEMPLATE_YAML provides at least one discord connector");
+        manifests.connectors.retain(|c| {
+            serde_json::from_value::<ConnectorSpec>(c.spec.clone())
+                .map(|s| s.kind != "discord")
+                .unwrap_or(true)
+        });
+        for (name, peers) in [("connector-a", a_peers), ("connector-b", b_peers)] {
+            let mut clone = template.clone();
+            clone.metadata.name = name.to_string();
+            if let Some(obj) = clone.spec.as_object_mut() {
+                obj.insert(
+                    "peer_bots".to_string(),
+                    serde_json::json!(
+                        peers.iter().map(|p| p.to_string()).collect::<Vec<_>>()
+                    ),
+                );
+            }
+            manifests.connectors.push(clone);
+        }
+    }
+
+    /// Helper-boundary regression (Codex comment 3274130773): the
+    /// `peer_bots_for_connector` extractor must pick the allowlist for the
+    /// connector named on the inbound message, not the first discord
+    /// connector encountered in the manifest list.
+    #[tokio::test]
+    async fn peer_bots_for_connector_selects_per_connector_allowlist() {
+        let state = test_state_async().await;
+        inject_two_discord_connectors(&state, &["peer-A"], &["peer-B"]);
+        let manifests = state.manifests.read().unwrap();
+
+        // Message tagged with connector-a sees only peer-A — peer-B is not
+        // unioned in from connector-b.
+        let a = peer_bots_for_connector(&manifests, Some("connector-a"));
+        assert_eq!(a, vec!["peer-A".to_string()]);
+        // And vice-versa.
+        let b = peer_bots_for_connector(&manifests, Some("connector-b"));
+        assert_eq!(b, vec!["peer-B".to_string()]);
+
+        // Unknown / unstamped messages get the empty allowlist — no
+        // peer-bot admission is granted to a synthetic message without
+        // connector identity.
+        assert!(peer_bots_for_connector(&manifests, Some("ghost")).is_empty());
+        assert!(peer_bots_for_connector(&manifests, None).is_empty());
+    }
+
+    /// Integration regression (Codex comment 3274130773): a bot that is in
+    /// connector-a's `peer_bots` must NOT be admitted when the message
+    /// arrives stamped from connector-b. With the pre-repair code (taking
+    /// `.next()` over discord connectors) this would have audited as
+    /// `ignored_peer_bot_no_handoff` (i.e. treated as a known peer just
+    /// missing handoff) rather than `ignored_unrelated_bot`, leaking
+    /// authorization across connectors.
+    #[tokio::test]
+    async fn process_message_uses_source_connectors_peer_bots_not_first() {
+        let state = test_state_async().await;
+        inject_two_discord_connectors(&state, &["peer-A"], &["peer-B"]);
+
+        // peer-A posts to connector-b. From connector-b's perspective this
+        // is just an unrelated bot.
+        let msg = DiscordMessage {
+            channel_id: "ch_pub".into(),
+            user_id: "peer-A".into(),
+            username: "peer-A".into(),
+            content: "crossing the streams".into(),
+            message_id: "msg_cross_a_to_b".into(),
+            is_dm: true,
+            mentions_bot: false,
+            is_bot: true,
+            connector_name: Some("connector-b".into()),
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        let ignored: Vec<&_> = audits
+            .iter()
+            .filter(|a| a.event_type == "discord_message_ignored")
+            .collect();
+        assert_eq!(
+            ignored.len(),
+            1,
+            "peer-A on connector-b must be ignored exactly once",
+        );
+        let details: serde_json::Value =
+            serde_json::from_str(ignored[0].details.as_deref().expect("details")).unwrap();
+        assert_eq!(
+            details["reason"], "ignored_unrelated_bot",
+            "peer-A is NOT a peer on connector-b — must not be audited as peer-bot",
+        );
+    }
+
+    /// Symmetric integration regression: peer-B posting to connector-a
+    /// must also be classified as unrelated, not as a recognized peer
+    /// (sera-yeg.1 follow-up — Codex 3274130773).
+    #[tokio::test]
+    async fn process_message_isolates_connector_b_peers_from_connector_a() {
+        let state = test_state_async().await;
+        inject_two_discord_connectors(&state, &["peer-A"], &["peer-B"]);
+
+        let msg = DiscordMessage {
+            channel_id: "ch_pub".into(),
+            user_id: "peer-B".into(),
+            username: "peer-B".into(),
+            content: "wrong door".into(),
+            message_id: "msg_cross_b_to_a".into(),
+            is_dm: true,
+            mentions_bot: false,
+            is_bot: true,
+            connector_name: Some("connector-a".into()),
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        let ignored: Vec<&_> = audits
+            .iter()
+            .filter(|a| a.event_type == "discord_message_ignored")
+            .collect();
+        assert_eq!(ignored.len(), 1);
+        let details: serde_json::Value =
+            serde_json::from_str(ignored[0].details.as_deref().expect("details")).unwrap();
+        assert_eq!(details["reason"], "ignored_unrelated_bot");
     }
 
     #[tokio::test]
@@ -13255,6 +13434,7 @@ spec:
                 is_dm: true,
                 mentions_bot: false,
                 is_bot: false,
+                connector_name: None,
             })
             .await
             .expect("send discord message");
@@ -13478,6 +13658,7 @@ spec:
                 is_dm: true,
                 mentions_bot: false,
                 is_bot: false,
+                connector_name: None,
             })
             .await
             .expect("send discord message");

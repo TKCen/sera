@@ -31,6 +31,13 @@ pub struct DiscordMessage {
     /// peer bots make it through with this flag set so the routing layer
     /// (`process_message`) can apply the configured peer-bot policy.
     pub is_bot: bool,
+    /// Manifest name of the [`DiscordConnector`] that produced this message.
+    /// Set by [`DiscordConnector`] as it dispatches into the shared mpsc;
+    /// `None` only for synthetic test fixtures. The routing layer uses this
+    /// to look up the *connector-specific* `peer_bots` allowlist rather than
+    /// taking the first parsed discord connector in manifests (sera-yeg.1
+    /// repair, Codex comment 3274130773).
+    pub connector_name: Option<String>,
 }
 
 /// Discord Gateway connector — connects via WebSocket, handles heartbeat,
@@ -38,6 +45,11 @@ pub struct DiscordMessage {
 pub struct DiscordConnector {
     token: String,
     agent_name: String,
+    /// Manifest name of the connector this instance was spawned for. Used to
+    /// stamp outgoing [`DiscordMessage`]s so the routing layer can look up
+    /// per-connector configuration (e.g. `peer_bots`) instead of folding
+    /// across all discord connectors.
+    connector_name: String,
     tx: mpsc::Sender<DiscordMessage>,
     /// Bot's own user ID, set on READY event.
     bot_user_id: std::sync::Mutex<Option<String>>,
@@ -348,6 +360,10 @@ pub fn parse_message_create(payload: &Value, bot_user_id: Option<&str>) -> Optio
         is_dm,
         mentions_bot,
         is_bot,
+        // Stamped by the dispatching `DiscordConnector` (which knows its
+        // own connector_name); the pure parser deliberately stays
+        // identity-agnostic so it remains unit-testable without one.
+        connector_name: None,
     })
 }
 
@@ -524,12 +540,14 @@ impl DiscordConnector {
     pub fn new(
         token: &str,
         agent_name: &str,
+        connector_name: &str,
         tx: mpsc::Sender<DiscordMessage>,
         shutting_down: Arc<AtomicBool>,
     ) -> Self {
         Self {
             token: token.to_owned(),
             agent_name: agent_name.to_owned(),
+            connector_name: connector_name.to_owned(),
             tx,
             bot_user_id: std::sync::Mutex::new(None),
             shutting_down,
@@ -965,10 +983,18 @@ impl DiscordConnector {
                         }
                         "MESSAGE_CREATE" => {
                             let bot_id = self.bot_user_id.lock().ok().and_then(|g| g.clone());
-                            if let Some(msg) = parse_message_create(payload, bot_id.as_deref())
-                                && let Err(e) = self.tx.send(msg).await
+                            if let Some(mut msg) = parse_message_create(payload, bot_id.as_deref())
                             {
-                                tracing::error!("Failed to dispatch Discord message: {e}");
+                                // Stamp the message with this connector's
+                                // manifest name so the routing layer applies
+                                // the *connector-specific* peer-bot policy
+                                // (sera-yeg.1 repair — Codex 3274130773).
+                                msg.connector_name = Some(self.connector_name.clone());
+                                if let Err(e) = self.tx.send(msg).await {
+                                    tracing::error!(
+                                        "Failed to dispatch Discord message: {e}"
+                                    );
+                                }
                             }
                         }
                         _ => {
@@ -1039,6 +1065,7 @@ mod tests {
             is_dm: false,
             mentions_bot: false,
             is_bot: false,
+            connector_name: None,
         };
         assert_eq!(msg.channel_id, "123456");
         assert_eq!(msg.user_id, "789");
@@ -1260,9 +1287,11 @@ mod tests {
     fn test_connector_new() {
         let (tx, _rx) = mpsc::channel(10);
         let shutting_down = Arc::new(AtomicBool::new(false));
-        let connector = DiscordConnector::new("token123", "my-agent", tx, shutting_down);
+        let connector =
+            DiscordConnector::new("token123", "my-agent", "discord-main", tx, shutting_down);
         assert_eq!(connector.token, "token123");
         assert_eq!(connector.agent_name, "my-agent");
+        assert_eq!(connector.connector_name, "discord-main");
     }
 
     // --- strip_mentions tests ---
@@ -1329,6 +1358,7 @@ mod tests {
         let connector = Arc::new(DiscordConnector::new(
             "fake-token",
             "test-agent",
+            "discord-test",
             tx,
             Arc::clone(&shutting_down),
         ));
@@ -1413,7 +1443,13 @@ mod tests {
     fn test_connector() -> (Arc<DiscordConnector>, mpsc::Receiver<DiscordMessage>) {
         let (tx, rx) = mpsc::channel(4);
         let shutting_down = Arc::new(AtomicBool::new(false));
-        let connector = Arc::new(DiscordConnector::new("token", "agent", tx, shutting_down));
+        let connector = Arc::new(DiscordConnector::new(
+            "token",
+            "agent",
+            "discord-test",
+            tx,
+            shutting_down,
+        ));
         (connector, rx)
     }
 

@@ -21,12 +21,16 @@ pub struct DiscordMessage {
     pub user_id: String,
     pub username: String,
     pub content: String,
-    #[allow(dead_code)]
     pub message_id: String,
     /// Whether this message was a DM (not a guild channel).
     pub is_dm: bool,
     /// Whether the bot was mentioned in this message (for guild channels).
     pub mentions_bot: bool,
+    /// Whether the message author is itself a Discord bot. SERA's own bot
+    /// messages are always filtered upstream in [`parse_message_create`];
+    /// peer bots make it through with this flag set so the routing layer
+    /// (`process_message`) can apply the configured peer-bot policy.
+    pub is_bot: bool,
 }
 
 /// Discord Gateway connector — connects via WebSocket, handles heartbeat,
@@ -294,7 +298,9 @@ pub fn strip_mentions(content: &str) -> String {
 /// with `t == "MESSAGE_CREATE"`.
 ///
 /// Returns `None` if the payload is not a MESSAGE_CREATE dispatch, or if the
-/// message author is a bot.
+/// message author is SERA's own bot (loop-safety). Other bot authors are
+/// surfaced with `is_bot = true` so the routing layer can apply the
+/// configured peer-bot policy (sera-yeg.1).
 ///
 /// The `is_dm` and `mentions_bot` fields are set based on the raw payload data.
 pub fn parse_message_create(payload: &Value, bot_user_id: Option<&str>) -> Option<DiscordMessage> {
@@ -306,11 +312,18 @@ pub fn parse_message_create(payload: &Value, bot_user_id: Option<&str>) -> Optio
     }
     let d = payload.get("d")?;
     let author = d.get("author")?;
+    let author_id = author.get("id")?.as_str()?;
 
-    // Skip bot messages
-    if author.get("bot").and_then(Value::as_bool).unwrap_or(false) {
+    // Hard loop-safety: never surface SERA's own bot messages to the routing
+    // layer. This is the only filter applied here; unrelated bots and peer
+    // bots are surfaced with `is_bot = true` so policy can decide.
+    if let Some(self_id) = bot_user_id
+        && author_id == self_id
+    {
         return None;
     }
+
+    let is_bot = author.get("bot").and_then(Value::as_bool).unwrap_or(false);
 
     // Check if this is a DM (no guild_id) or mentions the bot
     let is_dm = d.get("guild_id").is_none();
@@ -328,13 +341,96 @@ pub fn parse_message_create(payload: &Value, bot_user_id: Option<&str>) -> Optio
 
     Some(DiscordMessage {
         channel_id: d.get("channel_id")?.as_str()?.to_owned(),
-        user_id: author.get("id")?.as_str()?.to_owned(),
+        user_id: author_id.to_owned(),
         username: author.get("username")?.as_str()?.to_owned(),
         content: strip_mentions(d.get("content")?.as_str()?),
         message_id: d.get("id")?.as_str()?.to_owned(),
         is_dm,
         mentions_bot,
+        is_bot,
     })
+}
+
+/// Routing decision for a Discord message authored by a bot.
+///
+/// Pure data — no I/O — so the policy is unit-testable without standing up
+/// a gateway. `decide_bot_policy` is the sole producer; `process_message`
+/// is the sole consumer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BotPolicyDecision {
+    /// Author is human or a configured peer bot with explicit handoff.
+    Accept,
+    /// Author is SERA's own bot. Defense-in-depth — `parse_message_create`
+    /// already drops these.
+    IgnoreSelf,
+    /// Author is a bot we don't recognize as a peer.
+    IgnoreUnrelated,
+    /// Author is a configured peer bot but the message lacks an explicit
+    /// handoff (DM or @-mention of SERA).
+    IgnoreNoHandoff,
+}
+
+impl BotPolicyDecision {
+    /// Human-readable tag for audit metadata.
+    pub fn audit_reason(self) -> &'static str {
+        match self {
+            BotPolicyDecision::Accept => "accept",
+            BotPolicyDecision::IgnoreSelf => "ignored_self_bot",
+            BotPolicyDecision::IgnoreUnrelated => "ignored_unrelated_bot",
+            BotPolicyDecision::IgnoreNoHandoff => "ignored_peer_bot_no_handoff",
+        }
+    }
+}
+
+/// Decide whether to accept a Discord message under the peer-bot policy.
+///
+/// Loop-safety contract (sera-yeg.1):
+/// * Human authors are always accepted.
+/// * SERA's own bot id is always ignored (already filtered upstream).
+/// * Other bot authors are accepted only if `author_id` or `username` matches
+///   an entry in `peer_bots` AND the message is an explicit handoff to SERA
+///   (DM or @-mention).
+pub fn decide_bot_policy(
+    is_bot: bool,
+    author_id: &str,
+    username: &str,
+    self_bot_id: Option<&str>,
+    is_explicit_handoff: bool,
+    peer_bots: &[String],
+) -> BotPolicyDecision {
+    if !is_bot {
+        return BotPolicyDecision::Accept;
+    }
+    if let Some(self_id) = self_bot_id
+        && author_id == self_id
+    {
+        return BotPolicyDecision::IgnoreSelf;
+    }
+    let is_peer = peer_bots
+        .iter()
+        .any(|p| !p.is_empty() && (p == author_id || p == username));
+    if !is_peer {
+        return BotPolicyDecision::IgnoreUnrelated;
+    }
+    if !is_explicit_handoff {
+        return BotPolicyDecision::IgnoreNoHandoff;
+    }
+    BotPolicyDecision::Accept
+}
+
+/// Build the REST URL for the Discord typing-indicator endpoint.
+/// Extracted for unit testability (no live Discord required).
+pub fn typing_indicator_url(channel_id: &str) -> String {
+    format!("{DISCORD_API_BASE}/channels/{channel_id}/typing")
+}
+
+/// Build the REST URL for adding/removing the bot's own reaction on a
+/// message. Discord expects the emoji URL-encoded (`%F0%9F%91%80` for `👀`).
+pub fn own_reaction_url(channel_id: &str, message_id: &str, emoji: &str) -> String {
+    let emoji_enc = urlencoding::encode(emoji);
+    format!(
+        "{DISCORD_API_BASE}/channels/{channel_id}/messages/{message_id}/reactions/{emoji_enc}/@me"
+    )
 }
 
 /// Extract the event name from a Dispatch payload (opcode 0).
@@ -526,6 +622,83 @@ impl DiscordConnector {
             anyhow::bail!("Discord API error {status}: {body}");
         }
         Ok(())
+    }
+
+    /// Trigger the Discord typing indicator on a channel.
+    ///
+    /// The indicator self-expires after ~10 seconds, so callers must
+    /// re-trigger periodically while processing. UX affordance only —
+    /// failures (missing permission, transport error) are returned to the
+    /// caller for low-noise logging and never propagated as turn failures
+    /// (sera-yeg.2).
+    pub async fn trigger_typing(&self, channel_id: &str) -> anyhow::Result<()> {
+        let url = typing_indicator_url(channel_id);
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bot {}", self.token))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!("Discord typing error {status}");
+        }
+        Ok(())
+    }
+
+    /// Add an emoji reaction (the bot's own) to a message.
+    ///
+    /// UX affordance only — failures are returned for low-noise logging by
+    /// the caller and never propagated as turn failures (sera-yeg.2).
+    pub async fn add_reaction(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        emoji: &str,
+    ) -> anyhow::Result<()> {
+        let url = own_reaction_url(channel_id, message_id, emoji);
+        let client = reqwest::Client::new();
+        let resp = client
+            .put(&url)
+            .header("Authorization", format!("Bot {}", self.token))
+            .header("Content-Length", "0")
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!("Discord add_reaction error {status}");
+        }
+        Ok(())
+    }
+
+    /// Remove the bot's own reaction from a message.
+    ///
+    /// UX affordance only — failures are returned for low-noise logging by
+    /// the caller and never propagated as turn failures (sera-yeg.2).
+    pub async fn remove_own_reaction(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        emoji: &str,
+    ) -> anyhow::Result<()> {
+        let url = own_reaction_url(channel_id, message_id, emoji);
+        let client = reqwest::Client::new();
+        let resp = client
+            .delete(&url)
+            .header("Authorization", format!("Bot {}", self.token))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!("Discord remove_reaction error {status}");
+        }
+        Ok(())
+    }
+
+    /// The bot's own Discord user id, populated on the first READY dispatch.
+    /// `None` until the gateway has connected.
+    pub fn bot_user_id(&self) -> Option<String> {
+        self.bot_user_id.lock().ok().and_then(|g| g.clone())
     }
 
     // -----------------------------------------------------------------------
@@ -795,12 +968,14 @@ mod tests {
             message_id: "msg001".into(),
             is_dm: false,
             mentions_bot: false,
+            is_bot: false,
         };
         assert_eq!(msg.channel_id, "123456");
         assert_eq!(msg.user_id, "789");
         assert_eq!(msg.username, "testuser");
         assert_eq!(msg.content, "hello world");
         assert_eq!(msg.message_id, "msg001");
+        assert!(!msg.is_bot);
     }
 
     #[test]
@@ -870,7 +1045,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_message_create_bot_filtered() {
+    fn test_parse_message_create_self_bot_dropped() {
+        // SERA's own bot id is always dropped at parse time (loop safety).
         let payload = serde_json::json!({
             "op": 0,
             "t": "MESSAGE_CREATE",
@@ -878,15 +1054,43 @@ mod tests {
             "d": {
                 "id": "msg124",
                 "channel_id": "ch456",
-                "content": "I am a bot",
+                "content": "self echo",
                 "author": {
-                    "id": "bot001",
-                    "username": "botuser",
+                    "id": "self-bot",
+                    "username": "sera",
                     "bot": true
                 }
             }
         });
-        assert!(parse_message_create(&payload, None).is_none());
+        assert!(parse_message_create(&payload, Some("self-bot")).is_none());
+    }
+
+    #[test]
+    fn test_parse_message_create_peer_bot_surfaced() {
+        // Peer-bot messages survive parse with `is_bot = true` so the
+        // routing layer can apply the configured peer-bot policy
+        // (sera-yeg.1). The previous behavior of dropping all bots at
+        // parse time made the peer-bot policy impossible to implement.
+        let payload = serde_json::json!({
+            "op": 0,
+            "t": "MESSAGE_CREATE",
+            "s": 43,
+            "d": {
+                "id": "msg124",
+                "channel_id": "ch456",
+                "content": "I am a peer bot",
+                "author": {
+                    "id": "bot001",
+                    "username": "hermes",
+                    "bot": true
+                }
+            }
+        });
+        let msg = parse_message_create(&payload, Some("other-self-id"))
+            .expect("peer-bot messages should surface for policy");
+        assert!(msg.is_bot);
+        assert_eq!(msg.user_id, "bot001");
+        assert_eq!(msg.username, "hermes");
     }
 
     #[test]
@@ -1435,6 +1639,138 @@ mod tests {
         let evt = serde_json::json!({ "op": 0, "t": "GUILD_CREATE", "s": 17, "d": {} });
         assert_eq!(conn.handle_payload(&evt).await, None);
         assert_eq!(conn.test_last_sequence(), 17);
+    }
+
+    // -----------------------------------------------------------------------
+    // Peer-bot policy decisions (sera-yeg.1)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn bot_policy_human_always_accepted() {
+        assert_eq!(
+            decide_bot_policy(false, "user-1", "alice", Some("self"), false, &[]),
+            BotPolicyDecision::Accept,
+        );
+        // Even with no peer_bots configured, a human user is fine.
+        assert_eq!(
+            decide_bot_policy(false, "user-1", "alice", Some("self"), true, &[]),
+            BotPolicyDecision::Accept,
+        );
+    }
+
+    #[test]
+    fn bot_policy_self_bot_is_ignored() {
+        // Defense in depth: even if parse_message_create lets the self id
+        // through, the policy says ignore.
+        let peers: Vec<String> = vec!["self-id".into()];
+        assert_eq!(
+            decide_bot_policy(true, "self-id", "sera", Some("self-id"), true, &peers),
+            BotPolicyDecision::IgnoreSelf,
+        );
+    }
+
+    #[test]
+    fn bot_policy_unrelated_bot_is_ignored() {
+        let peers: Vec<String> = vec!["allowed-peer".into()];
+        assert_eq!(
+            decide_bot_policy(true, "stranger-bot", "stranger", Some("self"), true, &peers),
+            BotPolicyDecision::IgnoreUnrelated,
+        );
+        // Empty peer-bots list = strict default, all bots ignored.
+        assert_eq!(
+            decide_bot_policy(true, "any-bot", "any", Some("self"), true, &[]),
+            BotPolicyDecision::IgnoreUnrelated,
+        );
+    }
+
+    #[test]
+    fn bot_policy_peer_bot_without_handoff_is_ignored() {
+        let peers: Vec<String> = vec!["peer-1".into()];
+        assert_eq!(
+            decide_bot_policy(true, "peer-1", "hermes", Some("self"), false, &peers),
+            BotPolicyDecision::IgnoreNoHandoff,
+        );
+    }
+
+    #[test]
+    fn bot_policy_peer_bot_with_explicit_handoff_accepted() {
+        let peers: Vec<String> = vec!["peer-1".into()];
+        assert_eq!(
+            decide_bot_policy(true, "peer-1", "hermes", Some("self"), true, &peers),
+            BotPolicyDecision::Accept,
+        );
+    }
+
+    #[test]
+    fn bot_policy_peer_bot_match_by_username() {
+        // Operators may configure peer bots by friendly name (e.g.
+        // `@Sera 2.0` on the Hermes side); the policy matches either id
+        // or username so both work.
+        let peers: Vec<String> = vec!["Sera 2.0".into()];
+        assert_eq!(
+            decide_bot_policy(true, "12345", "Sera 2.0", Some("self"), true, &peers),
+            BotPolicyDecision::Accept,
+        );
+    }
+
+    #[test]
+    fn bot_policy_ignores_empty_string_peer_entries() {
+        // Empty strings in the peers list must not match anyone — guards
+        // against an operator typo collapsing the strict default.
+        let peers: Vec<String> = vec!["".into(), "real-peer".into()];
+        assert_eq!(
+            decide_bot_policy(true, "", "", Some("self"), true, &peers),
+            BotPolicyDecision::IgnoreUnrelated,
+        );
+        assert_eq!(
+            decide_bot_policy(true, "real-peer", "x", Some("self"), true, &peers),
+            BotPolicyDecision::Accept,
+        );
+    }
+
+    #[test]
+    fn bot_policy_audit_reasons_are_distinct() {
+        assert_eq!(BotPolicyDecision::Accept.audit_reason(), "accept");
+        assert_eq!(BotPolicyDecision::IgnoreSelf.audit_reason(), "ignored_self_bot");
+        assert_eq!(
+            BotPolicyDecision::IgnoreUnrelated.audit_reason(),
+            "ignored_unrelated_bot",
+        );
+        assert_eq!(
+            BotPolicyDecision::IgnoreNoHandoff.audit_reason(),
+            "ignored_peer_bot_no_handoff",
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // REST URL construction (sera-yeg.2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn typing_indicator_url_shape() {
+        assert_eq!(
+            typing_indicator_url("ch-42"),
+            "https://discord.com/api/v10/channels/ch-42/typing",
+        );
+    }
+
+    #[test]
+    fn own_reaction_url_url_encodes_emoji() {
+        // `👀` is U+1F440 → UTF-8 `F0 9F 91 80` → percent-encoded
+        // `%F0%9F%91%80`. Without encoding, Discord rejects the route
+        // with 400 INVALID_FORM_BODY.
+        assert_eq!(
+            own_reaction_url("ch-1", "msg-1", "👀"),
+            "https://discord.com/api/v10/channels/ch-1/messages/msg-1/reactions/%F0%9F%91%80/@me",
+        );
+        assert_eq!(
+            own_reaction_url("ch-1", "msg-1", "✅"),
+            "https://discord.com/api/v10/channels/ch-1/messages/msg-1/reactions/%E2%9C%85/@me",
+        );
+        assert_eq!(
+            own_reaction_url("ch-1", "msg-1", "❌"),
+            "https://discord.com/api/v10/channels/ch-1/messages/msg-1/reactions/%E2%9D%8C/@me",
+        );
     }
 
     #[tokio::test]

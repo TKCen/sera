@@ -4735,12 +4735,14 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         channel = %msg.channel_id,
         is_dm = %msg.is_dm,
         mentions_bot = %msg.mentions_bot,
+        is_bot = %msg.is_bot,
         "Received Discord message"
     );
 
     // Filter: Only respond to DMs or when mentioned.
     // Ignore messages in other channels that don't mention the bot.
-    if !msg.is_dm && !msg.mentions_bot {
+    let is_explicit_handoff = msg.is_dm || msg.mentions_bot;
+    if !is_explicit_handoff {
         tracing::debug!(
             user = %msg.username,
             channel = %msg.channel_id,
@@ -4749,33 +4751,164 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         return Ok(());
     }
 
+    // Peer-bot policy (sera-yeg.1). Reads configured `peer_bots` from the
+    // Discord connector spec. Self bot is already dropped at parse time but
+    // we keep the defense-in-depth check; unrelated bots and peer bots
+    // without explicit handoff are recorded in the audit log with a reason
+    // so this failure mode stays visible to operators.
+    let peer_bots: Vec<String> = {
+        let manifests = state.manifests.read().unwrap();
+        manifests
+            .connectors
+            .iter()
+            .filter_map(|c| {
+                let spec: ConnectorSpec = serde_json::from_value(c.spec.clone()).ok()?;
+                if spec.kind == "discord" {
+                    Some(spec.peer_bots)
+                } else {
+                    None
+                }
+            })
+            .next()
+            .unwrap_or_default()
+    };
+    let self_bot_id = state
+        .discord
+        .as_ref()
+        .and_then(|dc| dc.bot_user_id());
+    let policy = crate::discord::decide_bot_policy(
+        msg.is_bot,
+        &msg.user_id,
+        &msg.username,
+        self_bot_id.as_deref(),
+        is_explicit_handoff,
+        &peer_bots,
+    );
+    if policy != crate::discord::BotPolicyDecision::Accept {
+        tracing::info!(
+            user = %msg.username,
+            user_id = %msg.user_id,
+            channel = %msg.channel_id,
+            reason = %policy.audit_reason(),
+            "Ignoring bot message under peer-bot policy"
+        );
+        {
+            let db = state.db.lock().await;
+            let _ = db.append_audit(
+                "discord_message_ignored",
+                &msg.user_id,
+                "agent",
+                Some(
+                    &serde_json::json!({
+                        "username": msg.username,
+                        "channel_id": msg.channel_id,
+                        "reason": policy.audit_reason(),
+                        "is_bot": msg.is_bot,
+                        "mentions_bot": msg.mentions_bot,
+                        "is_dm": msg.is_dm,
+                    })
+                    .to_string(),
+                ),
+            );
+        }
+        return Ok(());
+    }
+
+    // Principal kind: peer-bot handoffs are classified as Agent so audit /
+    // routing layers can distinguish them from human submissions
+    // (sera-yeg.1).
+    let principal_kind = if msg.is_bot {
+        PrincipalKind::Agent
+    } else {
+        PrincipalKind::Human
+    };
+    let principal_kind_str = if msg.is_bot { "agent" } else { "human" };
+
+    // UX affordance: 👀 reaction + typing indicator while we process this
+    // accepted turn (sera-yeg.2). Both degrade gracefully — failures (missing
+    // permissions, transport errors) are logged at debug and never propagate.
+    let typing_task = state
+        .discord
+        .as_ref()
+        .map(|dc| start_typing_indicator(Arc::clone(dc), msg.channel_id.clone()));
+    add_reaction_best_effort(state, &msg.channel_id, &msg.message_id, "👀").await;
+
     // Audit: Discord message received.
     {
         let db = state.db.lock().await;
         let _ = db.append_audit(
             "discord_message",
             &msg.user_id,
-            "human",
+            principal_kind_str,
             Some(
                 &serde_json::json!({
                     "username": msg.username,
                     "channel_id": msg.channel_id,
                     "message_len": msg.content.len(),
+                    "is_bot": msg.is_bot,
                 })
                 .to_string(),
             ),
         );
     }
 
+    // Run the inner turn pipeline. We wrap everything below in an async block
+    // so the typing/reaction lifecycle finalizes consistently (✅ on success,
+    // ❌ on failure) regardless of where the inner pipeline returns.
+    let outcome = process_message_inner(state, msg, is_explicit_handoff, principal_kind).await;
+    if let Some(handle) = typing_task {
+        handle.abort();
+    }
+    remove_reaction_best_effort(state, &msg.channel_id, &msg.message_id, "👀").await;
+    let final_emoji = match outcome.as_ref() {
+        Ok(TurnOutcome::Success) => Some("✅"),
+        Ok(TurnOutcome::Rejected) | Err(_) => Some("❌"),
+        Ok(TurnOutcome::Queued) => None,
+    };
+    if let Some(emoji) = final_emoji {
+        add_reaction_best_effort(state, &msg.channel_id, &msg.message_id, emoji).await;
+    }
+    outcome.map(|_| ())
+}
+
+/// Final state of an accepted Discord turn — drives the reaction lifecycle.
+enum TurnOutcome {
+    /// Turn ran to completion and a reply was sent.
+    Success,
+    /// A hook or runtime check stopped the turn before completion (a
+    /// user-facing error message was already sent). UX-wise this is the same
+    /// as a failure, so we land on ❌.
+    Rejected,
+    /// Message was queued behind another in-flight turn; no final reaction
+    /// — the dispatched turn will own the lifecycle.
+    Queued,
+}
+
+/// Inner pipeline for an accepted Discord turn. Extracted so
+/// `process_message` can finalize the UX-affordance lifecycle (typing /
+/// reaction) in one place regardless of where the pipeline returns.
+async fn process_message_inner(
+    state: &AppState,
+    msg: &DiscordMessage,
+    _is_explicit_handoff: bool,
+    principal_kind: PrincipalKind,
+) -> anyhow::Result<TurnOutcome> {
     // Load hook chains from manifests.
     let chains = state.manifests.read().unwrap().hook_chain_specs();
 
     // Build principal for hook context.
     let principal = PrincipalRef {
         id: PrincipalId::new(&msg.user_id),
-        kind: PrincipalKind::Human,
+        kind: principal_kind,
     };
-    let principal_json = serde_json::json!({"id": msg.user_id, "kind": "human"});
+    let principal_kind_str = match principal_kind {
+        PrincipalKind::Human => "human",
+        PrincipalKind::Agent => "agent",
+        PrincipalKind::ExternalAgent => "external_agent",
+        PrincipalKind::Service => "service",
+        PrincipalKind::System => "system",
+    };
+    let principal_json = serde_json::json!({"id": msg.user_id, "kind": principal_kind_str});
 
     // ── pre_route: after ingress, before agent resolution ──
     let pre_route_ctx = HookContext {
@@ -4797,7 +4930,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         HookResult::Reject { reason, .. } => {
             tracing::info!(reason = %reason, "pre_route hook rejected message");
             send_error_to_discord(state, &msg.channel_id, reason).await;
-            return Ok(());
+            return Ok(TurnOutcome::Rejected);
         }
         HookResult::Redirect { target, .. } => {
             tracing::warn!(target = %target, "pre_route Redirect not yet supported, treating as Continue");
@@ -4832,7 +4965,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             let err_msg = format!("Agent '{agent_name}' not found in manifests");
             tracing::error!("{err_msg}");
             send_error_to_discord(state, &msg.channel_id, &err_msg).await;
-            return Ok(());
+            return Ok(TurnOutcome::Rejected);
         }
     };
 
@@ -4845,7 +4978,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             let err_msg = format!("No runtime supervisor for agent '{agent_name}'");
             tracing::error!("{err_msg}");
             send_error_to_discord(state, &msg.channel_id, &err_msg).await;
-            return Ok(());
+            return Ok(TurnOutcome::Rejected);
         }
     };
 
@@ -4900,7 +5033,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         HookResult::Reject { reason, .. } => {
             tracing::info!(reason = %reason, "post_route hook rejected message");
             send_error_to_discord(state, &msg.channel_id, reason).await;
-            return Ok(());
+            return Ok(TurnOutcome::Rejected);
         }
         HookResult::Redirect { target, .. } => {
             tracing::warn!(target = %target, "post_route Redirect not yet supported, treating as Continue");
@@ -4924,7 +5057,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         HookResult::Reject { reason, .. } => {
             tracing::info!(reason = %reason, "pre_turn hook rejected message");
             send_error_to_discord(state, &msg.channel_id, reason).await;
-            return Ok(());
+            return Ok(TurnOutcome::Rejected);
         }
         HookResult::Redirect { target, .. } => {
             tracing::warn!(target = %target, "pre_turn Redirect not yet supported, treating as Continue");
@@ -4943,11 +5076,11 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             }
             sera_db::lane_queue::EnqueueResult::Queued => {
                 tracing::info!(session_key = %session_key, "Message queued behind active turn");
-                return Ok(());
+                return Ok(TurnOutcome::Queued);
             }
             sera_db::lane_queue::EnqueueResult::Steer => {
                 tracing::info!(session_key = %session_key, "Steer event queued for tool boundary injection");
-                return Ok(());
+                return Ok(TurnOutcome::Queued);
             }
             sera_db::lane_queue::EnqueueResult::Interrupt => {
                 tracing::info!(session_key = %session_key, "Interrupt: active run should be aborted");
@@ -4956,7 +5089,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             }
             sera_db::lane_queue::EnqueueResult::Closed => {
                 tracing::warn!(session_key = %session_key, "Lane queue is closed; dropping incoming Discord message");
-                return Ok(());
+                return Ok(TurnOutcome::Rejected);
             }
         }
     }
@@ -5013,7 +5146,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         HookResult::Reject { reason, .. } => {
             tracing::info!(reason = %reason, "post_turn hook rejected reply");
             send_error_to_discord(state, &msg.channel_id, reason).await;
-            return Ok(());
+            return Ok(TurnOutcome::Rejected);
         }
         HookResult::Redirect { target, .. } => {
             tracing::warn!(target = %target, "post_turn Redirect not yet supported, treating as Continue");
@@ -5156,7 +5289,81 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         }
     }
 
-    Ok(())
+    Ok(TurnOutcome::Success)
+}
+
+/// Start a background task that periodically triggers the Discord typing
+/// indicator on `channel_id` until the returned handle is aborted. The
+/// indicator self-expires after ~10 seconds on Discord's side, so we
+/// re-trigger every 8 seconds while a turn is in flight (sera-yeg.2). All
+/// failures degrade gracefully — logged at debug level only.
+fn start_typing_indicator(
+    connector: Arc<crate::discord::DiscordConnector>,
+    channel_id: String,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        // Trigger once immediately so the indicator appears without waiting
+        // for the first interval tick.
+        if let Err(e) = connector.trigger_typing(&channel_id).await {
+            tracing::debug!(channel_id = %channel_id, error = %e, "Discord typing trigger failed");
+        }
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(8));
+        // Skip the first tick (already triggered above).
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            if let Err(e) = connector.trigger_typing(&channel_id).await {
+                tracing::debug!(channel_id = %channel_id, error = %e, "Discord typing trigger failed");
+            }
+        }
+    })
+}
+
+/// Add an emoji reaction on a Discord message. Best-effort UX affordance —
+/// failures (missing permission, transport error) are logged at debug only
+/// and never propagated to the caller (sera-yeg.2).
+async fn add_reaction_best_effort(
+    state: &AppState,
+    channel_id: &str,
+    message_id: &str,
+    emoji: &str,
+) {
+    let Some(ref dc) = state.discord else {
+        return;
+    };
+    if let Err(e) = dc.add_reaction(channel_id, message_id, emoji).await {
+        tracing::debug!(
+            channel_id = %channel_id,
+            message_id = %message_id,
+            emoji = %emoji,
+            error = %e,
+            "Discord add_reaction failed (low-noise — UX affordance only)",
+        );
+    }
+}
+
+/// Remove the bot's own emoji reaction on a Discord message. Best-effort UX
+/// affordance — failures are logged at debug only and never propagated
+/// (sera-yeg.2).
+async fn remove_reaction_best_effort(
+    state: &AppState,
+    channel_id: &str,
+    message_id: &str,
+    emoji: &str,
+) {
+    let Some(ref dc) = state.discord else {
+        return;
+    };
+    if let Err(e) = dc.remove_own_reaction(channel_id, message_id, emoji).await {
+        tracing::debug!(
+            channel_id = %channel_id,
+            message_id = %message_id,
+            emoji = %emoji,
+            error = %e,
+            "Discord remove_reaction failed (low-noise — UX affordance only)",
+        );
+    }
 }
 
 // ── sera init ───────────────────────────────────────────────────────────────
@@ -8642,6 +8849,7 @@ spec:
             message_id: "msg_001".into(),
             is_dm: true, // Must be DM or mention bot to trigger processing
             mentions_bot: false,
+            is_bot: false,
         })
         .await
         .unwrap();
@@ -12918,6 +13126,7 @@ spec:
                 message_id: "msg_ov7z_1".into(),
                 is_dm: true,
                 mentions_bot: false,
+                is_bot: false,
             })
             .await
             .expect("send discord message");
@@ -13140,6 +13349,7 @@ spec:
                 message_id: "msg_ve9x_1".into(),
                 is_dm: true,
                 mentions_bot: false,
+                is_bot: false,
             })
             .await
             .expect("send discord message");

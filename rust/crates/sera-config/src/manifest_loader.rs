@@ -499,6 +499,54 @@ spec:
         assert_eq!(spec.kind, "discord");
         assert_eq!(spec.agent.as_deref(), Some("sera"));
         assert_eq!(spec.token.unwrap().secret, "connectors/discord-main/token");
+        // peer_bots defaults to empty when absent — strict default
+        // (sera-yeg.1): no peer bots accepted unless explicitly listed.
+        assert!(spec.peer_bots.is_empty());
+    }
+
+    #[test]
+    fn connector_spec_peer_bots_parses_list() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Connector
+metadata:
+  name: discord-main
+spec:
+  kind: discord
+  token:
+    secret: connectors/discord-main/token
+  agent: sera
+  peer_bots:
+    - "987654321012345678"
+    - "Sera 2.0"
+"#;
+        let set = parse_manifests(yaml).unwrap();
+        let spec = set.connector_spec("discord-main").unwrap().unwrap();
+        assert_eq!(
+            spec.peer_bots,
+            vec!["987654321012345678".to_string(), "Sera 2.0".to_string()],
+        );
+    }
+
+    #[test]
+    fn connector_spec_peer_bots_accepts_camel_case_alias() {
+        // YAML conventions vary; accept both `peer_bots` and `peerBots`
+        // so operators following the camelCase convention used by some
+        // other specs in this repo aren't surprised.
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Connector
+metadata:
+  name: discord-main
+spec:
+  kind: discord
+  agent: sera
+  peerBots:
+    - hermes-bot-id
+"#;
+        let set = parse_manifests(yaml).unwrap();
+        let spec = set.connector_spec("discord-main").unwrap().unwrap();
+        assert_eq!(spec.peer_bots, vec!["hermes-bot-id".to_string()]);
     }
 
     #[test]

@@ -2461,9 +2461,34 @@ async fn probe_runtime_ready(state: &AppState) -> bool {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
                 tracing::warn!(error = %e, "readiness probe: transport reported failure");
+                // sera-yeg.3: the probe already wrote a
+                // `__sera_readiness_probe__` submission down the stdio
+                // pipe. When it errors mid-read (or its future is dropped
+                // by the timeout arm below), the runtime continues
+                // processing the ping and the resulting `StreamingDelta`
+                // ("pong") + `TurnCompleted` frames stay buffered on
+                // stdout. The next real user turn's `send_turn_inner`
+                // reads them as its own response (no submission_id
+                // correlation) and short-circuits — the user-visible
+                // failure is a transcript row whose assistant reply is
+                // `pong` instead of the requested content. Same class as
+                // the KillSwitch DISARM scenario `kill_for_rollback` was
+                // designed for, so reuse it: terminate the child and
+                // clear the harness slot so the next `acquire()`
+                // respawns fresh.
+                transport.kill_for_rollback().await;
                 return false;
             }
-            Err(_elapsed) => return false,
+            Err(_elapsed) => {
+                tracing::warn!(
+                    timeout_secs = timeout.as_secs(),
+                    "readiness probe: transport did not reply within timeout"
+                );
+                // sera-yeg.3: see Ok(Err) arm — a timed-out probe leaves
+                // the same stale-frame footprint in the backend's pipe.
+                transport.kill_for_rollback().await;
+                return false;
+            }
         }
     }
 
@@ -8172,6 +8197,152 @@ mod tests {
             elapsed < std::time::Duration::from_secs(4),
             "probe should give up within ~1s, got {:?}",
             elapsed
+        );
+    }
+
+    /// sera-yeg.3 regression: a readiness probe that times out (or errors)
+    /// must call `kill_for_rollback` on the underlying transport, otherwise
+    /// the probe's `__sera_readiness_probe__` frames sit in the stdio pipe
+    /// and the next real user turn's `send_turn_inner` reads them as its
+    /// own response (the live "pong" leak observed on the Discord peer-bot
+    /// handoff path — assistant transcript row was `pong` instead of the
+    /// requested content).
+    #[tokio::test]
+    async fn readiness_probe_timeout_recycles_transport() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct HangingProbeTransport {
+            kill_count: AtomicUsize,
+        }
+
+        #[async_trait::async_trait]
+        impl AgentTurnTransport for HangingProbeTransport {
+            async fn send_turn(
+                &self,
+                _messages: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                anyhow::bail!("send_turn not used in this test")
+            }
+            async fn send_steer(
+                &self,
+                _items: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                // Hang forever — mimics the LM Studio cold-start window
+                // where the runtime has accepted the probe submission but
+                // not yet streamed the matching frames.
+                std::future::pending::<()>().await;
+                Ok(())
+            }
+            async fn kill_for_rollback(&self) {
+                self.kill_count.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let _lock = READINESS_TIMEOUT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // SAFETY: callers hold READINESS_TIMEOUT_ENV_LOCK.
+        unsafe {
+            std::env::set_var("SERA_READINESS_PROBE_TIMEOUT_SECS", "1");
+        }
+
+        let hanging = Arc::new(HangingProbeTransport {
+            kill_count: AtomicUsize::new(0),
+        });
+        let mut state = test_state_async().await;
+        let state_mut = Arc::get_mut(&mut state).expect("unique state ref");
+        state_mut.harnesses.clear();
+        state_mut
+            .harnesses
+            .insert(
+                "sera".to_string(),
+                Arc::clone(&hanging) as Arc<dyn AgentTurnTransport>,
+            );
+
+        let ready = probe_runtime_ready(&state).await;
+
+        unsafe {
+            std::env::remove_var("SERA_READINESS_PROBE_TIMEOUT_SECS");
+        }
+
+        assert!(!ready, "hung probe must close the readiness gate");
+        assert_eq!(
+            hanging.kill_count.load(Ordering::SeqCst),
+            1,
+            "kill_for_rollback must be called once after probe timeout so the next turn does not consume the probe's stale `pong` frames",
+        );
+        assert!(
+            !state.runtime_ready.load(Ordering::Acquire),
+            "ready latch must stay closed after a timed-out probe",
+        );
+    }
+
+    /// sera-yeg.3 regression: a `liveness_probe` that returns `Err`
+    /// (e.g. the runtime child exited mid-probe) must also recycle the
+    /// transport — same stale-frame footprint, different trigger path.
+    #[tokio::test]
+    async fn readiness_probe_error_recycles_transport() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct ErroringProbeTransport {
+            kill_count: AtomicUsize,
+        }
+
+        #[async_trait::async_trait]
+        impl AgentTurnTransport for ErroringProbeTransport {
+            async fn send_turn(
+                &self,
+                _messages: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                anyhow::bail!("send_turn not used in this test")
+            }
+            async fn send_steer(
+                &self,
+                _items: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                anyhow::bail!("simulated probe failure")
+            }
+            async fn kill_for_rollback(&self) {
+                self.kill_count.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let erroring = Arc::new(ErroringProbeTransport {
+            kill_count: AtomicUsize::new(0),
+        });
+        let mut state = test_state_async().await;
+        let state_mut = Arc::get_mut(&mut state).expect("unique state ref");
+        state_mut.harnesses.clear();
+        state_mut
+            .harnesses
+            .insert(
+                "sera".to_string(),
+                Arc::clone(&erroring) as Arc<dyn AgentTurnTransport>,
+            );
+
+        let ready = probe_runtime_ready(&state).await;
+
+        assert!(!ready, "errored probe must close the readiness gate");
+        assert_eq!(
+            erroring.kill_count.load(Ordering::SeqCst),
+            1,
+            "kill_for_rollback must be called once after probe error",
         );
     }
 

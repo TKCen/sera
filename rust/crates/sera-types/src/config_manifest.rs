@@ -284,6 +284,16 @@ pub struct ConnectorSpec {
     pub token: Option<SecretRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// Peer bots that are allowed to hand off to SERA on this connector
+    /// (sera-yeg.1). Matched against the message author's Discord user id
+    /// OR username. Empty/absent = strict default (no peer bots accepted).
+    ///
+    /// Acceptance still requires the peer bot's message to be an explicit
+    /// handoff — either a DM to SERA or an @-mention of SERA in a guild
+    /// channel — so a chatty configured peer cannot create a feedback loop
+    /// by talking past SERA.
+    #[serde(default, alias = "peerBots", skip_serializing_if = "Vec::is_empty")]
+    pub peer_bots: Vec<String>,
 }
 
 /// A reference to a secret value, resolved at runtime.

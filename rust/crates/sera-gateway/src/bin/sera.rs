@@ -4729,25 +4729,137 @@ async fn event_loop(state: Arc<AppState>, mut rx: mpsc::Receiver<DiscordMessage>
     }
 }
 
+/// Look up the `peer_bots` allowlist for the Discord connector that produced
+/// a given message.
+///
+/// Multiple Discord connectors can be spawned from one manifest set, each
+/// with its own `peer_bots` list. The selection boundary at
+/// [`process_message`] must therefore key off the connector identity stamped
+/// on the inbound [`DiscordMessage`] rather than folding across all
+/// connectors. The previous implementation took `.next()` on the iterator —
+/// meaning a message from connector B could be evaluated against connector
+/// A's allowlist, denying valid peer-bot handoffs or accepting unauthorized
+/// bots depending on list ordering (Codex review comment 3274130773).
+///
+/// Returns an empty `Vec` when no matching connector is found or when the
+/// message has no `connector_name` stamped (synthetic test messages that
+/// don't set one are conservatively treated as untrusted — no peer-bot
+/// admission). Extracted as a free function so tests can exercise the
+/// selection boundary directly without spinning up multiple gateway
+/// listeners.
+fn peer_bots_for_connector(
+    manifests: &sera_config::manifest_loader::ManifestSet,
+    connector_name: Option<&str>,
+) -> Vec<String> {
+    let Some(name) = connector_name else {
+        return Vec::new();
+    };
+    manifests
+        .connectors
+        .iter()
+        .find(|c| c.metadata.name == name)
+        .and_then(|c| {
+            let spec: ConnectorSpec = serde_json::from_value(c.spec.clone()).ok()?;
+            if spec.kind == "discord" {
+                Some(spec.peer_bots)
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default()
+}
+
 async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Result<()> {
     tracing::info!(
         user = %msg.username,
         channel = %msg.channel_id,
         is_dm = %msg.is_dm,
         mentions_bot = %msg.mentions_bot,
+        is_bot = %msg.is_bot,
         "Received Discord message"
     );
 
-    // Filter: Only respond to DMs or when mentioned.
-    // Ignore messages in other channels that don't mention the bot.
-    if !msg.is_dm && !msg.mentions_bot {
-        tracing::debug!(
-            user = %msg.username,
-            channel = %msg.channel_id,
-            "Ignoring message - not a DM and bot not mentioned"
-        );
-        return Ok(());
+    // Gate the message through `gate_message` so bot-authored messages run
+    // through the peer-bot policy *before* the generic human/public-channel
+    // filter (sera-yeg.1 repair). Without this ordering, unrelated bots and
+    // peer bots without handoff in public channels were silently dropped
+    // before any audit row was written.
+    let is_explicit_handoff = msg.is_dm || msg.mentions_bot;
+    let peer_bots: Vec<String> = {
+        let manifests = state.manifests.read().unwrap();
+        peer_bots_for_connector(&manifests, msg.connector_name.as_deref())
+    };
+    let self_bot_id = state
+        .discord
+        .as_ref()
+        .and_then(|dc| dc.bot_user_id());
+    let gate = crate::discord::gate_message(
+        msg.is_bot,
+        &msg.user_id,
+        &msg.username,
+        self_bot_id.as_deref(),
+        is_explicit_handoff,
+        &peer_bots,
+    );
+    match gate {
+        crate::discord::MessageGateDecision::IgnoreHumanNoHandoff => {
+            tracing::debug!(
+                user = %msg.username,
+                channel = %msg.channel_id,
+                "Ignoring message - not a DM and bot not mentioned"
+            );
+            return Ok(());
+        }
+        crate::discord::MessageGateDecision::IgnoreBot(decision) => {
+            tracing::info!(
+                user = %msg.username,
+                user_id = %msg.user_id,
+                channel = %msg.channel_id,
+                reason = %decision.audit_reason(),
+                "Ignoring bot message under peer-bot policy"
+            );
+            {
+                let db = state.db.lock().await;
+                let _ = db.append_audit(
+                    "discord_message_ignored",
+                    &msg.user_id,
+                    "agent",
+                    Some(
+                        &serde_json::json!({
+                            "username": msg.username,
+                            "channel_id": msg.channel_id,
+                            "reason": decision.audit_reason(),
+                            "is_bot": msg.is_bot,
+                            "mentions_bot": msg.mentions_bot,
+                            "is_dm": msg.is_dm,
+                        })
+                        .to_string(),
+                    ),
+                );
+            }
+            return Ok(());
+        }
+        crate::discord::MessageGateDecision::Accept => {}
     }
+
+    // Principal kind: peer-bot handoffs are classified as Agent so audit /
+    // routing layers can distinguish them from human submissions
+    // (sera-yeg.1).
+    let principal_kind = if msg.is_bot {
+        PrincipalKind::Agent
+    } else {
+        PrincipalKind::Human
+    };
+    let principal_kind_str = if msg.is_bot { "agent" } else { "human" };
+
+    // UX affordance: 👀 reaction + typing indicator while we process this
+    // accepted turn (sera-yeg.2). Both degrade gracefully — failures (missing
+    // permissions, transport errors) are logged at debug and never propagate.
+    let typing_task = state
+        .discord
+        .as_ref()
+        .map(|dc| start_typing_indicator(Arc::clone(dc), msg.channel_id.clone()));
+    add_reaction_best_effort(state, &msg.channel_id, &msg.message_id, "👀").await;
 
     // Audit: Discord message received.
     {
@@ -4755,27 +4867,76 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         let _ = db.append_audit(
             "discord_message",
             &msg.user_id,
-            "human",
+            principal_kind_str,
             Some(
                 &serde_json::json!({
                     "username": msg.username,
                     "channel_id": msg.channel_id,
                     "message_len": msg.content.len(),
+                    "is_bot": msg.is_bot,
                 })
                 .to_string(),
             ),
         );
     }
 
+    // Run the inner turn pipeline. We wrap everything below in an async block
+    // so the typing/reaction lifecycle finalizes consistently (✅ on success,
+    // ❌ on failure) regardless of where the inner pipeline returns.
+    let outcome = process_message_inner(state, msg, is_explicit_handoff, principal_kind).await;
+    if let Some(handle) = typing_task {
+        handle.abort();
+    }
+    remove_reaction_best_effort(state, &msg.channel_id, &msg.message_id, "👀").await;
+    let final_emoji = match outcome.as_ref() {
+        Ok(TurnOutcome::Success) => Some("✅"),
+        Ok(TurnOutcome::Rejected) | Err(_) => Some("❌"),
+        Ok(TurnOutcome::Queued) => None,
+    };
+    if let Some(emoji) = final_emoji {
+        add_reaction_best_effort(state, &msg.channel_id, &msg.message_id, emoji).await;
+    }
+    outcome.map(|_| ())
+}
+
+/// Final state of an accepted Discord turn — drives the reaction lifecycle.
+enum TurnOutcome {
+    /// Turn ran to completion and a reply was sent.
+    Success,
+    /// A hook or runtime check stopped the turn before completion (a
+    /// user-facing error message was already sent). UX-wise this is the same
+    /// as a failure, so we land on ❌.
+    Rejected,
+    /// Message was queued behind another in-flight turn; no final reaction
+    /// — the dispatched turn will own the lifecycle.
+    Queued,
+}
+
+/// Inner pipeline for an accepted Discord turn. Extracted so
+/// `process_message` can finalize the UX-affordance lifecycle (typing /
+/// reaction) in one place regardless of where the pipeline returns.
+async fn process_message_inner(
+    state: &AppState,
+    msg: &DiscordMessage,
+    _is_explicit_handoff: bool,
+    principal_kind: PrincipalKind,
+) -> anyhow::Result<TurnOutcome> {
     // Load hook chains from manifests.
     let chains = state.manifests.read().unwrap().hook_chain_specs();
 
     // Build principal for hook context.
     let principal = PrincipalRef {
         id: PrincipalId::new(&msg.user_id),
-        kind: PrincipalKind::Human,
+        kind: principal_kind,
     };
-    let principal_json = serde_json::json!({"id": msg.user_id, "kind": "human"});
+    let principal_kind_str = match principal_kind {
+        PrincipalKind::Human => "human",
+        PrincipalKind::Agent => "agent",
+        PrincipalKind::ExternalAgent => "external_agent",
+        PrincipalKind::Service => "service",
+        PrincipalKind::System => "system",
+    };
+    let principal_json = serde_json::json!({"id": msg.user_id, "kind": principal_kind_str});
 
     // ── pre_route: after ingress, before agent resolution ──
     let pre_route_ctx = HookContext {
@@ -4797,7 +4958,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         HookResult::Reject { reason, .. } => {
             tracing::info!(reason = %reason, "pre_route hook rejected message");
             send_error_to_discord(state, &msg.channel_id, reason).await;
-            return Ok(());
+            return Ok(TurnOutcome::Rejected);
         }
         HookResult::Redirect { target, .. } => {
             tracing::warn!(target = %target, "pre_route Redirect not yet supported, treating as Continue");
@@ -4832,7 +4993,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             let err_msg = format!("Agent '{agent_name}' not found in manifests");
             tracing::error!("{err_msg}");
             send_error_to_discord(state, &msg.channel_id, &err_msg).await;
-            return Ok(());
+            return Ok(TurnOutcome::Rejected);
         }
     };
 
@@ -4845,7 +5006,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             let err_msg = format!("No runtime supervisor for agent '{agent_name}'");
             tracing::error!("{err_msg}");
             send_error_to_discord(state, &msg.channel_id, &err_msg).await;
-            return Ok(());
+            return Ok(TurnOutcome::Rejected);
         }
     };
 
@@ -4900,7 +5061,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         HookResult::Reject { reason, .. } => {
             tracing::info!(reason = %reason, "post_route hook rejected message");
             send_error_to_discord(state, &msg.channel_id, reason).await;
-            return Ok(());
+            return Ok(TurnOutcome::Rejected);
         }
         HookResult::Redirect { target, .. } => {
             tracing::warn!(target = %target, "post_route Redirect not yet supported, treating as Continue");
@@ -4924,7 +5085,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         HookResult::Reject { reason, .. } => {
             tracing::info!(reason = %reason, "pre_turn hook rejected message");
             send_error_to_discord(state, &msg.channel_id, reason).await;
-            return Ok(());
+            return Ok(TurnOutcome::Rejected);
         }
         HookResult::Redirect { target, .. } => {
             tracing::warn!(target = %target, "pre_turn Redirect not yet supported, treating as Continue");
@@ -4943,11 +5104,11 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             }
             sera_db::lane_queue::EnqueueResult::Queued => {
                 tracing::info!(session_key = %session_key, "Message queued behind active turn");
-                return Ok(());
+                return Ok(TurnOutcome::Queued);
             }
             sera_db::lane_queue::EnqueueResult::Steer => {
                 tracing::info!(session_key = %session_key, "Steer event queued for tool boundary injection");
-                return Ok(());
+                return Ok(TurnOutcome::Queued);
             }
             sera_db::lane_queue::EnqueueResult::Interrupt => {
                 tracing::info!(session_key = %session_key, "Interrupt: active run should be aborted");
@@ -4956,7 +5117,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             }
             sera_db::lane_queue::EnqueueResult::Closed => {
                 tracing::warn!(session_key = %session_key, "Lane queue is closed; dropping incoming Discord message");
-                return Ok(());
+                return Ok(TurnOutcome::Rejected);
             }
         }
     }
@@ -5013,7 +5174,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         HookResult::Reject { reason, .. } => {
             tracing::info!(reason = %reason, "post_turn hook rejected reply");
             send_error_to_discord(state, &msg.channel_id, reason).await;
-            return Ok(());
+            return Ok(TurnOutcome::Rejected);
         }
         HookResult::Redirect { target, .. } => {
             tracing::warn!(target = %target, "post_turn Redirect not yet supported, treating as Continue");
@@ -5156,7 +5317,81 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         }
     }
 
-    Ok(())
+    Ok(TurnOutcome::Success)
+}
+
+/// Start a background task that periodically triggers the Discord typing
+/// indicator on `channel_id` until the returned handle is aborted. The
+/// indicator self-expires after ~10 seconds on Discord's side, so we
+/// re-trigger every 8 seconds while a turn is in flight (sera-yeg.2). All
+/// failures degrade gracefully — logged at debug level only.
+fn start_typing_indicator(
+    connector: Arc<crate::discord::DiscordConnector>,
+    channel_id: String,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        // Trigger once immediately so the indicator appears without waiting
+        // for the first interval tick.
+        if let Err(e) = connector.trigger_typing(&channel_id).await {
+            tracing::debug!(channel_id = %channel_id, error = %e, "Discord typing trigger failed");
+        }
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(8));
+        // Skip the first tick (already triggered above).
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            if let Err(e) = connector.trigger_typing(&channel_id).await {
+                tracing::debug!(channel_id = %channel_id, error = %e, "Discord typing trigger failed");
+            }
+        }
+    })
+}
+
+/// Add an emoji reaction on a Discord message. Best-effort UX affordance —
+/// failures (missing permission, transport error) are logged at debug only
+/// and never propagated to the caller (sera-yeg.2).
+async fn add_reaction_best_effort(
+    state: &AppState,
+    channel_id: &str,
+    message_id: &str,
+    emoji: &str,
+) {
+    let Some(ref dc) = state.discord else {
+        return;
+    };
+    if let Err(e) = dc.add_reaction(channel_id, message_id, emoji).await {
+        tracing::debug!(
+            channel_id = %channel_id,
+            message_id = %message_id,
+            emoji = %emoji,
+            error = %e,
+            "Discord add_reaction failed (low-noise — UX affordance only)",
+        );
+    }
+}
+
+/// Remove the bot's own emoji reaction on a Discord message. Best-effort UX
+/// affordance — failures are logged at debug only and never propagated
+/// (sera-yeg.2).
+async fn remove_reaction_best_effort(
+    state: &AppState,
+    channel_id: &str,
+    message_id: &str,
+    emoji: &str,
+) {
+    let Some(ref dc) = state.discord else {
+        return;
+    };
+    if let Err(e) = dc.remove_own_reaction(channel_id, message_id, emoji).await {
+        tracing::debug!(
+            channel_id = %channel_id,
+            message_id = %message_id,
+            emoji = %emoji,
+            error = %e,
+            "Discord remove_reaction failed (low-noise — UX affordance only)",
+        );
+    }
 }
 
 // ── sera init ───────────────────────────────────────────────────────────────
@@ -5794,6 +6029,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         let connector = Arc::new(DiscordConnector::new(
             &token,
             &agent_name,
+            &cm.metadata.name,
             discord_tx.clone(),
             Arc::clone(&shutting_down),
         ));
@@ -8642,6 +8878,8 @@ spec:
             message_id: "msg_001".into(),
             is_dm: true, // Must be DM or mention bot to trigger processing
             mentions_bot: false,
+            is_bot: false,
+            connector_name: None,
         })
         .await
         .unwrap();
@@ -8666,6 +8904,283 @@ spec:
         assert_eq!(transcript[1].role, "assistant");
         // The reply will be an error (no real LLM), but it should be recorded.
         assert!(transcript[1].content.is_some());
+    }
+
+    /// Patch the discord connector spec in `state.manifests` to set
+    /// `peer_bots = peers`. Tests below need this because the default
+    /// `TEMPLATE_YAML` leaves peer_bots empty.
+    fn inject_peer_bots(state: &AppState, peers: &[&str]) {
+        let mut manifests = state.manifests.write().unwrap();
+        for cm in &mut manifests.connectors {
+            if let Some(obj) = cm.spec.as_object_mut()
+                && obj.get("kind").and_then(|k| k.as_str()) == Some("discord")
+            {
+                obj.insert(
+                    "peer_bots".to_string(),
+                    serde_json::json!(peers.iter().map(|p| p.to_string()).collect::<Vec<_>>()),
+                );
+            }
+        }
+    }
+
+    /// Repair regression test (sera-yeg.1): an unrelated bot posting in a
+    /// guild channel without DM/@-mention used to be silently dropped by
+    /// the `!is_explicit_handoff` early return *before* the peer-bot
+    /// policy ran. `process_message` must now route through the bot
+    /// policy first and emit a `discord_message_ignored` audit row with
+    /// reason `ignored_unrelated_bot`.
+    #[tokio::test]
+    async fn process_message_audits_unrelated_bot_in_public_channel() {
+        let state = test_state_async().await;
+        inject_peer_bots(&state, &["peer-1"]);
+
+        let msg = DiscordMessage {
+            channel_id: "ch_pub".into(),
+            user_id: "stranger-bot".into(),
+            username: "stranger".into(),
+            content: "noise".into(),
+            message_id: "msg_unrelated_pub".into(),
+            // The key scenario: not a DM, no @-mention. Pre-repair this
+            // would have hit the silent human early-return.
+            is_dm: false,
+            mentions_bot: false,
+            is_bot: true,
+            connector_name: Some("discord-main".into()),
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        let ignored: Vec<&_> = audits
+            .iter()
+            .filter(|a| a.event_type == "discord_message_ignored")
+            .collect();
+        assert_eq!(ignored.len(), 1, "expected one ignored audit row");
+        let row = ignored[0];
+        assert_eq!(row.actor_id, "stranger-bot");
+        let details: serde_json::Value =
+            serde_json::from_str(row.details.as_deref().expect("details")).unwrap();
+        assert_eq!(details["reason"], "ignored_unrelated_bot");
+        assert_eq!(details["is_bot"], true);
+        assert_eq!(details["is_dm"], false);
+        assert_eq!(details["mentions_bot"], false);
+    }
+
+    /// Repair regression test (sera-yeg.1): a *configured* peer bot
+    /// posting in a guild channel without DM/@-mention must surface as
+    /// `ignored_peer_bot_no_handoff` in the live audit log. Pre-repair
+    /// this path also disappeared via the human early return.
+    #[tokio::test]
+    async fn process_message_audits_peer_bot_without_handoff() {
+        let state = test_state_async().await;
+        inject_peer_bots(&state, &["peer-1"]);
+
+        let msg = DiscordMessage {
+            channel_id: "ch_pub".into(),
+            user_id: "peer-1".into(),
+            username: "hermes".into(),
+            content: "drive-by chatter".into(),
+            message_id: "msg_peer_no_handoff".into(),
+            is_dm: false,
+            mentions_bot: false,
+            is_bot: true,
+            connector_name: Some("discord-main".into()),
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        let ignored: Vec<&_> = audits
+            .iter()
+            .filter(|a| a.event_type == "discord_message_ignored")
+            .collect();
+        assert_eq!(ignored.len(), 1, "expected one ignored audit row");
+        let details: serde_json::Value = serde_json::from_str(
+            ignored[0].details.as_deref().expect("details"),
+        )
+        .unwrap();
+        assert_eq!(details["reason"], "ignored_peer_bot_no_handoff");
+    }
+
+    /// Preserve the original human behavior: a human message in a guild
+    /// channel without an @-mention must still be silently ignored — no
+    /// `discord_message_ignored` audit row, no LLM call. The bug repair
+    /// changed bot ordering but must not have made humans noisier.
+    #[tokio::test]
+    async fn process_message_human_no_handoff_stays_silent() {
+        let state = test_state_async().await;
+
+        let msg = DiscordMessage {
+            channel_id: "ch_pub".into(),
+            user_id: "alice".into(),
+            username: "alice".into(),
+            content: "hey channel".into(),
+            message_id: "msg_human_pub".into(),
+            is_dm: false,
+            mentions_bot: false,
+            is_bot: false,
+            connector_name: None,
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        assert!(
+            audits
+                .iter()
+                .all(|a| a.event_type != "discord_message_ignored"),
+            "human non-handoff must not create an ignored audit row",
+        );
+        assert!(
+            audits.iter().all(|a| a.event_type != "discord_message"),
+            "human non-handoff must not record a received audit either",
+        );
+    }
+
+    /// Patch `state.manifests` to contain two Discord connectors named
+    /// `connector-a` and `connector-b` with the supplied `peer_bots` lists.
+    /// Replaces the single TEMPLATE_YAML `discord-main` connector so tests
+    /// can exercise per-connector `peer_bots` selection at the actual
+    /// boundary in `process_message` (sera-yeg.1 follow-up — Codex 3274130773).
+    ///
+    /// We clone the template connector (rather than constructing one) so
+    /// the test fixture stays decoupled from the `ConfigManifest` envelope
+    /// shape — only the connector identity and `peer_bots` differ between
+    /// the two clones.
+    fn inject_two_discord_connectors(state: &AppState, a_peers: &[&str], b_peers: &[&str]) {
+        let mut manifests = state.manifests.write().unwrap();
+        let template = manifests
+            .connectors
+            .iter()
+            .find(|c| {
+                serde_json::from_value::<ConnectorSpec>(c.spec.clone())
+                    .map(|s| s.kind == "discord")
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .expect("TEMPLATE_YAML provides at least one discord connector");
+        manifests.connectors.retain(|c| {
+            serde_json::from_value::<ConnectorSpec>(c.spec.clone())
+                .map(|s| s.kind != "discord")
+                .unwrap_or(true)
+        });
+        for (name, peers) in [("connector-a", a_peers), ("connector-b", b_peers)] {
+            let mut clone = template.clone();
+            clone.metadata.name = name.to_string();
+            if let Some(obj) = clone.spec.as_object_mut() {
+                obj.insert(
+                    "peer_bots".to_string(),
+                    serde_json::json!(
+                        peers.iter().map(|p| p.to_string()).collect::<Vec<_>>()
+                    ),
+                );
+            }
+            manifests.connectors.push(clone);
+        }
+    }
+
+    /// Helper-boundary regression (Codex comment 3274130773): the
+    /// `peer_bots_for_connector` extractor must pick the allowlist for the
+    /// connector named on the inbound message, not the first discord
+    /// connector encountered in the manifest list.
+    #[tokio::test]
+    async fn peer_bots_for_connector_selects_per_connector_allowlist() {
+        let state = test_state_async().await;
+        inject_two_discord_connectors(&state, &["peer-A"], &["peer-B"]);
+        let manifests = state.manifests.read().unwrap();
+
+        // Message tagged with connector-a sees only peer-A — peer-B is not
+        // unioned in from connector-b.
+        let a = peer_bots_for_connector(&manifests, Some("connector-a"));
+        assert_eq!(a, vec!["peer-A".to_string()]);
+        // And vice-versa.
+        let b = peer_bots_for_connector(&manifests, Some("connector-b"));
+        assert_eq!(b, vec!["peer-B".to_string()]);
+
+        // Unknown / unstamped messages get the empty allowlist — no
+        // peer-bot admission is granted to a synthetic message without
+        // connector identity.
+        assert!(peer_bots_for_connector(&manifests, Some("ghost")).is_empty());
+        assert!(peer_bots_for_connector(&manifests, None).is_empty());
+    }
+
+    /// Integration regression (Codex comment 3274130773): a bot that is in
+    /// connector-a's `peer_bots` must NOT be admitted when the message
+    /// arrives stamped from connector-b. With the pre-repair code (taking
+    /// `.next()` over discord connectors) this would have audited as
+    /// `ignored_peer_bot_no_handoff` (i.e. treated as a known peer just
+    /// missing handoff) rather than `ignored_unrelated_bot`, leaking
+    /// authorization across connectors.
+    #[tokio::test]
+    async fn process_message_uses_source_connectors_peer_bots_not_first() {
+        let state = test_state_async().await;
+        inject_two_discord_connectors(&state, &["peer-A"], &["peer-B"]);
+
+        // peer-A posts to connector-b. From connector-b's perspective this
+        // is just an unrelated bot.
+        let msg = DiscordMessage {
+            channel_id: "ch_pub".into(),
+            user_id: "peer-A".into(),
+            username: "peer-A".into(),
+            content: "crossing the streams".into(),
+            message_id: "msg_cross_a_to_b".into(),
+            is_dm: true,
+            mentions_bot: false,
+            is_bot: true,
+            connector_name: Some("connector-b".into()),
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        let ignored: Vec<&_> = audits
+            .iter()
+            .filter(|a| a.event_type == "discord_message_ignored")
+            .collect();
+        assert_eq!(
+            ignored.len(),
+            1,
+            "peer-A on connector-b must be ignored exactly once",
+        );
+        let details: serde_json::Value =
+            serde_json::from_str(ignored[0].details.as_deref().expect("details")).unwrap();
+        assert_eq!(
+            details["reason"], "ignored_unrelated_bot",
+            "peer-A is NOT a peer on connector-b — must not be audited as peer-bot",
+        );
+    }
+
+    /// Symmetric integration regression: peer-B posting to connector-a
+    /// must also be classified as unrelated, not as a recognized peer
+    /// (sera-yeg.1 follow-up — Codex 3274130773).
+    #[tokio::test]
+    async fn process_message_isolates_connector_b_peers_from_connector_a() {
+        let state = test_state_async().await;
+        inject_two_discord_connectors(&state, &["peer-A"], &["peer-B"]);
+
+        let msg = DiscordMessage {
+            channel_id: "ch_pub".into(),
+            user_id: "peer-B".into(),
+            username: "peer-B".into(),
+            content: "wrong door".into(),
+            message_id: "msg_cross_b_to_a".into(),
+            is_dm: true,
+            mentions_bot: false,
+            is_bot: true,
+            connector_name: Some("connector-a".into()),
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        let ignored: Vec<&_> = audits
+            .iter()
+            .filter(|a| a.event_type == "discord_message_ignored")
+            .collect();
+        assert_eq!(ignored.len(), 1);
+        let details: serde_json::Value =
+            serde_json::from_str(ignored[0].details.as_deref().expect("details")).unwrap();
+        assert_eq!(details["reason"], "ignored_unrelated_bot");
     }
 
     #[tokio::test]
@@ -12918,6 +13433,8 @@ spec:
                 message_id: "msg_ov7z_1".into(),
                 is_dm: true,
                 mentions_bot: false,
+                is_bot: false,
+                connector_name: None,
             })
             .await
             .expect("send discord message");
@@ -13140,6 +13657,8 @@ spec:
                 message_id: "msg_ve9x_1".into(),
                 is_dm: true,
                 mentions_bot: false,
+                is_bot: false,
+                connector_name: None,
             })
             .await
             .expect("send discord message");

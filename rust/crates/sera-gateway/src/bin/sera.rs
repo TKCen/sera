@@ -4930,10 +4930,43 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         );
     }
 
+    // Build the peer-mention directory and runtime-visible content for this
+    // turn (sera-yeg.4). The directory carries inbound `<@id>` mentions that
+    // are allowlisted by the connector's `peer_bots` config — the only
+    // mentions safe to expose to the runtime or echo on outbound. When
+    // `raw_content` is empty (synthetic test fixtures), fall back to the
+    // pre-existing stripped `msg.content` so existing tests are unaffected.
+    let peer_directory = if msg.raw_content.is_empty() {
+        Vec::new()
+    } else {
+        crate::discord::peer_directory_from_mentions(
+            &msg.mentions,
+            self_bot_id.as_deref(),
+            &peer_bots,
+        )
+    };
+    let runtime_content = if msg.raw_content.is_empty() {
+        msg.content.clone()
+    } else {
+        crate::discord::normalize_content_for_runtime(
+            &msg.raw_content,
+            self_bot_id.as_deref(),
+            &peer_directory,
+        )
+    };
+
     // Run the inner turn pipeline. We wrap everything below in an async block
     // so the typing/reaction lifecycle finalizes consistently (✅ on success,
     // ❌ on failure) regardless of where the inner pipeline returns.
-    let outcome = process_message_inner(state, msg, is_explicit_handoff, principal_kind).await;
+    let outcome = process_message_inner(
+        state,
+        msg,
+        is_explicit_handoff,
+        principal_kind,
+        &runtime_content,
+        &peer_directory,
+    )
+    .await;
     if let Some(handle) = typing_task {
         handle.abort();
     }
@@ -4965,11 +4998,19 @@ enum TurnOutcome {
 /// Inner pipeline for an accepted Discord turn. Extracted so
 /// `process_message` can finalize the UX-affordance lifecycle (typing /
 /// reaction) in one place regardless of where the pipeline returns.
+///
+/// `runtime_content` is the mention-normalized form of the inbound message
+/// (`<@self>` stripped, allowlisted peer `<@id>` rewritten to `@<handle>`,
+/// other mentions stripped) — what the LLM and transcript see. The reverse
+/// path: `peer_directory` rewrites `@<handle>` tokens back to `<@id>` on
+/// outbound so the reply actually pings the peer in Discord (sera-yeg.4).
 async fn process_message_inner(
     state: &AppState,
     msg: &DiscordMessage,
     _is_explicit_handoff: bool,
     principal_kind: PrincipalKind,
+    runtime_content: &str,
+    peer_directory: &[crate::discord::PeerMentionBinding],
 ) -> anyhow::Result<TurnOutcome> {
     // Load hook chains from manifests.
     let chains = state.manifests.read().unwrap().hook_chain_specs();
@@ -4992,7 +5033,7 @@ async fn process_message_inner(
     let pre_route_ctx = HookContext {
         point: HookPoint::PreRoute,
         event: Some(serde_json::json!({
-            "content": msg.content,
+            "content": runtime_content,
             "channel_id": msg.channel_id,
             "username": msg.username,
         })),
@@ -5082,14 +5123,14 @@ async fn process_message_inner(
             Err(e) => anyhow::bail!("DB error: {e}"),
         };
 
-        let _ = db.append_transcript(&session.id, "user", Some(&msg.content), None, None);
+        let _ = db.append_transcript(&session.id, "user", Some(runtime_content), None, None);
         let transcript = db
             .get_transcript_recent(&session.id, 20)
             .unwrap_or_default();
         (session, transcript)
     };
 
-    let domain_event = DomainEvent::message(&agent_name, &session_key, principal, &msg.content);
+    let domain_event = DomainEvent::message(&agent_name, &session_key, principal, runtime_content);
     tracing::debug!(event_id = %domain_event.id.0, "Created domain event for Discord message");
 
     let session_json = serde_json::json!({"id": session.id, "key": session_key});
@@ -5179,7 +5220,7 @@ async fn process_message_inner(
     let result = execute_turn(
         &agent_spec,
         &transcript,
-        &msg.content,
+        runtime_content,
         &*supervisor,
         &session_key,
         &state.skill_engine,
@@ -5192,11 +5233,19 @@ async fn process_message_inner(
     .await;
     state.deregister_cancellation_token(&session_key);
 
+    // Render the LLM reply so allowlisted `@<handle>` tokens become Discord
+    // `<@id>` mention tags. Reverse peer-mention handoff (sera-yeg.4):
+    // arbitrary user @-names pass through unchanged because they are not in
+    // `peer_directory`, preserving the loop-safety contract.
+    let reply_rendered = crate::discord::render_outbound_content(&result.reply, peer_directory);
+
     // Persist tool call events to transcript before the final response.
+    // Transcript stores the rendered reply (with `<@id>` tags) so future
+    // turn context sees what was actually sent to Discord.
     {
         let db = state.db.lock().await;
         persist_tool_events(&db, &session.id, &result.tool_events);
-        let _ = db.append_transcript(&session.id, "assistant", Some(&result.reply), None, None);
+        let _ = db.append_transcript(&session.id, "assistant", Some(&reply_rendered), None, None);
     }
 
     // Complete the run and drain any pending messages for this session.
@@ -5215,7 +5264,7 @@ async fn process_message_inner(
         principal: Some(principal_json),
         metadata: std::collections::HashMap::from([(
             "reply".to_string(),
-            serde_json::json!(result.reply),
+            serde_json::json!(reply_rendered),
         )]),
         change_artifact: None, // Populated by sera-meta when processing evolution ChangeArtifacts
     };
@@ -5232,9 +5281,11 @@ async fn process_message_inner(
         HookResult::Continue { .. } => {}
     }
 
-    // Send the reply back to Discord via the shared connector.
+    // Send the reply back to Discord via the shared connector. The rendered
+    // reply already has allowlisted `@<handle>` tokens rewritten to
+    // `<@id>` (sera-yeg.4 reverse handoff).
     if let Some(ref dc) = state.discord {
-        if let Err(e) = dc.send_message(&msg.channel_id, &result.reply).await {
+        if let Err(e) = dc.send_message(&msg.channel_id, &reply_rendered).await {
             tracing::error!(error = ?e, channel_id = %msg.channel_id, "Discord send_message failed");
         }
     } else {
@@ -5304,11 +5355,14 @@ async fn process_message_inner(
                 let mut lq = state.lane_queue.lock().await;
                 lq.complete_run(&session_key);
             }
-            // Send steering response to Discord if any.
-            if let Some(ref dc) = state.discord
-                && let Err(e) = dc.send_message(&msg.channel_id, &follow_up.reply).await
-            {
-                tracing::error!(error = ?e, channel_id = %msg.channel_id, "Discord send_message failed");
+            // Send steering response to Discord if any. Render allowlisted
+            // peer mentions (sera-yeg.4).
+            if let Some(ref dc) = state.discord {
+                let rendered =
+                    crate::discord::render_outbound_content(&follow_up.reply, peer_directory);
+                if let Err(e) = dc.send_message(&msg.channel_id, &rendered).await {
+                    tracing::error!(error = ?e, channel_id = %msg.channel_id, "Discord send_message failed");
+                }
             }
             continue;
         }
@@ -5346,11 +5400,20 @@ async fn process_message_inner(
         .await;
         state.deregister_cancellation_token(&session_key);
 
+        // Render the follow-up reply once: transcript and outbound both see
+        // the `@<handle>` → `<@id>` rewrite (sera-yeg.4).
+        let follow_up_rendered =
+            crate::discord::render_outbound_content(&follow_up.reply, peer_directory);
         {
             let db = state.db.lock().await;
             persist_tool_events(&db, &session.id, &follow_up.tool_events);
-            let _ =
-                db.append_transcript(&session.id, "assistant", Some(&follow_up.reply), None, None);
+            let _ = db.append_transcript(
+                &session.id,
+                "assistant",
+                Some(&follow_up_rendered),
+                None,
+                None,
+            );
         }
 
         // Complete run for this follow-up turn.
@@ -5361,7 +5424,7 @@ async fn process_message_inner(
 
         // Send the follow-up reply to Discord.
         if let Some(ref dc) = state.discord
-            && let Err(e) = dc.send_message(&msg.channel_id, &follow_up.reply).await
+            && let Err(e) = dc.send_message(&msg.channel_id, &follow_up_rendered).await
         {
             tracing::error!(error = ?e, channel_id = %msg.channel_id, "Discord send_message failed");
         }
@@ -9188,6 +9251,8 @@ spec:
             mentions_bot: false,
             is_bot: false,
             connector_name: None,
+            raw_content: String::new(),
+            mentions: Vec::new(),
         })
         .await
         .unwrap();
@@ -9254,6 +9319,8 @@ spec:
             mentions_bot: false,
             is_bot: true,
             connector_name: Some("discord-main".into()),
+            raw_content: String::new(),
+            mentions: Vec::new(),
         };
         process_message(&state, &msg).await.expect("process_message");
 
@@ -9293,6 +9360,8 @@ spec:
             mentions_bot: false,
             is_bot: true,
             connector_name: Some("discord-main".into()),
+            raw_content: String::new(),
+            mentions: Vec::new(),
         };
         process_message(&state, &msg).await.expect("process_message");
 
@@ -9328,6 +9397,8 @@ spec:
             mentions_bot: false,
             is_bot: false,
             connector_name: None,
+            raw_content: String::new(),
+            mentions: Vec::new(),
         };
         process_message(&state, &msg).await.expect("process_message");
 
@@ -9436,6 +9507,8 @@ spec:
             mentions_bot: false,
             is_bot: true,
             connector_name: Some("connector-b".into()),
+            raw_content: String::new(),
+            mentions: Vec::new(),
         };
         process_message(&state, &msg).await.expect("process_message");
 
@@ -9458,6 +9531,125 @@ spec:
         );
     }
 
+    /// Reverse peer-mention handoff (sera-yeg.4): an inbound message that
+    /// mentions both SERA (`<@self>`) and an allowlisted peer (`<@peer>`)
+    /// must reach the transcript with the peer reference preserved as
+    /// `@<handle>` text. The pre-yeg.4 strip_mentions pass deleted the
+    /// peer reference entirely, so SERA never saw what bot to ping in the
+    /// reply. After this fix the runtime view of the inbound carries the
+    /// handle and the routing layer keeps the binding for outbound
+    /// rendering.
+    #[tokio::test]
+    async fn process_message_preserves_allowlisted_peer_mention_in_transcript() {
+        let state = test_state_async().await;
+        inject_peer_bots(&state, &["Sera 2.0"]);
+
+        let msg = DiscordMessage {
+            channel_id: "ch_yeg4".into(),
+            user_id: "1000".into(),
+            username: "operator".into(),
+            content: String::new(),
+            message_id: "msg_yeg4_persist".into(),
+            is_dm: true,
+            mentions_bot: true,
+            is_bot: false,
+            connector_name: Some("discord-main".into()),
+            raw_content: "<@111> please tell <@222> reverse path works".into(),
+            mentions: vec![
+                crate::discord::DiscordMentionedUser {
+                    id: "111".into(),
+                    username: "Sera".into(),
+                },
+                crate::discord::DiscordMentionedUser {
+                    id: "222".into(),
+                    username: "Sera 2.0".into(),
+                },
+            ],
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let session_key = "discord:sera:ch_yeg4";
+        let session = db
+            .get_session_by_key(session_key)
+            .unwrap()
+            .expect("session created");
+        let transcript = db.get_transcript(&session.id).unwrap();
+        // Discord parser strips `<@self>` (routing-only) but normalization
+        // rewrites the allowlisted `<@peer-2>` to `@Sera 2.0` so the
+        // runtime + transcript see the handle.
+        let user_row = transcript
+            .iter()
+            .find(|t| t.role == "user")
+            .expect("user transcript row");
+        let content = user_row.content.as_deref().expect("user content");
+        assert!(
+            content.contains("@Sera 2.0"),
+            "user transcript should preserve @Sera 2.0 mention; got {content:?}",
+        );
+        assert!(
+            !content.contains("<@self>") && !content.contains("<@peer-2>"),
+            "raw `<@id>` tags must not leak into transcript; got {content:?}",
+        );
+    }
+
+    /// Reverse peer-mention handoff arbitrary-mention guard (sera-yeg.4):
+    /// an inbound mention that is NOT in `peer_bots` must be stripped from
+    /// the runtime view so unconfigured users cannot turn SERA into a
+    /// mention-spam relay or smuggle prompt-injection via @-references.
+    #[tokio::test]
+    async fn process_message_drops_unallowlisted_inbound_mention() {
+        let state = test_state_async().await;
+        inject_peer_bots(&state, &["Sera 2.0"]);
+
+        let msg = DiscordMessage {
+            channel_id: "ch_yeg4_strip".into(),
+            user_id: "1000".into(),
+            username: "operator".into(),
+            content: String::new(),
+            message_id: "msg_yeg4_strip".into(),
+            is_dm: true,
+            mentions_bot: true,
+            is_bot: false,
+            connector_name: Some("discord-main".into()),
+            raw_content: "<@111> hi <@333> please".into(),
+            mentions: vec![
+                crate::discord::DiscordMentionedUser {
+                    id: "111".into(),
+                    username: "Sera".into(),
+                },
+                crate::discord::DiscordMentionedUser {
+                    id: "333".into(),
+                    username: "rando".into(),
+                },
+            ],
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let session_key = "discord:sera:ch_yeg4_strip";
+        let session = db
+            .get_session_by_key(session_key)
+            .unwrap()
+            .expect("session created");
+        let transcript = db.get_transcript(&session.id).unwrap();
+        let user_row = transcript
+            .iter()
+            .find(|t| t.role == "user")
+            .expect("user transcript row");
+        let content = user_row.content.as_deref().expect("user content");
+        // Self stripped, unallowlisted user stripped — no `@rando`, no
+        // `<@id>` tags, just the residual text.
+        assert!(
+            !content.contains("rando") && !content.contains("<@"),
+            "unallowlisted mention must not appear in runtime view; got {content:?}",
+        );
+        assert!(
+            content.contains("hi") && content.contains("please"),
+            "non-mention text must survive normalization; got {content:?}",
+        );
+    }
+
     /// Symmetric integration regression: peer-B posting to connector-a
     /// must also be classified as unrelated, not as a recognized peer
     /// (sera-yeg.1 follow-up — Codex 3274130773).
@@ -9476,6 +9668,8 @@ spec:
             mentions_bot: false,
             is_bot: true,
             connector_name: Some("connector-a".into()),
+            raw_content: String::new(),
+            mentions: Vec::new(),
         };
         process_message(&state, &msg).await.expect("process_message");
 
@@ -13743,6 +13937,8 @@ spec:
                 mentions_bot: false,
                 is_bot: false,
                 connector_name: None,
+                raw_content: String::new(),
+                mentions: Vec::new(),
             })
             .await
             .expect("send discord message");
@@ -13967,6 +14163,8 @@ spec:
                 mentions_bot: false,
                 is_bot: false,
                 connector_name: None,
+                raw_content: String::new(),
+                mentions: Vec::new(),
             })
             .await
             .expect("send discord message");

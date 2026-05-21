@@ -2458,7 +2458,32 @@ async fn probe_runtime_ready(state: &AppState) -> bool {
         // probes, the supervisor respawns transparently inside that call.
         let probe = transport.liveness_probe();
         match tokio::time::timeout(timeout, probe).await {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => {
+                // sera-yeg.3 follow-up: PR #1268 wired `kill_for_rollback`
+                // into the timeout / error arms, but the post-deploy
+                // one-turn diagnostic
+                // (`/home/entity/.hermes/ops/sera-discord-forward/fresh-session-one-turn-20260521.md`)
+                // showed `Pong! How can I help you today?` still surfacing
+                // as the first `/api/chat` reply on a fresh container
+                // whenever `/api/health/ready` was called first — i.e. the
+                // success arm leaks the same way. `send_turn_inner` reads
+                // by line until it sees a `turn_completed` and there is no
+                // `submission_id` correlation, so any frame the runtime
+                // emits after that point (e.g. a delayed terminal flush, a
+                // duplicate `turn_completed`, or a frame written between
+                // the probe's read window and our break) is consumed by the
+                // very next user turn as its own reply. The cheapest
+                // guaranteed-isolation fix matching the task's preferred
+                // repair shape is to recycle the just-probed child here
+                // too: terminate it and clear the harness slot so the
+                // next `acquire()` (the first real chat turn) spawns a
+                // fresh runtime against an empty stdio pipe. The latch
+                // is set below on success, so subsequent
+                // `/api/health/ready` calls remain O(1) and never
+                // re-probe — exactly one extra spawn per process
+                // lifetime.
+                transport.kill_for_rollback().await;
+            }
             Ok(Err(e)) => {
                 tracing::warn!(error = %e, "readiness probe: transport reported failure");
                 // sera-yeg.3: the probe already wrote a
@@ -8343,6 +8368,118 @@ mod tests {
             erroring.kill_count.load(Ordering::SeqCst),
             1,
             "kill_for_rollback must be called once after probe error",
+        );
+    }
+
+    /// sera-yeg.3 follow-up: a readiness probe that *succeeds* must also
+    /// recycle the transport so the probe's `ping`/`pong` frames cannot
+    /// surface as the next user turn's reply.
+    ///
+    /// Reproduces the post-PR-#1268 diagnostic captured in
+    /// `~/.hermes/ops/sera-discord-forward/fresh-session-one-turn-20260521.md`:
+    /// a fresh container that called `/api/health/ready` first saw
+    /// `Pong! How can I help you today?` as the first `/api/chat` reply,
+    /// while a sibling container that skipped the probe obeyed the
+    /// requested phrase cleanly. PR #1268 only wired `kill_for_rollback`
+    /// into the timeout / error arms; this regression pins the success
+    /// arm too. The transport is replaced with a fresh harness on the
+    /// next `acquire()`, so the chat turn cannot consume any frames the
+    /// probe child wrote to stdout, even ones that arrive after our
+    /// `turn_completed` read.
+    #[tokio::test]
+    async fn readiness_probe_success_recycles_transport() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct SucceedingProbeTransport {
+            kill_count: AtomicUsize,
+            send_turn_count: AtomicUsize,
+            kill_count_at_send_turn: AtomicUsize,
+        }
+
+        #[async_trait::async_trait]
+        impl AgentTurnTransport for SucceedingProbeTransport {
+            async fn send_turn(
+                &self,
+                _messages: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                // Snapshot the recycle count at the moment the chat turn
+                // begins — proves the recycle ran *before* the next user
+                // turn could have read the probe's stale `pong` frames.
+                self.kill_count_at_send_turn
+                    .store(self.kill_count.load(Ordering::SeqCst), Ordering::SeqCst);
+                self.send_turn_count.fetch_add(1, Ordering::SeqCst);
+                Ok(TurnEvents {
+                    response: "user-requested reply".to_string(),
+                    ..Default::default()
+                })
+            }
+            async fn send_steer(
+                &self,
+                _items: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                // Success — same as a real probe whose `ping` got a
+                // streaming-delta `pong` and a `turn_completed` back
+                // before our timeout.
+                Ok(())
+            }
+            async fn kill_for_rollback(&self) {
+                self.kill_count.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let succeeding = Arc::new(SucceedingProbeTransport {
+            kill_count: AtomicUsize::new(0),
+            send_turn_count: AtomicUsize::new(0),
+            kill_count_at_send_turn: AtomicUsize::new(0),
+        });
+        let mut state = test_state_async().await;
+        let state_mut = Arc::get_mut(&mut state).expect("unique state ref");
+        state_mut.harnesses.clear();
+        state_mut.harnesses.insert(
+            "sera".to_string(),
+            Arc::clone(&succeeding) as Arc<dyn AgentTurnTransport>,
+        );
+
+        // Readiness probe runs first — mirrors the fresh-session diagnostic
+        // sequence: `/api/health/ready` is called before any `/api/chat`.
+        let ready = probe_runtime_ready(&state).await;
+        assert!(ready, "successful probe must open the readiness gate");
+        assert_eq!(
+            succeeding.kill_count.load(Ordering::SeqCst),
+            1,
+            "kill_for_rollback must be called once after a successful probe so the probe's frames cannot leak into the next user turn",
+        );
+        // AC 2: `/api/health/ready` remains a valid readiness endpoint —
+        // the latch is set after the recycle so subsequent probes return
+        // 200 in O(1) without re-spawning a child.
+        assert!(
+            state.runtime_ready.load(Ordering::Acquire),
+            "ready latch must be set after a successful probe even when the just-probed child is recycled",
+        );
+
+        // AC 1 / AC 3: the next normal chat turn receives the
+        // user-requested response, not `pong` or a readiness response —
+        // and the recycle happened *before* the chat read anything.
+        let events = succeeding
+            .send_turn(vec![], "session:chat")
+            .await
+            .expect("chat turn after probe");
+        assert_eq!(
+            events.response, "user-requested reply",
+            "next chat turn must not consume the readiness probe's `pong` frame",
+        );
+        assert_eq!(
+            succeeding.kill_count_at_send_turn.load(Ordering::SeqCst),
+            1,
+            "kill_for_rollback must run before the next chat turn so any buffered probe frames are dropped along with the recycled child",
         );
     }
 

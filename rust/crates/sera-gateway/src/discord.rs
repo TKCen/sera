@@ -14,12 +14,42 @@ use tokio_tungstenite::tungstenite::Message;
 // Public types
 // ---------------------------------------------------------------------------
 
+/// One user mentioned in an inbound Discord MESSAGE_CREATE payload. Captured
+/// verbatim from the raw `d.mentions` array so the routing layer can decide
+/// which mentions are safe to expose to the runtime / echo on outbound (the
+/// connector-specific `peer_bots` allowlist filters this list — arbitrary
+/// user mentions are never preserved past that filter). See sera-yeg.4.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscordMentionedUser {
+    pub id: String,
+    pub username: String,
+}
+
+/// A peer-bot binding observed in an inbound message and confirmed against
+/// the connector's `peer_bots` allowlist. The runtime sees the message with
+/// `<@id>` tags rewritten to `@<handle>` text tokens; outbound replies that
+/// reference the same `@<handle>` are rewritten back to `<@id>` so Discord
+/// renders an actual mention. This is the data carrier for the reverse
+/// peer-mention handoff path (sera-yeg.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerMentionBinding {
+    /// Discord user id (used to render `<@id>` outbound mention tags).
+    pub user_id: String,
+    /// Configured peer-bot handle (the form runtime/LLM transcript sees).
+    pub handle: String,
+}
+
 /// Message received from Discord, ready for the gateway event queue.
 #[derive(Debug, Clone)]
 pub struct DiscordMessage {
     pub channel_id: String,
     pub user_id: String,
     pub username: String,
+    /// Mention-stripped content (legacy field, kept for back-compat with the
+    /// pre-sera-yeg.4 routing layer and tests that synthesize messages
+    /// without filling `raw_content`). When `raw_content` is non-empty the
+    /// routing layer prefers it so the configured peer-bot allowlist can
+    /// drive normalization (`normalize_content_for_runtime`).
     pub content: String,
     pub message_id: String,
     /// Whether this message was a DM (not a guild channel).
@@ -38,6 +68,17 @@ pub struct DiscordMessage {
     /// taking the first parsed discord connector in manifests (sera-yeg.1
     /// repair, Codex comment 3274130773).
     pub connector_name: Option<String>,
+    /// Raw message content as received from Discord, with `<@id>` mention
+    /// tags intact. `Some` for messages produced by [`parse_message_create`];
+    /// synthetic test fixtures may leave this empty, in which case the
+    /// routing layer falls back to `content`.
+    pub raw_content: String,
+    /// Users mentioned in the raw payload (one entry per `d.mentions`
+    /// element). Empty when no `<@id>` tags were resolved by Discord. The
+    /// routing layer filters this through the connector's `peer_bots`
+    /// allowlist before exposing any mention to the runtime / echoing it on
+    /// outbound replies (sera-yeg.4).
+    pub mentions: Vec<DiscordMentionedUser>,
 }
 
 /// Discord Gateway connector — connects via WebSocket, handles heartbeat,
@@ -306,6 +347,95 @@ pub fn strip_mentions(content: &str) -> String {
     stripped.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Compiled regex matching Discord user mention tags, capturing the numeric
+/// id. Shared by [`normalize_content_for_runtime`] so allow- vs deny-list
+/// decisions key off the same parse the rest of the connector uses.
+fn mention_tag_re() -> &'static regex::Regex {
+    use std::sync::LazyLock;
+    static RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"<@!?(\d+)>").expect("valid regex"));
+    &RE
+}
+
+/// Filter the inbound `mentions` array through the connector's `peer_bots`
+/// allowlist (matched by id OR username, same as [`decide_bot_policy`]).
+/// SERA's own bot id is excluded so the self mention used for routing never
+/// leaks into the runtime view (sera-yeg.4).
+///
+/// Returns the bindings the routing layer can safely expose to the runtime
+/// and use to render outbound mention tags. Empty when nothing matched.
+pub fn peer_directory_from_mentions(
+    mentions: &[DiscordMentionedUser],
+    self_bot_id: Option<&str>,
+    peer_bots: &[String],
+) -> Vec<PeerMentionBinding> {
+    mentions
+        .iter()
+        .filter(|m| match self_bot_id {
+            Some(sid) => m.id != sid,
+            None => true,
+        })
+        .filter(|m| {
+            peer_bots
+                .iter()
+                .any(|p| !p.is_empty() && (p == &m.id || p == &m.username))
+        })
+        .map(|m| PeerMentionBinding {
+            user_id: m.id.clone(),
+            handle: m.username.clone(),
+        })
+        .collect()
+}
+
+/// Build the runtime-visible content from raw Discord text:
+/// * `<@self_bot_id>` (and `<@!self_bot_id>`) → stripped — the self mention
+///   is used for inbound routing only and must not appear in transcript.
+/// * `<@peer_id>` where `peer_id` is in `peer_directory` → replaced with
+///   `@<handle>` so the LLM sees the peer reference as plain text.
+/// * Every other `<@id>` tag → stripped. Arbitrary user mentions must never
+///   reach the runtime: that would enable mention-spam / prompt-injection
+///   for any guild member that happens to ping SERA.
+///
+/// Whitespace is collapsed and trimmed to match [`strip_mentions`].
+pub fn normalize_content_for_runtime(
+    raw: &str,
+    self_bot_id: Option<&str>,
+    peer_directory: &[PeerMentionBinding],
+) -> String {
+    let replaced = mention_tag_re().replace_all(raw, |caps: &regex::Captures<'_>| {
+        let id = &caps[1];
+        if let Some(sid) = self_bot_id
+            && id == sid
+        {
+            return String::new();
+        }
+        if let Some(binding) = peer_directory.iter().find(|b| b.user_id == id) {
+            return format!("@{}", binding.handle);
+        }
+        String::new()
+    });
+    replaced.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Render an outbound Discord message by substituting `@<handle>` tokens
+/// with `<@user_id>` for each entry in `peer_directory`. Other text passes
+/// through unchanged so arbitrary user-supplied `@names` cannot become
+/// outbound pings — only allowlisted peer-bot handles get rewritten.
+///
+/// Longer handles are processed first so `@Sera 2.0` is preferred over
+/// `@Sera` when both appear in the directory (sera-yeg.4 acceptance #2).
+pub fn render_outbound_content(content: &str, peer_directory: &[PeerMentionBinding]) -> String {
+    let mut entries: Vec<&PeerMentionBinding> = peer_directory.iter().collect();
+    entries.sort_by_key(|b| std::cmp::Reverse(b.handle.len()));
+    let mut out = content.to_owned();
+    for binding in entries {
+        let needle = format!("@{}", binding.handle);
+        let replacement = format!("<@{}>", binding.user_id);
+        out = out.replace(&needle, &replacement);
+    }
+    out
+}
+
 /// Try to extract a `DiscordMessage` from a Dispatch (opcode 0) payload
 /// with `t == "MESSAGE_CREATE"`.
 ///
@@ -339,23 +469,31 @@ pub fn parse_message_create(payload: &Value, bot_user_id: Option<&str>) -> Optio
 
     // Check if this is a DM (no guild_id) or mentions the bot
     let is_dm = d.get("guild_id").is_none();
-    let mentions_bot = if let Some(bot_id) = bot_user_id {
-        d.get("mentions")
-            .and_then(|m| m.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .any(|u| u.get("id").and_then(Value::as_str) == Some(bot_id))
-            })
-            .unwrap_or(false)
-    } else {
-        false
+    let mentions: Vec<DiscordMentionedUser> = d
+        .get("mentions")
+        .and_then(|m| m.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|u| {
+                    let id = u.get("id")?.as_str()?.to_owned();
+                    let username = u.get("username")?.as_str()?.to_owned();
+                    Some(DiscordMentionedUser { id, username })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mentions_bot = match bot_user_id {
+        Some(bot_id) => mentions.iter().any(|m| m.id == bot_id),
+        None => false,
     };
+
+    let raw_content = d.get("content")?.as_str()?.to_owned();
 
     Some(DiscordMessage {
         channel_id: d.get("channel_id")?.as_str()?.to_owned(),
         user_id: author_id.to_owned(),
         username: author.get("username")?.as_str()?.to_owned(),
-        content: strip_mentions(d.get("content")?.as_str()?),
+        content: strip_mentions(&raw_content),
         message_id: d.get("id")?.as_str()?.to_owned(),
         is_dm,
         mentions_bot,
@@ -364,6 +502,8 @@ pub fn parse_message_create(payload: &Value, bot_user_id: Option<&str>) -> Optio
         // own connector_name); the pure parser deliberately stays
         // identity-agnostic so it remains unit-testable without one.
         connector_name: None,
+        raw_content,
+        mentions,
     })
 }
 
@@ -1066,6 +1206,8 @@ mod tests {
             mentions_bot: false,
             is_bot: false,
             connector_name: None,
+            raw_content: "hello world".into(),
+            mentions: Vec::new(),
         };
         assert_eq!(msg.channel_id, "123456");
         assert_eq!(msg.user_id, "789");
@@ -2007,5 +2149,249 @@ mod tests {
         assert!(conn.test_session_id().is_none());
         assert!(conn.test_resume_gateway_url().is_none());
         assert_eq!(conn.test_last_sequence(), -1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Reverse peer-mention handoff (sera-yeg.4)
+    //
+    // Inbound: configured non-self peer mentions are preserved as
+    // `@<handle>` text so the runtime sees the reference; SERA's own self
+    // mention is stripped (used only for routing); arbitrary user mentions
+    // are stripped so they can't leak into the runtime or be echoed.
+    //
+    // Outbound: when SERA's reply contains `@<peer-handle>` for a binding
+    // captured on the inbound, it is rewritten to `<@id>` so Discord
+    // renders an actual mention (the reverse handoff goal).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_message_create_captures_raw_content_and_mentions() {
+        let payload = serde_json::json!({
+            "op": 0,
+            "t": "MESSAGE_CREATE",
+            "s": 60,
+            "d": {
+                "id": "msg-yeg4-1",
+                "channel_id": "ch-yeg4",
+                "content": "<@111> please ping <@222> for me",
+                "mentions": [
+                    {"id": "111", "username": "Sera"},
+                    {"id": "222", "username": "Sera 2.0"}
+                ],
+                "author": {
+                    "id": "user-yeg4",
+                    "username": "operator",
+                    "bot": false
+                }
+            }
+        });
+        let msg = parse_message_create(&payload, Some("111")).expect("parse");
+        // raw_content keeps mention tags intact for downstream normalization.
+        assert_eq!(msg.raw_content, "<@111> please ping <@222> for me");
+        // Legacy `content` is still the strip_mentions output (back-compat).
+        assert_eq!(msg.content, "please ping for me");
+        assert_eq!(msg.mentions.len(), 2);
+        assert_eq!(
+            msg.mentions[0],
+            DiscordMentionedUser {
+                id: "111".into(),
+                username: "Sera".into()
+            }
+        );
+        assert_eq!(
+            msg.mentions[1],
+            DiscordMentionedUser {
+                id: "222".into(),
+                username: "Sera 2.0".into()
+            }
+        );
+        // Self mention drives the mentions_bot routing flag.
+        assert!(msg.mentions_bot);
+    }
+
+    #[test]
+    fn peer_directory_filters_through_allowlist_and_drops_self() {
+        let mentions = vec![
+            DiscordMentionedUser {
+                id: "111".into(),
+                username: "Sera".into(),
+            },
+            DiscordMentionedUser {
+                id: "222".into(),
+                username: "Sera 2.0".into(),
+            },
+            DiscordMentionedUser {
+                id: "333".into(),
+                username: "random-user".into(),
+            },
+        ];
+        // peer_bots configured by username; self id is "111".
+        let peers: Vec<String> = vec!["Sera 2.0".into()];
+        let dir = peer_directory_from_mentions(&mentions, Some("111"), &peers);
+        // Self ("111") and the unallowlisted random user ("333") are dropped.
+        assert_eq!(
+            dir,
+            vec![PeerMentionBinding {
+                user_id: "222".into(),
+                handle: "Sera 2.0".into(),
+            }],
+        );
+    }
+
+    #[test]
+    fn peer_directory_matches_by_id_or_username() {
+        // peer_bots can list either the Discord user id (stable across
+        // username changes) OR the human-friendly username; both must
+        // resolve into a binding.
+        let mentions = vec![
+            DiscordMentionedUser {
+                id: "by-id".into(),
+                username: "Friendly".into(),
+            },
+            DiscordMentionedUser {
+                id: "by-name".into(),
+                username: "Hermes 2.0".into(),
+            },
+        ];
+        let peers: Vec<String> = vec!["by-id".into(), "Hermes 2.0".into()];
+        let dir = peer_directory_from_mentions(&mentions, None, &peers);
+        assert_eq!(dir.len(), 2);
+        assert!(dir.iter().any(|b| b.user_id == "by-id"));
+        assert!(dir.iter().any(|b| b.user_id == "by-name"));
+    }
+
+    #[test]
+    fn peer_directory_empty_when_no_peer_bots_configured() {
+        // Strict default: with peer_bots empty, no inbound mention is
+        // surfaced — even bots are anonymized away.
+        let mentions = vec![DiscordMentionedUser {
+            id: "222".into(),
+            username: "Sera 2.0".into(),
+        }];
+        let dir = peer_directory_from_mentions(&mentions, Some("self"), &[]);
+        assert!(dir.is_empty());
+    }
+
+    #[test]
+    fn normalize_content_strips_self_and_unknown_keeps_peer() {
+        let dir = vec![PeerMentionBinding {
+            user_id: "222".into(),
+            handle: "Sera 2.0".into(),
+        }];
+        // Self <@111>: stripped. Peer <@222>: replaced with @Sera 2.0.
+        // Unknown <@333>: stripped (arbitrary mention spam guard).
+        let raw = "<@111> hi <@222> and <@333> please";
+        let runtime = normalize_content_for_runtime(raw, Some("111"), &dir);
+        assert_eq!(runtime, "hi @Sera 2.0 and please");
+    }
+
+    #[test]
+    fn normalize_content_handles_nickname_form() {
+        // Discord uses `<@!id>` when the mention targets a member with a
+        // server nickname. Must be treated identically to `<@id>`.
+        let dir = vec![PeerMentionBinding {
+            user_id: "222".into(),
+            handle: "Sera 2.0".into(),
+        }];
+        let runtime = normalize_content_for_runtime("<@!222> ping", None, &dir);
+        assert_eq!(runtime, "@Sera 2.0 ping");
+    }
+
+    #[test]
+    fn normalize_content_strips_all_when_no_directory() {
+        // No peer directory and no self id: behave like strip_mentions —
+        // every mention tag is removed so nothing leaks to runtime.
+        let runtime = normalize_content_for_runtime("<@111> <@222> raw", None, &[]);
+        assert_eq!(runtime, "raw");
+    }
+
+    #[test]
+    fn render_outbound_substitutes_only_allowlisted_handles() {
+        let dir = vec![PeerMentionBinding {
+            user_id: "222".into(),
+            handle: "Sera 2.0".into(),
+        }];
+        // The allowlisted handle is rewritten; @stranger is left as plain
+        // text so it cannot become an outbound ping.
+        let out = render_outbound_content("hello @Sera 2.0 and @stranger", &dir);
+        assert_eq!(out, "hello <@222> and @stranger");
+    }
+
+    #[test]
+    fn render_outbound_prefers_longer_handle_on_overlap() {
+        // Two peers, one a prefix of the other. The longer handle must win
+        // so `@Sera 2.0` doesn't collapse to `<@sera_id> 2.0`.
+        let dir = vec![
+            PeerMentionBinding {
+                user_id: "AAA".into(),
+                handle: "Sera".into(),
+            },
+            PeerMentionBinding {
+                user_id: "BBB".into(),
+                handle: "Sera 2.0".into(),
+            },
+        ];
+        let out = render_outbound_content("@Sera 2.0 and @Sera", &dir);
+        assert_eq!(out, "<@BBB> and <@AAA>");
+    }
+
+    #[test]
+    fn render_outbound_noop_when_directory_empty() {
+        // No allowlisted peers -> reply passes through untouched. This is
+        // the loop-safety contract for the common case (human user, no
+        // reverse handoff): nothing in the reply gets turned into a ping.
+        assert_eq!(
+            render_outbound_content("@Sera 2.0 hi", &[]),
+            "@Sera 2.0 hi",
+        );
+    }
+
+    #[test]
+    fn render_outbound_does_not_introduce_self_ping() {
+        // SERA's own bot id is not in any peer_directory (peer_directory
+        // strips self at construction). If the LLM ever produces `@sera`
+        // text, the renderer must leave it alone — preventing accidental
+        // self-pings that could trip loop-safety telemetry.
+        let dir = vec![PeerMentionBinding {
+            user_id: "222".into(),
+            handle: "Sera 2.0".into(),
+        }];
+        let out = render_outbound_content("@sera will think about it", &dir);
+        assert_eq!(out, "@sera will think about it");
+    }
+
+    #[test]
+    fn reverse_handoff_round_trip_inbound_to_outbound() {
+        // End-to-end on the pure layer: inbound MESSAGE_CREATE mentioning
+        // both @Sera (self) and @Sera 2.0 (allowlisted peer). After
+        // normalization the runtime sees the peer reference as plain text.
+        // The LLM echoes that reference into its reply. The outbound
+        // renderer turns it back into a Discord `<@id>` tag — closing the
+        // reverse-mention loop without disabling any loop guard.
+        let payload = serde_json::json!({
+            "op": 0,
+            "t": "MESSAGE_CREATE",
+            "s": 70,
+            "d": {
+                "id": "msg-yeg4-rt",
+                "channel_id": "ch-yeg4-rt",
+                "content": "<@111> tell <@222> that the reverse path works",
+                "mentions": [
+                    {"id": "111", "username": "Sera"},
+                    {"id": "222", "username": "Sera 2.0"}
+                ],
+                "author": {"id": "user-rt", "username": "operator", "bot": false}
+            }
+        });
+        let msg = parse_message_create(&payload, Some("111")).expect("parse");
+        let peers: Vec<String> = vec!["Sera 2.0".into()];
+        let dir = peer_directory_from_mentions(&msg.mentions, Some("111"), &peers);
+        let runtime = normalize_content_for_runtime(&msg.raw_content, Some("111"), &dir);
+        assert_eq!(runtime, "tell @Sera 2.0 that the reverse path works");
+
+        // Simulated LLM reply that echoes the peer handle.
+        let reply = "@Sera 2.0 acknowledged: reverse path works";
+        let outbound = render_outbound_content(reply, &dir);
+        assert_eq!(outbound, "<@222> acknowledged: reverse path works");
     }
 }

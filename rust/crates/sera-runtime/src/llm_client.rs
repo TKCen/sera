@@ -567,16 +567,12 @@ impl LlmClient {
                 )));
             }
             Ok(Err(e)) => {
-                let is_timeout = e.is_timeout();
                 if let Some(g) = guard {
                     // Network-level failure → treat as provider unavailable so
                     // the pool tries the next account next time.
                     g.mark_unavailable();
                 }
-                if is_timeout {
-                    return Err(LlmError::Timeout(e.to_string()));
-                }
-                return Err(LlmError::RequestError(e.to_string()));
+                return Err(classify_send_error(e));
             }
             Ok(Ok(resp)) => resp,
         };
@@ -610,13 +606,27 @@ impl LlmClient {
                     );
                     g.record_429(*retry_after);
                 }
-                Err(LlmError::ProviderUnavailable(_)) => {
+                Err(LlmError::ProviderUnavailable(_)) if status.as_u16() == 503 => {
+                    // 503 Service Unavailable on this credential: pool entry
+                    // is overloaded/banned, so cycle to the next credential.
                     record_credential_outcome(
                         &provider,
                         &credential_id,
                         CredentialOutcome::Error5xx,
                     );
                     g.mark_unavailable();
+                }
+                Err(LlmError::ProviderUnavailable(_)) => {
+                    // 500/502/504/etc.: server-side fault that's not the
+                    // credential's fault — keep the credential active. The
+                    // chain still falls back because the error class is
+                    // retryable; see PR #1272 P1 follow-up.
+                    record_credential_outcome(
+                        &provider,
+                        &credential_id,
+                        CredentialOutcome::Error5xx,
+                    );
+                    g.mark_success();
                 }
                 Err(LlmError::RequestError(_)) if is_non_retryable_status(status.as_u16()) => {
                     // Sera-hjem: 4xx other than 429 is the credential's fault
@@ -627,14 +637,6 @@ impl LlmClient {
                         CredentialOutcome::Error4xx,
                     );
                     g.record_non_retryable_error();
-                }
-                _ if (500..=599).contains(&status.as_u16()) => {
-                    record_credential_outcome(
-                        &provider,
-                        &credential_id,
-                        CredentialOutcome::Error5xx,
-                    );
-                    g.mark_success();
                 }
                 // Context overflow / unclassified — not the credential's
                 // fault, leave state untouched and don't taint counters.
@@ -865,20 +867,36 @@ impl LlmClient {
 /// single-account `LLM_BASE_URL` / `LLM_API_KEY` path. Likewise
 /// `SERA_REASONING_LEVEL` defaults to `off` when unset.
 pub fn build_from_config(config: &RuntimeConfig) -> LlmClient {
+    // Provider kind is inferred from LLM_MODEL (e.g. "gpt-4o" → OpenAI,
+    // "claude-3-5-sonnet" → Anthropic).  Operators can also set
+    // SERA_LLM_PROVIDER_ID to pin the inference explicitly.
+    let provider_id = std::env::var("SERA_LLM_PROVIDER_ID")
+        .unwrap_or_else(|_| config.llm_model.clone());
+    wire_client_from_env(config, &provider_id)
+}
+
+/// Build an [`LlmClient`] from `config`, applying the same env-driven wiring
+/// that [`build_from_config`] uses for the primary: `SERA_REASONING_LEVEL` /
+/// `SERA_REASONING_BUDGET_TOKENS` thinking config, inferred provider kind,
+/// and the `SERA_<PROVIDER>_KEYS` account pool (sera-jvi) when configured for
+/// `provider_id`.
+///
+/// Extracted so [`build_provider_from_config`] can construct the fallback
+/// through the same path — closing the PR #1272 P2 gap where the fallback
+/// silently ran with no reasoning config and only a single static key, so
+/// fallback availability degraded exactly during the outage/rate-limit
+/// scenarios it was meant to cover.
+fn wire_client_from_env(config: &RuntimeConfig, provider_id: &str) -> LlmClient {
     use sera_config::providers::ProviderAccountsConfig;
     use sera_models::{
         AccountPool, CooldownConfig, ProviderAccount, ProviderKind, ReasoningLevel,
         ThinkingConfig,
     };
 
-    // Provider kind is inferred from LLM_MODEL (e.g. "gpt-4o" → OpenAI,
-    // "claude-3-5-sonnet" → Anthropic).  Operators can also set
-    // SERA_LLM_PROVIDER_ID to pin the inference explicitly.
-    let provider_id = std::env::var("SERA_LLM_PROVIDER_ID")
-        .unwrap_or_else(|_| config.llm_model.clone());
-    let provider_kind = ProviderKind::infer(&provider_id);
+    let provider_kind = ProviderKind::infer(provider_id);
 
-    // Thinking / reasoning level.
+    // Thinking / reasoning level (shared across primary + fallback — reasoning
+    // depth is an agent-level decision, not provider-specific).
     let level = std::env::var("SERA_REASONING_LEVEL")
         .ok()
         .and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
@@ -902,7 +920,7 @@ pub fn build_from_config(config: &RuntimeConfig) -> LlmClient {
     // Account pool (sera-jvi). Only attached when at least one key is
     // configured for the active provider id.
     let accounts_cfg = ProviderAccountsConfig::from_env();
-    if let Some(keys) = accounts_cfg.keys_for(&provider_id)
+    if let Some(keys) = accounts_cfg.keys_for(provider_id)
         && !keys.is_empty()
     {
         let accounts: Vec<ProviderAccount> = keys
@@ -913,7 +931,7 @@ pub fn build_from_config(config: &RuntimeConfig) -> LlmClient {
             })
             .collect();
         let pool = Arc::new(
-            AccountPool::new(provider_id.clone(), accounts, CooldownConfig::default())
+            AccountPool::new(provider_id.to_string(), accounts, CooldownConfig::default())
                 .with_default_base_url(config.llm_base_url.clone()),
         );
         tracing::info!(
@@ -925,6 +943,81 @@ pub fn build_from_config(config: &RuntimeConfig) -> LlmClient {
     }
 
     client
+}
+
+/// Build an [`LlmProvider`] from a [`RuntimeConfig`], optionally wrapping the
+/// primary client in a [`crate::fallback_chain::FallbackChain`] when fallback
+/// env vars are set.
+///
+/// Env-var contract (sera-m1k8):
+/// - **Primary** — `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` (existing).
+/// - **Fallback (optional)** — `SERA_LLM_FALLBACK_BASE_URL`,
+///   `SERA_LLM_FALLBACK_MODEL`, `SERA_LLM_FALLBACK_API_KEY`. When all three
+///   are set the returned provider tries the primary first and falls back to
+///   the secondary on retryable errors only (rate-limit, timeout,
+///   provider-unavailable). Operators wiring MiniMax as the primary point
+///   `LLM_*` at MiniMax and `SERA_LLM_FALLBACK_*` at local LM Studio / Qwen.
+///   The fallback is built through the same `wire_client_from_env` path as
+///   the primary, so it picks up `SERA_REASONING_LEVEL` /
+///   `SERA_REASONING_BUDGET_TOKENS` and any `SERA_<PROVIDER>_KEYS` account
+///   pool configured for the fallback's provider id (PR #1272 P2 fix).
+/// - `SERA_LLM_FALLBACK_PROVIDER_ID` — optional explicit provider id for the
+///   fallback (used for reasoning-config inference + account-pool lookup).
+///   Defaults to the fallback model name.
+/// - `SERA_LLM_FALLBACK_MAX_TOKENS` — optional override for the fallback
+///   client's `max_tokens` budget. Defaults to the primary's `max_tokens`.
+///
+/// When the fallback vars are absent, this returns a single-provider
+/// `Box<LlmClient>` — byte-identical to calling [`build_from_config`]
+/// directly.
+pub fn build_provider_from_config(
+    config: &RuntimeConfig,
+) -> Box<dyn crate::turn::LlmProvider> {
+    let primary = build_from_config(config);
+
+    let fallback_base = std::env::var("SERA_LLM_FALLBACK_BASE_URL").ok();
+    let fallback_model = std::env::var("SERA_LLM_FALLBACK_MODEL").ok();
+    let fallback_key = std::env::var("SERA_LLM_FALLBACK_API_KEY").ok();
+
+    match (fallback_base, fallback_model, fallback_key) {
+        (Some(base), Some(model), Some(api_key))
+            if !base.is_empty() && !model.is_empty() && !api_key.is_empty() =>
+        {
+            let max_tokens = std::env::var("SERA_LLM_FALLBACK_MAX_TOKENS")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(config.max_tokens);
+            let provider_id = std::env::var("SERA_LLM_FALLBACK_PROVIDER_ID")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| model.clone());
+            let fallback_config = RuntimeConfig {
+                llm_base_url: base,
+                llm_model: model.clone(),
+                llm_api_key: api_key,
+                max_tokens,
+                ..config.clone()
+            };
+            // PR #1272 P2 fix (sera-m1k8): route the fallback through the same
+            // env-driven wiring as the primary so it gets reasoning config and
+            // a provider account pool when configured. Otherwise the fallback
+            // silently runs with a single static key and no reasoning settings,
+            // degrading availability exactly during the outage/rate-limit
+            // scenarios the chain was added for.
+            let fallback_client = wire_client_from_env(&fallback_config, &provider_id);
+            tracing::info!(
+                primary_model = %config.llm_model,
+                fallback_model = %model,
+                fallback_provider_id = %provider_id,
+                "FallbackChain configured (sera-m1k8): primary + 1 fallback"
+            );
+            Box::new(crate::fallback_chain::FallbackChain::new(vec![
+                primary,
+                fallback_client,
+            ]))
+        }
+        _ => Box::new(primary),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1005,6 +1098,46 @@ impl LlmProvider for LlmClient {
 // Error classification
 // ---------------------------------------------------------------------------
 
+/// Classify a `reqwest::Error` raised from `.send()` (no HTTP response received).
+///
+/// Policy — see PR #1272 review (sera-m1k8):
+/// - `is_timeout()` → `Timeout` (chain-retryable).
+/// - `is_builder()` → `RequestError` (PR #1272 P2 follow-up). Builder errors
+///   come from request *construction* — invalid `LLM_BASE_URL` /
+///   `SERA_LLM_FALLBACK_BASE_URL`, malformed header values, etc. — and are
+///   purely local config / wiring bugs. They must surface as `RequestError`
+///   so the chain does NOT advance and silently route traffic to the
+///   fallback while masking the primary misconfiguration. Checked **before**
+///   transport signals because builder errors never reach the network.
+/// - transport-level signals (`is_connect()` — DNS / connection refused / TLS
+///   handshake; `is_body()` — mid-request body transport drop;
+///   `is_redirect()` — redirect-loop) → `ProviderUnavailable` so
+///   `FallbackChain` advances. Checked **before** `is_request()` because in
+///   reqwest those signals are not mutually exclusive: `is_request()` is also
+///   `true` for connect errors, so checking `is_request()` first would
+///   re-introduce the PR #1272 P1 bug (transport outages misclassified as
+///   SERA-side request bugs).
+/// - `is_request()` (after eliminating transport signals) → `RequestError`
+///   (genuine SERA-side request-builder bug — invalid URL, bad header, etc.).
+/// - everything else → `ProviderUnavailable` (default to upstream-side for
+///   unknown reqwest error kinds; the chain advances rather than masking a
+///   real outage as a SERA bug).
+fn classify_send_error(e: reqwest::Error) -> LlmError {
+    if e.is_timeout() {
+        return LlmError::Timeout(e.to_string());
+    }
+    if e.is_builder() {
+        return LlmError::RequestError(e.to_string());
+    }
+    if e.is_connect() || e.is_body() || e.is_redirect() {
+        return LlmError::ProviderUnavailable(e.to_string());
+    }
+    if e.is_request() {
+        return LlmError::RequestError(e.to_string());
+    }
+    LlmError::ProviderUnavailable(e.to_string())
+}
+
 /// Classify an HTTP error into the appropriate `LlmError` variant.
 fn classify_http_error(
     status: u16,
@@ -1018,7 +1151,15 @@ fn classify_http_error(
             message: truncate_error(body),
             retry_after,
         }),
-        503 => Err(LlmError::ProviderUnavailable(truncate_error(body))),
+        // Any 5xx — upstream-side fault. Classify as ProviderUnavailable so
+        // `FallbackChain` advances on 500/502/504/etc., not just 503. PR #1272
+        // P1 follow-up: previously only 503 was retryable; generic 5xx fell
+        // through to `RequestError` and the chain stopped on the primary
+        // during common upstream outage classes.
+        500..=599 => Err(LlmError::ProviderUnavailable(format!(
+            "HTTP {status}: {}",
+            truncate_error(body)
+        ))),
         400 if lower_body.contains("context_length_exceeded")
             || lower_body.contains("maximum context length")
             || lower_body.contains("context window")
@@ -1283,10 +1424,45 @@ mod tests {
     }
 
     #[test]
-    fn test_error_generic_500() {
-        let err = classify_http_error(500, "internal server error", None).unwrap_err();
-        assert!(matches!(err, LlmError::RequestError(_)));
-        assert!(err.to_string().contains("HTTP 500"));
+    fn test_error_generic_5xx_is_provider_unavailable() {
+        // PR #1272 P1 follow-up: every 5xx — not just 503 — must classify as
+        // ProviderUnavailable so FallbackChain advances on common upstream
+        // outage classes (500 Internal, 502 Bad Gateway, 504 Gateway Timeout).
+        for status in [500u16, 502, 504, 505, 599] {
+            let err = classify_http_error(status, "upstream fault", None).unwrap_err();
+            assert!(
+                matches!(err, LlmError::ProviderUnavailable(_)),
+                "status {status} should be ProviderUnavailable, got {err:?}"
+            );
+            assert!(
+                err.to_string().contains(&format!("HTTP {status}")),
+                "error message should include the status code"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_send_error_builder_is_request_error() {
+        // PR #1272 P2 follow-up: reqwest builder errors (invalid base URL,
+        // bad header construction, etc.) must classify as `RequestError` so
+        // `FallbackChain::is_retryable` returns false and the chain does NOT
+        // silently route traffic to the fallback while masking a local
+        // misconfiguration of the primary endpoint.
+        let err = reqwest::Client::new()
+            .get("not a url")
+            .build()
+            .unwrap_err();
+        assert!(err.is_builder(), "expected a reqwest builder error");
+
+        let classified = classify_send_error(err);
+        assert!(
+            matches!(classified, LlmError::RequestError(_)),
+            "builder errors must classify as RequestError, got {classified:?}"
+        );
+        assert!(
+            !crate::fallback_chain::is_retryable(&classified),
+            "builder/RequestError must not be chain-retryable"
+        );
     }
 
     #[test]
@@ -1770,9 +1946,12 @@ mod tests {
     }
 
     #[test]
-    fn error_502_maps_to_request_error() {
+    fn error_502_maps_to_provider_unavailable() {
+        // PR #1272 P1 follow-up: 502 Bad Gateway is an upstream-side fault,
+        // not a SERA-side request bug. It must classify as ProviderUnavailable
+        // so the fallback chain advances on common primary-down outages.
         let err = classify_http_error(502, "bad gateway", None).unwrap_err();
-        assert!(matches!(err, LlmError::RequestError(_)));
+        assert!(matches!(err, LlmError::ProviderUnavailable(_)));
         assert!(err.to_string().contains("HTTP 502"));
     }
 
@@ -2117,5 +2296,58 @@ mod tests {
         let config = make_runtime_config_with_thinking(None);
         let client = LlmClient::new(&config);
         assert_eq!(client.provider_kind(), ProviderKind::Anthropic);
+    }
+
+    // =========================================================================
+    // PR #1272 P2 — fallback gets the same env-driven wiring as the primary
+    // =========================================================================
+
+    #[test]
+    fn wire_client_from_env_attaches_thinking_and_account_pool() {
+        // Use a uniquely-named provider id so SERA_<PROVIDER>_KEYS can be
+        // set/cleared in this test without colliding with any real provider.
+        // SERA_REASONING_LEVEL is a single global env var; save/restore it so
+        // we don't pollute other tests that depend on its default ("off").
+        let provider_id = "sera1272testprov";
+        let keys_var = "SERA_SERA1272TESTPROV_KEYS";
+        let level_var = "SERA_REASONING_LEVEL";
+
+        let prev_level = std::env::var(level_var).ok();
+        let prev_keys = std::env::var(keys_var).ok();
+
+        // SAFETY: env::set_var is unsafe under edition 2024 (racy across
+        // threads). This test mutates two env vars and restores them before
+        // returning; concurrent test threads reading the same vars may see
+        // transient state, which is acceptable for the narrow window here —
+        // every existing wire/build_from_config test directly constructs
+        // clients without touching SERA_REASONING_LEVEL.
+        unsafe {
+            std::env::set_var(level_var, "high");
+            std::env::set_var(keys_var, "key-a,key-b,key-c");
+        }
+
+        let config = make_runtime_config_with_thinking(None);
+        let client = wire_client_from_env(&config, provider_id);
+
+        unsafe {
+            match prev_level {
+                Some(v) => std::env::set_var(level_var, v),
+                None => std::env::remove_var(level_var),
+            }
+            match prev_keys {
+                Some(v) => std::env::set_var(keys_var, v),
+                None => std::env::remove_var(keys_var),
+            }
+        }
+
+        assert_eq!(
+            client.thinking().level,
+            sera_models::ReasoningLevel::High,
+            "SERA_REASONING_LEVEL=high must propagate to wired client"
+        );
+        assert!(
+            client.has_account_pool(),
+            "SERA_<PROVIDER>_KEYS must attach an account pool"
+        );
     }
 }

@@ -199,9 +199,11 @@ async fn main() -> anyhow::Result<()> {
     let permissive_gate = resolve_allow_missing_gate();
 
     let context_engine = Box::new(ContextPipeline::new());
-    let llm_client = Box::new(llm_client::build_from_config(&config));
+    // sera-m1k8: returns either a single LlmClient or a FallbackChain wrapping
+    // primary + fallback when SERA_LLM_FALLBACK_* env vars are set.
+    let llm_provider = llm_client::build_provider_from_config(&config);
     let runtime = DefaultRuntime::new(context_engine)
-        .with_llm(llm_client)
+        .with_llm(llm_provider)
         .with_tool_dispatcher(Box::new(dispatcher))
         .with_authz_provider(authz_provider)
         .with_allow_missing_constitutional_gate(permissive_gate);

@@ -59,6 +59,7 @@ pub mod authz_builder;
 pub mod config;
 pub mod memory_budget;
 pub mod default_runtime;
+pub mod fallback_chain;
 pub mod health;
 pub mod llm_client;
 pub mod manifest;

@@ -2030,6 +2030,21 @@ fn classify_operator_task_turn(turn: &MvsTurnResult) -> OperatorTaskCloseout {
         };
     }
 
+    // sera-qts: must precede the llm_unavailable check — the
+    // `[Model no-action: …]` sanitised reply describes a live model that
+    // burned its budget on reasoning_content without emitting any
+    // assistant reply or tool call. It is neither `llm_unavailable` (the
+    // model and the provider are healthy) nor `complete` (the operator
+    // task was not actually performed).
+    if is_model_no_act_runtime_result(&turn.reply) {
+        return OperatorTaskCloseout {
+            status: "blocked",
+            blocked: true,
+            failure_class: Some("model_no_act"),
+            next_action: Some("increase_output_budget_or_retry"),
+        };
+    }
+
     if is_llm_unavailable_runtime_result(&turn.reply) {
         return OperatorTaskCloseout {
             status: "blocked",
@@ -2056,6 +2071,16 @@ fn is_interrupted_runtime_result(reply: &str) -> bool {
 fn is_llm_unavailable_runtime_result(reply: &str) -> bool {
     let normalized = reply.trim_start().to_ascii_lowercase();
     normalized.starts_with("[llm error:") || normalized.starts_with("[llm unavailable:")
+}
+
+/// sera-qts: detect the runtime's sanitised reply for the
+/// `reasoning_content`-only, no-content, no-tool-calls case so the
+/// operator-task card can be classified as `model_no_act` instead of being
+/// folded into `llm_unavailable`. The runtime guarantees this prefix on the
+/// assistant-visible reply; the reasoning body itself never reaches us.
+fn is_model_no_act_runtime_result(reply: &str) -> bool {
+    let normalized = reply.trim_start().to_ascii_lowercase();
+    normalized.starts_with("[model no-action:")
 }
 
 fn is_llm_unavailable_structured_failure(failure: &str) -> bool {
@@ -9058,6 +9083,36 @@ spec:
         assert!(closeout.blocked);
         assert_eq!(closeout.failure_class, Some("llm_unavailable"));
         assert_eq!(closeout.next_action, Some("inspect_llm_provider"));
+    }
+
+    // sera-qts: reasoning-only Qwen / DeepSeek behaviour must classify as
+    // its own actionable failure — `model_no_act` — and *not* as
+    // `llm_unavailable` (the model is live, the provider is healthy) and
+    // *not* as `complete` (the task was never performed). The check must
+    // also be ordered before `is_llm_unavailable_runtime_result` since the
+    // sanitised reply contains "no" wording that could plausibly fall
+    // through to the wrong branch.
+    #[test]
+    fn operator_task_sanitized_reasoning_only_response_is_model_no_act_blocked_failure() {
+        let turn = MvsTurnResult {
+            reply: "[Model no-action: model produced internal reasoning but no assistant reply or tool call; retry with a larger output budget or different model.]"
+                .to_string(),
+            tool_events: vec![],
+            usage: UsageInfo {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+            },
+            cancelled: false,
+            failure: None,
+        };
+
+        let closeout = classify_operator_task_turn(&turn);
+
+        assert_eq!(closeout.status, "blocked");
+        assert!(closeout.blocked);
+        assert_eq!(closeout.failure_class, Some("model_no_act"));
+        assert_eq!(closeout.next_action, Some("increase_output_budget_or_retry"));
     }
 
     #[test]

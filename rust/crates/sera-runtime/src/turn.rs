@@ -86,6 +86,24 @@ impl ThinkError {
             ThinkError::Conversion(_) | ThinkError::UnsupportedToolUseBehavior(_) => false,
         }
     }
+
+    /// True when the provider streamed `reasoning_content` deltas but never
+    /// produced any assistant `content` or `tool_calls` (sera-qts).
+    ///
+    /// This is *not* `is_empty_assistant_message` — the model is alive and
+    /// emitting tokens, it just spent its whole budget thinking. Callers
+    /// must sanitise this into the `[Model no-action: …]` assistant-visible
+    /// reply and the gateway must classify it as `model_no_act`, never as
+    /// `llm_unavailable` and never as `complete`. The raw reasoning body
+    /// is discarded inside the LLM client; only a byte count reaches us.
+    fn is_reasoning_only_no_action(&self) -> bool {
+        match self {
+            ThinkError::Llm(message) => {
+                message.contains("provider emitted reasoning_content")
+            }
+            ThinkError::Conversion(_) | ThinkError::UnsupportedToolUseBehavior(_) => false,
+        }
+    }
 }
 
 /// Trait for calling an LLM from the think step.
@@ -329,7 +347,18 @@ pub async fn think(
         Some(provider) => match provider.chat_with_behavior(messages, tools, tool_use_behavior).await {
             Ok(result) => result,
             Err(e) => {
-                let content = if e.is_empty_assistant_message() {
+                let content = if e.is_reasoning_only_no_action() {
+                    // sera-qts: distinct from `empty_assistant_message`.
+                    // Logged with metadata only — the reasoning body never
+                    // crosses this boundary.
+                    tracing::error!(
+                        provider_error_kind = "reasoning_only_no_action",
+                        error = %e,
+                        "LLM emitted reasoning_content but no assistant content or tool_calls; sanitized assistant-visible response"
+                    );
+                    "[Model no-action: model produced internal reasoning but no assistant reply or tool call; retry with a larger output budget or different model.]"
+                        .to_string()
+                } else if e.is_empty_assistant_message() {
                     tracing::error!(
                         provider_error_kind = "empty_assistant_message",
                         error = %e,
@@ -1687,6 +1716,51 @@ mod tests {
                 && !content.contains("provider returned assistant message")
                 && !content.contains("neither content nor tool_calls"),
             "raw provider detail must not be user-visible: {content}"
+        );
+    }
+
+    /// sera-qts: reasoning-only provider error must be sanitised into the
+    /// distinct `[Model no-action: …]` reply (NOT `[LLM unavailable: …]`)
+    /// and must not leak the reasoning_content body — only its byte count
+    /// crossed the LLM-client boundary.
+    #[tokio::test]
+    async fn think_sanitizes_reasoning_only_provider_error_as_model_no_action() {
+        let provider = LlmErrorProvider {
+            message:
+                "request error: provider emitted reasoning_content (4096 bytes) but no assistant content or tool_calls",
+        };
+        let result = think(
+            &[],
+            &[],
+            &ReactMode::Default,
+            Some(&provider as &dyn LlmProvider),
+            &ToolUseBehavior::Auto,
+        )
+        .await;
+
+        assert!(
+            result.tool_calls.is_empty(),
+            "reasoning-only sanitisation must not invent tool calls"
+        );
+        let content = result
+            .response
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        assert!(
+            content.starts_with("[Model no-action:"),
+            "expected `[Model no-action: …]` prefix, got: {content}"
+        );
+        assert!(
+            !content.contains("LLM unavailable")
+                && !content.contains("LLM error")
+                && !content.contains("LLM call failed"),
+            "reasoning-only must not be folded into LLM-unavailable/error wording: {content}"
+        );
+        assert!(
+            !content.contains("reasoning_content")
+                && !content.contains("4096 bytes"),
+            "internal reasoning metadata must not bleed into the assistant-visible reply: {content}"
         );
     }
 

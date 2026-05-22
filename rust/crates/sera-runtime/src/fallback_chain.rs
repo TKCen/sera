@@ -17,6 +17,12 @@
 //!   [`LlmError::ContextOverflow`] (genuine model-side limit). These surface
 //!   immediately so a real SERA bug is not silently masked by falling back.
 //!
+//! Transport-level failures (DNS, connection refused, TLS handshake) are
+//! classified by [`LlmClient`] as [`LlmError::ProviderUnavailable`] — see
+//! `llm_client.rs` where the reqwest `is_connect()` branch maps to that
+//! variant — so a primary-down outage falls through to the next provider
+//! rather than surfacing as a SERA-side request bug.
+//!
 //! When the last provider in the chain fails, its error is returned verbatim
 //! (whatever class it was), preserving caller-visible diagnostics.
 //!

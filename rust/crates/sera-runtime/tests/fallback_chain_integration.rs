@@ -236,6 +236,45 @@ async fn primary_timeout_falls_back_to_local() {
     assert_eq!(result.message.content.as_deref(), Some("from-local"));
 }
 
+#[tokio::test]
+async fn primary_connect_refused_falls_back_to_local() {
+    // Regression for PR #1272 review: when the primary is unreachable at the
+    // transport layer (DNS failure, connection refused, TLS handshake), the
+    // reqwest error must be classified as ProviderUnavailable so the chain
+    // advances. Previously these surfaced as RequestError and the fallback
+    // never got a chance — every primary-outage looked like a SERA bug.
+    //
+    // We synthesise "connection refused" by binding a TCP listener, capturing
+    // its port, then dropping the listener so the port is free again. The
+    // chance of another process racing in on that exact port within the test
+    // window is negligible on a CI host.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probe socket");
+    let dead_port = listener
+        .local_addr()
+        .expect("probe socket has local addr")
+        .port();
+    drop(listener);
+
+    let fallback = healthy_server("from-local").await;
+
+    let primary_client = LlmClient::with_params(
+        &format!("http://127.0.0.1:{dead_port}"),
+        "minimax-m2.1",
+        Some("sk-mm"),
+        5_000,
+    );
+    let fallback_client =
+        LlmClient::with_params(&fallback.uri(), "qwen-local", Some("local"), 5_000);
+
+    let chain = FallbackChain::new(vec![primary_client, fallback_client]);
+    let result = chain
+        .chat_non_streaming_with_behavior(&[user_msg("hi")], &[], &ToolUseBehavior::Auto)
+        .await
+        .expect("fallback should succeed after primary connect refused");
+
+    assert_eq!(result.message.content.as_deref(), Some("from-local"));
+}
+
 // ---------------------------------------------------------------------------
 // Non-retryable: must NOT fall back (would mask real SERA bugs)
 // ---------------------------------------------------------------------------

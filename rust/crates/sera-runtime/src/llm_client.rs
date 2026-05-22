@@ -568,6 +568,7 @@ impl LlmClient {
             }
             Ok(Err(e)) => {
                 let is_timeout = e.is_timeout();
+                let is_connect = e.is_connect();
                 if let Some(g) = guard {
                     // Network-level failure → treat as provider unavailable so
                     // the pool tries the next account next time.
@@ -575,6 +576,13 @@ impl LlmClient {
                 }
                 if is_timeout {
                     return Err(LlmError::Timeout(e.to_string()));
+                }
+                if is_connect {
+                    // DNS failure, connection refused, TLS handshake error —
+                    // the upstream is unreachable. Classify as
+                    // ProviderUnavailable so FallbackChain advances rather
+                    // than masking this as a SERA-side request bug.
+                    return Err(LlmError::ProviderUnavailable(e.to_string()));
                 }
                 return Err(LlmError::RequestError(e.to_string()));
             }

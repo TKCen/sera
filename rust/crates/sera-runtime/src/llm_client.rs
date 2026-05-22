@@ -606,13 +606,27 @@ impl LlmClient {
                     );
                     g.record_429(*retry_after);
                 }
-                Err(LlmError::ProviderUnavailable(_)) => {
+                Err(LlmError::ProviderUnavailable(_)) if status.as_u16() == 503 => {
+                    // 503 Service Unavailable on this credential: pool entry
+                    // is overloaded/banned, so cycle to the next credential.
                     record_credential_outcome(
                         &provider,
                         &credential_id,
                         CredentialOutcome::Error5xx,
                     );
                     g.mark_unavailable();
+                }
+                Err(LlmError::ProviderUnavailable(_)) => {
+                    // 500/502/504/etc.: server-side fault that's not the
+                    // credential's fault — keep the credential active. The
+                    // chain still falls back because the error class is
+                    // retryable; see PR #1272 P1 follow-up.
+                    record_credential_outcome(
+                        &provider,
+                        &credential_id,
+                        CredentialOutcome::Error5xx,
+                    );
+                    g.mark_success();
                 }
                 Err(LlmError::RequestError(_)) if is_non_retryable_status(status.as_u16()) => {
                     // Sera-hjem: 4xx other than 429 is the credential's fault
@@ -623,14 +637,6 @@ impl LlmClient {
                         CredentialOutcome::Error4xx,
                     );
                     g.record_non_retryable_error();
-                }
-                _ if (500..=599).contains(&status.as_u16()) => {
-                    record_credential_outcome(
-                        &provider,
-                        &credential_id,
-                        CredentialOutcome::Error5xx,
-                    );
-                    g.mark_success();
                 }
                 // Context overflow / unclassified — not the credential's
                 // fault, leave state untouched and don't taint counters.
@@ -1135,7 +1141,15 @@ fn classify_http_error(
             message: truncate_error(body),
             retry_after,
         }),
-        503 => Err(LlmError::ProviderUnavailable(truncate_error(body))),
+        // Any 5xx — upstream-side fault. Classify as ProviderUnavailable so
+        // `FallbackChain` advances on 500/502/504/etc., not just 503. PR #1272
+        // P1 follow-up: previously only 503 was retryable; generic 5xx fell
+        // through to `RequestError` and the chain stopped on the primary
+        // during common upstream outage classes.
+        500..=599 => Err(LlmError::ProviderUnavailable(format!(
+            "HTTP {status}: {}",
+            truncate_error(body)
+        ))),
         400 if lower_body.contains("context_length_exceeded")
             || lower_body.contains("maximum context length")
             || lower_body.contains("context window")
@@ -1400,10 +1414,21 @@ mod tests {
     }
 
     #[test]
-    fn test_error_generic_500() {
-        let err = classify_http_error(500, "internal server error", None).unwrap_err();
-        assert!(matches!(err, LlmError::RequestError(_)));
-        assert!(err.to_string().contains("HTTP 500"));
+    fn test_error_generic_5xx_is_provider_unavailable() {
+        // PR #1272 P1 follow-up: every 5xx — not just 503 — must classify as
+        // ProviderUnavailable so FallbackChain advances on common upstream
+        // outage classes (500 Internal, 502 Bad Gateway, 504 Gateway Timeout).
+        for status in [500u16, 502, 504, 505, 599] {
+            let err = classify_http_error(status, "upstream fault", None).unwrap_err();
+            assert!(
+                matches!(err, LlmError::ProviderUnavailable(_)),
+                "status {status} should be ProviderUnavailable, got {err:?}"
+            );
+            assert!(
+                err.to_string().contains(&format!("HTTP {status}")),
+                "error message should include the status code"
+            );
+        }
     }
 
     #[test]
@@ -1887,9 +1912,12 @@ mod tests {
     }
 
     #[test]
-    fn error_502_maps_to_request_error() {
+    fn error_502_maps_to_provider_unavailable() {
+        // PR #1272 P1 follow-up: 502 Bad Gateway is an upstream-side fault,
+        // not a SERA-side request bug. It must classify as ProviderUnavailable
+        // so the fallback chain advances on common primary-down outages.
         let err = classify_http_error(502, "bad gateway", None).unwrap_err();
-        assert!(matches!(err, LlmError::RequestError(_)));
+        assert!(matches!(err, LlmError::ProviderUnavailable(_)));
         assert!(err.to_string().contains("HTTP 502"));
     }
 

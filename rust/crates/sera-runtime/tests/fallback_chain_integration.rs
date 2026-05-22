@@ -108,6 +108,19 @@ async fn unavailable_server() -> MockServer {
     server
 }
 
+async fn server_with_status(status: u16) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(status)
+                .set_body_string(r#"{"error":{"message":"upstream fault"}}"#),
+        )
+        .mount(&server)
+        .await;
+    server
+}
+
 async fn bad_request_server() -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -205,6 +218,36 @@ async fn primary_unavailable_falls_back_to_local() {
         .expect("fallback should succeed after primary 503");
 
     assert_eq!(result.message.content.as_deref(), Some("from-local"));
+}
+
+#[tokio::test]
+async fn primary_generic_5xx_falls_back_to_local() {
+    // Regression for PR #1272 review (current P1): the original classifier
+    // only routed 503 to ProviderUnavailable. 500 Internal Server Error,
+    // 502 Bad Gateway, and 504 Gateway Timeout — the most common primary-
+    // down classes — fell through to RequestError, so the chain stopped
+    // on the primary and never tried the fallback. Cover the canonical set.
+    for status in [500u16, 502, 504] {
+        let primary = server_with_status(status).await;
+        let fallback = healthy_server("from-local").await;
+
+        let primary_client =
+            LlmClient::with_params(&primary.uri(), "minimax-m2.1", Some("sk-mm"), 5_000);
+        let fallback_client =
+            LlmClient::with_params(&fallback.uri(), "qwen-local", Some("local"), 5_000);
+
+        let chain = FallbackChain::new(vec![primary_client, fallback_client]);
+        let result = chain
+            .chat_non_streaming_with_behavior(&[user_msg("hi")], &[], &ToolUseBehavior::Auto)
+            .await
+            .unwrap_or_else(|e| panic!("fallback should succeed after primary {status}: {e:?}"));
+
+        assert_eq!(
+            result.message.content.as_deref(),
+            Some("from-local"),
+            "status {status} should advance the chain to the fallback",
+        );
+    }
 }
 
 #[tokio::test]

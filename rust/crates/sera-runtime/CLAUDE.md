@@ -28,6 +28,23 @@ cargo run -p sera-runtime -- --ndjson < submissions.ndjson
 | `AGENT_ID` | `sera-local` | Agent identifier |
 | `AGENT_CHAT_PORT` | 0 | Health check HTTP port (0 = disabled) |
 | `RUST_LOG` | `info` | Tracing filter (NDJSON mode) |
+| `SERA_LLM_FALLBACK_BASE_URL` | (unset) | Optional fallback endpoint (sera-m1k8) |
+| `SERA_LLM_FALLBACK_MODEL` | (unset) | Optional fallback model name |
+| `SERA_LLM_FALLBACK_API_KEY` | (unset) | Optional fallback API key (env-resolved) |
+| `SERA_LLM_FALLBACK_PROVIDER_ID` | fallback model | Optional explicit provider id for reasoning/pool inference |
+| `SERA_LLM_FALLBACK_MAX_TOKENS` | inherits primary | Optional override for fallback `max_tokens` |
+
+### Provider chain (sera-m1k8)
+
+When `SERA_LLM_FALLBACK_*` env vars are set, `build_provider_from_config`
+wraps the primary [`LlmClient`] in a [`fallback_chain::FallbackChain`]. The
+chain prefers the primary (typically MiniMax over the OpenAI-compatible path)
+and falls back to the secondary (typically local LM Studio / Qwen) **only**
+on retryable upstream errors: `RateLimited`, `ProviderUnavailable`,
+`Timeout`. Non-retryable classes (`RequestError`, `ContextOverflow`) surface
+verbatim so SERA-side bugs are not silently masked by falling back. Absent
+the env vars the chain is bypassed and behaviour is byte-identical to the
+single-provider path.
 
 ## Module Map
 

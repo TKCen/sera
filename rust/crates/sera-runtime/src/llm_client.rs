@@ -927,6 +927,73 @@ pub fn build_from_config(config: &RuntimeConfig) -> LlmClient {
     client
 }
 
+/// Build an [`LlmProvider`] from a [`RuntimeConfig`], optionally wrapping the
+/// primary client in a [`crate::fallback_chain::FallbackChain`] when fallback
+/// env vars are set.
+///
+/// Env-var contract (sera-m1k8):
+/// - **Primary** — `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` (existing).
+/// - **Fallback (optional)** — `SERA_LLM_FALLBACK_BASE_URL`,
+///   `SERA_LLM_FALLBACK_MODEL`, `SERA_LLM_FALLBACK_API_KEY`. When all three
+///   are set the returned provider tries the primary first and falls back to
+///   the secondary on retryable errors only (rate-limit, timeout,
+///   provider-unavailable). Operators wiring MiniMax as the primary point
+///   `LLM_*` at MiniMax and `SERA_LLM_FALLBACK_*` at local LM Studio / Qwen.
+/// - `SERA_LLM_FALLBACK_PROVIDER_ID` — optional explicit provider id for the
+///   fallback (used for reasoning-config inference + account-pool lookup).
+///   Defaults to the fallback model name.
+/// - `SERA_LLM_FALLBACK_MAX_TOKENS` — optional override for the fallback
+///   client's `max_tokens` budget. Defaults to the primary's `max_tokens`.
+///
+/// When the fallback vars are absent, this returns a single-provider
+/// `Box<LlmClient>` — byte-identical to calling [`build_from_config`]
+/// directly.
+pub fn build_provider_from_config(
+    config: &RuntimeConfig,
+) -> Box<dyn crate::turn::LlmProvider> {
+    let primary = build_from_config(config);
+
+    let fallback_base = std::env::var("SERA_LLM_FALLBACK_BASE_URL").ok();
+    let fallback_model = std::env::var("SERA_LLM_FALLBACK_MODEL").ok();
+    let fallback_key = std::env::var("SERA_LLM_FALLBACK_API_KEY").ok();
+
+    match (fallback_base, fallback_model, fallback_key) {
+        (Some(base), Some(model), Some(api_key))
+            if !base.is_empty() && !model.is_empty() && !api_key.is_empty() =>
+        {
+            let max_tokens = std::env::var("SERA_LLM_FALLBACK_MAX_TOKENS")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(config.max_tokens);
+            let provider_id = std::env::var("SERA_LLM_FALLBACK_PROVIDER_ID")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| model.clone());
+            let provider_kind = sera_models::ProviderKind::infer(&provider_id);
+            let fallback_config = RuntimeConfig {
+                llm_base_url: base,
+                llm_model: model.clone(),
+                llm_api_key: api_key,
+                max_tokens,
+                ..config.clone()
+            };
+            let fallback_client = LlmClient::new(&fallback_config)
+                .with_provider_kind(provider_kind);
+            tracing::info!(
+                primary_model = %config.llm_model,
+                fallback_model = %model,
+                fallback_provider_id = %provider_id,
+                "FallbackChain configured (sera-m1k8): primary + 1 fallback"
+            );
+            Box::new(crate::fallback_chain::FallbackChain::new(vec![
+                primary,
+                fallback_client,
+            ]))
+        }
+        _ => Box::new(primary),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // LlmProvider implementation
 // ---------------------------------------------------------------------------

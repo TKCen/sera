@@ -567,24 +567,12 @@ impl LlmClient {
                 )));
             }
             Ok(Err(e)) => {
-                let is_timeout = e.is_timeout();
-                let is_connect = e.is_connect();
                 if let Some(g) = guard {
                     // Network-level failure → treat as provider unavailable so
                     // the pool tries the next account next time.
                     g.mark_unavailable();
                 }
-                if is_timeout {
-                    return Err(LlmError::Timeout(e.to_string()));
-                }
-                if is_connect {
-                    // DNS failure, connection refused, TLS handshake error —
-                    // the upstream is unreachable. Classify as
-                    // ProviderUnavailable so FallbackChain advances rather
-                    // than masking this as a SERA-side request bug.
-                    return Err(LlmError::ProviderUnavailable(e.to_string()));
-                }
-                return Err(LlmError::RequestError(e.to_string()));
+                return Err(classify_send_error(e));
             }
             Ok(Ok(resp)) => resp,
         };
@@ -873,20 +861,36 @@ impl LlmClient {
 /// single-account `LLM_BASE_URL` / `LLM_API_KEY` path. Likewise
 /// `SERA_REASONING_LEVEL` defaults to `off` when unset.
 pub fn build_from_config(config: &RuntimeConfig) -> LlmClient {
+    // Provider kind is inferred from LLM_MODEL (e.g. "gpt-4o" → OpenAI,
+    // "claude-3-5-sonnet" → Anthropic).  Operators can also set
+    // SERA_LLM_PROVIDER_ID to pin the inference explicitly.
+    let provider_id = std::env::var("SERA_LLM_PROVIDER_ID")
+        .unwrap_or_else(|_| config.llm_model.clone());
+    wire_client_from_env(config, &provider_id)
+}
+
+/// Build an [`LlmClient`] from `config`, applying the same env-driven wiring
+/// that [`build_from_config`] uses for the primary: `SERA_REASONING_LEVEL` /
+/// `SERA_REASONING_BUDGET_TOKENS` thinking config, inferred provider kind,
+/// and the `SERA_<PROVIDER>_KEYS` account pool (sera-jvi) when configured for
+/// `provider_id`.
+///
+/// Extracted so [`build_provider_from_config`] can construct the fallback
+/// through the same path — closing the PR #1272 P2 gap where the fallback
+/// silently ran with no reasoning config and only a single static key, so
+/// fallback availability degraded exactly during the outage/rate-limit
+/// scenarios it was meant to cover.
+fn wire_client_from_env(config: &RuntimeConfig, provider_id: &str) -> LlmClient {
     use sera_config::providers::ProviderAccountsConfig;
     use sera_models::{
         AccountPool, CooldownConfig, ProviderAccount, ProviderKind, ReasoningLevel,
         ThinkingConfig,
     };
 
-    // Provider kind is inferred from LLM_MODEL (e.g. "gpt-4o" → OpenAI,
-    // "claude-3-5-sonnet" → Anthropic).  Operators can also set
-    // SERA_LLM_PROVIDER_ID to pin the inference explicitly.
-    let provider_id = std::env::var("SERA_LLM_PROVIDER_ID")
-        .unwrap_or_else(|_| config.llm_model.clone());
-    let provider_kind = ProviderKind::infer(&provider_id);
+    let provider_kind = ProviderKind::infer(provider_id);
 
-    // Thinking / reasoning level.
+    // Thinking / reasoning level (shared across primary + fallback — reasoning
+    // depth is an agent-level decision, not provider-specific).
     let level = std::env::var("SERA_REASONING_LEVEL")
         .ok()
         .and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
@@ -910,7 +914,7 @@ pub fn build_from_config(config: &RuntimeConfig) -> LlmClient {
     // Account pool (sera-jvi). Only attached when at least one key is
     // configured for the active provider id.
     let accounts_cfg = ProviderAccountsConfig::from_env();
-    if let Some(keys) = accounts_cfg.keys_for(&provider_id)
+    if let Some(keys) = accounts_cfg.keys_for(provider_id)
         && !keys.is_empty()
     {
         let accounts: Vec<ProviderAccount> = keys
@@ -921,7 +925,7 @@ pub fn build_from_config(config: &RuntimeConfig) -> LlmClient {
             })
             .collect();
         let pool = Arc::new(
-            AccountPool::new(provider_id.clone(), accounts, CooldownConfig::default())
+            AccountPool::new(provider_id.to_string(), accounts, CooldownConfig::default())
                 .with_default_base_url(config.llm_base_url.clone()),
         );
         tracing::info!(
@@ -947,6 +951,10 @@ pub fn build_from_config(config: &RuntimeConfig) -> LlmClient {
 ///   the secondary on retryable errors only (rate-limit, timeout,
 ///   provider-unavailable). Operators wiring MiniMax as the primary point
 ///   `LLM_*` at MiniMax and `SERA_LLM_FALLBACK_*` at local LM Studio / Qwen.
+///   The fallback is built through the same `wire_client_from_env` path as
+///   the primary, so it picks up `SERA_REASONING_LEVEL` /
+///   `SERA_REASONING_BUDGET_TOKENS` and any `SERA_<PROVIDER>_KEYS` account
+///   pool configured for the fallback's provider id (PR #1272 P2 fix).
 /// - `SERA_LLM_FALLBACK_PROVIDER_ID` — optional explicit provider id for the
 ///   fallback (used for reasoning-config inference + account-pool lookup).
 ///   Defaults to the fallback model name.
@@ -977,7 +985,6 @@ pub fn build_provider_from_config(
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| model.clone());
-            let provider_kind = sera_models::ProviderKind::infer(&provider_id);
             let fallback_config = RuntimeConfig {
                 llm_base_url: base,
                 llm_model: model.clone(),
@@ -985,8 +992,13 @@ pub fn build_provider_from_config(
                 max_tokens,
                 ..config.clone()
             };
-            let fallback_client = LlmClient::new(&fallback_config)
-                .with_provider_kind(provider_kind);
+            // PR #1272 P2 fix (sera-m1k8): route the fallback through the same
+            // env-driven wiring as the primary so it gets reasoning config and
+            // a provider account pool when configured. Otherwise the fallback
+            // silently runs with a single static key and no reasoning settings,
+            // degrading availability exactly during the outage/rate-limit
+            // scenarios the chain was added for.
+            let fallback_client = wire_client_from_env(&fallback_config, &provider_id);
             tracing::info!(
                 primary_model = %config.llm_model,
                 fallback_model = %model,
@@ -1079,6 +1091,36 @@ impl LlmProvider for LlmClient {
 // ---------------------------------------------------------------------------
 // Error classification
 // ---------------------------------------------------------------------------
+
+/// Classify a `reqwest::Error` raised from `.send()` (no HTTP response received).
+///
+/// Policy — see PR #1272 review (sera-m1k8):
+/// - `is_timeout()` → `Timeout` (chain-retryable).
+/// - transport-level signals (`is_connect()` — DNS / connection refused / TLS
+///   handshake; `is_body()` — mid-request body transport drop;
+///   `is_redirect()` — redirect-loop) → `ProviderUnavailable` so
+///   `FallbackChain` advances. Checked **before** `is_request()` because in
+///   reqwest those signals are not mutually exclusive: `is_request()` is also
+///   `true` for connect errors, so checking `is_request()` first would
+///   re-introduce the PR #1272 P1 bug (transport outages misclassified as
+///   SERA-side request bugs).
+/// - `is_request()` (after eliminating transport signals) → `RequestError`
+///   (genuine SERA-side request-builder bug — invalid URL, bad header, etc.).
+/// - everything else → `ProviderUnavailable` (default to upstream-side for
+///   unknown reqwest error kinds; the chain advances rather than masking a
+///   real outage as a SERA bug).
+fn classify_send_error(e: reqwest::Error) -> LlmError {
+    if e.is_timeout() {
+        return LlmError::Timeout(e.to_string());
+    }
+    if e.is_connect() || e.is_body() || e.is_redirect() {
+        return LlmError::ProviderUnavailable(e.to_string());
+    }
+    if e.is_request() {
+        return LlmError::RequestError(e.to_string());
+    }
+    LlmError::ProviderUnavailable(e.to_string())
+}
 
 /// Classify an HTTP error into the appropriate `LlmError` variant.
 fn classify_http_error(
@@ -2192,5 +2234,58 @@ mod tests {
         let config = make_runtime_config_with_thinking(None);
         let client = LlmClient::new(&config);
         assert_eq!(client.provider_kind(), ProviderKind::Anthropic);
+    }
+
+    // =========================================================================
+    // PR #1272 P2 — fallback gets the same env-driven wiring as the primary
+    // =========================================================================
+
+    #[test]
+    fn wire_client_from_env_attaches_thinking_and_account_pool() {
+        // Use a uniquely-named provider id so SERA_<PROVIDER>_KEYS can be
+        // set/cleared in this test without colliding with any real provider.
+        // SERA_REASONING_LEVEL is a single global env var; save/restore it so
+        // we don't pollute other tests that depend on its default ("off").
+        let provider_id = "sera1272testprov";
+        let keys_var = "SERA_SERA1272TESTPROV_KEYS";
+        let level_var = "SERA_REASONING_LEVEL";
+
+        let prev_level = std::env::var(level_var).ok();
+        let prev_keys = std::env::var(keys_var).ok();
+
+        // SAFETY: env::set_var is unsafe under edition 2024 (racy across
+        // threads). This test mutates two env vars and restores them before
+        // returning; concurrent test threads reading the same vars may see
+        // transient state, which is acceptable for the narrow window here —
+        // every existing wire/build_from_config test directly constructs
+        // clients without touching SERA_REASONING_LEVEL.
+        unsafe {
+            std::env::set_var(level_var, "high");
+            std::env::set_var(keys_var, "key-a,key-b,key-c");
+        }
+
+        let config = make_runtime_config_with_thinking(None);
+        let client = wire_client_from_env(&config, provider_id);
+
+        unsafe {
+            match prev_level {
+                Some(v) => std::env::set_var(level_var, v),
+                None => std::env::remove_var(level_var),
+            }
+            match prev_keys {
+                Some(v) => std::env::set_var(keys_var, v),
+                None => std::env::remove_var(keys_var),
+            }
+        }
+
+        assert_eq!(
+            client.thinking().level,
+            sera_models::ReasoningLevel::High,
+            "SERA_REASONING_LEVEL=high must propagate to wired client"
+        );
+        assert!(
+            client.has_account_pool(),
+            "SERA_<PROVIDER>_KEYS must attach an account pool"
+        );
     }
 }

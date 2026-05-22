@@ -1102,6 +1102,13 @@ impl LlmProvider for LlmClient {
 ///
 /// Policy — see PR #1272 review (sera-m1k8):
 /// - `is_timeout()` → `Timeout` (chain-retryable).
+/// - `is_builder()` → `RequestError` (PR #1272 P2 follow-up). Builder errors
+///   come from request *construction* — invalid `LLM_BASE_URL` /
+///   `SERA_LLM_FALLBACK_BASE_URL`, malformed header values, etc. — and are
+///   purely local config / wiring bugs. They must surface as `RequestError`
+///   so the chain does NOT advance and silently route traffic to the
+///   fallback while masking the primary misconfiguration. Checked **before**
+///   transport signals because builder errors never reach the network.
 /// - transport-level signals (`is_connect()` — DNS / connection refused / TLS
 ///   handshake; `is_body()` — mid-request body transport drop;
 ///   `is_redirect()` — redirect-loop) → `ProviderUnavailable` so
@@ -1118,6 +1125,9 @@ impl LlmProvider for LlmClient {
 fn classify_send_error(e: reqwest::Error) -> LlmError {
     if e.is_timeout() {
         return LlmError::Timeout(e.to_string());
+    }
+    if e.is_builder() {
+        return LlmError::RequestError(e.to_string());
     }
     if e.is_connect() || e.is_body() || e.is_redirect() {
         return LlmError::ProviderUnavailable(e.to_string());
@@ -1429,6 +1439,30 @@ mod tests {
                 "error message should include the status code"
             );
         }
+    }
+
+    #[test]
+    fn classify_send_error_builder_is_request_error() {
+        // PR #1272 P2 follow-up: reqwest builder errors (invalid base URL,
+        // bad header construction, etc.) must classify as `RequestError` so
+        // `FallbackChain::is_retryable` returns false and the chain does NOT
+        // silently route traffic to the fallback while masking a local
+        // misconfiguration of the primary endpoint.
+        let err = reqwest::Client::new()
+            .get("not a url")
+            .build()
+            .unwrap_err();
+        assert!(err.is_builder(), "expected a reqwest builder error");
+
+        let classified = classify_send_error(err);
+        assert!(
+            matches!(classified, LlmError::RequestError(_)),
+            "builder errors must classify as RequestError, got {classified:?}"
+        );
+        assert!(
+            !crate::fallback_chain::is_retryable(&classified),
+            "builder/RequestError must not be chain-retryable"
+        );
     }
 
     #[test]

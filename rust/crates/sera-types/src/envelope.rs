@@ -231,6 +231,20 @@ pub enum EventMsg {
         turn_id: Uuid,
         call_id: String,
         result: String,
+        /// Structured outcome of the tool execution. Defaults to `Success`
+        /// so older runtimes that do not set the field still deserialize.
+        /// Set by the runtime via [`sera-tqzd`] when `ToolDispatcher::dispatch`
+        /// returns an error, so failures are never reduced to an opaque
+        /// content string at the operator/audit boundary.
+        #[serde(default)]
+        status: ToolCallStatus,
+        /// Canonical [`ToolError`](crate::tool::ToolError) variant name when
+        /// `status == Failure` (e.g. `"policy_denied"`, `"execution_failed"`).
+        /// `None` on success or when the runtime cannot classify the error.
+        /// Used by the gateway audit ledger ([`sera-q66q`]) so a closeout
+        /// reader can filter on failure class without reparsing free text.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_class: Option<String>,
     },
     HitlRequest {
         approval_id: Uuid,
@@ -275,6 +289,66 @@ pub enum EventMsg {
         code: String,
         message: String,
     },
+}
+
+/// Outcome of a tool execution surfaced on [`EventMsg::ToolCallEnd`].
+///
+/// Lives alongside the wire envelope so both the runtime emitter and the
+/// gateway consumer share the same enum. `Success` is the serde default so
+/// older runtime builds — which never set the field — keep parsing.
+///
+/// Anchors: `sera-tqzd` (failure must be operator-visible) and `sera-q66q`
+/// (audit ledger entry per execution).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallStatus {
+    #[default]
+    Success,
+    Failure,
+}
+
+impl ToolCallStatus {
+    /// Stable lowercase tag — used by the gateway audit payload so dashboards
+    /// can filter without recomputing the enum case.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Failure => "failure",
+        }
+    }
+}
+
+/// JSON field on a transcript `tool` message that flags a failed dispatch
+/// (`"success"` / `"failure"`). Underscore-prefixed so the field is treated
+/// as runtime/gateway metadata rather than an OpenAI tool-message contract
+/// field. Older builds that never see it default to [`ToolCallStatus::Success`].
+pub const TOOL_STATUS_MARKER: &str = "_sera_status";
+
+/// JSON field on a transcript `tool` message carrying the canonical
+/// [`crate::tool::ToolError::class_name`] when [`TOOL_STATUS_MARKER`] is
+/// `"failure"`. Absent on success.
+pub const TOOL_ERROR_CLASS_MARKER: &str = "_sera_error_class";
+
+/// Parse the failure markers off a transcript `tool` message, returning
+/// `(status, error_class)`. Missing / malformed markers degrade to
+/// `(Success, None)` so the helper is safe on any tool-result JSON shape.
+///
+/// Single source of truth shared between the runtime's NDJSON emitter
+/// ([`sera-runtime`]) and the gateway's embedded-transport projection
+/// ([`sera-gateway`]) — keeps the wire / projection paths from drifting.
+pub fn read_tool_status_markers(msg: &serde_json::Value) -> (ToolCallStatus, Option<String>) {
+    let status = match msg.get(TOOL_STATUS_MARKER).and_then(|v| v.as_str()) {
+        Some("failure") => ToolCallStatus::Failure,
+        Some("success") | None => ToolCallStatus::Success,
+        // Unknown future strings are treated as success to preserve the
+        // forward-compat default; the wire field always wins if set.
+        Some(_) => ToolCallStatus::Success,
+    };
+    let error_class = msg
+        .get(TOOL_ERROR_CLASS_MARKER)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    (status, error_class)
 }
 
 /// W3C trace context for distributed tracing.
@@ -712,5 +786,103 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(plugin, RegisterOp::Plugin { .. }));
+    }
+
+    // ── ToolCallStatus + marker reader (sera-tqzd / sera-q66q) ────────────────
+
+    #[test]
+    fn tool_call_status_default_is_success() {
+        // Wire-default must be Success so old runtimes that never set the
+        // field don't get reclassified as failures.
+        assert_eq!(ToolCallStatus::default(), ToolCallStatus::Success);
+    }
+
+    #[test]
+    fn tool_call_status_serializes_snake_case() {
+        let success = serde_json::to_value(ToolCallStatus::Success).unwrap();
+        let failure = serde_json::to_value(ToolCallStatus::Failure).unwrap();
+        assert_eq!(success, serde_json::Value::String("success".into()));
+        assert_eq!(failure, serde_json::Value::String("failure".into()));
+    }
+
+    #[test]
+    fn read_tool_status_markers_defaults_to_success() {
+        let msg = serde_json::json!({
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": "ok",
+        });
+        let (status, class) = read_tool_status_markers(&msg);
+        assert_eq!(status, ToolCallStatus::Success);
+        assert!(class.is_none());
+    }
+
+    #[test]
+    fn read_tool_status_markers_recognises_failure() {
+        let msg = serde_json::json!({
+            "role": "tool",
+            "tool_call_id": "c2",
+            "content": "[tool error: …]",
+            TOOL_STATUS_MARKER: "failure",
+            TOOL_ERROR_CLASS_MARKER: "policy_denied",
+        });
+        let (status, class) = read_tool_status_markers(&msg);
+        assert_eq!(status, ToolCallStatus::Failure);
+        assert_eq!(class.as_deref(), Some("policy_denied"));
+    }
+
+    #[test]
+    fn read_tool_status_markers_ignores_unknown_status() {
+        // Forward-compat: unknown status values fall back to Success rather
+        // than synthesising a phantom failure. The wire field always wins
+        // when set to a known value.
+        let msg = serde_json::json!({
+            "role": "tool",
+            TOOL_STATUS_MARKER: "weird_future_state",
+        });
+        let (status, class) = read_tool_status_markers(&msg);
+        assert_eq!(status, ToolCallStatus::Success);
+        assert!(class.is_none());
+    }
+
+    #[test]
+    fn tool_call_end_with_status_round_trips() {
+        // Forward-compat: a runtime that emits the new fields must
+        // round-trip through serde, and an older runtime that omits them
+        // must deserialize with the Success default.
+        let new = EventMsg::ToolCallEnd {
+            turn_id: uuid::Uuid::nil(),
+            call_id: "c3".into(),
+            result: "[tool error: timeout]".into(),
+            status: ToolCallStatus::Failure,
+            error_class: Some("timeout".into()),
+        };
+        let json = serde_json::to_value(&new).unwrap();
+        assert_eq!(json["status"], serde_json::Value::String("failure".into()));
+        assert_eq!(json["error_class"], serde_json::Value::String("timeout".into()));
+        let parsed: EventMsg = serde_json::from_value(json).unwrap();
+        match parsed {
+            EventMsg::ToolCallEnd { status, error_class, .. } => {
+                assert_eq!(status, ToolCallStatus::Failure);
+                assert_eq!(error_class.as_deref(), Some("timeout"));
+            }
+            other => panic!("expected ToolCallEnd, got {:?}", other),
+        }
+
+        // Older wire shape — no status / error_class — must default to Success.
+        let legacy = serde_json::json!({
+            "type": "tool_call_end",
+            "turn_id": uuid::Uuid::nil(),
+            "call_id": "c4",
+            "result": "ok",
+        });
+        let parsed: EventMsg = serde_json::from_value(legacy).unwrap();
+        match parsed {
+            EventMsg::ToolCallEnd { status, error_class, .. } => {
+                assert_eq!(status, ToolCallStatus::Success);
+                assert!(error_class.is_none());
+            }
+            other => panic!("expected ToolCallEnd, got {:?}", other),
+        }
     }
 }

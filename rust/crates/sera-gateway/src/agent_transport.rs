@@ -16,6 +16,7 @@
 //! sense. The implementor is responsible only for the backend round-trip.
 
 use async_trait::async_trait;
+use sera_types::envelope::ToolCallStatus;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::mpsc::Sender;
@@ -34,6 +35,15 @@ pub enum ToolEvent {
     End {
         call_id: String,
         content: String,
+        /// Structured outcome forwarded from `EventMsg::ToolCallEnd::status`.
+        /// Defaults to `Success` so an older runtime that omits the wire
+        /// field still produces a sensible event for the audit emitter
+        /// (`sera-tqzd`, `sera-q66q`).
+        status: ToolCallStatus,
+        /// Canonical [`sera_types::tool::ToolError`] variant name when the
+        /// dispatch failed; `None` on success or when the runtime could not
+        /// classify the error.
+        error_class: Option<String>,
     },
 }
 

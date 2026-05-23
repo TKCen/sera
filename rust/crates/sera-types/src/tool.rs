@@ -480,6 +480,29 @@ pub enum ToolError {
     PermissionDenied { reason: String },
 }
 
+impl ToolError {
+    /// Stable snake_case class name for audit / wire propagation.
+    ///
+    /// Used by the runtime to fill `EventMsg::ToolCallEnd::error_class` when
+    /// dispatch fails (`sera-tqzd`), and by the gateway's OCSF audit emitter
+    /// (`sera-q66q`) to filter failures by class without reparsing `Display`.
+    /// The mapping is intentionally lossy: `Display`/`Debug` carry the
+    /// human-readable detail, while this returns only the discriminant.
+    pub fn class_name(&self) -> &'static str {
+        match self {
+            ToolError::NotFound(_) => "not_found",
+            ToolError::Unauthorized(_) => "unauthorized",
+            ToolError::ExecutionFailed(_) => "execution_failed",
+            ToolError::Timeout => "timeout",
+            ToolError::InvalidInput(_) => "invalid_input",
+            ToolError::PolicyDenied(_) => "policy_denied",
+            ToolError::InvalidArguments(_) => "invalid_arguments",
+            ToolError::AbortedByHook { .. } => "aborted_by_hook",
+            ToolError::PermissionDenied { .. } => "permission_denied",
+        }
+    }
+}
+
 impl From<ToolError> for sera_errors::SeraError {
     fn from(err: ToolError) -> Self {
         use sera_errors::SeraErrorCode;

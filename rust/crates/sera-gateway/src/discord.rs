@@ -1397,6 +1397,441 @@ pub fn gate_control_reaction(
 }
 
 // ---------------------------------------------------------------------------
+// Operator introspection commands (sera-yeg.10)
+//
+// A compact Discord-native operator console: a short command word (`status`,
+// `help`, `sessions`, `goals`) — typed alone in a DM or alongside a mention
+// in a guild channel — returns a privacy-clean summary backed by
+// gateway-owned state. Responses must:
+//   * never leak raw channel ids, file paths, tokens, or transcripts;
+//   * include short session/audit ids when useful for follow-up;
+//   * be per-user rate-limited so a hot operator cannot flood the bot or
+//     trigger Discord's per-channel rate limit.
+//
+// Everything in this module is pure data + functions (no I/O), so the parser,
+// renderer, sanitizers, and rate limiter are unit-testable without standing
+// up a gateway. The bin layer (`process_message` in `bin/sera.rs`) wires the
+// short-circuit: a matched introspection command bypasses the LLM turn
+// pipeline entirely and replies with the rendered snapshot.
+// ---------------------------------------------------------------------------
+
+/// Typed operator introspection command parsed from an inbound message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntrospectionCommand {
+    /// Compact one-card summary of gateway-owned state.
+    Status,
+    /// List of supported commands + usage examples.
+    Help,
+    /// Snapshot of SERA sessions (short id, agent, surface, state).
+    Sessions,
+    /// Snapshot of pending workflow tasks (short id, gate kind, state).
+    Goals,
+}
+
+impl IntrospectionCommand {
+    /// Stable audit tag for `discord_introspection` rows. Used by the bin
+    /// layer when appending the audit row so log analysis doesn't depend on
+    /// `Debug` formatting.
+    pub fn audit_tag(self) -> &'static str {
+        match self {
+            IntrospectionCommand::Status => "status",
+            IntrospectionCommand::Help => "help",
+            IntrospectionCommand::Sessions => "sessions",
+            IntrospectionCommand::Goals => "goals",
+        }
+    }
+}
+
+/// Produce a command-peek candidate from a raw inbound message: strip only
+/// the self mention (`<@self>` / `<@!self>`) and return `None` whenever the
+/// remaining text still contains any other `<@id>` mention tag.
+///
+/// Rationale (Codex P2 on PR #1283): the introspection short-circuit must
+/// not intercept `<@peer-bot> status` — that message targets a peer, and
+/// `normalize_content_for_runtime` with an empty peer directory would
+/// silently strip `<@peer-bot>` to leave the bare `status` verb, causing a
+/// false-positive introspection trigger that bypasses the normal turn /
+/// audit / session pipeline. Returning `None` here forces the caller to
+/// route any message carrying a non-self mention through the full pipeline
+/// regardless of verb shape.
+pub fn introspection_command_candidate(raw: &str, self_bot_id: Option<&str>) -> Option<String> {
+    let stripped = match self_bot_id {
+        Some(self_id) if !self_id.is_empty() => {
+            let re = mention_tag_re();
+            re.replace_all(raw, |caps: &regex::Captures<'_>| {
+                if &caps[1] == self_id {
+                    String::new()
+                } else {
+                    caps[0].to_owned()
+                }
+            })
+            .into_owned()
+        }
+        _ => raw.to_owned(),
+    };
+    // Any leftover `<@id>` mention belongs to a non-self user / peer bot.
+    // The introspection short-circuit is *not* the right routing for those
+    // messages — they need to flow through the full pipeline so peer
+    // mentions are preserved on the outbound reply (sera-yeg.4) and the
+    // turn-audit / session-state path runs normally.
+    if mention_tag_re().is_match(&stripped) {
+        return None;
+    }
+    Some(stripped.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// Try to parse `content` as an operator introspection command.
+///
+/// Returns `None` for anything that doesn't look like a command so a regular
+/// DM / mention with the word `status` embedded in a sentence (e.g.
+/// `"what's the status of x?"`) is still routed through the normal turn
+/// pipeline. The parser is intentionally strict: the verb must be the *only*
+/// remaining token after sigil/prefix stripping, so brittle keyword matching
+/// is avoided.
+///
+/// Accepted forms (case-insensitive, leading/trailing whitespace tolerated):
+///   * the bare verb: `status`, `help`, `sessions`, `goals`
+///   * `commands` aliases to `help`; `tasks` aliases to `goals`
+///   * sigil prefixes: `!status`, `/status`, `?status`
+///   * `!sera <verb>` or `/sera <verb>` for slash-style invocation
+///
+/// The `content` is expected to be the mention-normalized form built by
+/// [`normalize_content_for_runtime`] — i.e. self mentions already stripped —
+/// so callers don't need to handle `<@bot_id> status` separately.
+pub fn parse_introspection_command(content: &str) -> Option<IntrospectionCommand> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Strip the longest matching slash-style prefix first so `!sera status`
+    // and `/sera status` both reduce to `status`. Order matters: the longer
+    // prefixes (`!sera ` with the trailing space) must be tried before the
+    // bare-sigil paths so `!sera status` doesn't get cut to `sera status`.
+    let body = if let Some(rest) = trimmed
+        .strip_prefix("!sera ")
+        .or_else(|| trimmed.strip_prefix("/sera "))
+    {
+        rest.trim_start()
+    } else if let Some(rest) = trimmed.strip_prefix(['!', '/', '?']) {
+        rest.trim_start()
+    } else {
+        trimmed
+    };
+    let verb = body.trim();
+    if verb.is_empty() || verb.chars().any(char::is_whitespace) {
+        return None;
+    }
+    match verb.to_ascii_lowercase().as_str() {
+        "status" => Some(IntrospectionCommand::Status),
+        "help" | "commands" => Some(IntrospectionCommand::Help),
+        "sessions" => Some(IntrospectionCommand::Sessions),
+        "goals" | "tasks" => Some(IntrospectionCommand::Goals),
+        _ => None,
+    }
+}
+
+/// One row in the `sessions` digest. Fields are pre-sanitized for direct
+/// inclusion in a Discord message body — short ids only, no raw channel ids
+/// or filesystem paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionDigest {
+    /// Last few chars of the canonical SERA session id, prefixed with `…`.
+    pub id_short: String,
+    /// Logical agent name (already a public manifest identifier).
+    pub agent: String,
+    /// Surface tag — first colon segment of `session_key`. Typical values:
+    /// `discord`, `http`, `a2a`.
+    pub surface: String,
+    /// Session state column (`active`, `closed`, etc.).
+    pub state: String,
+}
+
+/// One row in the `goals` digest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalDigest {
+    /// Last few chars of the workflow task id, prefixed with `…`.
+    pub id_short: String,
+    /// Gate kind name (`gh_run`, `timer`, `human`, …) or `none` when the
+    /// task has no `await_type`.
+    pub kind: String,
+    /// Scheduler-side status (`pending`, `resolved`).
+    pub state: String,
+}
+
+/// Compact, privacy-clean snapshot of gateway state. Built by the bin layer
+/// from `AppState` at command-handle time and consumed by
+/// [`render_introspection_response`].
+///
+/// The bin builds this once per introspection command and discards it; nothing
+/// here is meant to be cached. Empty/zero fields are valid (fresh gateway with
+/// no traffic) — the renderer surfaces them as `0` / `(none)` rather than
+/// hiding the row.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IntrospectionSnapshot {
+    /// Number of in-flight turns/steers across all lanes.
+    pub active_runs: usize,
+    /// Number of events queued behind in-flight runs.
+    pub queued_events: usize,
+    /// Total number of sessions known to the persistence layer.
+    pub total_sessions: usize,
+    /// Total number of pending workflow tasks.
+    pub total_pending_goals: usize,
+    /// Agent names from the loaded manifests (deduped, caller-sorted).
+    pub agents: Vec<String>,
+    /// Connector kinds from the loaded manifests (deduped, caller-sorted).
+    pub connectors: Vec<String>,
+    /// Per-session digests for the `sessions` command. Clamped at the
+    /// renderer to keep the response compact; carry the unclamped list here
+    /// so the renderer can report `+N more not shown`.
+    pub sessions: Vec<SessionDigest>,
+    /// Pending workflow-task digests for the `goals` command. Clamped by the
+    /// renderer with the same `+N more not shown` affordance as `sessions`.
+    pub goals: Vec<GoalDigest>,
+}
+
+/// Maximum number of session rows the renderer prints. Excess rows are
+/// summarised as `_+ N more not shown_` so the reply stays well under the
+/// Discord 2000-char limit even when the gateway is tracking many sessions.
+pub const INTROSPECTION_SESSION_LIMIT: usize = 5;
+
+/// Maximum number of goal rows the renderer prints. Same `+N more` overflow
+/// affordance as [`INTROSPECTION_SESSION_LIMIT`].
+pub const INTROSPECTION_GOAL_LIMIT: usize = 5;
+
+/// Trim a session id / audit id to a short display tail prefixed with `…`.
+/// Short inputs (≤ 6 chars) are returned verbatim so test fixtures remain
+/// readable; longer inputs keep the last 4 chars, matching the convention
+/// used by [`sanitize_audit_id_for_display`] for status-card audit ids.
+///
+/// Backticks and CR/LF are stripped so the value can be wrapped in
+/// `` `…` `` inline code without breaking Discord markdown.
+pub fn shorten_id_for_display(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| *c != '`' && *c != '\n' && *c != '\r')
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        return "unknown".to_owned();
+    }
+    if trimmed.chars().count() <= 6 {
+        return trimmed.to_owned();
+    }
+    let tail: String = trimmed
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("…{tail}")
+}
+
+/// Trusted SERA surface labels that may appear as the leading segment of a
+/// session_key. Anything outside this allowlist is treated as untrusted —
+/// see [`surface_from_session_key`].
+///
+/// New surfaces must be added explicitly. A pattern-based check (e.g.
+/// "ascii lowercase, up to 16 chars") is intentionally NOT used: an
+/// externally-supplied prefix like `a12345678901234` matches such a
+/// pattern but still embeds a 14-digit run that would leak identifier
+/// material in the operator-facing reply (Codex P2 follow-up on PR #1283).
+const TRUSTED_SURFACE_TAGS: &[&str] = &["discord", "http", "a2a"];
+
+/// Extract the surface tag (first colon segment) from a SERA session_key.
+/// Returns `"unknown"` whenever the key is missing the colon delimiter, the
+/// leading segment is empty, or the leading segment is not on
+/// [`TRUSTED_SURFACE_TAGS`].
+///
+/// Using an explicit allowlist (instead of a regex / character-class check)
+/// closes the snowflake-leak class for externally-supplied prefixes that
+/// happen to satisfy a shape rule but still embed identifier material.
+pub fn surface_from_session_key(session_key: &str) -> String {
+    if !session_key.contains(':') {
+        return "unknown".to_owned();
+    }
+    let surface = session_key.split(':').next().unwrap_or("").trim();
+    if TRUSTED_SURFACE_TAGS.contains(&surface) {
+        surface.to_owned()
+    } else {
+        "unknown".to_owned()
+    }
+}
+
+/// Render an [`IntrospectionCommand`] + [`IntrospectionSnapshot`] pair into
+/// a single Discord message body. Privacy-clean (no raw channel ids, file
+/// paths, tokens, transcripts) and bounded in size — the snapshot's
+/// `sessions` and `goals` are clamped to
+/// [`INTROSPECTION_SESSION_LIMIT`] / [`INTROSPECTION_GOAL_LIMIT`] with an
+/// overflow notice so the reply always fits comfortably under Discord's
+/// 2000-char message limit.
+pub fn render_introspection_response(
+    cmd: IntrospectionCommand,
+    snapshot: &IntrospectionSnapshot,
+) -> String {
+    match cmd {
+        IntrospectionCommand::Help => render_help_response(),
+        IntrospectionCommand::Status => render_status_response(snapshot),
+        IntrospectionCommand::Sessions => render_sessions_response(snapshot),
+        IntrospectionCommand::Goals => render_goals_response(snapshot),
+    }
+}
+
+fn render_help_response() -> String {
+    let mut out = String::new();
+    out.push_str("**SERA · operator commands**\n");
+    out.push_str("`status` · live gateway summary (active runs, agents, connectors)\n");
+    out.push_str("`sessions` · active SERA session digests (short id, agent, surface)\n");
+    out.push_str("`goals` · pending workflow-task digests (short id, gate kind, state)\n");
+    out.push_str("`help` · this list\n");
+    out.push_str("\nUsage: DM SERA or @-mention with the verb as the only token (e.g. `status`).");
+    out
+}
+
+fn render_status_response(s: &IntrospectionSnapshot) -> String {
+    let agents = render_inline_list(&s.agents);
+    let connectors = render_inline_list(&s.connectors);
+    format!(
+        "**SERA · status**\n\
+         • active runs · `{active}`\n\
+         • queued events · `{queued}`\n\
+         • sessions tracked · `{sessions}`\n\
+         • pending goals · `{goals}`\n\
+         • agents · {agents}\n\
+         • connectors · {connectors}",
+        active = s.active_runs,
+        queued = s.queued_events,
+        sessions = s.total_sessions,
+        goals = s.total_pending_goals,
+        agents = agents,
+        connectors = connectors,
+    )
+}
+
+fn render_sessions_response(s: &IntrospectionSnapshot) -> String {
+    if s.sessions.is_empty() {
+        return "**SERA · sessions**\n_(no sessions tracked)_".to_owned();
+    }
+    let mut out = String::from("**SERA · sessions**");
+    for d in s.sessions.iter().take(INTROSPECTION_SESSION_LIMIT) {
+        out.push_str(&format!(
+            "\n• `{id}` · {agent} · {surface} · {state}",
+            id = d.id_short,
+            agent = d.agent,
+            surface = d.surface,
+            state = d.state,
+        ));
+    }
+    if s.sessions.len() > INTROSPECTION_SESSION_LIMIT {
+        let extra = s.sessions.len() - INTROSPECTION_SESSION_LIMIT;
+        out.push_str(&format!("\n_+ {extra} more not shown_"));
+    }
+    out
+}
+
+fn render_goals_response(s: &IntrospectionSnapshot) -> String {
+    if s.goals.is_empty() {
+        return "**SERA · goals**\n_(no pending tasks)_".to_owned();
+    }
+    let mut out = String::from("**SERA · goals**");
+    for g in s.goals.iter().take(INTROSPECTION_GOAL_LIMIT) {
+        out.push_str(&format!(
+            "\n• `{id}` · {kind} · {state}",
+            id = g.id_short,
+            kind = g.kind,
+            state = g.state,
+        ));
+    }
+    if s.goals.len() > INTROSPECTION_GOAL_LIMIT {
+        let extra = s.goals.len() - INTROSPECTION_GOAL_LIMIT;
+        out.push_str(&format!("\n_+ {extra} more not shown_"));
+    }
+    out
+}
+
+fn render_inline_list(items: &[String]) -> String {
+    if items.is_empty() {
+        return "_(none)_".to_owned();
+    }
+    items
+        .iter()
+        .map(|s| format!("`{s}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Per-user sliding-window rate limiter for operator introspection commands.
+///
+/// Pure data structure — callers pass [`std::time::Instant`] so the limiter
+/// is fully testable with a controlled clock. Each call to
+/// [`Self::try_acquire`] evicts timestamps older than `window`, then admits
+/// the call only if the per-user count is below `capacity`.
+///
+/// Default policy ([`Self::default_policy`]) is **5 commands per 60-second
+/// window per user**. This is generous enough for routine operator
+/// introspection but strict enough that a misconfigured operator script
+/// can't flood the channel or trip Discord's per-channel rate limit.
+#[derive(Debug)]
+pub struct IntrospectionRateLimiter {
+    capacity: usize,
+    window: std::time::Duration,
+    log: std::collections::HashMap<String, std::collections::VecDeque<std::time::Instant>>,
+}
+
+impl IntrospectionRateLimiter {
+    /// Construct with explicit `capacity` (max accepted commands per window)
+    /// and `window` length. `capacity == 0` denies every call.
+    pub fn new(capacity: usize, window: std::time::Duration) -> Self {
+        Self {
+            capacity,
+            window,
+            log: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Default policy — 5 commands per 60s per user. The default keeps
+    /// burst-typed operators (e.g. `status` then `sessions` in quick
+    /// succession) flowing without contention while bounding pathological
+    /// loops to ~5 / minute.
+    pub fn default_policy() -> Self {
+        Self::new(5, std::time::Duration::from_secs(60))
+    }
+
+    /// Attempt to acquire a slot for `user_id` at `now`. Returns `true` on
+    /// success (slot consumed), `false` when the per-user cap is full.
+    ///
+    /// An empty `user_id` is always denied — an anonymous caller bypasses
+    /// per-user accounting, which would let a single unauthenticated source
+    /// flood the channel under the global capacity rather than its own.
+    pub fn try_acquire(&mut self, user_id: &str, now: std::time::Instant) -> bool {
+        if user_id.is_empty() || self.capacity == 0 {
+            return false;
+        }
+        let entry = self.log.entry(user_id.to_owned()).or_default();
+        while let Some(front) = entry.front() {
+            if now.duration_since(*front) >= self.window {
+                entry.pop_front();
+            } else {
+                break;
+            }
+        }
+        if entry.len() >= self.capacity {
+            return false;
+        }
+        entry.push_back(now);
+        true
+    }
+}
+
+/// Render the body of a rate-limit reply. Kept as a separate helper so the
+/// bin layer doesn't need to know the policy specifics, and so the reply
+/// text is unit-testable independently of the limiter state.
+pub fn render_rate_limited_response() -> String {
+    "**SERA · rate limited**\n_Slow down — try again in a minute._".to_owned()
+}
+
+// ---------------------------------------------------------------------------
 // DiscordConnector implementation
 // ---------------------------------------------------------------------------
 
@@ -4329,5 +4764,360 @@ mod tests {
             }))
             .unwrap_or_else(|_| panic!("parse_message_create panicked on bogus shape {i}: {p}"));
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Operator introspection commands (sera-yeg.10)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn introspection_command_candidate_strips_self_mention_only() {
+        // Discord mention tags are `<@digits>` / `<@!digits>` — use realistic
+        // numeric ids matching the `mention_tag_re()` pattern.
+        let got = introspection_command_candidate("<@111> status", Some("111"));
+        assert_eq!(got.as_deref(), Some("status"));
+
+        // Both the angle-bang variant `<@!id>` and the plain `<@id>` shape
+        // are handled by the same regex.
+        let got = introspection_command_candidate("<@!111>  help  ", Some("111"));
+        assert_eq!(got.as_deref(), Some("help"));
+    }
+
+    #[test]
+    fn introspection_command_candidate_refuses_when_peer_mention_present() {
+        // Codex P2 on PR #1283: `<@peer> status` must NOT short-circuit
+        // into introspection — the user is targeting a peer with the
+        // word "status" and the message must flow through the normal turn
+        // pipeline so the peer mention is preserved.
+        let got = introspection_command_candidate("<@222> status", Some("111"));
+        assert!(got.is_none(), "peer mention must abort the candidate");
+
+        // Same when the self mention is also present alongside a peer.
+        let got = introspection_command_candidate("<@111> <@222> status", Some("111"));
+        assert!(got.is_none(), "self+peer combo must abort the candidate");
+
+        // And when there's no self bot id known yet — be conservative.
+        let got = introspection_command_candidate("<@333> status", None);
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn introspection_command_candidate_no_self_id_returns_raw() {
+        // No self id known and no `<@id>` tags → return the raw text
+        // (whitespace collapsed for the parser).
+        let got = introspection_command_candidate("status", None);
+        assert_eq!(got.as_deref(), Some("status"));
+
+        let got = introspection_command_candidate("  status  ", None);
+        assert_eq!(got.as_deref(), Some("status"));
+    }
+
+    #[test]
+    fn parse_introspection_command_recognises_bare_verbs() {
+        for (raw, expected) in [
+            ("status", IntrospectionCommand::Status),
+            ("Status", IntrospectionCommand::Status),
+            ("STATUS", IntrospectionCommand::Status),
+            ("help", IntrospectionCommand::Help),
+            ("commands", IntrospectionCommand::Help),
+            ("sessions", IntrospectionCommand::Sessions),
+            ("goals", IntrospectionCommand::Goals),
+            ("tasks", IntrospectionCommand::Goals),
+        ] {
+            assert_eq!(
+                parse_introspection_command(raw),
+                Some(expected),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_introspection_command_accepts_sigil_and_slash_prefixes() {
+        for raw in ["!status", "/status", "?status", "!sera status", "/sera status"] {
+            assert_eq!(
+                parse_introspection_command(raw),
+                Some(IntrospectionCommand::Status),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_introspection_command_tolerates_surrounding_whitespace() {
+        for raw in ["  status  ", "\tstatus\n", " /sera   status "] {
+            assert_eq!(
+                parse_introspection_command(raw),
+                Some(IntrospectionCommand::Status),
+                "{raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_introspection_command_rejects_embedded_keywords_in_prose() {
+        for raw in [
+            "what's the status of the deploy?",
+            "tell me about your sessions please",
+            "help me debug this",
+            "status report incoming",
+            "",
+            "   ",
+            "/sera",
+            "!",
+        ] {
+            assert_eq!(parse_introspection_command(raw), None, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn parse_introspection_command_rejects_unknown_single_tokens() {
+        for raw in ["restart", "shutdown", "logs", "deploy", "kill"] {
+            assert_eq!(parse_introspection_command(raw), None, "{raw}");
+        }
+    }
+
+    #[test]
+    fn shorten_id_for_display_handles_short_long_and_unsafe_inputs() {
+        assert_eq!(shorten_id_for_display("abc"), "abc");
+        assert_eq!(shorten_id_for_display("abcdef"), "abcdef");
+        assert_eq!(shorten_id_for_display("abcdefgh"), "…efgh");
+        assert_eq!(shorten_id_for_display(""), "unknown");
+        assert_eq!(shorten_id_for_display("   "), "unknown");
+        // Backticks and CR/LF stripped so the value is safe to wrap in `…`.
+        assert_eq!(
+            shorten_id_for_display("ses_`evil`\nthing\rid"),
+            "…ngid"
+        );
+    }
+
+    #[test]
+    fn surface_from_session_key_extracts_first_segment_or_unknown() {
+        // Trusted SERA surfaces from the allowlist pass through.
+        assert_eq!(surface_from_session_key("discord:sera:ch12345"), "discord");
+        assert_eq!(surface_from_session_key("http:sera:ses_abc"), "http");
+        assert_eq!(surface_from_session_key("a2a:reviewer:peer-7"), "a2a");
+
+        // Anything else is masked — closing every shape-based bypass:
+        // numeric prefix, mixed-case, over-length, leading-digit, whitespace,
+        // and (Codex P2 follow-up on PR #1283) a letter-led prefix that
+        // embeds a long digit run.
+        assert_eq!(
+            surface_from_session_key("1234567890123456:agent:x"),
+            "unknown"
+        );
+        assert_eq!(
+            surface_from_session_key("a12345678901234:agent:x"),
+            "unknown"
+        );
+        assert_eq!(surface_from_session_key("DISCORD:sera:x"), "unknown");
+        assert_eq!(surface_from_session_key("abcdefghijklmnopqr:x:y"), "unknown");
+        assert_eq!(surface_from_session_key("9start:x:y"), "unknown");
+        assert_eq!(surface_from_session_key("has space:x:y"), "unknown");
+        // Even close near-misses (typos / casing) get masked rather than
+        // surfaced — the allowlist is strict on purpose.
+        assert_eq!(surface_from_session_key("discords:x:y"), "unknown");
+
+        // Missing or empty prefix.
+        assert_eq!(surface_from_session_key("no-colon-here"), "unknown");
+        assert_eq!(surface_from_session_key("just-an-opaque-id-123"), "unknown");
+        assert_eq!(surface_from_session_key(""), "unknown");
+        assert_eq!(surface_from_session_key(":sera:rest"), "unknown");
+    }
+
+    fn sample_snapshot() -> IntrospectionSnapshot {
+        IntrospectionSnapshot {
+            active_runs: 2,
+            queued_events: 1,
+            total_sessions: 4,
+            total_pending_goals: 2,
+            agents: vec!["sera".into(), "reviewer".into()],
+            connectors: vec!["discord".into()],
+            sessions: vec![
+                SessionDigest {
+                    id_short: "…2345".into(),
+                    agent: "sera".into(),
+                    surface: "discord".into(),
+                    state: "active".into(),
+                },
+                SessionDigest {
+                    id_short: "…6789".into(),
+                    agent: "reviewer".into(),
+                    surface: "http".into(),
+                    state: "active".into(),
+                },
+            ],
+            goals: vec![GoalDigest {
+                id_short: "…cafe".into(),
+                kind: "gh_run".into(),
+                state: "pending".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn render_status_response_includes_all_counters_and_lists() {
+        let body =
+            render_introspection_response(IntrospectionCommand::Status, &sample_snapshot());
+        assert!(body.contains("**SERA · status**"), "{body}");
+        assert!(body.contains("active runs · `2`"), "{body}");
+        assert!(body.contains("queued events · `1`"), "{body}");
+        assert!(body.contains("sessions tracked · `4`"), "{body}");
+        assert!(body.contains("pending goals · `2`"), "{body}");
+        assert!(body.contains("`sera`"), "{body}");
+        assert!(body.contains("`reviewer`"), "{body}");
+        assert!(body.contains("`discord`"), "{body}");
+        assert!(body.len() < DISCORD_CONTENT_LIMIT, "{body}");
+    }
+
+    #[test]
+    fn render_status_response_handles_empty_lists_without_leaks() {
+        let snap = IntrospectionSnapshot::default();
+        let body = render_introspection_response(IntrospectionCommand::Status, &snap);
+        assert!(body.contains("active runs · `0`"), "{body}");
+        assert!(body.contains("_(none)_"), "{body}");
+    }
+
+    #[test]
+    fn render_sessions_response_clamps_with_overflow_notice() {
+        let mut snap = sample_snapshot();
+        snap.sessions = (0..(INTROSPECTION_SESSION_LIMIT + 3))
+            .map(|i| SessionDigest {
+                id_short: format!("…{i:04}"),
+                agent: "sera".into(),
+                surface: "discord".into(),
+                state: "active".into(),
+            })
+            .collect();
+        let body = render_introspection_response(IntrospectionCommand::Sessions, &snap);
+        let occurrences = body.matches("…").filter(|_| true).count();
+        assert!(occurrences >= INTROSPECTION_SESSION_LIMIT, "{body}");
+        assert!(body.contains("_+ 3 more not shown_"), "{body}");
+        assert!(body.len() < DISCORD_CONTENT_LIMIT, "{body}");
+    }
+
+    #[test]
+    fn render_sessions_response_empty_state_is_clearly_marked() {
+        let body =
+            render_introspection_response(IntrospectionCommand::Sessions, &IntrospectionSnapshot::default());
+        assert!(body.contains("**SERA · sessions**"), "{body}");
+        assert!(body.contains("_(no sessions tracked)_"), "{body}");
+    }
+
+    #[test]
+    fn render_goals_response_clamps_and_handles_empty() {
+        let mut snap = sample_snapshot();
+        snap.goals = (0..(INTROSPECTION_GOAL_LIMIT + 2))
+            .map(|i| GoalDigest {
+                id_short: format!("…{i:04}"),
+                kind: "timer".into(),
+                state: "pending".into(),
+            })
+            .collect();
+        let body = render_introspection_response(IntrospectionCommand::Goals, &snap);
+        assert!(body.contains("_+ 2 more not shown_"), "{body}");
+        assert!(body.len() < DISCORD_CONTENT_LIMIT, "{body}");
+
+        let empty_body = render_introspection_response(
+            IntrospectionCommand::Goals,
+            &IntrospectionSnapshot::default(),
+        );
+        assert!(empty_body.contains("_(no pending tasks)_"), "{empty_body}");
+    }
+
+    #[test]
+    fn render_help_response_lists_all_verbs_and_is_under_limit() {
+        let body =
+            render_introspection_response(IntrospectionCommand::Help, &IntrospectionSnapshot::default());
+        for verb in ["status", "sessions", "goals", "help"] {
+            assert!(body.contains(verb), "help missing `{verb}`: {body}");
+        }
+        assert!(body.len() < DISCORD_CONTENT_LIMIT, "{body}");
+    }
+
+    #[test]
+    fn render_responses_never_leak_raw_channel_ids() {
+        // The renderer must not surface long runs of digits — a raw Discord
+        // snowflake is 17-19 ascii digits. The snapshot only carries
+        // pre-sanitised digests today, but this contract pins the property
+        // so a future change that smuggles a raw id through a digest would
+        // be caught by the test.
+        let snap = IntrospectionSnapshot {
+            sessions: vec![SessionDigest {
+                id_short: "…2345".into(),
+                agent: "sera".into(),
+                surface: "discord".into(),
+                state: "active".into(),
+            }],
+            ..IntrospectionSnapshot::default()
+        };
+        let body =
+            render_introspection_response(IntrospectionCommand::Sessions, &snap);
+        let longest_digit_run = body
+            .split(|c: char| !c.is_ascii_digit())
+            .map(str::len)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            longest_digit_run < 12,
+            "renderer surfaced a long digit run ({longest_digit_run}): {body}"
+        );
+    }
+
+    #[test]
+    fn rate_limiter_accepts_up_to_capacity_then_denies() {
+        let mut rl = IntrospectionRateLimiter::new(3, Duration::from_secs(60));
+        let t0 = std::time::Instant::now();
+        assert!(rl.try_acquire("u1", t0));
+        assert!(rl.try_acquire("u1", t0 + Duration::from_millis(100)));
+        assert!(rl.try_acquire("u1", t0 + Duration::from_millis(200)));
+        assert!(!rl.try_acquire("u1", t0 + Duration::from_millis(300)));
+    }
+
+    #[test]
+    fn rate_limiter_per_user_buckets_are_independent() {
+        let mut rl = IntrospectionRateLimiter::new(1, Duration::from_secs(60));
+        let t0 = std::time::Instant::now();
+        assert!(rl.try_acquire("alice", t0));
+        assert!(!rl.try_acquire("alice", t0 + Duration::from_millis(10)));
+        // bob has his own bucket — alice's deny does not affect him.
+        assert!(rl.try_acquire("bob", t0 + Duration::from_millis(20)));
+    }
+
+    #[test]
+    fn rate_limiter_evicts_old_entries_after_window() {
+        let mut rl = IntrospectionRateLimiter::new(2, Duration::from_secs(60));
+        let t0 = std::time::Instant::now();
+        assert!(rl.try_acquire("u1", t0));
+        assert!(rl.try_acquire("u1", t0 + Duration::from_secs(10)));
+        // Still inside window — third call denied.
+        assert!(!rl.try_acquire("u1", t0 + Duration::from_secs(20)));
+        // After the window slides past the first call, capacity opens up.
+        assert!(rl.try_acquire("u1", t0 + Duration::from_secs(61)));
+    }
+
+    #[test]
+    fn rate_limiter_denies_empty_user_and_zero_capacity() {
+        let mut rl = IntrospectionRateLimiter::new(5, Duration::from_secs(60));
+        let now = std::time::Instant::now();
+        assert!(!rl.try_acquire("", now));
+
+        let mut zero = IntrospectionRateLimiter::new(0, Duration::from_secs(60));
+        assert!(!zero.try_acquire("u1", now));
+    }
+
+    #[test]
+    fn rate_limited_response_is_short_and_self_describing() {
+        let body = render_rate_limited_response();
+        assert!(body.contains("rate limited"), "{body}");
+        assert!(body.len() < DISCORD_CONTENT_LIMIT, "{body}");
+    }
+
+    #[test]
+    fn introspection_command_audit_tag_is_stable() {
+        assert_eq!(IntrospectionCommand::Status.audit_tag(), "status");
+        assert_eq!(IntrospectionCommand::Help.audit_tag(), "help");
+        assert_eq!(IntrospectionCommand::Sessions.audit_tag(), "sessions");
+        assert_eq!(IntrospectionCommand::Goals.audit_tag(), "goals");
     }
 }

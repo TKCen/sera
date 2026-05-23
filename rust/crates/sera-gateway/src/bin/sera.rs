@@ -4848,6 +4848,36 @@ fn peer_bots_for_connector(
         .unwrap_or_default()
 }
 
+/// Operator allowlist for Discord introspection commands (sera-yeg.10),
+/// scoped to the connector the inbound message arrived on. Returns the
+/// configured `allowed_operators` list for the named connector, or an
+/// empty `Vec` when no matching Discord connector is found.
+///
+/// Default-deny: an empty / unconfigured allowlist rejects every
+/// introspection command, so a fresh deployment cannot accidentally expose
+/// gateway-internal state to any guild member who can @-mention the bot.
+fn allowed_operators_for_connector(
+    manifests: &sera_config::manifest_loader::ManifestSet,
+    connector_name: Option<&str>,
+) -> Vec<String> {
+    let Some(name) = connector_name else {
+        return Vec::new();
+    };
+    manifests
+        .connectors
+        .iter()
+        .find(|c| c.metadata.name == name)
+        .and_then(|c| {
+            let spec: ConnectorSpec = serde_json::from_value(c.spec.clone()).ok()?;
+            if spec.kind == "discord" {
+                Some(spec.allowed_operators)
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default()
+}
+
 /// Whether the named Discord connector has opted in to the status-card
 /// session surface (sera-yeg.6). Default `false` keeps the pre-yeg.6 UX
 /// unchanged for operators who haven't set `statusCard: true` in their
@@ -4872,6 +4902,224 @@ fn status_card_enabled_for_connector(
             }
         })
         .unwrap_or(false)
+}
+
+/// Process-wide rate limiter for Discord operator introspection commands
+/// (sera-yeg.10). A single instance is shared across every accepted
+/// Discord turn so a hot operator typing `status`/`sessions`/`goals` in
+/// quick succession is bounded to the default policy (see
+/// `IntrospectionRateLimiter::default_policy`). Held in a `std::sync::Mutex`
+/// because the critical section is a pure HashMap update with no `.await`.
+static DISCORD_INTROSPECTION_RATE_LIMITER: std::sync::LazyLock<
+    std::sync::Mutex<crate::discord::IntrospectionRateLimiter>,
+> = std::sync::LazyLock::new(|| {
+    std::sync::Mutex::new(crate::discord::IntrospectionRateLimiter::default_policy())
+});
+
+/// Build a privacy-clean [`crate::discord::IntrospectionSnapshot`] for the
+/// operator introspection command path (sera-yeg.10).
+///
+/// Reads gateway-owned state under each subsystem's existing lock discipline:
+///   * `lane_queue` (tokio Mutex)  — for active runs + queued counts
+///   * `db`         (tokio Mutex)  — for session digests
+///   * `manifests`  (sync RwLock)  — for agent + connector names
+///   * `workflow_store` (trait)    — for pending goal digests
+///
+/// Every field on the snapshot is bounded by the number of records in the
+/// store at the moment of the call; the renderer enforces a per-section
+/// display cap so the rendered Discord reply stays well under the 2000-char
+/// content limit even when the store is large.
+async fn build_introspection_snapshot(state: &AppState) -> crate::discord::IntrospectionSnapshot {
+    let (active_runs, pending_total) = {
+        let lq = state.lane_queue.lock().await;
+        let pending_total = lq.pending_count().unwrap_or(0);
+        (lq.active_runs(), pending_total)
+    };
+    let queued_events = pending_total.saturating_sub(active_runs);
+
+    let (total_sessions, sessions) = {
+        let db = state.db.lock().await;
+        match db.list_sessions() {
+            Ok(rows) => {
+                let total = rows.len();
+                let digests: Vec<crate::discord::SessionDigest> = rows
+                    .into_iter()
+                    .map(|r| crate::discord::SessionDigest {
+                        id_short: crate::discord::shorten_id_for_display(&r.id),
+                        agent: r.agent_id,
+                        surface: crate::discord::surface_from_session_key(&r.session_key),
+                        state: r.state,
+                    })
+                    .collect();
+                (total, digests)
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "list_sessions failed during introspection snapshot");
+                (0, Vec::new())
+            }
+        }
+    };
+
+    let (agents, connectors) = {
+        let manifests = state.manifests.read().unwrap();
+        let mut agents: Vec<String> =
+            manifests.agent_names().into_iter().map(str::to_owned).collect();
+        agents.sort();
+        agents.dedup();
+        let mut kinds: Vec<String> = manifests
+            .connectors
+            .iter()
+            .filter_map(|c| {
+                serde_json::from_value::<ConnectorSpec>(c.spec.clone())
+                    .ok()
+                    .map(|s| s.kind)
+            })
+            .collect();
+        kinds.sort();
+        kinds.dedup();
+        (agents, kinds)
+    };
+
+    let pending_records = state.workflow_store.list_pending().await;
+    let total_pending_goals = pending_records.len();
+    let goals: Vec<crate::discord::GoalDigest> = pending_records
+        .into_iter()
+        .map(|rec| {
+            let kind = match &rec.task.await_type {
+                Some(sera_workflow::task::AwaitType::GhRun { .. }) => "gh_run",
+                Some(sera_workflow::task::AwaitType::GhPr { .. }) => "gh_pr",
+                Some(sera_workflow::task::AwaitType::Timer { .. }) => "timer",
+                Some(sera_workflow::task::AwaitType::Mail { .. }) => "mail",
+                Some(sera_workflow::task::AwaitType::Change { .. }) => "change",
+                Some(sera_workflow::task::AwaitType::Human { .. }) => "human",
+                None => "none",
+            };
+            crate::discord::GoalDigest {
+                id_short: crate::discord::shorten_id_for_display(&rec.task.id.to_string()),
+                kind: kind.to_owned(),
+                state: "pending".to_owned(),
+            }
+        })
+        .collect();
+
+    crate::discord::IntrospectionSnapshot {
+        active_runs,
+        queued_events,
+        total_sessions,
+        total_pending_goals,
+        agents,
+        connectors,
+        sessions,
+        goals,
+    }
+}
+
+/// Handle an operator introspection command short-circuit (sera-yeg.10).
+///
+/// Called from [`process_message`] when [`crate::discord::parse_introspection_command`]
+/// matched the runtime-normalized message body. Bypasses the LLM turn pipeline
+/// entirely:
+///   1. Audit the request under `discord_introspection` (always — even when
+///      rate-limited — so floods are observable).
+///   2. Check the per-user rate limiter; reply with a short rate-limit notice
+///      when denied, no snapshot built.
+///   3. Build the snapshot, render the reply, send it via the connector's
+///      chunked sender (the reply is always under the limit but the chunker
+///      handles any future template growth safely).
+///   4. Add a final ✅ reaction so the operator sees the command was handled.
+///
+/// Returns `Ok(())` so the outer `event_loop` continues; transport failures
+/// inside this path are logged at debug and never propagated as turn errors —
+/// an introspection request should never wedge the gateway.
+async fn handle_introspection_command(
+    state: &AppState,
+    msg: &DiscordMessage,
+    cmd: crate::discord::IntrospectionCommand,
+    principal_kind_str: &str,
+) -> anyhow::Result<()> {
+    // sera-yeg.10 (Codex P1 follow-up on PR #1283): default-deny operator
+    // allowlist. An unconfigured / empty `allowedOperators` rejects every
+    // introspection command. The user gets no reply (defense-in-depth — do
+    // not signal to a non-operator that the surface exists), but the
+    // attempt is audited under `discord_introspection_denied` so operators
+    // can see access attempts in the audit log.
+    let allowed = {
+        let manifests = state.manifests.read().unwrap();
+        allowed_operators_for_connector(&manifests, msg.connector_name.as_deref())
+    };
+    let authorized =
+        crate::discord::authorize_control_principal(&msg.user_id, &allowed);
+    if !authorized {
+        let db = state.db.lock().await;
+        let _ = db.append_audit(
+            "discord_introspection_denied",
+            &msg.user_id,
+            principal_kind_str,
+            Some(
+                &serde_json::json!({
+                    "command": cmd.audit_tag(),
+                    "username": msg.username,
+                    "reason": "unauthorized_principal",
+                    "is_dm": msg.is_dm,
+                    "is_bot": msg.is_bot,
+                })
+                .to_string(),
+            ),
+        );
+        tracing::info!(
+            user = %msg.username,
+            user_id = %msg.user_id,
+            command = cmd.audit_tag(),
+            "discord introspection command denied (unauthorized principal)",
+        );
+        return Ok(());
+    }
+
+    {
+        let db = state.db.lock().await;
+        let _ = db.append_audit(
+            "discord_introspection",
+            &msg.user_id,
+            principal_kind_str,
+            Some(
+                &serde_json::json!({
+                    "command": cmd.audit_tag(),
+                    "username": msg.username,
+                    "is_dm": msg.is_dm,
+                    "is_bot": msg.is_bot,
+                })
+                .to_string(),
+            ),
+        );
+    }
+
+    let admitted = {
+        let mut rl = DISCORD_INTROSPECTION_RATE_LIMITER
+            .lock()
+            .expect("introspection rate-limiter mutex poisoned");
+        rl.try_acquire(&msg.user_id, std::time::Instant::now())
+    };
+
+    let body = if admitted {
+        let snapshot = build_introspection_snapshot(state).await;
+        crate::discord::render_introspection_response(cmd, &snapshot)
+    } else {
+        tracing::info!(
+            user = %msg.username,
+            user_id = %msg.user_id,
+            command = cmd.audit_tag(),
+            "discord introspection command rate-limited",
+        );
+        crate::discord::render_rate_limited_response()
+    };
+
+    if let Some(ref dc) = state.discord
+        && let Err(e) = dc.send_message_chunked(&msg.channel_id, &body).await
+    {
+        tracing::debug!(error = %e, "failed to send introspection reply to Discord");
+    }
+    add_reaction_best_effort(state, &msg.channel_id, &msg.message_id, "✅").await;
+    Ok(())
 }
 
 async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Result<()> {
@@ -4956,6 +5204,35 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         PrincipalKind::Human
     };
     let principal_kind_str = if msg.is_bot { "agent" } else { "human" };
+
+    // sera-yeg.10: peek at the message body to see if this is an operator
+    // introspection command (`status` / `help` / `sessions` / `goals`). When
+    // it matches, short-circuit before any UX affordance or turn-pipeline
+    // cost — introspection is a fast no-LLM path that should never queue
+    // behind an in-flight turn or surface a status card.
+    //
+    // Bots are excluded so a chatty peer bot that happens to mention SERA
+    // with the verb `status` does not pull a snapshot — operator commands
+    // are a human surface. The candidate helper strips only the self
+    // mention and refuses to short-circuit when a peer mention is present,
+    // so `<@peer-bot> status` keeps flowing through the normal turn
+    // pipeline (and gets the peer ping rewritten on outbound via
+    // sera-yeg.4) instead of being intercepted (Codex P2 on PR #1283).
+    if !msg.is_bot {
+        let candidate = if msg.raw_content.is_empty() {
+            Some(msg.content.clone())
+        } else {
+            crate::discord::introspection_command_candidate(
+                &msg.raw_content,
+                self_bot_id.as_deref(),
+            )
+        };
+        if let Some(text) = candidate
+            && let Some(cmd) = crate::discord::parse_introspection_command(&text)
+        {
+            return handle_introspection_command(state, msg, cmd, principal_kind_str).await;
+        }
+    }
 
     // UX affordance: 👀 reaction + typing indicator while we process this
     // accepted turn (sera-yeg.2). Both degrade gracefully — failures (missing
@@ -9653,6 +9930,302 @@ spec:
             audits.iter().all(|a| a.event_type != "discord_message"),
             "human non-handoff must not record a received audit either",
         );
+    }
+
+    // ─── Operator introspection commands (sera-yeg.10) ──────────────────────
+
+    /// Patch the discord connector spec in `state.manifests` to set
+    /// `allowed_operators = ops`. Used by introspection tests that need to
+    /// pass the default-deny operator allowlist gate (sera-yeg.10).
+    fn inject_allowed_operators(state: &AppState, ops: &[&str]) {
+        let mut manifests = state.manifests.write().unwrap();
+        for cm in &mut manifests.connectors {
+            if let Some(obj) = cm.spec.as_object_mut()
+                && obj.get("kind").and_then(|k| k.as_str()) == Some("discord")
+            {
+                obj.insert(
+                    "allowed_operators".to_string(),
+                    serde_json::json!(ops.iter().map(|p| p.to_string()).collect::<Vec<_>>()),
+                );
+            }
+        }
+    }
+
+    /// Human DM with a bare `status` verb must short-circuit before the LLM
+    /// turn pipeline: write a `discord_introspection` audit row, skip the
+    /// `discord_message` audit + transcript entries, and never enqueue on
+    /// the lane queue.
+    #[tokio::test]
+    async fn process_message_introspection_status_short_circuits() {
+        let state = test_state_async().await;
+        inject_allowed_operators(&state, &["operator-1"]);
+
+        let msg = DiscordMessage {
+            channel_id: "ch_intro_status".into(),
+            user_id: "operator-1".into(),
+            username: "operator".into(),
+            content: "status".into(),
+            message_id: "msg_intro_status".into(),
+            is_dm: true,
+            mentions_bot: false,
+            is_bot: false,
+            connector_name: Some("discord-main".into()),
+            raw_content: "status".into(),
+            mentions: Vec::new(),
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        let intro: Vec<&_> = audits
+            .iter()
+            .filter(|a| a.event_type == "discord_introspection")
+            .collect();
+        assert_eq!(intro.len(), 1, "expected one introspection audit row");
+        let details: serde_json::Value =
+            serde_json::from_str(intro[0].details.as_deref().expect("details")).unwrap();
+        assert_eq!(details["command"], "status");
+        assert_eq!(details["is_dm"], true);
+        assert_eq!(details["is_bot"], false);
+
+        // Must NOT have created a turn-pipeline audit + transcript.
+        assert!(
+            audits.iter().all(|a| a.event_type != "discord_message"),
+            "introspection short-circuit must skip discord_message audit"
+        );
+        assert!(
+            db.get_session_by_key("discord:sera:ch_intro_status")
+                .unwrap()
+                .is_none(),
+            "introspection short-circuit must not create a session"
+        );
+    }
+
+    /// `help` is recognised case-insensitively and short-circuits — covers
+    /// the verb-aliases path on the live boundary.
+    #[tokio::test]
+    async fn process_message_introspection_help_short_circuits() {
+        let state = test_state_async().await;
+        inject_allowed_operators(&state, &["operator-2"]);
+
+        let msg = DiscordMessage {
+            channel_id: "ch_intro_help".into(),
+            user_id: "operator-2".into(),
+            username: "operator2".into(),
+            content: "Help".into(),
+            message_id: "msg_intro_help".into(),
+            is_dm: true,
+            mentions_bot: false,
+            is_bot: false,
+            connector_name: Some("discord-main".into()),
+            raw_content: "Help".into(),
+            mentions: Vec::new(),
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        let intro: Vec<&_> = audits
+            .iter()
+            .filter(|a| a.event_type == "discord_introspection")
+            .collect();
+        assert_eq!(intro.len(), 1);
+        let details: serde_json::Value =
+            serde_json::from_str(intro[0].details.as_deref().expect("details")).unwrap();
+        assert_eq!(details["command"], "help");
+    }
+
+    /// Default-deny gate (Codex P1 follow-up on PR #1283): a human DM with a
+    /// valid introspection verb but a Discord user id that is NOT on the
+    /// connector's `allowed_operators` list must produce a
+    /// `discord_introspection_denied` audit row, NO `discord_introspection`
+    /// audit, and NO turn-pipeline audit / session creation. The
+    /// non-operator sees no reply (the surface stays invisible to them).
+    #[tokio::test]
+    async fn process_message_introspection_unauthorized_principal_is_denied() {
+        let state = test_state_async().await;
+        // Deliberately do NOT call inject_allowed_operators — the empty
+        // allowlist is the default-deny case we want to pin.
+
+        let msg = DiscordMessage {
+            channel_id: "ch_intro_deny".into(),
+            user_id: "random-user".into(),
+            username: "stranger".into(),
+            content: "status".into(),
+            message_id: "msg_intro_deny".into(),
+            is_dm: true,
+            mentions_bot: false,
+            is_bot: false,
+            connector_name: Some("discord-main".into()),
+            raw_content: "status".into(),
+            mentions: Vec::new(),
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        let denied: Vec<&_> = audits
+            .iter()
+            .filter(|a| a.event_type == "discord_introspection_denied")
+            .collect();
+        assert_eq!(denied.len(), 1, "expected one denied audit row");
+        let details: serde_json::Value =
+            serde_json::from_str(denied[0].details.as_deref().expect("details")).unwrap();
+        assert_eq!(details["command"], "status");
+        assert_eq!(details["reason"], "unauthorized_principal");
+
+        // Must NOT have created an introspection audit, a turn audit, or
+        // a session — the surface is invisible to non-operators.
+        assert!(
+            audits
+                .iter()
+                .all(|a| a.event_type != "discord_introspection"),
+            "unauthorized principal must not produce a discord_introspection audit",
+        );
+        assert!(
+            audits.iter().all(|a| a.event_type != "discord_message"),
+            "unauthorized principal must not flow through the turn audit",
+        );
+        assert!(
+            db.get_session_by_key("discord:sera:ch_intro_deny")
+                .unwrap()
+                .is_none(),
+            "unauthorized principal must not create a session",
+        );
+    }
+
+    /// Prose like `"what's the status of x?"` MUST NOT short-circuit — the
+    /// keyword `status` is embedded in a sentence rather than the sole verb.
+    /// This is the privacy / UX boundary that keeps introspection from
+    /// accidentally intercepting a normal conversation.
+    #[tokio::test]
+    async fn process_message_introspection_ignores_embedded_keywords() {
+        let state = test_state_async().await;
+
+        let msg = DiscordMessage {
+            channel_id: "ch_prose".into(),
+            user_id: "operator-3".into(),
+            username: "operator3".into(),
+            content: "what's the status of the deploy?".into(),
+            message_id: "msg_prose".into(),
+            is_dm: true,
+            mentions_bot: false,
+            is_bot: false,
+            connector_name: Some("discord-main".into()),
+            raw_content: "what's the status of the deploy?".into(),
+            mentions: Vec::new(),
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        // Prose must flow through the normal turn pipeline — discord_message
+        // audit gets written, no introspection row.
+        assert!(
+            audits
+                .iter()
+                .all(|a| a.event_type != "discord_introspection"),
+            "embedded keyword `status` must not trigger introspection"
+        );
+        assert!(
+            audits.iter().any(|a| a.event_type == "discord_message"),
+            "prose must flow through the normal turn audit",
+        );
+    }
+
+    /// Regression for Codex P2 on PR #1283: a human message that includes a
+    /// non-self `<@id>` mention plus the word `status` must NOT short-circuit
+    /// into introspection — the message targets a peer and must flow through
+    /// the normal turn pipeline so the peer mention is preserved on outbound
+    /// (sera-yeg.4) and audit / session state is populated normally.
+    #[tokio::test]
+    async fn process_message_introspection_does_not_intercept_peer_mention() {
+        let state = test_state_async().await;
+
+        let msg = DiscordMessage {
+            channel_id: "ch_peer_status".into(),
+            user_id: "operator-4".into(),
+            username: "operator4".into(),
+            content: "status".into(), // mention-stripped legacy field
+            message_id: "msg_peer_status".into(),
+            is_dm: true,
+            mentions_bot: false,
+            is_bot: false,
+            connector_name: Some("discord-main".into()),
+            // Raw payload carries a peer mention alongside the verb. The
+            // pre-fix code normalized this to bare "status" against an empty
+            // peer directory and falsely intercepted. Discord mention tags
+            // are `<@digits>` so the regex-driven candidate guard sees this
+            // as a non-self mention and refuses to short-circuit.
+            raw_content: "<@222333444> status".into(),
+            mentions: vec![crate::discord::DiscordMentionedUser {
+                id: "222333444".into(),
+                username: "peer-bot".into(),
+            }],
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        assert!(
+            audits
+                .iter()
+                .all(|a| a.event_type != "discord_introspection"),
+            "peer-mention message must not trigger introspection",
+        );
+        assert!(
+            audits.iter().any(|a| a.event_type == "discord_message"),
+            "peer-mention message must flow through the normal turn audit",
+        );
+    }
+
+    /// A bot-author message (peer bot accepted by handoff) carrying the
+    /// `status` verb must NOT short-circuit — operator introspection is a
+    /// human-only surface. The bot's message follows the normal turn path
+    /// so existing peer-bot tests remain unaffected.
+    #[tokio::test]
+    async fn process_message_introspection_excludes_peer_bots() {
+        let state = test_state_async().await;
+        inject_peer_bots(&state, &["peer-bot"]);
+
+        let msg = DiscordMessage {
+            channel_id: "ch_botcmd".into(),
+            user_id: "peer-bot".into(),
+            username: "peer-bot".into(),
+            content: "status".into(),
+            message_id: "msg_botcmd".into(),
+            is_dm: true, // explicit handoff so the peer-bot gate accepts.
+            mentions_bot: false,
+            is_bot: true,
+            connector_name: Some("discord-main".into()),
+            raw_content: "status".into(),
+            mentions: Vec::new(),
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        assert!(
+            audits
+                .iter()
+                .all(|a| a.event_type != "discord_introspection"),
+            "peer-bot status command must not trigger introspection"
+        );
+    }
+
+    /// Snapshot builder smoke test: with no live sessions or pending goals,
+    /// the snapshot reports zeroes / empty lists rather than panicking — the
+    /// renderer downstream is responsible for the human-readable "(none)".
+    #[tokio::test]
+    async fn build_introspection_snapshot_empty_state_is_safe() {
+        let state = test_state_async().await;
+        let snap = build_introspection_snapshot(&state).await;
+        assert_eq!(snap.active_runs, 0);
+        assert_eq!(snap.queued_events, 0);
+        assert!(snap.goals.is_empty());
+        // The template manifest declares at least one agent and connector.
+        assert!(!snap.agents.is_empty());
+        assert!(!snap.connectors.is_empty());
     }
 
     /// Patch `state.manifests` to contain two Discord connectors named

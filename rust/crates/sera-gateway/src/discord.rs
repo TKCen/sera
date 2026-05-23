@@ -1629,26 +1629,44 @@ pub fn shorten_id_for_display(raw: &str) -> String {
 }
 
 /// Extract the surface tag (first colon segment) from a SERA session_key.
-/// Returns `"unknown"` whenever the key is missing the colon delimiter or
-/// the leading segment is empty — keys that don't conform to the
-/// `<surface>:<agent>:<id>` shape (or that carry only an externally-supplied
-/// identifier with no namespace) must not surface their raw value into the
-/// operator response (Codex P2 on PR #1283).
+/// Returns `"unknown"` whenever the key is missing the colon delimiter, the
+/// leading segment is empty, or the leading segment fails a strict shape
+/// check (Codex P2 on PR #1283):
+///
+/// A valid surface tag is a short lowercase ascii label — 1-16 chars, made
+/// up of `[a-z0-9_-]`, starting with a letter, and **not** entirely numeric.
+/// This conservatively passes the gateway's known surfaces (`discord`,
+/// `http`, `a2a`) and rejects externally-supplied opaque identifiers
+/// (snowflake-shaped ids, base64 blobs, arbitrary user-prefixes) that
+/// would leak unsanitized identifier material into the operator reply.
 pub fn surface_from_session_key(session_key: &str) -> String {
-    // A session_key without a colon doesn't have a `<surface>:` prefix. We
-    // must NOT surface the raw value as the "surface" tag — externally
-    // supplied session ids can be arbitrary strings, and rendering them
-    // here would leak the unsanitized identifier into the operator reply
-    // and violate the introspection privacy contract.
     if !session_key.contains(':') {
         return "unknown".to_owned();
     }
     let surface = session_key.split(':').next().unwrap_or("").trim();
-    if surface.is_empty() {
-        "unknown".to_owned()
-    } else {
-        surface.to_owned()
+    if !is_safe_surface_tag(surface) {
+        return "unknown".to_owned();
     }
+    surface.to_owned()
+}
+
+/// True when `s` looks like a trusted internal SERA surface label — used by
+/// [`surface_from_session_key`] to decide whether the leading segment of a
+/// session_key is safe to render in the operator-facing introspection reply.
+fn is_safe_surface_tag(s: &str) -> bool {
+    let count = s.chars().count();
+    if count == 0 || count > 16 {
+        return false;
+    }
+    let first_ok = s
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase());
+    if !first_ok {
+        return false;
+    }
+    s.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 /// Render an [`IntrospectionCommand`] + [`IntrospectionSnapshot`] pair into
@@ -4885,12 +4903,25 @@ mod tests {
 
     #[test]
     fn surface_from_session_key_extracts_first_segment_or_unknown() {
+        // Trusted internal surfaces pass the strict label check.
         assert_eq!(surface_from_session_key("discord:sera:ch12345"), "discord");
         assert_eq!(surface_from_session_key("http:sera:ses_abc"), "http");
         assert_eq!(surface_from_session_key("a2a:reviewer:peer-7"), "a2a");
-        // No-colon keys are NOT surface tags — they're either malformed or
-        // externally-supplied identifiers. Surfacing them would leak the
-        // unsanitized id into the operator reply (Codex P2 on PR #1283).
+
+        // Untrusted / externally-supplied prefixes get masked — even when a
+        // colon is present (Codex P2, follow-up on PR #1283). A snowflake-
+        // shaped numeric prefix, a base64 blob, or any leading-digit /
+        // unusually long / mixed-case prefix is NOT a SERA surface tag.
+        assert_eq!(
+            surface_from_session_key("1234567890123456:agent:x"),
+            "unknown"
+        );
+        assert_eq!(surface_from_session_key("DISCORD:sera:x"), "unknown");
+        assert_eq!(surface_from_session_key("abcdefghijklmnopqr:x:y"), "unknown");
+        assert_eq!(surface_from_session_key("9start:x:y"), "unknown");
+        assert_eq!(surface_from_session_key("has space:x:y"), "unknown");
+
+        // Missing or empty prefix.
         assert_eq!(surface_from_session_key("no-colon-here"), "unknown");
         assert_eq!(surface_from_session_key("just-an-opaque-id-123"), "unknown");
         assert_eq!(surface_from_session_key(""), "unknown");

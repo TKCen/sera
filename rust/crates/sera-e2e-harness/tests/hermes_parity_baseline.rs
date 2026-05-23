@@ -91,22 +91,20 @@ async fn hermes_parity_baseline_gate() -> Result<()> {
     };
 
     // ── 2. Boot the gateway child process ──
-    let gateway = match InProcessGateway::start_local(
+    //
+    // Once we are past the binary-located + LLM-resolved gates above,
+    // the environment is capable of running this test, and a boot
+    // failure here is a real parity regression (panic, config drift,
+    // runtime wiring break, port collision). Propagate the error so
+    // CI fails loudly instead of skipping. The "expected on stripped
+    // CI environments" path is handled by the two skips above.
+    let gateway = InProcessGateway::start_local(
         &gateway_bin_path,
         &runtime_bin_path,
         &llm_base_url,
     )
     .await
-    {
-        Ok(g) => g,
-        Err(e) => {
-            eprintln!(
-                "{SKIP_TAG} SKIP: gateway failed to boot ({e}). Expected on \
-                 stripped CI environments; see crate-level docs."
-            );
-            return Ok(());
-        }
-    };
+    .context("gateway failed to boot — baseline parity regression")?;
 
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
@@ -146,9 +144,21 @@ async fn hermes_parity_baseline_gate() -> Result<()> {
     // equality is intentionally not asserted — provider/runtime wiring
     // may legitimately rephrase — but the response shape (session_id
     // present, response field present) must hold.
+    //
+    // The request carries an `Authorization: Bearer …` header matching
+    // the development bootstrap key documented in the top-level
+    // CLAUDE.md. The harness boots in autonomous mode where auth is
+    // not enforced, so this header is decorative for the local skip
+    // path; once auth-enabled harness profiles land, the same call
+    // gates correctly against the principal middleware without test
+    // edits. `SERA_E2E_BEARER_TOKEN` can override the bootstrap value
+    // for operator-run captures against a non-autonomous gateway.
+    let bearer_token = std::env::var("SERA_E2E_BEARER_TOKEN")
+        .unwrap_or_else(|_| "sera_bootstrap_dev_123".to_string());
     let nonce = short_nonce();
     let chat: serde_json::Value = http
         .post(format!("{}/api/chat", gateway.base_url))
+        .bearer_auth(&bearer_token)
         .json(&json!({
             "agent": "sera",
             "message": format!("Reply with the word OK and the nonce {nonce}."),

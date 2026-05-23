@@ -10,9 +10,12 @@
 //!    for the same session-key. The gateway must admit one and short-circuit
 //!    the other with HTTP 429, `Retry-After: 15`, and a structured
 //!    `{error: "rate_limited", reason: "lane_busy", retry_after_secs: 15}`
-//!    body. This is the operator-visible "blocked" state per the acceptance
-//!    criterion; without this gate, a flooded client either wedges the lane
-//!    or gets opaque 500s, both of which look like "thinking forever" to the
+//!    body. The probe asserts "exactly one 429 and one 2xx" rather than
+//!    binding to physical request order, so a contended CI worker that
+//!    flips the lane-mutex race does not flake the test. This is the
+//!    operator-visible "blocked" state per the acceptance criterion;
+//!    without this gate, a flooded client either wedges the lane or gets
+//!    opaque 500s, both of which look like "thinking forever" to the
 //!    operator.
 //!
 //! 2. **Session isolation across agents** — when the manifest declares two
@@ -60,14 +63,17 @@ fn bearer() -> String {
 ///
 /// We boot the gateway against a mock LLM that sleeps for 4 seconds before
 /// responding, then fire two `/api/chat` POSTs concurrently for the same
-/// agent (and therefore the same gateway-owned session key). The first
-/// request must claim the lane; the second must observe `Queued` and return
-/// 429 with the documented `lane_busy` envelope.
+/// agent (and therefore the same gateway-owned session key). Whichever
+/// request wins the lane mutex claims the slot and waits on the LLM; the
+/// loser must observe `Queued` and return 429 with the documented
+/// `lane_busy` envelope. The assertion is order-independent — exactly one
+/// 429 and one 2xx across the pair, regardless of physical request order.
 ///
-/// Without the delay, the runtime can complete the first turn before tokio
-/// schedules the second request to the lane mutex — the race is benign in
-/// production (the second request just runs serially) but kills the test's
-/// determinism, so we hold the lane open with the mock delay.
+/// Without the LLM delay, the runtime can complete the lane-winner's turn
+/// before tokio schedules the other request to the lane mutex — the race
+/// is benign in production (the second request just runs serially) but
+/// kills the test's lane-busy assertion, so we hold the lane open with the
+/// mock delay.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn hermes_parity_api_lane_busy_returns_429() -> Result<()> {
     let _ = tracing_subscriber::fmt()
@@ -137,19 +143,15 @@ async fn hermes_parity_api_lane_busy_returns_429() -> Result<()> {
             .await
             .context("gateway failed to boot — lane-busy parity smoke")?;
 
-    // Two clients: the first holds the lane open for up to ~6s waiting on the
-    // delayed mock LLM; the second must come back fast with a 429. Both use
-    // a generous timeout so a body-read stall surfaces as a test assertion
-    // failure (with the body content visible) rather than an opaque reqwest
-    // timeout error.
-    let slow_http = reqwest::Client::builder()
+    // Single client with a generous timeout: both requests may need to wait
+    // on the 4 s mock-LLM delay if they happen to be the lane winner, so the
+    // timeout must cover that path. A body-read stall therefore surfaces as
+    // a test assertion failure (with the body content visible) rather than
+    // an opaque reqwest timeout.
+    let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
-        .context("building slow client")?;
-    let fast_http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .context("building fast client")?;
+        .context("building lane-busy HTTP client")?;
 
     let url = format!("{}/api/chat", gateway.base_url);
     let body = json!({
@@ -160,43 +162,51 @@ async fn hermes_parity_api_lane_busy_returns_429() -> Result<()> {
     let token = bearer();
 
     // Fire both concurrently. tokio::join! starts both futures immediately;
-    // the first to reach the lane mutex wins. The runtime's mock-LLM call
-    // then sleeps for 4 s, during which the second request lands on the same
-    // session_key and must observe `Queued`.
-    let first = slow_http
+    // whichever reaches the lane mutex first claims it (Ready) and the
+    // loser observes Queued and returns 429. The race is *not* bound to
+    // request order — on a contended CI worker, scheduling and localhost
+    // connect timing can flip which call wins (Codex review on PR #1276
+    // r3292990638). The contract this probe enforces is therefore
+    // "exactly one 429 and one success", not "the second request is 429".
+    let req_a = http
         .post(&url)
         .bearer_auth(&token)
         .json(&body)
         .send();
-    let second = async {
-        // Tiny stagger so the first request reliably grabs the lane before
-        // the second observes it. The full-concurrent variant is harder to
-        // reason about (either could win the mutex); the stagger makes the
-        // ordering deterministic without sleeping for any meaningful slice
-        // of the LLM-hold window.
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        fast_http
-            .post(&url)
-            .bearer_auth(&token)
-            .json(&body)
-            .send()
-            .await
+    let req_b = http
+        .post(&url)
+        .bearer_auth(&token)
+        .json(&body)
+        .send();
+    let (res_a, res_b) = tokio::join!(req_a, req_b);
+    let resp_a = res_a.context("lane-busy probe A send")?;
+    let resp_b = res_b.context("lane-busy probe B send")?;
+
+    // Identify the 429 (lane loser) and the 2xx (lane winner) without
+    // binding to which physical request fired first. Exactly one of each
+    // is required; everything else is a regression in the lane gate.
+    let status_a = resp_a.status();
+    let status_b = resp_b.status();
+    let (busy_resp, success_resp) = match (status_a, status_b) {
+        (s_a, s_b)
+            if s_a == reqwest::StatusCode::TOO_MANY_REQUESTS && s_b.is_success() =>
+        {
+            (resp_a, resp_b)
+        }
+        (s_a, s_b)
+            if s_b == reqwest::StatusCode::TOO_MANY_REQUESTS && s_a.is_success() =>
+        {
+            (resp_b, resp_a)
+        }
+        _ => panic!(
+            "lane-busy smoke: expected exactly one 429 and one 2xx across the \
+             two concurrent /api/chat requests, got A={status_a:?} B={status_b:?}"
+        ),
     };
 
-    let (first_res, second_res) = tokio::join!(first, second);
-
-    // Second response: this is the probe. Must be 429 with the documented
-    // envelope. The first request's outcome is asserted afterwards so we can
-    // still report the lane-busy assertion failure even if the gateway's
-    // delayed completion path also regresses.
-    let second_resp = second_res.context("second /api/chat send")?;
-    assert_eq!(
-        second_resp.status(),
-        reqwest::StatusCode::TOO_MANY_REQUESTS,
-        "lane-busy smoke: second concurrent /api/chat must return 429, got {:?}",
-        second_resp.status()
-    );
-    let retry_after = second_resp
+    // The 429 must carry the documented `Retry-After` header and structured
+    // body envelope. These pin the operator-visible "blocked" state.
+    let retry_after = busy_resp
         .headers()
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|v| v.to_str().ok())
@@ -209,37 +219,35 @@ async fn hermes_parity_api_lane_busy_returns_429() -> Result<()> {
     // Use `.text()` + manual JSON parse so an unexpected body shape (or a
     // body-read stall) surfaces the actual response text in the failure
     // message rather than an opaque reqwest decode error.
-    let second_body_text = second_resp
+    let busy_body_text = busy_resp
         .text()
         .await
         .context("reading lane-busy 429 body as text")?;
-    let second_body: serde_json::Value = serde_json::from_str(&second_body_text)
+    let busy_body: serde_json::Value = serde_json::from_str(&busy_body_text)
         .with_context(|| {
-            format!("parsing lane-busy 429 body as JSON; raw body: {second_body_text:?}")
+            format!("parsing lane-busy 429 body as JSON; raw body: {busy_body_text:?}")
         })?;
     assert_eq!(
-        second_body["error"], "rate_limited",
-        "lane-busy smoke: 429 body.error must be \"rate_limited\", got {second_body:?}"
+        busy_body["error"], "rate_limited",
+        "lane-busy smoke: 429 body.error must be \"rate_limited\", got {busy_body:?}"
     );
     assert_eq!(
-        second_body["reason"], "lane_busy",
-        "lane-busy smoke: 429 body.reason must be \"lane_busy\", got {second_body:?}"
+        busy_body["reason"], "lane_busy",
+        "lane-busy smoke: 429 body.reason must be \"lane_busy\", got {busy_body:?}"
     );
     assert_eq!(
-        second_body["retry_after_secs"], 15,
-        "lane-busy smoke: 429 body.retry_after_secs must be 15, got {second_body:?}"
+        busy_body["retry_after_secs"], 15,
+        "lane-busy smoke: 429 body.retry_after_secs must be 15, got {busy_body:?}"
     );
 
-    // First response: it should complete successfully once the mock's delay
-    // expires. If it doesn't, the test still has its primary assertion (the
-    // 429), but a failure here surfaces a deeper completion-path regression
-    // — for example the delayed LLM call being dropped while the lane was
+    // The lane winner must complete 2xx after the mock's delay clears. A
+    // non-success here surfaces a deeper completion-path regression — for
+    // example the delayed LLM call being dropped while the lane was
     // contended.
-    let first_resp = first_res.context("first /api/chat send")?;
     assert!(
-        first_resp.status().is_success(),
-        "lane-busy smoke: first /api/chat should complete 2xx after the lane clears, got {:?}",
-        first_resp.status()
+        success_resp.status().is_success(),
+        "lane-busy smoke: lane-winning /api/chat should complete 2xx after the lane clears, got {:?}",
+        success_resp.status()
     );
 
     // Tolerate slow shutdowns: the gateway's drain can outrun the harness's

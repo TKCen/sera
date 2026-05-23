@@ -1,5 +1,26 @@
 //! Discord Gateway connector — connects via raw WebSocket, handles heartbeat,
 //! and dispatches MESSAGE_CREATE events through an mpsc channel.
+//!
+//! ## Threat model (sera-h1iq)
+//!
+//! Inbound payloads arrive over a TLS WebSocket so "hostile" payloads are not
+//! the normal case. The parser is still expected to survive misbehaving
+//! gateway regions or MITM scenarios that deliver malformed JSON: every
+//! `parse_*` helper here returns `Option` (never panics) on missing fields,
+//! wrong types, truncated payloads, or unicode-heavy strings. Inbound
+//! `MESSAGE_CREATE` content is hard-bounded by
+//! [`MAX_MESSAGE_CONTENT_BYTES`] so a hostile gateway cannot OOM the runtime
+//! via a single 1MB payload.
+//!
+//! ## Reconnect / lock primitives (sera-bib9)
+//!
+//! `bot_user_id` is set exactly once on the first READY dispatch and never
+//! cleared (it is the bot's own immutable Discord user id). It is stored in
+//! [`std::sync::OnceLock`] so async handlers can read it without grabbing a
+//! blocking `Mutex` on the tokio executor thread. The remaining session
+//! state (`session_id`, `resume_gateway_url`) is still gated by short-held
+//! `std::sync::Mutex` critical sections that never span an `.await`; the
+//! clippy `await_holding_lock` lint will catch any future regression.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -92,8 +113,12 @@ pub struct DiscordConnector {
     /// across all discord connectors.
     connector_name: String,
     tx: mpsc::Sender<DiscordMessage>,
-    /// Bot's own user ID, set on READY event.
-    bot_user_id: std::sync::Mutex<Option<String>>,
+    /// Bot's own user ID, set on READY event. Single-write: populated the
+    /// first time the gateway emits a READY dispatch and never mutated
+    /// thereafter (the bot's own id is immutable). Stored in `OnceLock` so
+    /// async handlers can read it lock-free without parking the executor
+    /// thread (sera-bib9).
+    bot_user_id: std::sync::OnceLock<String>,
     /// Shared shutdown flag from `AppState`. When `true` the reconnect loop
     /// exits instead of sleeping for the next attempt.
     shutting_down: Arc<AtomicBool>,
@@ -108,6 +133,12 @@ pub struct DiscordConnector {
     /// connections so RESUME can replay missed dispatches. `-1` means "no
     /// sequence yet" (serializes as JSON `null`).
     last_sequence: Arc<AtomicI64>,
+    /// Set to `true` the first time the current connection receives a READY
+    /// dispatch. The reconnect loop checks this after `connect_and_run`
+    /// returns: if the connection ever reached READY, the consecutive
+    /// connect-failure counter resets so a transient transport drop after a
+    /// healthy run does not pay full exponential backoff (sera-dxmv).
+    observed_ready: Arc<AtomicBool>,
 }
 
 /// Why the current gateway connection ended. Drives the backoff and IDENTIFY-vs-RESUME
@@ -309,6 +340,74 @@ fn resume_url_should_clear(consecutive: u32) -> bool {
     consecutive >= RESUME_URL_FAILURE_THRESHOLD
 }
 
+/// Hard upper bound on the byte length of the `content` field
+/// [`parse_message_create`] forwards into the runtime. Discord's own message
+/// ceiling is 4000 bytes (Nitro) but a misbehaving gateway region or a
+/// hostile intermediary could deliver an arbitrarily large payload — without
+/// this clamp the connector would happily copy a 1MB string into every
+/// downstream log line and the runtime mpsc queue (sera-h1iq).
+///
+/// Set to 16 KiB so legitimate code-block messages still pass through
+/// uncut while malicious oversized payloads get a single truncation event.
+pub const MAX_MESSAGE_CONTENT_BYTES: usize = 16 * 1024;
+
+/// Truncate `content` to at most [`MAX_MESSAGE_CONTENT_BYTES`], preserving
+/// UTF-8 char boundaries so the returned string never sits inside a
+/// multi-byte sequence. Returns the (possibly truncated) string and `true`
+/// if truncation actually happened. Public for unit testing (sera-h1iq).
+pub fn clamp_message_content(content: &str) -> (String, bool) {
+    if content.len() <= MAX_MESSAGE_CONTENT_BYTES {
+        return (content.to_owned(), false);
+    }
+    let mut end = MAX_MESSAGE_CONTENT_BYTES;
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    (content[..end].to_owned(), true)
+}
+
+/// Truncated-exponential backoff schedule for generic-close / transport-error
+/// reconnects (sera-dxmv).
+///
+/// Discord's developer guidance for gateway reconnects is "truncated
+/// exponential with jitter, 1s base, 30s cap". This function returns the
+/// *deterministic* base seconds for an attempt index so the schedule can be
+/// asserted in unit tests without depending on randomness. Callers apply
+/// jitter via [`apply_backoff_jitter`] before sleeping.
+///
+/// `attempt` is 1-based: `1 → 1s`, `2 → 2s`, `3 → 4s`, `4 → 8s`, `5 → 16s`,
+/// then capped at 30s for every subsequent failure. `0` returns `1` so a
+/// caller that hasn't incremented yet still gets the base delay.
+pub fn connect_backoff_secs(attempt: u32) -> u64 {
+    if attempt == 0 {
+        return 1;
+    }
+    // 1 << 31 already overflows u64::MAX once multiplied by base, so saturate
+    // at 30s long before that point.
+    let shift = attempt.saturating_sub(1).min(30);
+    let value = 1u64.checked_shl(shift).unwrap_or(30);
+    value.min(30)
+}
+
+/// Apply ±`jitter_pct` percent jitter to `base_secs`, drawing from `rng`.
+/// Returns a duration in seconds bounded to `[1, 60]` so a buggy rng or
+/// extreme base can't make us sleep forever or fire instantly.
+///
+/// Extracted as a pure function so the deterministic-mode unit test can
+/// pass `jitter_pct = 0` and observe the unjittered schedule exactly
+/// (sera-dxmv acceptance #3).
+pub fn apply_backoff_jitter<R: rand::Rng>(base_secs: u64, jitter_pct: u8, rng: &mut R) -> u64 {
+    if jitter_pct == 0 || base_secs == 0 {
+        return base_secs.clamp(1, 60);
+    }
+    let pct = (jitter_pct as f64).min(100.0) / 100.0;
+    let base = base_secs as f64;
+    let jitter = rng.gen_range(-pct..=pct);
+    let jittered = (base * (1.0 + jitter)).round();
+    let bounded = jittered.clamp(1.0, 60.0);
+    bounded as u64
+}
+
 /// Backoff schedule for INVALID_SESSION re-IDENTIFY attempts.
 ///
 /// Discord's spec says clients should wait a random 1-5 seconds before sending a
@@ -487,7 +586,18 @@ pub fn parse_message_create(payload: &Value, bot_user_id: Option<&str>) -> Optio
         None => false,
     };
 
-    let raw_content = d.get("content")?.as_str()?.to_owned();
+    // Bound the content the connector forwards so a hostile or misbehaving
+    // gateway can't OOM the runtime / log pipeline via a single oversized
+    // payload (sera-h1iq).
+    let raw_content_str = d.get("content")?.as_str()?;
+    let (raw_content, truncated) = clamp_message_content(raw_content_str);
+    if truncated {
+        tracing::warn!(
+            original_len = raw_content_str.len(),
+            kept_len = raw_content.len(),
+            "Inbound Discord message content exceeded MAX_MESSAGE_CONTENT_BYTES; truncated before forwarding",
+        );
+    }
 
     Some(DiscordMessage {
         channel_id: d.get("channel_id")?.as_str()?.to_owned(),
@@ -1303,11 +1413,12 @@ impl DiscordConnector {
             agent_name: agent_name.to_owned(),
             connector_name: connector_name.to_owned(),
             tx,
-            bot_user_id: std::sync::Mutex::new(None),
+            bot_user_id: std::sync::OnceLock::new(),
             shutting_down,
             session_id: std::sync::Mutex::new(None),
             resume_gateway_url: std::sync::Mutex::new(None),
             last_sequence: Arc::new(AtomicI64::new(-1)),
+            observed_ready: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1342,7 +1453,9 @@ impl DiscordConnector {
     /// dispatches MESSAGE_CREATE events. Reconnects after a backoff that
     /// adapts to the disconnect reason:
     ///
-    /// * normal close / transport error → 5s, attempt RESUME
+    /// * normal close / transport error → truncated-exponential 1-30s + ±25%
+    ///   jitter (sera-dxmv), attempt RESUME; counter resets on a successful
+    ///   READY observed during the previous connection
     /// * Op 7 RECONNECT or Op 9 (`d=true`) → 1s, attempt RESUME
     /// * Op 9 (`d=false`) → escalating 1-30s, drop session, fresh IDENTIFY
     ///
@@ -1351,8 +1464,16 @@ impl DiscordConnector {
         let mut consecutive_invalid_sessions: u32 = 0;
         let mut consecutive_resume_no_signal: u32 = 0;
         let mut consecutive_resume_url_errors: u32 = 0;
+        // Generic-close / transport-error attempt counter. Survives across
+        // loop iterations so repeated flaps escalate via the exponential
+        // schedule; reset once a connection has observed READY (sera-dxmv).
+        let mut consecutive_connect_failures: u32 = 0;
         while !self.shutting_down.load(Ordering::Relaxed) {
             let attempted_resume_url = self.current_resume_url().is_some();
+            // Reset the per-attempt READY observer before each connection
+            // so the counter only resets when the *current* connect actually
+            // made it past Hello+IDENTIFY/RESUME.
+            self.observed_ready.store(false, Ordering::Relaxed);
             let outcome = match self.connect_and_run().await {
                 Ok(reason) => {
                     consecutive_resume_url_errors = 0;
@@ -1377,6 +1498,9 @@ impl DiscordConnector {
                     None
                 }
             };
+            if self.observed_ready.load(Ordering::Relaxed) {
+                consecutive_connect_failures = 0;
+            }
             if self.shutting_down.load(Ordering::Relaxed) {
                 break;
             }
@@ -1430,7 +1554,20 @@ impl DiscordConnector {
                 Some(DisconnectReason::GenericClose) | None => {
                     consecutive_invalid_sessions = 0;
                     consecutive_resume_no_signal = 0;
-                    Duration::from_secs(5)
+                    consecutive_connect_failures =
+                        consecutive_connect_failures.saturating_add(1);
+                    let base = connect_backoff_secs(consecutive_connect_failures);
+                    // ±25% jitter avoids synchronized reconnect storms across
+                    // multiple bots when Discord rolls a gateway change
+                    // (sera-dxmv acceptance #1).
+                    let secs = apply_backoff_jitter(base, 25, &mut rand::thread_rng());
+                    tracing::warn!(
+                        attempt = consecutive_connect_failures,
+                        base_secs = base,
+                        jittered_secs = secs,
+                        "Discord gateway closed without opcode signal; sleeping before reconnect",
+                    );
+                    Duration::from_secs(secs)
                 }
             };
 
@@ -1680,9 +1817,11 @@ impl DiscordConnector {
     }
 
     /// The bot's own Discord user id, populated on the first READY dispatch.
-    /// `None` until the gateway has connected.
+    /// `None` until the gateway has connected. Reads from a `OnceLock`, so
+    /// the lookup is lock-free and safe to call from async contexts
+    /// (sera-bib9).
     pub fn bot_user_id(&self) -> Option<String> {
-        self.bot_user_id.lock().ok().and_then(|g| g.clone())
+        self.bot_user_id.get().cloned()
     }
 
     // -----------------------------------------------------------------------
@@ -1850,11 +1989,18 @@ impl DiscordConnector {
                                 .and_then(|u| u.get("id"))
                                 .and_then(Value::as_str)
                                 .map(String::from);
-                            if let Some(ref uid) = user_id
-                                && let Ok(mut guard) = self.bot_user_id.lock()
-                            {
-                                *guard = Some(uid.clone());
+                            if let Some(ref uid) = user_id {
+                                // OnceLock::set is idempotent — subsequent
+                                // READYs (e.g. after IDENTIFY) carry the same
+                                // immutable bot id, so a second set is a
+                                // harmless no-op (sera-bib9).
+                                let _ = self.bot_user_id.set(uid.clone());
                             }
+                            // Signal to the reconnect loop that this
+                            // connection actually reached a healthy state
+                            // (sera-dxmv: reset connect-failure counter on
+                            // successful READY).
+                            self.observed_ready.store(true, Ordering::Relaxed);
                             // Capture session_id and resume_gateway_url so a
                             // future reconnect can RESUME instead of dropping
                             // events.
@@ -1876,9 +2022,18 @@ impl DiscordConnector {
                         }
                         "RESUMED" => {
                             tracing::info!("Discord session RESUMED");
+                            // A successful RESUME is just as healthy as a
+                            // fresh READY for backoff purposes — the
+                            // resume_gateway_url accepted us and replayed
+                            // missed events. Without this, reconnects that
+                            // recover via RESUME would never clear the
+                            // generic-close counter and later transport
+                            // drops would keep escalating toward the 30s
+                            // cap (sera-dxmv P2 repair, PR #1282 review).
+                            self.observed_ready.store(true, Ordering::Relaxed);
                         }
                         "MESSAGE_CREATE" => {
-                            let bot_id = self.bot_user_id.lock().ok().and_then(|g| g.clone());
+                            let bot_id = self.bot_user_id.get().cloned();
                             if let Some(mut msg) = parse_message_create(payload, bot_id.as_deref())
                             {
                                 // Stamp the message with this connector's
@@ -3782,6 +3937,397 @@ mod tests {
         }
         for part in &plan.parts {
             assert!(part.chars().count() <= DISCORD_CONTENT_LIMIT);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Reliability hardening — sera-yeg.9 slice
+    //  * sera-bib9: OnceLock semantics for bot_user_id
+    //  * sera-dxmv: deterministic exponential backoff + jitter
+    //  * sera-h1iq: fuzzy/malformed payload coverage + content clamp
+    // -----------------------------------------------------------------------
+
+    /// sera-dxmv #1+#3: deterministic backoff schedule must match the
+    /// truncated-exponential 1s base / 30s cap curve and the published unit
+    /// test must demonstrate the sequence for 5 consecutive failures.
+    #[test]
+    fn connect_backoff_secs_schedule_for_5_failures() {
+        // Discord guidance: truncated exponential, 1s base, 30s cap.
+        // attempt 0 is treated as "before the first failure" → still 1s so
+        // the caller doesn't have to special-case the off-by-one.
+        assert_eq!(connect_backoff_secs(0), 1);
+        assert_eq!(connect_backoff_secs(1), 1);
+        assert_eq!(connect_backoff_secs(2), 2);
+        assert_eq!(connect_backoff_secs(3), 4);
+        assert_eq!(connect_backoff_secs(4), 8);
+        assert_eq!(connect_backoff_secs(5), 16);
+        // attempt 6 doubles to 32 which is clamped to the 30s cap.
+        assert_eq!(connect_backoff_secs(6), 30);
+        assert_eq!(connect_backoff_secs(7), 30);
+        // Cap holds for arbitrarily large failure counts.
+        assert_eq!(connect_backoff_secs(50), 30);
+        assert_eq!(connect_backoff_secs(u32::MAX), 30);
+    }
+
+    /// sera-dxmv #3: with jitter disabled (deterministic mode) the schedule
+    /// must equal the published exponential curve exactly.
+    #[test]
+    fn apply_backoff_jitter_disabled_matches_base() {
+        let mut rng = rand::thread_rng();
+        for attempt in 1..=6 {
+            let base = connect_backoff_secs(attempt);
+            let observed = apply_backoff_jitter(base, 0, &mut rng);
+            assert_eq!(
+                observed, base,
+                "deterministic mode (jitter_pct=0) must yield base for attempt {attempt}",
+            );
+        }
+    }
+
+    /// sera-dxmv #1: ±25% jitter must keep the sleep within Discord's
+    /// guidance — between 0.75x and 1.25x of the base, clamped to the
+    /// `[1, 60]` second envelope.
+    #[test]
+    fn apply_backoff_jitter_stays_within_envelope() {
+        let mut rng = rand::thread_rng();
+        for attempt in 1..=6 {
+            let base = connect_backoff_secs(attempt);
+            // Run many iterations so we exercise the rng range, not just a
+            // single draw.
+            for _ in 0..200 {
+                let observed = apply_backoff_jitter(base, 25, &mut rng);
+                // Lower envelope: 75% of base, clamped at 1 second.
+                let lower = ((base as f64) * 0.75).floor().max(1.0) as u64;
+                // Upper envelope: 125% of base, clamped at 60 seconds. We
+                // round-up to allow for f64.round() ties.
+                let upper = (((base as f64) * 1.25).round() as u64).min(60);
+                assert!(
+                    observed >= lower && observed <= upper,
+                    "attempt {attempt}: jittered {observed}s outside [{lower}, {upper}] (base {base}s)",
+                );
+            }
+        }
+    }
+
+    /// sera-bib9: `bot_user_id` is single-write — the first READY wins; a
+    /// later READY for a different user id is ignored (it can't happen with
+    /// a real Discord gateway since the bot's own user id is immutable, but
+    /// the invariant is now structural via `OnceLock`).
+    #[tokio::test]
+    async fn bot_user_id_is_single_write() {
+        let (conn, _rx) = test_connector();
+        let ready_a = serde_json::json!({
+            "op": 0, "t": "READY", "s": 1,
+            "d": {
+                "session_id": "sess-a",
+                "user": { "id": "bot-a", "username": "sera" }
+            }
+        });
+        conn.handle_payload(&ready_a).await;
+        assert_eq!(conn.bot_user_id().as_deref(), Some("bot-a"));
+
+        // A second READY (e.g. after a re-IDENTIFY) is a no-op for the
+        // OnceLock — the original id stands.
+        let ready_b = serde_json::json!({
+            "op": 0, "t": "READY", "s": 2,
+            "d": {
+                "session_id": "sess-b",
+                "user": { "id": "bot-b", "username": "sera" }
+            }
+        });
+        conn.handle_payload(&ready_b).await;
+        assert_eq!(conn.bot_user_id().as_deref(), Some("bot-a"));
+    }
+
+    /// sera-dxmv: the connect-failure counter resets when a connection has
+    /// observed READY. Pure observation on the `observed_ready` flag — we
+    /// can't drive `run()` end-to-end without a real socket, but we can
+    /// assert the flag semantics that `run()` keys off of.
+    #[tokio::test]
+    async fn observed_ready_flag_set_on_ready_dispatch() {
+        let (conn, _rx) = test_connector();
+        assert!(!conn.observed_ready.load(Ordering::Relaxed));
+
+        let ready = serde_json::json!({
+            "op": 0, "t": "READY", "s": 1,
+            "d": {
+                "session_id": "s",
+                "user": { "id": "b", "username": "n" }
+            }
+        });
+        conn.handle_payload(&ready).await;
+        assert!(conn.observed_ready.load(Ordering::Relaxed));
+
+        // GUILD_CREATE alone (no READY) does not set the flag — reset and
+        // verify nothing else flips it.
+        conn.observed_ready.store(false, Ordering::Relaxed);
+        let guild = serde_json::json!({ "op": 0, "t": "GUILD_CREATE", "s": 2, "d": {} });
+        conn.handle_payload(&guild).await;
+        assert!(!conn.observed_ready.load(Ordering::Relaxed));
+    }
+
+    /// sera-dxmv repair (PR #1282 P2 review): a RESUMED dispatch is just as
+    /// healthy as a fresh READY — the resume succeeded and the connection
+    /// is good. Without this signal, reconnect cycles that recover via
+    /// RESUME would never clear the generic-close counter, so a later
+    /// transport drop would keep paying escalating backoff toward the 30s
+    /// cap on an otherwise-recovered session.
+    #[tokio::test]
+    async fn observed_ready_flag_set_on_resumed_dispatch() {
+        let (conn, _rx) = test_connector();
+        assert!(!conn.observed_ready.load(Ordering::Relaxed));
+
+        let resumed = serde_json::json!({
+            "op": 0, "t": "RESUMED", "s": 5, "d": {}
+        });
+        conn.handle_payload(&resumed).await;
+        assert!(
+            conn.observed_ready.load(Ordering::Relaxed),
+            "RESUMED dispatch must mark the connection healthy for backoff reset",
+        );
+    }
+
+    // ---- sera-h1iq fuzz coverage ------------------------------------------
+
+    /// MESSAGE_CREATE without a `content` field must silently return `None`
+    /// — never panic. The runtime never sees the message; it cannot
+    /// route something that has no body.
+    #[test]
+    fn parse_message_create_missing_content_returns_none() {
+        let p = serde_json::json!({
+            "op": 0, "t": "MESSAGE_CREATE", "s": 1,
+            "d": {
+                "id": "msg",
+                "channel_id": "chan",
+                "author": { "id": "u", "username": "n" }
+            }
+        });
+        assert!(parse_message_create(&p, None).is_none());
+    }
+
+    /// MESSAGE_CREATE without an `author` field must silently return `None`.
+    /// Without an author we cannot decide bot-policy, so the safest action
+    /// is to drop the payload.
+    #[test]
+    fn parse_message_create_missing_author_returns_none() {
+        let p = serde_json::json!({
+            "op": 0, "t": "MESSAGE_CREATE", "s": 1,
+            "d": {
+                "id": "msg",
+                "channel_id": "chan",
+                "content": "hi"
+            }
+        });
+        assert!(parse_message_create(&p, None).is_none());
+    }
+
+    /// MESSAGE_CREATE where `author.id` is a number instead of a string —
+    /// Discord docs say IDs are stringified snowflakes, but a misbehaving
+    /// region (or an MITM) could deliver the wrong type. Must drop, not
+    /// panic.
+    #[test]
+    fn parse_message_create_wrong_author_id_type_returns_none() {
+        let p = serde_json::json!({
+            "op": 0, "t": "MESSAGE_CREATE", "s": 1,
+            "d": {
+                "id": "msg",
+                "channel_id": "chan",
+                "content": "hi",
+                "author": { "id": 12345, "username": "n" }
+            }
+        });
+        assert!(parse_message_create(&p, None).is_none());
+    }
+
+    /// `handle_payload` with `op` as a string instead of a u64 must not
+    /// panic — the parser uses `unwrap_or(u64::MAX)` so the path lands in
+    /// the unknown-opcode branch and is silently dropped.
+    #[tokio::test]
+    async fn handle_payload_op_wrong_type_returns_none() {
+        let (conn, _rx) = test_connector();
+        let p = serde_json::json!({ "op": "zero", "d": null });
+        assert_eq!(conn.handle_payload(&p).await, None);
+    }
+
+    /// `handle_payload` with completely missing `op` must not panic — same
+    /// guarantee: silently drop.
+    #[tokio::test]
+    async fn handle_payload_no_op_field_returns_none() {
+        let (conn, _rx) = test_connector();
+        let p = serde_json::json!({ "d": null });
+        assert_eq!(conn.handle_payload(&p).await, None);
+    }
+
+    /// A handful of unhandled dispatch events (TYPING_START, PRESENCE_UPDATE,
+    /// CHANNEL_PINS_UPDATE) must NOT panic and must NOT dispatch a
+    /// DiscordMessage. They just update the sequence and exit silently.
+    #[tokio::test]
+    async fn handle_payload_unhandled_dispatch_events_are_silent() {
+        let (conn, mut rx) = test_connector();
+        for event in [
+            "TYPING_START",
+            "PRESENCE_UPDATE",
+            "CHANNEL_PINS_UPDATE",
+            "GUILD_MEMBER_UPDATE",
+        ] {
+            let p = serde_json::json!({ "op": 0, "t": event, "s": 1, "d": {} });
+            assert_eq!(conn.handle_payload(&p).await, None);
+        }
+        // Nothing dispatched.
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// 1MB inbound MESSAGE_CREATE content: the parser must not panic, must
+    /// truncate at the configured byte budget, and the resulting
+    /// `raw_content` must be valid UTF-8.
+    #[test]
+    fn parse_message_create_oversized_content_is_clamped() {
+        let huge = "x".repeat(1024 * 1024);
+        let p = serde_json::json!({
+            "op": 0, "t": "MESSAGE_CREATE", "s": 1,
+            "d": {
+                "id": "m",
+                "channel_id": "c",
+                "content": huge,
+                "author": { "id": "u", "username": "n" }
+            }
+        });
+        let msg = parse_message_create(&p, None).expect("parse must not drop");
+        assert!(
+            msg.raw_content.len() <= MAX_MESSAGE_CONTENT_BYTES,
+            "raw_content kept {} bytes, budget {}",
+            msg.raw_content.len(),
+            MAX_MESSAGE_CONTENT_BYTES,
+        );
+        // UTF-8 validity follows from `String`, but make the assertion
+        // explicit so a future refactor that returns `Vec<u8>` doesn't
+        // silently regress.
+        assert!(std::str::from_utf8(msg.raw_content.as_bytes()).is_ok());
+    }
+
+    /// `clamp_message_content` must never split a multi-byte UTF-8
+    /// codepoint — a payload that overflows the budget exactly at a
+    /// 4-byte emoji boundary must still produce a valid UTF-8 string.
+    #[test]
+    fn clamp_message_content_respects_char_boundary() {
+        // 4-byte emoji: U+1F4A9 (💩). Build a string of one-byte 'a'
+        // characters padded so the cut would land mid-emoji if the
+        // function didn't honor `is_char_boundary`.
+        let mut body = "a".repeat(MAX_MESSAGE_CONTENT_BYTES - 2);
+        body.push('💩'); // 4 bytes — straddles the budget.
+        assert!(body.len() > MAX_MESSAGE_CONTENT_BYTES);
+        let (clamped, truncated) = clamp_message_content(&body);
+        assert!(truncated);
+        assert!(clamped.len() <= MAX_MESSAGE_CONTENT_BYTES);
+        // String invariant proves there is no mid-codepoint split. Explicit
+        // UTF-8 check just to make the intent obvious.
+        assert!(std::str::from_utf8(clamped.as_bytes()).is_ok());
+    }
+
+    /// `clamp_message_content` must be a no-op for content that already
+    /// fits — `truncated=false` and the string is returned untouched.
+    #[test]
+    fn clamp_message_content_passthrough_under_budget() {
+        let body = "hello world";
+        let (clamped, truncated) = clamp_message_content(body);
+        assert!(!truncated);
+        assert_eq!(clamped, body);
+    }
+
+    /// `parse_heartbeat_interval` must reject obviously bogus payloads
+    /// without panicking: missing `d`, non-numeric heartbeat_interval,
+    /// negative numbers (serde_json parses these as i64 → `as_u64()` is
+    /// None).
+    #[test]
+    fn parse_heartbeat_interval_fuzz_rejects_bogus() {
+        // Missing `d` entirely
+        assert!(parse_heartbeat_interval(&serde_json::json!({ "op": 10 })).is_none());
+        // Non-numeric heartbeat_interval
+        assert!(
+            parse_heartbeat_interval(&serde_json::json!({
+                "op": 10, "d": { "heartbeat_interval": "fast" }
+            }))
+            .is_none(),
+        );
+        // Negative value
+        assert!(
+            parse_heartbeat_interval(&serde_json::json!({
+                "op": 10, "d": { "heartbeat_interval": -1 }
+            }))
+            .is_none(),
+        );
+        // Wrong opcode (not Hello)
+        assert!(
+            parse_heartbeat_interval(&serde_json::json!({
+                "op": 0, "d": { "heartbeat_interval": 41250 }
+            }))
+            .is_none(),
+        );
+    }
+
+    /// `parse_ready_session` must reject malformed READY payloads without
+    /// panicking — non-string session_id, missing `d`, etc.
+    #[test]
+    fn parse_ready_session_fuzz_rejects_bogus() {
+        // session_id present but not a string
+        assert!(
+            parse_ready_session(&serde_json::json!({
+                "op": 0, "t": "READY", "s": 1,
+                "d": { "session_id": 999 }
+            }))
+            .is_none(),
+        );
+        // d completely missing
+        assert!(
+            parse_ready_session(&serde_json::json!({
+                "op": 0, "t": "READY", "s": 1
+            }))
+            .is_none(),
+        );
+        // truncated payload (`{}`)
+        assert!(parse_ready_session(&serde_json::json!({})).is_none());
+    }
+
+    /// Hand-rolled property-style smoke: a small grab-bag of malformed
+    /// JSON values — none of them should panic the parser. Confirms the
+    /// `Option`-returning contract holds across the documented threat
+    /// model (sera-h1iq module-level note).
+    #[test]
+    fn parse_message_create_never_panics_on_random_shapes() {
+        let bogus = vec![
+            serde_json::json!(null),
+            serde_json::json!({}),
+            serde_json::json!({ "op": 0 }),
+            serde_json::json!({ "op": 0, "t": "MESSAGE_CREATE" }),
+            serde_json::json!({ "op": 0, "t": "MESSAGE_CREATE", "d": null }),
+            serde_json::json!({ "op": 0, "t": "MESSAGE_CREATE", "d": [] }),
+            serde_json::json!({ "op": 0, "t": "MESSAGE_CREATE", "d": "string" }),
+            serde_json::json!({ "op": 0, "t": "MESSAGE_CREATE", "d": { "deeply": { "nested": { "missing": true } } } }),
+            // Nested array under content
+            serde_json::json!({
+                "op": 0, "t": "MESSAGE_CREATE", "d": {
+                    "id": "m", "channel_id": "c", "content": ["arr"],
+                    "author": { "id": "u", "username": "n" }
+                }
+            }),
+            // Empty content is technically valid (Discord sends embeds-only
+            // messages with content=""). Parser must succeed but the result
+            // has empty content/raw_content.
+            serde_json::json!({
+                "op": 0, "t": "MESSAGE_CREATE", "d": {
+                    "id": "m", "channel_id": "c", "content": "",
+                    "author": { "id": "u", "username": "n" }
+                }
+            }),
+        ];
+        for (i, p) in bogus.iter().enumerate() {
+            // The function must terminate (no panic) on every shape — the
+            // result Option<T> is allowed to be either Some or None
+            // depending on whether enough fields parsed.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                parse_message_create(p, None)
+            }))
+            .unwrap_or_else(|_| panic!("parse_message_create panicked on bogus shape {i}: {p}"));
         }
     }
 }

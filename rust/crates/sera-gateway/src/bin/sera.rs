@@ -4733,7 +4733,7 @@ fn persist_tool_events(db: &sera_db::sqlite::SqliteDb, session_id: &str, events:
 async fn send_error_to_discord(state: &AppState, channel_id: &str, error: &str) {
     let formatted = format!("[sera] Error: {error}");
     if let Some(ref dc) = state.discord
-        && let Err(e) = dc.send_message(channel_id, &formatted).await
+        && let Err(e) = dc.send_message_chunked(channel_id, &formatted).await
     {
         tracing::error!(error = ?e, channel_id = %channel_id, "Discord send_message failed");
     }
@@ -5401,9 +5401,14 @@ async fn process_message_inner(
 
     // Send the reply back to Discord via the shared connector. The rendered
     // reply already has allowlisted `@<handle>` tokens rewritten to
-    // `<@id>` (sera-yeg.4 reverse handoff).
+    // `<@id>` (sera-yeg.4 reverse handoff). Replies over Discord's 2000-char
+    // limit are split into ordered `[i/N]` chunks; runaway replies past the
+    // policy cap get a visible truncation notice (sera-yeg.8).
     if let Some(ref dc) = state.discord {
-        if let Err(e) = dc.send_message(&msg.channel_id, &reply_rendered).await {
+        if let Err(e) = dc
+            .send_message_chunked(&msg.channel_id, &reply_rendered)
+            .await
+        {
             tracing::error!(error = ?e, channel_id = %msg.channel_id, "Discord send_message failed");
         }
     } else {
@@ -5478,7 +5483,7 @@ async fn process_message_inner(
             if let Some(ref dc) = state.discord {
                 let rendered =
                     crate::discord::render_outbound_content(&follow_up.reply, peer_directory);
-                if let Err(e) = dc.send_message(&msg.channel_id, &rendered).await {
+                if let Err(e) = dc.send_message_chunked(&msg.channel_id, &rendered).await {
                     tracing::error!(error = ?e, channel_id = %msg.channel_id, "Discord send_message failed");
                 }
             }
@@ -5542,7 +5547,9 @@ async fn process_message_inner(
 
         // Send the follow-up reply to Discord.
         if let Some(ref dc) = state.discord
-            && let Err(e) = dc.send_message(&msg.channel_id, &follow_up_rendered).await
+            && let Err(e) = dc
+                .send_message_chunked(&msg.channel_id, &follow_up_rendered)
+                .await
         {
             tracing::error!(error = ?e, channel_id = %msg.channel_id, "Discord send_message failed");
         }

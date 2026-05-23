@@ -4848,6 +4848,36 @@ fn peer_bots_for_connector(
         .unwrap_or_default()
 }
 
+/// Operator allowlist for Discord introspection commands (sera-yeg.10),
+/// scoped to the connector the inbound message arrived on. Returns the
+/// configured `allowed_operators` list for the named connector, or an
+/// empty `Vec` when no matching Discord connector is found.
+///
+/// Default-deny: an empty / unconfigured allowlist rejects every
+/// introspection command, so a fresh deployment cannot accidentally expose
+/// gateway-internal state to any guild member who can @-mention the bot.
+fn allowed_operators_for_connector(
+    manifests: &sera_config::manifest_loader::ManifestSet,
+    connector_name: Option<&str>,
+) -> Vec<String> {
+    let Some(name) = connector_name else {
+        return Vec::new();
+    };
+    manifests
+        .connectors
+        .iter()
+        .find(|c| c.metadata.name == name)
+        .and_then(|c| {
+            let spec: ConnectorSpec = serde_json::from_value(c.spec.clone()).ok()?;
+            if spec.kind == "discord" {
+                Some(spec.allowed_operators)
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default()
+}
+
 /// Whether the named Discord connector has opted in to the status-card
 /// session surface (sera-yeg.6). Default `false` keeps the pre-yeg.6 UX
 /// unchanged for operators who haven't set `statusCard: true` in their
@@ -5007,6 +5037,44 @@ async fn handle_introspection_command(
     cmd: crate::discord::IntrospectionCommand,
     principal_kind_str: &str,
 ) -> anyhow::Result<()> {
+    // sera-yeg.10 (Codex P1 follow-up on PR #1283): default-deny operator
+    // allowlist. An unconfigured / empty `allowedOperators` rejects every
+    // introspection command. The user gets no reply (defense-in-depth — do
+    // not signal to a non-operator that the surface exists), but the
+    // attempt is audited under `discord_introspection_denied` so operators
+    // can see access attempts in the audit log.
+    let allowed = {
+        let manifests = state.manifests.read().unwrap();
+        allowed_operators_for_connector(&manifests, msg.connector_name.as_deref())
+    };
+    let authorized =
+        crate::discord::authorize_control_principal(&msg.user_id, &allowed);
+    if !authorized {
+        let db = state.db.lock().await;
+        let _ = db.append_audit(
+            "discord_introspection_denied",
+            &msg.user_id,
+            principal_kind_str,
+            Some(
+                &serde_json::json!({
+                    "command": cmd.audit_tag(),
+                    "username": msg.username,
+                    "reason": "unauthorized_principal",
+                    "is_dm": msg.is_dm,
+                    "is_bot": msg.is_bot,
+                })
+                .to_string(),
+            ),
+        );
+        tracing::info!(
+            user = %msg.username,
+            user_id = %msg.user_id,
+            command = cmd.audit_tag(),
+            "discord introspection command denied (unauthorized principal)",
+        );
+        return Ok(());
+    }
+
     {
         let db = state.db.lock().await;
         let _ = db.append_audit(
@@ -9866,6 +9934,23 @@ spec:
 
     // ─── Operator introspection commands (sera-yeg.10) ──────────────────────
 
+    /// Patch the discord connector spec in `state.manifests` to set
+    /// `allowed_operators = ops`. Used by introspection tests that need to
+    /// pass the default-deny operator allowlist gate (sera-yeg.10).
+    fn inject_allowed_operators(state: &AppState, ops: &[&str]) {
+        let mut manifests = state.manifests.write().unwrap();
+        for cm in &mut manifests.connectors {
+            if let Some(obj) = cm.spec.as_object_mut()
+                && obj.get("kind").and_then(|k| k.as_str()) == Some("discord")
+            {
+                obj.insert(
+                    "allowed_operators".to_string(),
+                    serde_json::json!(ops.iter().map(|p| p.to_string()).collect::<Vec<_>>()),
+                );
+            }
+        }
+    }
+
     /// Human DM with a bare `status` verb must short-circuit before the LLM
     /// turn pipeline: write a `discord_introspection` audit row, skip the
     /// `discord_message` audit + transcript entries, and never enqueue on
@@ -9873,6 +9958,7 @@ spec:
     #[tokio::test]
     async fn process_message_introspection_status_short_circuits() {
         let state = test_state_async().await;
+        inject_allowed_operators(&state, &["operator-1"]);
 
         let msg = DiscordMessage {
             channel_id: "ch_intro_status".into(),
@@ -9920,6 +10006,7 @@ spec:
     #[tokio::test]
     async fn process_message_introspection_help_short_circuits() {
         let state = test_state_async().await;
+        inject_allowed_operators(&state, &["operator-2"]);
 
         let msg = DiscordMessage {
             channel_id: "ch_intro_help".into(),
@@ -9946,6 +10033,65 @@ spec:
         let details: serde_json::Value =
             serde_json::from_str(intro[0].details.as_deref().expect("details")).unwrap();
         assert_eq!(details["command"], "help");
+    }
+
+    /// Default-deny gate (Codex P1 follow-up on PR #1283): a human DM with a
+    /// valid introspection verb but a Discord user id that is NOT on the
+    /// connector's `allowed_operators` list must produce a
+    /// `discord_introspection_denied` audit row, NO `discord_introspection`
+    /// audit, and NO turn-pipeline audit / session creation. The
+    /// non-operator sees no reply (the surface stays invisible to them).
+    #[tokio::test]
+    async fn process_message_introspection_unauthorized_principal_is_denied() {
+        let state = test_state_async().await;
+        // Deliberately do NOT call inject_allowed_operators — the empty
+        // allowlist is the default-deny case we want to pin.
+
+        let msg = DiscordMessage {
+            channel_id: "ch_intro_deny".into(),
+            user_id: "random-user".into(),
+            username: "stranger".into(),
+            content: "status".into(),
+            message_id: "msg_intro_deny".into(),
+            is_dm: true,
+            mentions_bot: false,
+            is_bot: false,
+            connector_name: Some("discord-main".into()),
+            raw_content: "status".into(),
+            mentions: Vec::new(),
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        let denied: Vec<&_> = audits
+            .iter()
+            .filter(|a| a.event_type == "discord_introspection_denied")
+            .collect();
+        assert_eq!(denied.len(), 1, "expected one denied audit row");
+        let details: serde_json::Value =
+            serde_json::from_str(denied[0].details.as_deref().expect("details")).unwrap();
+        assert_eq!(details["command"], "status");
+        assert_eq!(details["reason"], "unauthorized_principal");
+
+        // Must NOT have created an introspection audit, a turn audit, or
+        // a session — the surface is invisible to non-operators.
+        assert!(
+            audits
+                .iter()
+                .all(|a| a.event_type != "discord_introspection"),
+            "unauthorized principal must not produce a discord_introspection audit",
+        );
+        assert!(
+            audits.iter().all(|a| a.event_type != "discord_message"),
+            "unauthorized principal must not flow through the turn audit",
+        );
+        assert!(
+            db.get_session_by_key("discord:sera:ch_intro_deny")
+                .unwrap()
+                .is_none(),
+            "unauthorized principal must not create a session",
+        );
     }
 
     /// Prose like `"what's the status of x?"` MUST NOT short-circuit — the

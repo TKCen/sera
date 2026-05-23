@@ -301,6 +301,15 @@ pub struct ConnectorSpec {
     /// change until they opt in.
     #[serde(default, alias = "statusCard")]
     pub status_card: bool,
+    /// Discord user ids authorized to invoke operator introspection commands
+    /// (sera-yeg.10): `status` / `help` / `sessions` / `goals`. Default-deny:
+    /// an empty / absent list rejects every introspection command, so a
+    /// fresh deployment cannot accidentally expose gateway-internal state to
+    /// any guild member who can @-mention the bot. Matched by exact Discord
+    /// user id (usernames are deliberately not supported — see the same
+    /// rationale on `authorize_control_principal`).
+    #[serde(default, alias = "allowedOperators", skip_serializing_if = "Vec::is_empty")]
+    pub allowed_operators: Vec<String>,
 }
 
 /// A reference to a secret value, resolved at runtime.

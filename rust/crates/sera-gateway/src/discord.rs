@@ -837,6 +837,17 @@ pub fn sanitize_status_reason(raw: &str) -> String {
     }
 }
 
+/// Build the JSON body for a status-card create/edit request. Disables
+/// all mention parsing so a sanitized-but-mention-shaped reason cannot
+/// generate Discord notifications (`@everyone`, `<@id>`, role pings,
+/// etc.). Exposed for unit-testability of the wire shape.
+pub fn status_card_payload(content: &str) -> Value {
+    serde_json::json!({
+        "content": content,
+        "allowed_mentions": { "parse": [] },
+    })
+}
+
 /// Render a status card body. Pure function exposed for unit testing —
 /// callers should normally hold a [`StatusCard`] and call `render`.
 pub fn render_status_card(audit_id: &str, state: &StatusCardState) -> String {
@@ -1160,6 +1171,11 @@ impl DiscordConnector {
     /// Send a message and return Discord's `id` for it. Used to anchor a
     /// status card so subsequent edits can target the same message
     /// (sera-yeg.6). UX affordance only.
+    ///
+    /// Mention parsing is disabled (`allowed_mentions.parse = []`) so a
+    /// sanitized-but-still-mention-shaped reason in the rendered card
+    /// (e.g. `@everyone` or `<@id>`) cannot ping anyone — the status
+    /// surface is informational, not interactive (Codex P1 on PR #1278).
     pub async fn send_message_with_id(
         &self,
         channel_id: &str,
@@ -1170,7 +1186,7 @@ impl DiscordConnector {
         let resp = client
             .post(&url)
             .header("Authorization", format!("Bot {}", self.token))
-            .json(&serde_json::json!({ "content": content }))
+            .json(&status_card_payload(content))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -1189,6 +1205,11 @@ impl DiscordConnector {
 
     /// Edit an existing bot-owned message in place. Used to update the
     /// status card as the turn lifecycle progresses (sera-yeg.6).
+    ///
+    /// Mention parsing is disabled on the edit body for the same reason
+    /// as [`Self::send_message_with_id`] — edits to a Failed/Blocked card
+    /// must not generate notifications even if the reason text survives
+    /// sanitization in a mention-shaped form.
     pub async fn edit_message(
         &self,
         channel_id: &str,
@@ -1200,7 +1221,7 @@ impl DiscordConnector {
         let resp = client
             .patch(&url)
             .header("Authorization", format!("Bot {}", self.token))
-            .json(&serde_json::json!({ "content": content }))
+            .json(&status_card_payload(content))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -2821,6 +2842,18 @@ mod tests {
         assert_eq!(sanitize_audit_id_for_display("a`b`c"), "abc");
         let long = "0123456789abcdef0123456789";
         assert_eq!(sanitize_audit_id_for_display(long).chars().count(), 12);
+    }
+
+    #[test]
+    fn status_card_payload_disables_all_mention_parsing() {
+        // Codex P1 on PR #1278: a sanitized-but-mention-shaped reason
+        // (e.g. `@everyone` slipping through whitespace-only sanitization)
+        // must NOT generate Discord notifications when the card is
+        // posted or edited. The wire body must therefore declare
+        // `allowed_mentions.parse = []`.
+        let body = status_card_payload("Failed: @everyone something broke");
+        assert_eq!(body["content"], "Failed: @everyone something broke");
+        assert_eq!(body["allowed_mentions"]["parse"], serde_json::json!([]));
     }
 
     #[test]

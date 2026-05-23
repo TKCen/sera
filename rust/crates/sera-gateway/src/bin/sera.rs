@@ -5648,7 +5648,11 @@ async fn start_status_card_session(
     msg: &DiscordMessage,
 ) -> Option<Arc<StatusCardSession>> {
     let dc = state.discord.as_ref()?;
-    let audit_id = format!("{}-{}", msg.channel_id, msg.message_id);
+    // Codex P2 on PR #1278: the display id is clamped to a 12-char
+    // prefix, so put the per-turn `message_id` first. A `channel_id`
+    // prefix would collapse every card from the same channel to the
+    // same visible id and break operator audit/debug correlation.
+    let audit_id = format!("{}-{}", msg.message_id, msg.channel_id);
     let card = crate::discord::StatusCard::new(&audit_id);
     let body = card.render();
 

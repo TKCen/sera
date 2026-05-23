@@ -1629,10 +1629,20 @@ pub fn shorten_id_for_display(raw: &str) -> String {
 }
 
 /// Extract the surface tag (first colon segment) from a SERA session_key.
-/// Returns `"unknown"` when the key has no colon — keys that don't conform
-/// to the `<surface>:<agent>:<id>` shape are rare but must not surface a
-/// raw / empty value into the operator response.
+/// Returns `"unknown"` whenever the key is missing the colon delimiter or
+/// the leading segment is empty — keys that don't conform to the
+/// `<surface>:<agent>:<id>` shape (or that carry only an externally-supplied
+/// identifier with no namespace) must not surface their raw value into the
+/// operator response (Codex P2 on PR #1283).
 pub fn surface_from_session_key(session_key: &str) -> String {
+    // A session_key without a colon doesn't have a `<surface>:` prefix. We
+    // must NOT surface the raw value as the "surface" tag — externally
+    // supplied session ids can be arbitrary strings, and rendering them
+    // here would leak the unsanitized identifier into the operator reply
+    // and violate the introspection privacy contract.
+    if !session_key.contains(':') {
+        return "unknown".to_owned();
+    }
     let surface = session_key.split(':').next().unwrap_or("").trim();
     if surface.is_empty() {
         "unknown".to_owned()
@@ -4878,7 +4888,11 @@ mod tests {
         assert_eq!(surface_from_session_key("discord:sera:ch12345"), "discord");
         assert_eq!(surface_from_session_key("http:sera:ses_abc"), "http");
         assert_eq!(surface_from_session_key("a2a:reviewer:peer-7"), "a2a");
-        assert_eq!(surface_from_session_key("no-colon-here"), "no-colon-here");
+        // No-colon keys are NOT surface tags — they're either malformed or
+        // externally-supplied identifiers. Surfacing them would leak the
+        // unsanitized id into the operator reply (Codex P2 on PR #1283).
+        assert_eq!(surface_from_session_key("no-colon-here"), "unknown");
+        assert_eq!(surface_from_session_key("just-an-opaque-id-123"), "unknown");
         assert_eq!(surface_from_session_key(""), "unknown");
         assert_eq!(surface_from_session_key(":sera:rest"), "unknown");
     }

@@ -1442,6 +1442,44 @@ impl IntrospectionCommand {
     }
 }
 
+/// Produce a command-peek candidate from a raw inbound message: strip only
+/// the self mention (`<@self>` / `<@!self>`) and return `None` whenever the
+/// remaining text still contains any other `<@id>` mention tag.
+///
+/// Rationale (Codex P2 on PR #1283): the introspection short-circuit must
+/// not intercept `<@peer-bot> status` — that message targets a peer, and
+/// `normalize_content_for_runtime` with an empty peer directory would
+/// silently strip `<@peer-bot>` to leave the bare `status` verb, causing a
+/// false-positive introspection trigger that bypasses the normal turn /
+/// audit / session pipeline. Returning `None` here forces the caller to
+/// route any message carrying a non-self mention through the full pipeline
+/// regardless of verb shape.
+pub fn introspection_command_candidate(raw: &str, self_bot_id: Option<&str>) -> Option<String> {
+    let stripped = match self_bot_id {
+        Some(self_id) if !self_id.is_empty() => {
+            let re = mention_tag_re();
+            re.replace_all(raw, |caps: &regex::Captures<'_>| {
+                if &caps[1] == self_id {
+                    String::new()
+                } else {
+                    caps[0].to_owned()
+                }
+            })
+            .into_owned()
+        }
+        _ => raw.to_owned(),
+    };
+    // Any leftover `<@id>` mention belongs to a non-self user / peer bot.
+    // The introspection short-circuit is *not* the right routing for those
+    // messages — they need to flow through the full pipeline so peer
+    // mentions are preserved on the outbound reply (sera-yeg.4) and the
+    // turn-audit / session-state path runs normally.
+    if mention_tag_re().is_match(&stripped) {
+        return None;
+    }
+    Some(stripped.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
 /// Try to parse `content` as an operator introspection command.
 ///
 /// Returns `None` for anything that doesn't look like a command so a regular
@@ -4713,6 +4751,48 @@ mod tests {
     // -----------------------------------------------------------------------
     // Operator introspection commands (sera-yeg.10)
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn introspection_command_candidate_strips_self_mention_only() {
+        // Discord mention tags are `<@digits>` / `<@!digits>` — use realistic
+        // numeric ids matching the `mention_tag_re()` pattern.
+        let got = introspection_command_candidate("<@111> status", Some("111"));
+        assert_eq!(got.as_deref(), Some("status"));
+
+        // Both the angle-bang variant `<@!id>` and the plain `<@id>` shape
+        // are handled by the same regex.
+        let got = introspection_command_candidate("<@!111>  help  ", Some("111"));
+        assert_eq!(got.as_deref(), Some("help"));
+    }
+
+    #[test]
+    fn introspection_command_candidate_refuses_when_peer_mention_present() {
+        // Codex P2 on PR #1283: `<@peer> status` must NOT short-circuit
+        // into introspection — the user is targeting a peer with the
+        // word "status" and the message must flow through the normal turn
+        // pipeline so the peer mention is preserved.
+        let got = introspection_command_candidate("<@222> status", Some("111"));
+        assert!(got.is_none(), "peer mention must abort the candidate");
+
+        // Same when the self mention is also present alongside a peer.
+        let got = introspection_command_candidate("<@111> <@222> status", Some("111"));
+        assert!(got.is_none(), "self+peer combo must abort the candidate");
+
+        // And when there's no self bot id known yet — be conservative.
+        let got = introspection_command_candidate("<@333> status", None);
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn introspection_command_candidate_no_self_id_returns_raw() {
+        // No self id known and no `<@id>` tags → return the raw text
+        // (whitespace collapsed for the parser).
+        let got = introspection_command_candidate("status", None);
+        assert_eq!(got.as_deref(), Some("status"));
+
+        let got = introspection_command_candidate("  status  ", None);
+        assert_eq!(got.as_deref(), Some("status"));
+    }
 
     #[test]
     fn parse_introspection_command_recognises_bare_verbs() {

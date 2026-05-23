@@ -5137,28 +5137,31 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
     };
     let principal_kind_str = if msg.is_bot { "agent" } else { "human" };
 
-    // sera-yeg.10: peek at the mention-normalized message body to see if this
-    // is an operator introspection command (`status` / `help` / `sessions` /
-    // `goals`). When it matches, short-circuit before any UX affordance or
-    // turn-pipeline cost — introspection is a fast no-LLM path that should
-    // never queue behind an in-flight turn or surface a status card.
+    // sera-yeg.10: peek at the message body to see if this is an operator
+    // introspection command (`status` / `help` / `sessions` / `goals`). When
+    // it matches, short-circuit before any UX affordance or turn-pipeline
+    // cost — introspection is a fast no-LLM path that should never queue
+    // behind an in-flight turn or surface a status card.
     //
     // Bots are excluded so a chatty peer bot that happens to mention SERA
     // with the verb `status` does not pull a snapshot — operator commands
-    // are a human surface. Build the normalized content lazily here (the
-    // full peer-directory + render-pipeline computation below is reused
-    // only if this short-circuit does not fire).
+    // are a human surface. The candidate helper strips only the self
+    // mention and refuses to short-circuit when a peer mention is present,
+    // so `<@peer-bot> status` keeps flowing through the normal turn
+    // pipeline (and gets the peer ping rewritten on outbound via
+    // sera-yeg.4) instead of being intercepted (Codex P2 on PR #1283).
     if !msg.is_bot {
-        let normalized = if msg.raw_content.is_empty() {
-            msg.content.clone()
+        let candidate = if msg.raw_content.is_empty() {
+            Some(msg.content.clone())
         } else {
-            crate::discord::normalize_content_for_runtime(
+            crate::discord::introspection_command_candidate(
                 &msg.raw_content,
                 self_bot_id.as_deref(),
-                &[],
             )
         };
-        if let Some(cmd) = crate::discord::parse_introspection_command(&normalized) {
+        if let Some(text) = candidate
+            && let Some(cmd) = crate::discord::parse_introspection_command(&text)
+        {
             return handle_introspection_command(state, msg, cmd, principal_kind_str).await;
         }
     }
@@ -9981,6 +9984,52 @@ spec:
         assert!(
             audits.iter().any(|a| a.event_type == "discord_message"),
             "prose must flow through the normal turn audit",
+        );
+    }
+
+    /// Regression for Codex P2 on PR #1283: a human message that includes a
+    /// non-self `<@id>` mention plus the word `status` must NOT short-circuit
+    /// into introspection — the message targets a peer and must flow through
+    /// the normal turn pipeline so the peer mention is preserved on outbound
+    /// (sera-yeg.4) and audit / session state is populated normally.
+    #[tokio::test]
+    async fn process_message_introspection_does_not_intercept_peer_mention() {
+        let state = test_state_async().await;
+
+        let msg = DiscordMessage {
+            channel_id: "ch_peer_status".into(),
+            user_id: "operator-4".into(),
+            username: "operator4".into(),
+            content: "status".into(), // mention-stripped legacy field
+            message_id: "msg_peer_status".into(),
+            is_dm: true,
+            mentions_bot: false,
+            is_bot: false,
+            connector_name: Some("discord-main".into()),
+            // Raw payload carries a peer mention alongside the verb. The
+            // pre-fix code normalized this to bare "status" against an empty
+            // peer directory and falsely intercepted. Discord mention tags
+            // are `<@digits>` so the regex-driven candidate guard sees this
+            // as a non-self mention and refuses to short-circuit.
+            raw_content: "<@222333444> status".into(),
+            mentions: vec![crate::discord::DiscordMentionedUser {
+                id: "222333444".into(),
+                username: "peer-bot".into(),
+            }],
+        };
+        process_message(&state, &msg).await.expect("process_message");
+
+        let db = state.db.lock().await;
+        let audits = db.query_audit(50).expect("query_audit");
+        assert!(
+            audits
+                .iter()
+                .all(|a| a.event_type != "discord_introspection"),
+            "peer-mention message must not trigger introspection",
+        );
+        assert!(
+            audits.iter().any(|a| a.event_type == "discord_message"),
+            "peer-mention message must flow through the normal turn audit",
         );
     }
 

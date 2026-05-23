@@ -906,6 +906,11 @@ pub fn parse_sequence(payload: &Value) -> Option<i64> {
 /// HITL / GoalRun control surface (`approve`, `deny`, `cancel`, `retry`,
 /// `pause`, `resume`) so the audit + downstream routing path can use a
 /// single vocabulary regardless of which channel surface produced it.
+///
+/// `#[allow(dead_code)]`: only constructed from tests + the not-yet-wired
+/// `gate_control_reaction` (see its rustdoc). Lifted once the bin wires
+/// MESSAGE_REACTION_ADD into the gate.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlIntent {
     /// Operator approves the pending approval / HITL ticket.
@@ -947,6 +952,7 @@ impl ControlIntent {
 /// (Discord sends `name` = the unicode char for unicode emoji, or the
 /// custom emoji name otherwise). The match is case-sensitive so a manifest
 /// typo doesn't silently widen the set of accepted reactions.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReactionControlBinding {
     pub emoji: String,
@@ -957,6 +963,7 @@ pub struct ReactionControlBinding {
 /// `target_message_id` is the bot-owned message the reaction landed on —
 /// the gate uses it to anchor the resulting control to the corresponding
 /// HITL ticket / status card.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscordReactionAdd {
     pub channel_id: String,
@@ -1007,6 +1014,7 @@ pub fn parse_reaction_add(payload: &Value, bot_user_id: Option<&str>) -> Option<
 /// Outcome of the reaction-control gate. Mirrors the shape of
 /// [`MessageGateDecision`] so the audit pattern is uniform across the
 /// inbound message gate and the reaction-control gate.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlGateDecision {
     /// Reaction maps to a known intent AND the reacting principal is on
@@ -1026,6 +1034,7 @@ pub enum ControlGateDecision {
 
 /// Reason a reaction-driven control was denied. Distinct from the
 /// `Unmapped` (silent) path so the audit pattern stays expressive.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlDenyReason {
     /// Reacting Discord user id is not on the configured operator
@@ -1053,6 +1062,7 @@ impl ControlDenyReason {
 /// bindings with the same emoji resolve to the first match (manifest
 /// ordering wins) so operators can override defaults by listing them
 /// earlier.
+#[allow(dead_code)]
 pub fn map_reaction_to_intent(
     emoji: &str,
     bindings: &[ReactionControlBinding],
@@ -1072,6 +1082,7 @@ pub fn map_reaction_to_intent(
 /// supported here — usernames are mutable and an operator typo would
 /// either lock everyone out or admit a stranger. Ids are the stable
 /// principal identifier on Discord.
+#[allow(dead_code)]
 pub fn authorize_control_principal(user_id: &str, allowed_operators: &[String]) -> bool {
     if user_id.is_empty() {
         return false;

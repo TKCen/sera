@@ -294,6 +294,13 @@ pub struct ConnectorSpec {
     /// by talking past SERA.
     #[serde(default, alias = "peerBots", skip_serializing_if = "Vec::is_empty")]
     pub peer_bots: Vec<String>,
+    /// Enable the Discord status-card session surface (sera-yeg.6). When
+    /// `true`, accepted Discord turns post a single in-place edited status
+    /// card (Accepted → Running → Done/Failed/Blocked). Default `false`
+    /// preserves the pre-yeg.6 behavior so existing operators see no UX
+    /// change until they opt in.
+    #[serde(default, alias = "statusCard")]
+    pub status_card: bool,
 }
 
 /// A reference to a secret value, resolved at runtime.

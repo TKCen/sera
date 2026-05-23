@@ -2022,6 +2022,15 @@ impl DiscordConnector {
                         }
                         "RESUMED" => {
                             tracing::info!("Discord session RESUMED");
+                            // A successful RESUME is just as healthy as a
+                            // fresh READY for backoff purposes — the
+                            // resume_gateway_url accepted us and replayed
+                            // missed events. Without this, reconnects that
+                            // recover via RESUME would never clear the
+                            // generic-close counter and later transport
+                            // drops would keep escalating toward the 30s
+                            // cap (sera-dxmv P2 repair, PR #1282 review).
+                            self.observed_ready.store(true, Ordering::Relaxed);
                         }
                         "MESSAGE_CREATE" => {
                             let bot_id = self.bot_user_id.get().cloned();
@@ -4055,6 +4064,27 @@ mod tests {
         let guild = serde_json::json!({ "op": 0, "t": "GUILD_CREATE", "s": 2, "d": {} });
         conn.handle_payload(&guild).await;
         assert!(!conn.observed_ready.load(Ordering::Relaxed));
+    }
+
+    /// sera-dxmv repair (PR #1282 P2 review): a RESUMED dispatch is just as
+    /// healthy as a fresh READY — the resume succeeded and the connection
+    /// is good. Without this signal, reconnect cycles that recover via
+    /// RESUME would never clear the generic-close counter, so a later
+    /// transport drop would keep paying escalating backoff toward the 30s
+    /// cap on an otherwise-recovered session.
+    #[tokio::test]
+    async fn observed_ready_flag_set_on_resumed_dispatch() {
+        let (conn, _rx) = test_connector();
+        assert!(!conn.observed_ready.load(Ordering::Relaxed));
+
+        let resumed = serde_json::json!({
+            "op": 0, "t": "RESUMED", "s": 5, "d": {}
+        });
+        conn.handle_payload(&resumed).await;
+        assert!(
+            conn.observed_ready.load(Ordering::Relaxed),
+            "RESUMED dispatch must mark the connection healthy for backoff reset",
+        );
     }
 
     // ---- sera-h1iq fuzz coverage ------------------------------------------

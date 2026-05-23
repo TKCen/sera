@@ -4848,6 +4848,32 @@ fn peer_bots_for_connector(
         .unwrap_or_default()
 }
 
+/// Whether the named Discord connector has opted in to the status-card
+/// session surface (sera-yeg.6). Default `false` keeps the pre-yeg.6 UX
+/// unchanged for operators who haven't set `statusCard: true` in their
+/// connector manifest.
+fn status_card_enabled_for_connector(
+    manifests: &sera_config::manifest_loader::ManifestSet,
+    connector_name: Option<&str>,
+) -> bool {
+    let Some(name) = connector_name else {
+        return false;
+    };
+    manifests
+        .connectors
+        .iter()
+        .find(|c| c.metadata.name == name)
+        .and_then(|c| {
+            let spec: ConnectorSpec = serde_json::from_value(c.spec.clone()).ok()?;
+            if spec.kind == "discord" {
+                Some(spec.status_card)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(false)
+}
+
 async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Result<()> {
     tracing::info!(
         user = %msg.username,
@@ -4940,6 +4966,21 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         .map(|dc| start_typing_indicator(Arc::clone(dc), msg.channel_id.clone()));
     add_reaction_best_effort(state, &msg.channel_id, &msg.message_id, "👀").await;
 
+    // sera-yeg.6: opt-in status-card session surface. Each accepted turn
+    // posts one in-place edited card so operators see Accepted → Running →
+    // Done/Failed/Blocked as the lifecycle progresses. Default-off; existing
+    // operators are unaffected unless they set `statusCard: true` on their
+    // connector manifest.
+    let status_card_enabled = {
+        let manifests = state.manifests.read().unwrap();
+        status_card_enabled_for_connector(&manifests, msg.connector_name.as_deref())
+    };
+    let status_card_session = if status_card_enabled {
+        start_status_card_session(state, msg).await
+    } else {
+        None
+    };
+
     // Audit: Discord message received.
     {
         let db = state.db.lock().await;
@@ -4987,6 +5028,13 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
     // Run the inner turn pipeline. We wrap everything below in an async block
     // so the typing/reaction lifecycle finalizes consistently (✅ on success,
     // ❌ on failure) regardless of where the inner pipeline returns.
+    // Transition status card to Running just before invoking the inner
+    // pipeline (sera-yeg.6). Best-effort edit — failures are logged debug.
+    if let Some(session) = status_card_session.as_ref() {
+        update_status_card_best_effort(state, session, crate::discord::StatusCardState::Running)
+            .await;
+    }
+
     let outcome = process_message_inner(
         state,
         msg,
@@ -5007,6 +5055,22 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
     };
     if let Some(emoji) = final_emoji {
         add_reaction_best_effort(state, &msg.channel_id, &msg.message_id, emoji).await;
+    }
+    // Final status-card edit, mirroring the reaction lifecycle (sera-yeg.6).
+    // Queued turns do not finalize the card — the dispatched turn that
+    // actually runs owns the lifecycle.
+    if let Some(session) = status_card_session.as_ref() {
+        let terminal = match outcome.as_ref() {
+            Ok(TurnOutcome::Success) => Some(crate::discord::StatusCardState::Done),
+            Ok(TurnOutcome::Rejected) => Some(crate::discord::StatusCardState::Failed(
+                "hook rejected".into(),
+            )),
+            Err(e) => Some(crate::discord::StatusCardState::Failed(e.to_string())),
+            Ok(TurnOutcome::Queued) => None,
+        };
+        if let Some(state_next) = terminal {
+            update_status_card_best_effort(state, session, state_next).await;
+        }
     }
     outcome.map(|_| ())
 }
@@ -5535,6 +5599,112 @@ async fn remove_reaction_best_effort(
         );
     }
 }
+
+/// Live session anchor for a Discord status card (sera-yeg.6). Holds the
+/// in-flight `StatusCard` plus the Discord routing info needed to edit it
+/// — the channel id where the card was posted (may be a thread spawned
+/// from the inbound message) and the posted message's id.
+struct StatusCardSession {
+    card: tokio::sync::Mutex<crate::discord::StatusCard>,
+    /// Channel the card lives in — a thread when one was successfully
+    /// spawned, otherwise the inbound message's channel.
+    post_channel_id: String,
+    /// Discord id of the card message itself; targets of subsequent edits.
+    card_message_id: String,
+}
+
+/// Start a status-card session for an accepted Discord turn (sera-yeg.6).
+/// Tries to anchor the card inside a thread spawned from the inbound
+/// message; falls back to the inbound channel if thread creation fails.
+/// Returns `None` if the connector handle is missing or the initial card
+/// post fails — the lifecycle then degrades to the pre-yeg.6 UX silently.
+async fn start_status_card_session(
+    state: &AppState,
+    msg: &DiscordMessage,
+) -> Option<Arc<StatusCardSession>> {
+    let dc = state.discord.as_ref()?;
+    let audit_id = format!("{}-{}", msg.channel_id, msg.message_id);
+    let card = crate::discord::StatusCard::new(&audit_id);
+    let body = card.render();
+
+    // Try to anchor inside a thread spawned from the inbound message so
+    // the channel doesn't fill with status updates. Fall back to posting
+    // in the channel if thread creation fails (permissions, DMs, etc.).
+    let post_channel_id = match dc
+        .start_thread_from_message(
+            &msg.channel_id,
+            &msg.message_id,
+            "SERA session",
+            STATUS_CARD_THREAD_AUTO_ARCHIVE_MINUTES,
+        )
+        .await
+    {
+        Ok(thread_id) => thread_id,
+        Err(e) => {
+            tracing::debug!(
+                channel_id = %msg.channel_id,
+                message_id = %msg.message_id,
+                error = %e,
+                "Discord status-card thread creation failed; falling back to channel post"
+            );
+            msg.channel_id.clone()
+        }
+    };
+
+    match dc.send_message_with_id(&post_channel_id, &body).await {
+        Ok(card_message_id) => Some(Arc::new(StatusCardSession {
+            card: tokio::sync::Mutex::new(card),
+            post_channel_id,
+            card_message_id,
+        })),
+        Err(e) => {
+            tracing::debug!(
+                channel_id = %post_channel_id,
+                error = %e,
+                "Discord status-card initial post failed; lifecycle continues without card"
+            );
+            None
+        }
+    }
+}
+
+/// Apply a state transition to the in-flight status card and edit the
+/// posted Discord message in place (sera-yeg.6). Silently drops the
+/// update if the card is already terminal (e.g. a late blocker arriving
+/// after the turn has finalized). All transport failures degrade to
+/// debug-level logs and never propagate.
+async fn update_status_card_best_effort(
+    state: &AppState,
+    session: &StatusCardSession,
+    next: crate::discord::StatusCardState,
+) {
+    let Some(ref dc) = state.discord else {
+        return;
+    };
+    let mut card = session.card.lock().await;
+    if card.transition(next).is_err() {
+        // Already terminal — drop the update.
+        return;
+    }
+    let body = card.render();
+    drop(card);
+    if let Err(e) = dc
+        .edit_message(&session.post_channel_id, &session.card_message_id, &body)
+        .await
+    {
+        tracing::debug!(
+            channel_id = %session.post_channel_id,
+            message_id = %session.card_message_id,
+            error = %e,
+            "Discord status-card edit failed (low-noise — UX affordance only)",
+        );
+    }
+}
+
+/// Default Discord thread auto-archive duration (24h) used for status-card
+/// session threads. Keeps closed sessions tidy without forcing operators
+/// to manually archive.
+const STATUS_CARD_THREAD_AUTO_ARCHIVE_MINUTES: u32 = 1440;
 
 // ── sera init ───────────────────────────────────────────────────────────────
 

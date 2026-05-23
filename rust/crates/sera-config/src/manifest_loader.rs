@@ -550,6 +550,56 @@ spec:
     }
 
     #[test]
+    fn connector_spec_status_card_defaults_off() {
+        // sera-yeg.6: status-card session surface is opt-in. Connectors
+        // that omit `status_card` retain the pre-yeg.6 behavior.
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Connector
+metadata:
+  name: discord-main
+spec:
+  kind: discord
+  agent: sera
+"#;
+        let set = parse_manifests(yaml).unwrap();
+        let spec = set.connector_spec("discord-main").unwrap().unwrap();
+        assert!(!spec.status_card);
+    }
+
+    #[test]
+    fn connector_spec_status_card_opt_in_snake_and_camel() {
+        // Both `status_card` and the camelCase alias `statusCard` should
+        // toggle the opt-in.
+        for yaml in [
+            r#"
+apiVersion: sera.dev/v1
+kind: Connector
+metadata:
+  name: discord-main
+spec:
+  kind: discord
+  agent: sera
+  status_card: true
+"#,
+            r#"
+apiVersion: sera.dev/v1
+kind: Connector
+metadata:
+  name: discord-main
+spec:
+  kind: discord
+  agent: sera
+  statusCard: true
+"#,
+        ] {
+            let set = parse_manifests(yaml).unwrap();
+            let spec = set.connector_spec("discord-main").unwrap().unwrap();
+            assert!(spec.status_card, "yaml form did not opt in: {yaml}");
+        }
+    }
+
+    #[test]
     fn lookup_by_name() {
         let set = parse_manifests(MVS_CONFIG).unwrap();
         assert!(set.provider("lm-studio").is_some());

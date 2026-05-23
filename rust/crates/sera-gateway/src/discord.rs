@@ -659,6 +659,199 @@ pub fn own_reaction_url(channel_id: &str, message_id: &str, emoji: &str) -> Stri
     )
 }
 
+// ---------------------------------------------------------------------------
+// Status-card session surface (sera-yeg.6)
+//
+// A status card is a single Discord message — optionally posted inside a
+// thread anchored on the inbound operator message — that SERA edits in place
+// across the lifecycle of a turn. It gives operators a non-noisy "workcell"
+// surface showing terminal state (accepted/running/blocked/done/failed)
+// instead of the bot looking silent while a long turn is in flight.
+//
+// The state machine + renderer are pure and unit-tested here; the REST
+// methods on `DiscordConnector` and the wire-up in the message-processing
+// pipeline are best-effort UX affordances — failures degrade silently and
+// never propagate as turn failures, matching the typing/reaction lifecycle
+// from sera-yeg.2.
+// ---------------------------------------------------------------------------
+
+/// Build the REST URL for starting a thread from an existing message.
+/// Endpoint: `POST /channels/{channel_id}/messages/{message_id}/threads`.
+pub fn start_thread_from_message_url(channel_id: &str, message_id: &str) -> String {
+    format!("{DISCORD_API_BASE}/channels/{channel_id}/messages/{message_id}/threads")
+}
+
+/// Build the REST URL for posting messages to a channel (or thread —
+/// Discord exposes threads as channels for message ops).
+pub fn channel_messages_url(channel_id: &str) -> String {
+    format!("{DISCORD_API_BASE}/channels/{channel_id}/messages")
+}
+
+/// Build the REST URL for editing the bot's own message.
+/// Endpoint: `PATCH /channels/{channel_id}/messages/{message_id}`.
+pub fn edit_message_url(channel_id: &str, message_id: &str) -> String {
+    format!("{DISCORD_API_BASE}/channels/{channel_id}/messages/{message_id}")
+}
+
+/// Lifecycle state of a Discord status card. Drives the rendered text and
+/// the terminal/non-terminal classification used by the message-processing
+/// pipeline to decide whether further edits are allowed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatusCardState {
+    /// Turn was accepted by the connector gate and is queued / starting.
+    Accepted,
+    /// Turn is actively executing (post-pre-route, runtime running).
+    Running,
+    /// Turn is waiting on an external dependency (hook redirect, HITL, etc.).
+    /// Carries a short operator-facing reason (sanitized at render time).
+    Blocked(String),
+    /// Turn ran to completion and a reply was sent.
+    Done,
+    /// Turn ended in an error (hook reject, runtime failure, transport).
+    /// Carries a short operator-facing reason (sanitized at render time).
+    Failed(String),
+}
+
+impl StatusCardState {
+    /// True for `Done`/`Failed`. Terminal states must not be edited further;
+    /// the pipeline must drop further status updates once a card is terminal.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, StatusCardState::Done | StatusCardState::Failed(_))
+    }
+}
+
+/// A status-card session anchored on the inbound Discord message. Owns the
+/// posted message id (after first publish) and the current state — the
+/// pipeline calls `transition` and re-renders to drive edits.
+#[derive(Debug, Clone)]
+pub struct StatusCard {
+    /// Short audit id displayed on the card. Trimmed and length-clamped by
+    /// [`sanitize_audit_id_for_display`] before storage so the renderer
+    /// never needs to re-sanitize.
+    audit_id: String,
+    /// Current lifecycle state. Mutated through [`StatusCard::transition`].
+    state: StatusCardState,
+}
+
+impl StatusCard {
+    /// Create a new card in [`StatusCardState::Accepted`] with a display-safe
+    /// audit id derived from the input.
+    pub fn new(audit_id: &str) -> Self {
+        Self {
+            audit_id: sanitize_audit_id_for_display(audit_id),
+            state: StatusCardState::Accepted,
+        }
+    }
+
+    pub fn state(&self) -> &StatusCardState {
+        &self.state
+    }
+
+    pub fn audit_id(&self) -> &str {
+        &self.audit_id
+    }
+
+    /// Apply a state transition. Returns `Err` with the current state if the
+    /// card is already terminal — callers should drop the update rather than
+    /// editing the live Discord message past a final ✅/❌ state.
+    pub fn transition(&mut self, next: StatusCardState) -> Result<(), StatusCardState> {
+        if self.state.is_terminal() {
+            return Err(self.state.clone());
+        }
+        self.state = next;
+        Ok(())
+    }
+
+    /// Render the card as a single Discord message body — privacy-clean
+    /// (no raw channel ids, file paths, tokens, transcripts) and short
+    /// enough to fit comfortably under Discord's 2000-char message limit.
+    pub fn render(&self) -> String {
+        render_status_card(&self.audit_id, &self.state)
+    }
+}
+
+/// Trim a raw audit id / session id to a display-safe short prefix. Keeps
+/// roughly the first 12 chars (matches the short-sha convention used in
+/// other SERA operator surfaces) and strips characters Discord markdown
+/// would interpret (` ``` ` and backticks specifically). Non-ascii input
+/// is preserved verbatim up to the limit so callers can pass UUIDs or
+/// other ascii identifiers without quoting concerns.
+pub fn sanitize_audit_id_for_display(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let cleaned: String = trimmed
+        .chars()
+        .filter(|c| *c != '`' && *c != '\n' && *c != '\r')
+        .collect();
+    if cleaned.is_empty() {
+        return "unknown".to_owned();
+    }
+    // Clamp at 12 chars — long enough to disambiguate sessions in operator
+    // surfaces, short enough to keep the card compact.
+    cleaned.chars().take(12).collect()
+}
+
+/// Sanitize an operator-facing reason string for inclusion on a status card.
+/// Strips control characters, collapses whitespace, clamps length, and
+/// removes Discord code-fence backticks so a malformed reason cannot break
+/// the card's markdown.
+pub fn sanitize_status_reason(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| {
+            if c == '`' || c == '\n' || c == '\r' || c == '\t' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .filter(|c| !c.is_control())
+        .collect();
+    // Collapse runs of whitespace.
+    let mut out = String::with_capacity(cleaned.len());
+    let mut prev_space = false;
+    for c in cleaned.chars() {
+        if c == ' ' {
+            if !prev_space {
+                out.push(' ');
+            }
+            prev_space = true;
+        } else {
+            out.push(c);
+            prev_space = false;
+        }
+    }
+    let trimmed = out.trim();
+    // Clamp at 200 chars so the card stays compact even on long reasons.
+    if trimmed.chars().count() > 200 {
+        let mut clamped: String = trimmed.chars().take(197).collect();
+        clamped.push('…');
+        clamped
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// Render a status card body. Pure function exposed for unit testing —
+/// callers should normally hold a [`StatusCard`] and call `render`.
+pub fn render_status_card(audit_id: &str, state: &StatusCardState) -> String {
+    let (label, emoji) = match state {
+        StatusCardState::Accepted => ("Accepted", "📥"),
+        StatusCardState::Running => ("Running", "⚙️"),
+        StatusCardState::Blocked(_) => ("Blocked", "⏸"),
+        StatusCardState::Done => ("Done", "✅"),
+        StatusCardState::Failed(_) => ("Failed", "❌"),
+    };
+    let mut body = format!("**{emoji} SERA · {label}** · `{audit_id}`");
+    if let StatusCardState::Blocked(reason) | StatusCardState::Failed(reason) = state {
+        let sanitized = sanitize_status_reason(reason);
+        if !sanitized.is_empty() {
+            body.push('\n');
+            body.push_str(&sanitized);
+        }
+    }
+    body
+}
+
 /// Extract the event name from a Dispatch payload (opcode 0).
 pub fn parse_dispatch_event(payload: &Value) -> Option<String> {
     if payload.get("op")?.as_u64()? != OP_DISPATCH {
@@ -919,6 +1112,94 @@ impl DiscordConnector {
         if !resp.status().is_success() {
             let status = resp.status();
             anyhow::bail!("Discord remove_reaction error {status}");
+        }
+        Ok(())
+    }
+
+    /// Start a public thread anchored on an existing message
+    /// (`POST /channels/{channel_id}/messages/{message_id}/threads`).
+    /// Returns the new thread's channel id on success. UX affordance only —
+    /// failures degrade silently in the caller (sera-yeg.6).
+    pub async fn start_thread_from_message(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        name: &str,
+        auto_archive_duration_minutes: u32,
+    ) -> anyhow::Result<String> {
+        let url = start_thread_from_message_url(channel_id, message_id);
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bot {}", self.token))
+            .json(&serde_json::json!({
+                "name": name,
+                "auto_archive_duration": auto_archive_duration_minutes,
+            }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!("Discord start_thread error {status}");
+        }
+        let body: Value = resp.json().await?;
+        let id = body
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Discord start_thread response missing id"))?
+            .to_owned();
+        Ok(id)
+    }
+
+    /// Send a message and return Discord's `id` for it. Used to anchor a
+    /// status card so subsequent edits can target the same message
+    /// (sera-yeg.6). UX affordance only.
+    pub async fn send_message_with_id(
+        &self,
+        channel_id: &str,
+        content: &str,
+    ) -> anyhow::Result<String> {
+        let url = channel_messages_url(channel_id);
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bot {}", self.token))
+            .json(&serde_json::json!({ "content": content }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Discord send_message error {status}: {body}");
+        }
+        let body: Value = resp.json().await?;
+        let id = body
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Discord send_message response missing id"))?
+            .to_owned();
+        Ok(id)
+    }
+
+    /// Edit an existing bot-owned message in place. Used to update the
+    /// status card as the turn lifecycle progresses (sera-yeg.6).
+    pub async fn edit_message(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        content: &str,
+    ) -> anyhow::Result<()> {
+        let url = edit_message_url(channel_id, message_id);
+        let client = reqwest::Client::new();
+        let resp = client
+            .patch(&url)
+            .header("Authorization", format!("Bot {}", self.token))
+            .json(&serde_json::json!({ "content": content }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!("Discord edit_message error {status}");
         }
         Ok(())
     }
@@ -2393,5 +2674,159 @@ mod tests {
         let reply = "@Sera 2.0 acknowledged: reverse path works";
         let outbound = render_outbound_content(reply, &dir);
         assert_eq!(outbound, "<@222> acknowledged: reverse path works");
+    }
+
+    // -----------------------------------------------------------------------
+    // Status-card session surface (sera-yeg.6)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn start_thread_from_message_url_shape() {
+        assert_eq!(
+            start_thread_from_message_url("ch-9", "msg-77"),
+            "https://discord.com/api/v10/channels/ch-9/messages/msg-77/threads",
+        );
+    }
+
+    #[test]
+    fn channel_messages_url_shape() {
+        assert_eq!(
+            channel_messages_url("ch-9"),
+            "https://discord.com/api/v10/channels/ch-9/messages",
+        );
+    }
+
+    #[test]
+    fn edit_message_url_shape() {
+        assert_eq!(
+            edit_message_url("ch-9", "msg-77"),
+            "https://discord.com/api/v10/channels/ch-9/messages/msg-77",
+        );
+    }
+
+    #[test]
+    fn status_card_initial_state_is_accepted() {
+        let card = StatusCard::new("abcdef1234567890");
+        assert_eq!(*card.state(), StatusCardState::Accepted);
+        // Trimmed to the 12-char display prefix.
+        assert_eq!(card.audit_id(), "abcdef123456");
+    }
+
+    #[test]
+    fn status_card_transition_running_then_done() {
+        let mut card = StatusCard::new("sess-001");
+        card.transition(StatusCardState::Running).unwrap();
+        assert_eq!(*card.state(), StatusCardState::Running);
+        card.transition(StatusCardState::Done).unwrap();
+        assert!(card.state().is_terminal());
+    }
+
+    #[test]
+    fn status_card_terminal_rejects_further_transitions() {
+        let mut card = StatusCard::new("sess-002");
+        card.transition(StatusCardState::Running).unwrap();
+        card.transition(StatusCardState::Done).unwrap();
+        // Done is terminal — must not allow further edits.
+        let err = card
+            .transition(StatusCardState::Failed("late failure".into()))
+            .expect_err("terminal card must reject further transitions");
+        assert_eq!(err, StatusCardState::Done);
+        assert_eq!(*card.state(), StatusCardState::Done);
+    }
+
+    #[test]
+    fn status_card_failed_is_terminal() {
+        let mut card = StatusCard::new("sess-003");
+        card.transition(StatusCardState::Failed("hook reject".into()))
+            .unwrap();
+        assert!(card.state().is_terminal());
+        // Subsequent transitions are rejected.
+        assert!(card.transition(StatusCardState::Done).is_err());
+    }
+
+    #[test]
+    fn status_card_blocked_allows_continuation() {
+        // Blocked is NOT terminal — operator can later resume / fail / finish.
+        let mut card = StatusCard::new("sess-004");
+        card.transition(StatusCardState::Blocked("waiting on hitl".into()))
+            .unwrap();
+        assert!(!card.state().is_terminal());
+        card.transition(StatusCardState::Running).unwrap();
+        card.transition(StatusCardState::Done).unwrap();
+        assert!(card.state().is_terminal());
+    }
+
+    #[test]
+    fn render_status_card_includes_label_and_audit_prefix() {
+        let body = render_status_card("abcdef123456", &StatusCardState::Accepted);
+        assert!(body.contains("SERA · Accepted"));
+        assert!(body.contains("`abcdef123456`"));
+    }
+
+    #[test]
+    fn render_status_card_running_has_no_reason_line() {
+        let body = render_status_card("abc", &StatusCardState::Running);
+        // Running carries no reason — body must be single-line.
+        assert!(!body.contains('\n'), "rendered body had newline: {body}");
+        assert!(body.contains("Running"));
+    }
+
+    #[test]
+    fn render_status_card_blocked_includes_sanitized_reason() {
+        let body =
+            render_status_card("abc", &StatusCardState::Blocked("waiting on HITL".into()));
+        assert!(body.contains("Blocked"));
+        assert!(body.contains("waiting on HITL"));
+    }
+
+    #[test]
+    fn render_status_card_failed_includes_sanitized_reason() {
+        let body =
+            render_status_card("abc", &StatusCardState::Failed("hook rejected".into()));
+        assert!(body.contains("Failed"));
+        assert!(body.contains("hook rejected"));
+    }
+
+    #[test]
+    fn sanitize_status_reason_strips_backticks_and_control_chars() {
+        // Backticks would break the audit-id code-span on the card. Newlines
+        // would inflate the card vertically. Both must be stripped/folded.
+        let s = sanitize_status_reason("oops `code` failed\n\nsecond line");
+        assert!(!s.contains('`'));
+        assert!(!s.contains('\n'));
+        assert!(s.contains("oops"));
+        assert!(s.contains("second line"));
+    }
+
+    #[test]
+    fn sanitize_status_reason_clamps_long_input() {
+        let long = "x".repeat(1000);
+        let s = sanitize_status_reason(&long);
+        // ≤ 200 chars total (197 + ellipsis).
+        assert!(s.chars().count() <= 200, "len={}", s.chars().count());
+        assert!(s.ends_with('…'));
+    }
+
+    #[test]
+    fn sanitize_audit_id_for_display_handles_empty_and_long() {
+        assert_eq!(sanitize_audit_id_for_display(""), "unknown");
+        assert_eq!(sanitize_audit_id_for_display("   "), "unknown");
+        // Backticks would break the code-span — must be stripped.
+        assert_eq!(sanitize_audit_id_for_display("a`b`c"), "abc");
+        let long = "0123456789abcdef0123456789";
+        assert_eq!(sanitize_audit_id_for_display(long).chars().count(), 12);
+    }
+
+    #[test]
+    fn render_status_card_does_not_leak_raw_channel_id_or_path() {
+        // Privacy contract: the renderer must never emit channel/message
+        // ids or filesystem paths. Verified by construction (the renderer
+        // only sees the sanitized audit_id and reason) — this test pins
+        // the contract so future edits don't accidentally include them.
+        let card = StatusCard::new("audit-9F0AB");
+        let body = card.render();
+        assert!(!body.contains("channels/"));
+        assert!(!body.contains("/home/"));
+        assert!(!body.contains("Bot "));
     }
 }

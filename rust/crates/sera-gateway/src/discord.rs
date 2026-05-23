@@ -1628,45 +1628,35 @@ pub fn shorten_id_for_display(raw: &str) -> String {
     format!("…{tail}")
 }
 
+/// Trusted SERA surface labels that may appear as the leading segment of a
+/// session_key. Anything outside this allowlist is treated as untrusted —
+/// see [`surface_from_session_key`].
+///
+/// New surfaces must be added explicitly. A pattern-based check (e.g.
+/// "ascii lowercase, up to 16 chars") is intentionally NOT used: an
+/// externally-supplied prefix like `a12345678901234` matches such a
+/// pattern but still embeds a 14-digit run that would leak identifier
+/// material in the operator-facing reply (Codex P2 follow-up on PR #1283).
+const TRUSTED_SURFACE_TAGS: &[&str] = &["discord", "http", "a2a"];
+
 /// Extract the surface tag (first colon segment) from a SERA session_key.
 /// Returns `"unknown"` whenever the key is missing the colon delimiter, the
-/// leading segment is empty, or the leading segment fails a strict shape
-/// check (Codex P2 on PR #1283):
+/// leading segment is empty, or the leading segment is not on
+/// [`TRUSTED_SURFACE_TAGS`].
 ///
-/// A valid surface tag is a short lowercase ascii label — 1-16 chars, made
-/// up of `[a-z0-9_-]`, starting with a letter, and **not** entirely numeric.
-/// This conservatively passes the gateway's known surfaces (`discord`,
-/// `http`, `a2a`) and rejects externally-supplied opaque identifiers
-/// (snowflake-shaped ids, base64 blobs, arbitrary user-prefixes) that
-/// would leak unsanitized identifier material into the operator reply.
+/// Using an explicit allowlist (instead of a regex / character-class check)
+/// closes the snowflake-leak class for externally-supplied prefixes that
+/// happen to satisfy a shape rule but still embed identifier material.
 pub fn surface_from_session_key(session_key: &str) -> String {
     if !session_key.contains(':') {
         return "unknown".to_owned();
     }
     let surface = session_key.split(':').next().unwrap_or("").trim();
-    if !is_safe_surface_tag(surface) {
-        return "unknown".to_owned();
+    if TRUSTED_SURFACE_TAGS.contains(&surface) {
+        surface.to_owned()
+    } else {
+        "unknown".to_owned()
     }
-    surface.to_owned()
-}
-
-/// True when `s` looks like a trusted internal SERA surface label — used by
-/// [`surface_from_session_key`] to decide whether the leading segment of a
-/// session_key is safe to render in the operator-facing introspection reply.
-fn is_safe_surface_tag(s: &str) -> bool {
-    let count = s.chars().count();
-    if count == 0 || count > 16 {
-        return false;
-    }
-    let first_ok = s
-        .chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_lowercase());
-    if !first_ok {
-        return false;
-    }
-    s.chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 /// Render an [`IntrospectionCommand`] + [`IntrospectionSnapshot`] pair into
@@ -4903,23 +4893,30 @@ mod tests {
 
     #[test]
     fn surface_from_session_key_extracts_first_segment_or_unknown() {
-        // Trusted internal surfaces pass the strict label check.
+        // Trusted SERA surfaces from the allowlist pass through.
         assert_eq!(surface_from_session_key("discord:sera:ch12345"), "discord");
         assert_eq!(surface_from_session_key("http:sera:ses_abc"), "http");
         assert_eq!(surface_from_session_key("a2a:reviewer:peer-7"), "a2a");
 
-        // Untrusted / externally-supplied prefixes get masked — even when a
-        // colon is present (Codex P2, follow-up on PR #1283). A snowflake-
-        // shaped numeric prefix, a base64 blob, or any leading-digit /
-        // unusually long / mixed-case prefix is NOT a SERA surface tag.
+        // Anything else is masked — closing every shape-based bypass:
+        // numeric prefix, mixed-case, over-length, leading-digit, whitespace,
+        // and (Codex P2 follow-up on PR #1283) a letter-led prefix that
+        // embeds a long digit run.
         assert_eq!(
             surface_from_session_key("1234567890123456:agent:x"),
+            "unknown"
+        );
+        assert_eq!(
+            surface_from_session_key("a12345678901234:agent:x"),
             "unknown"
         );
         assert_eq!(surface_from_session_key("DISCORD:sera:x"), "unknown");
         assert_eq!(surface_from_session_key("abcdefghijklmnopqr:x:y"), "unknown");
         assert_eq!(surface_from_session_key("9start:x:y"), "unknown");
         assert_eq!(surface_from_session_key("has space:x:y"), "unknown");
+        // Even close near-misses (typos / casing) get masked rather than
+        // surfaced — the allowlist is strict on purpose.
+        assert_eq!(surface_from_session_key("discords:x:y"), "unknown");
 
         // Missing or empty prefix.
         assert_eq!(surface_from_session_key("no-colon-here"), "unknown");

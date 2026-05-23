@@ -11,6 +11,8 @@
 //! The returned URL has no trailing slash and is ready to drop into
 //! `LLM_BASE_URL` or into a Provider manifest's `base_url`.
 
+use std::time::Duration;
+
 use anyhow::Result;
 use serde_json::json;
 use wiremock::matchers::{method, path};
@@ -44,18 +46,35 @@ pub async fn start_mock_llm() -> Result<(String, MockServer)> {
 /// Returns `(url, server)` — the caller must hold `server` on its stack for
 /// the duration of the test; dropping it tears down the listener.
 pub async fn start_mock_llm_with_reply(reply: &str) -> Result<(String, MockServer)> {
+    start_mock_llm_with_reply_and_delay(reply, Duration::ZERO).await
+}
+
+/// Same as [`start_mock_llm_with_reply`] but delays every completion response
+/// by `delay` before returning the body. Used by the lane-busy parity smoke
+/// (`hermes_parity_api_smoke::hermes_parity_api_lane_busy_returns_429`) to
+/// hold the lane open long enough that a concurrent second `/api/chat`
+/// deterministically observes the `Queued` lane-queue verdict and gets a
+/// structured 429 back — without the delay, the runtime can finish the first
+/// turn before the second request reaches the lane gate, and the race is
+/// non-deterministic.
+pub async fn start_mock_llm_with_reply_and_delay(
+    reply: &str,
+    delay: Duration,
+) -> Result<(String, MockServer)> {
     let server = MockServer::start().await;
     let sse_body = build_sse_stream(reply);
 
     for p in ["/v1/chat/completions", "/chat/completions"] {
+        let mut template = ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .insert_header("cache-control", "no-cache")
+            .set_body_string(sse_body.clone());
+        if !delay.is_zero() {
+            template = template.set_delay(delay);
+        }
         Mock::given(method("POST"))
             .and(path(p))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("content-type", "text/event-stream")
-                    .insert_header("cache-control", "no-cache")
-                    .set_body_string(sse_body.clone()),
-            )
+            .respond_with(template)
             .mount(&server)
             .await;
     }

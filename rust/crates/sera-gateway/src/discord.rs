@@ -398,13 +398,13 @@ pub fn connect_backoff_secs(attempt: u32) -> u64 {
 /// (sera-dxmv acceptance #3).
 pub fn apply_backoff_jitter<R: rand::Rng>(base_secs: u64, jitter_pct: u8, rng: &mut R) -> u64 {
     if jitter_pct == 0 || base_secs == 0 {
-        return base_secs.max(1).min(60);
+        return base_secs.clamp(1, 60);
     }
     let pct = (jitter_pct as f64).min(100.0) / 100.0;
     let base = base_secs as f64;
     let jitter = rng.gen_range(-pct..=pct);
     let jittered = (base * (1.0 + jitter)).round();
-    let bounded = jittered.max(1.0).min(60.0);
+    let bounded = jittered.clamp(1.0, 60.0);
     bounded as u64
 }
 

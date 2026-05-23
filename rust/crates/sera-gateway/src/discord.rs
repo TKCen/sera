@@ -975,7 +975,12 @@ pub fn chunk_for_discord(content: &str) -> ChunkPlan {
         if visible_total == 1 {
             parts.push(body.clone());
         } else {
-            parts.push(format!("{body}\n[{}/{}]", i + 1, visible_total));
+            // Strip only trailing newlines on the body so the `\n[i/N]`
+            // suffix renders adjacently; intentional leading whitespace
+            // (Markdown indentation, code blocks, list items) is left
+            // intact across the boundary.
+            let base = body.trim_end_matches(['\n', '\r']);
+            parts.push(format!("{base}\n[{}/{}]", i + 1, visible_total));
         }
     }
 
@@ -1002,17 +1007,17 @@ pub fn chunk_for_discord(content: &str) -> ChunkPlan {
 /// Split `content` into chunks each within `budget` unicode characters.
 /// Prefers paragraph/newline/whitespace boundaries inside the budget
 /// window; falls back to a hard cut only when no soft boundary exists in
-/// the leading `budget` chars. Returned chunks have trailing whitespace
-/// trimmed.
+/// the leading `budget` chars. Boundary characters stay with the head,
+/// and chunk content is otherwise returned verbatim — intentional
+/// leading whitespace (Markdown indentation, code blocks, list items) on
+/// the tail is preserved so chunked output formats identically to the
+/// single-message path.
 fn split_for_chunking(content: &str, budget: usize) -> Vec<String> {
     let mut chunks: Vec<String> = Vec::new();
     let mut remaining = content;
     while !remaining.is_empty() {
         if remaining.chars().count() <= budget {
-            let tail = remaining.trim_matches(|c: char| c.is_whitespace());
-            if !tail.is_empty() {
-                chunks.push(tail.to_owned());
-            }
+            chunks.push(remaining.to_owned());
             break;
         }
         let bytes_budget = remaining
@@ -1029,11 +1034,8 @@ fn split_for_chunking(content: &str, budget: usize) -> Vec<String> {
             .filter(|i| *i > 0)
             .unwrap_or(bytes_budget);
         let (head, tail) = remaining.split_at(cut);
-        let head_trimmed = head.trim_matches(|c: char| c.is_whitespace());
-        if !head_trimmed.is_empty() {
-            chunks.push(head_trimmed.to_owned());
-        }
-        remaining = tail.trim_start_matches(|c: char| c.is_whitespace());
+        chunks.push(head.to_owned());
+        remaining = tail;
     }
     chunks
 }
@@ -3738,6 +3740,33 @@ mod tests {
                 part.chars().count()
             );
         }
+    }
+
+    #[test]
+    fn chunk_preserves_leading_indentation_after_paragraph_cut() {
+        // Markdown / code-block indentation on a tail chunk must survive
+        // the split — content after a paragraph boundary keeps its
+        // leading whitespace so indented blocks render identically to
+        // the single-message path. Pins the fix for Codex P2 on PR #1281
+        // (previous splitter trim-stripped both ends of every chunk and
+        // dropped intentional indentation on the next part).
+        let p1 = "a".repeat(DISCORD_CHUNK_BUDGET - 20);
+        let p2 = "    indented start of block\n    second indented line";
+        let body = format!("{p1}\n\n{p2}");
+        let plan = chunk_for_discord(&body);
+        assert_eq!(plan.audit, ChunkAudit::Chunked { parts: 2 });
+        assert_eq!(plan.parts.len(), 2);
+        // Tail chunk keeps its 4-space indent.
+        assert!(
+            plan.parts[1].starts_with("    indented start of block"),
+            "leading indentation stripped from tail chunk: {:?}",
+            plan.parts[1]
+        );
+        assert!(
+            plan.parts[1].contains("    second indented line"),
+            "interior indentation stripped from tail chunk: {:?}",
+            plan.parts[1]
+        );
     }
 
     #[test]

@@ -4527,8 +4527,17 @@ fn make_tool_execution_audit_payload(
         ToolCallStatus::Success => 1,  // Informational
         ToolCallStatus::Failure => 3,  // Medium — operator-actionable
     };
+    // Truncate on a char boundary so a multi-byte UTF-8 codepoint (emoji,
+    // CJK, etc.) never panics audit-payload construction. Walks back from
+    // the byte limit until the prefix is a valid &str slice, then appends
+    // the truncation marker.
     let snippet: String = if content.len() > TOOL_EXEC_AUDIT_CONTENT_LIMIT {
-        let mut s = content[..TOOL_EXEC_AUDIT_CONTENT_LIMIT].to_string();
+        let mut cut = TOOL_EXEC_AUDIT_CONTENT_LIMIT;
+        while cut > 0 && !content.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let mut s = String::with_capacity(cut + 16);
+        s.push_str(&content[..cut]);
         s.push_str("…[truncated]");
         s
     } else {
@@ -8798,6 +8807,41 @@ mod tests {
         );
         // The truncated body is bounded by the limit + the marker suffix.
         assert!(snippet.len() <= TOOL_EXEC_AUDIT_CONTENT_LIMIT + 32);
+    }
+
+    #[test]
+    fn tool_execution_audit_payload_truncates_on_char_boundary() {
+        // Codex P1 review on PR #1284: a naive `content[..LIMIT]` truncation
+        // panics if the limit lands in the middle of a multi-byte UTF-8
+        // codepoint (emoji, CJK, accented Latin). Build a snippet that
+        // would have landed inside a 4-byte emoji at the byte limit and
+        // assert payload construction returns a valid UTF-8 snippet.
+        let pad = "a".repeat(TOOL_EXEC_AUDIT_CONTENT_LIMIT - 2);
+        let big = format!("{pad}🦀🦀🦀🦀");
+        // The 512th byte falls strictly inside a 🦀 (U+1F980, 4 UTF-8 bytes),
+        // so the byte-index slice would panic without the boundary walk.
+        assert!(!big.is_char_boundary(TOOL_EXEC_AUDIT_CONTENT_LIMIT));
+
+        let payload = make_tool_execution_audit_payload(
+            "agent-test",
+            "sess-utf8",
+            "call_utf8",
+            "file-read",
+            sera_types::envelope::ToolCallStatus::Success,
+            None,
+            &big,
+        );
+        let snippet = payload["unmapped"]["result_snippet"]
+            .as_str()
+            .expect("snippet must serialize");
+        assert!(
+            snippet.ends_with("…[truncated]"),
+            "boundary-safe truncation must still mark output: {snippet}",
+        );
+        // The truncated prefix must be valid UTF-8 — implicitly true because
+        // we built a String, but assert no zero-width replacement happened:
+        // the snippet must start with the original pad characters.
+        assert!(snippet.starts_with("aaaa"));
     }
 
     #[test]

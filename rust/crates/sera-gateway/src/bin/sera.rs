@@ -62,6 +62,7 @@ use sera_gateway::hitl_gateway::{
     HitlAppState, InMemoryTicketStore, TicketStore, resolve_approval_routing, resolve_hitl_mode,
 };
 use sera_gateway::kill_switch::{KillSwitch, admin_sock_path, spawn_admin_socket};
+use sera_gateway::response_sanitizer::sanitize_assistant_response;
 use sera_gateway::scheduler::spawn_scheduler;
 #[cfg(test)]
 use sera_gateway::session_store::InMemorySessionStore;
@@ -3242,11 +3243,33 @@ async fn chat_handler(
                 .into_response());
         }
 
+        // Hermes parity matrix Row 4: strip raw `<think>…</think>` chain-of-
+        // thought before the bytes ever cross the operator boundary. The
+        // sanitizer is applied here (not deeper in the runtime) so the
+        // contract is enforced by the gateway, with the runtime free to
+        // keep raw text in its own logs / audit. We sanitize *before* the
+        // empty-reply guard so a reply that was nothing but a `<think>`
+        // block degrades to the same 502 silent-failure path rather than
+        // returning a sanitized empty `response`.
+        let sanitized = sanitize_assistant_response(&result.reply);
+        if sanitized.was_sanitized() {
+            tracing::info!(
+                session_id = %session_id,
+                agent = %agent_name,
+                stripped_blocks = sanitized.stripped_blocks,
+                raw_len = result.reply.len(),
+                sanitized_len = sanitized.text.len(),
+                "stripped chain-of-thought blocks from assistant response (hermes parity row 4)"
+            );
+        }
+        let response_text = sanitized.text;
+
         // Guard: an empty reply is a silent failure — the runtime returned
         // Ok(events) but produced no text. Log richly so the root cause can
         // be chased later, then return 502 so callers don't silently discard
-        // an empty response.
-        if result.reply.is_empty() {
+        // an empty response. A sanitization-induced empty reply (model
+        // produced only `<think>` blocks) is the same observable outcome.
+        if response_text.is_empty() {
             tracing::error!(
                 session_id = %session_id,
                 agent = %agent_name,
@@ -3255,7 +3278,9 @@ async fn chat_handler(
                 total_tokens = result.usage.total_tokens,
                 tool_events_count = result.tool_events.len(),
                 tools_ran = !result.tool_events.is_empty(),
-                "execute_turn returned empty reply; runtime produced no text"
+                stripped_blocks = sanitized.stripped_blocks,
+                raw_len = result.reply.len(),
+                "execute_turn returned empty reply after sanitization; runtime produced no operator-visible text"
             );
             return Ok((
                 StatusCode::BAD_GATEWAY,
@@ -3266,11 +3291,13 @@ async fn chat_handler(
                 .into_response());
         }
 
-        // Save tool events and assistant response.
+        // Save tool events and assistant response. The transcript stores
+        // the sanitized text so subsequent `/api/sessions/{id}/transcript`
+        // reads share the same contract as `/api/chat`.
         let db = state.db.lock().await;
         persist_tool_events(&db, &session_id, &result.tool_events);
         if let Err(e) =
-            db.append_transcript(&session_id, "assistant", Some(&result.reply), None, None)
+            db.append_transcript(&session_id, "assistant", Some(&response_text), None, None)
         {
             tracing::error!(error = %e, "Failed to append assistant transcript");
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -3283,7 +3310,9 @@ async fn chat_handler(
             Some(
                 &serde_json::json!({
                     "session_id": session_id,
-                    "response_len": result.reply.len(),
+                    "response_len": response_text.len(),
+                    "raw_response_len": result.reply.len(),
+                    "sanitized_blocks": sanitized.stripped_blocks,
                     "usage": {
                         "prompt_tokens": result.usage.prompt_tokens,
                         "completion_tokens": result.usage.completion_tokens,
@@ -3295,7 +3324,7 @@ async fn chat_handler(
         );
 
         Ok(Json(ChatResponse {
-            response: result.reply,
+            response: response_text,
             session_id,
             usage: result.usage,
         })

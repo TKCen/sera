@@ -883,6 +883,164 @@ pub fn parse_sequence(payload: &Value) -> Option<i64> {
 }
 
 // ---------------------------------------------------------------------------
+// Outbound long-message chunking (sera-yeg.8)
+//
+// Discord rejects message `content` over 2000 unicode characters with a 400.
+// A runtime reply that overflows the limit would either disappear entirely or
+// surface as an opaque transport error to the operator. The chunker splits an
+// overlong reply into ordered `[i/N]`-labeled parts at safe boundaries
+// (paragraph → newline → whitespace), capped at a small policy ceiling so a
+// runaway reply cannot dump dozens of messages into a channel. When the cap
+// is hit, the unsupported case is made visible with a final ⚠ notice and
+// audited via `tracing::warn`.
+// ---------------------------------------------------------------------------
+
+/// Discord's hard limit for the `content` field of a message (in unicode
+/// characters). Source: Discord API docs — `CREATE_MESSAGE`.
+pub const DISCORD_CONTENT_LIMIT: usize = 2000;
+
+/// Reservation for the `\n[i/N]` continuation suffix appended to each chunk
+/// when content spans multiple messages. Worst-case `\n[6/6]` is 6 chars; we
+/// reserve 12 so a future cap bump (or a misbehaving formatter that adds an
+/// extra newline) still leaves headroom under [`DISCORD_CONTENT_LIMIT`].
+pub const DISCORD_CHUNK_SUFFIX_RESERVE: usize = 12;
+
+/// Per-chunk payload budget — content limit minus the suffix reservation.
+pub const DISCORD_CHUNK_BUDGET: usize = DISCORD_CONTENT_LIMIT - DISCORD_CHUNK_SUFFIX_RESERVE;
+
+/// Maximum number of content chunks the gateway will emit for a single
+/// reply before falling over to the visible-truncation path. Six gives a
+/// realistic long answer (~12 KB) room to land in-channel while still
+/// stopping a pathological reply from spamming the operator.
+pub const DISCORD_MAX_CHUNKS: usize = 6;
+
+/// Audit classification produced by [`chunk_for_discord`]. Drives the
+/// `tracing` level used by [`DiscordConnector::send_message_chunked`] so
+/// the chunked vs truncated paths land in distinct log buckets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChunkAudit {
+    /// Reply fits in a single message; sent verbatim.
+    SingleMessage,
+    /// Reply was split into `parts` ordered chunks (`parts >= 2`); every
+    /// part of the original content was delivered.
+    Chunked { parts: usize },
+    /// Reply exceeded the policy cap. `kept` chunks were emitted with a
+    /// trailing visible ⚠ notice; `dropped_chunks` parts of the original
+    /// content did not reach the channel.
+    Truncated { kept: usize, dropped_chunks: usize },
+}
+
+/// Plan for delivering an outbound reply to Discord. `parts` is the
+/// ordered list of message bodies the connector will POST; `audit`
+/// describes which path the chunker took for logging/test assertions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkPlan {
+    pub parts: Vec<String>,
+    pub audit: ChunkAudit,
+}
+
+/// Render an outbound reply into one or more Discord-shaped messages,
+/// each under [`DISCORD_CONTENT_LIMIT`]. Returns a [`ChunkPlan`] whose
+/// `parts` are ready to POST verbatim and whose `audit` records whether
+/// the content was sent whole, split, or truncated with a visible notice.
+///
+/// Boundary preference (descending): paragraph break (`\n\n`), single
+/// newline, whitespace, then a hard cut at the byte budget when nothing
+/// softer exists. Trailing whitespace on each chunk is trimmed so the
+/// `[i/N]` suffix renders cleanly. Pure function — no I/O.
+pub fn chunk_for_discord(content: &str) -> ChunkPlan {
+    let trimmed = content.trim_end_matches(['\n', '\r', ' ', '\t']);
+    if trimmed.is_empty() {
+        return ChunkPlan {
+            parts: vec![String::new()],
+            audit: ChunkAudit::SingleMessage,
+        };
+    }
+    if trimmed.chars().count() <= DISCORD_CONTENT_LIMIT {
+        return ChunkPlan {
+            parts: vec![trimmed.to_owned()],
+            audit: ChunkAudit::SingleMessage,
+        };
+    }
+
+    let raw_chunks = split_for_chunking(trimmed, DISCORD_CHUNK_BUDGET);
+    let total_proposed = raw_chunks.len();
+    let mut iter = raw_chunks.into_iter();
+    let kept: Vec<String> = (&mut iter).take(DISCORD_MAX_CHUNKS).collect();
+    let dropped = total_proposed.saturating_sub(kept.len());
+
+    let visible_total = kept.len() + usize::from(dropped > 0);
+    let mut parts: Vec<String> = Vec::with_capacity(visible_total);
+    for (i, body) in kept.iter().enumerate() {
+        if visible_total == 1 {
+            parts.push(body.clone());
+        } else {
+            // Strip only trailing newlines on the body so the `\n[i/N]`
+            // suffix renders adjacently; intentional leading whitespace
+            // (Markdown indentation, code blocks, list items) is left
+            // intact across the boundary.
+            let base = body.trim_end_matches(['\n', '\r']);
+            parts.push(format!("{base}\n[{}/{}]", i + 1, visible_total));
+        }
+    }
+
+    if dropped > 0 {
+        parts.push(format!(
+            "⚠ output truncated — {dropped} part(s) omitted\n[{}/{}]",
+            visible_total, visible_total
+        ));
+        ChunkPlan {
+            parts,
+            audit: ChunkAudit::Truncated {
+                kept: kept.len(),
+                dropped_chunks: dropped,
+            },
+        }
+    } else {
+        ChunkPlan {
+            parts,
+            audit: ChunkAudit::Chunked { parts: kept.len() },
+        }
+    }
+}
+
+/// Split `content` into chunks each within `budget` unicode characters.
+/// Prefers paragraph/newline/whitespace boundaries inside the budget
+/// window; falls back to a hard cut only when no soft boundary exists in
+/// the leading `budget` chars. Boundary characters stay with the head,
+/// and chunk content is otherwise returned verbatim — intentional
+/// leading whitespace (Markdown indentation, code blocks, list items) on
+/// the tail is preserved so chunked output formats identically to the
+/// single-message path.
+fn split_for_chunking(content: &str, budget: usize) -> Vec<String> {
+    let mut chunks: Vec<String> = Vec::new();
+    let mut remaining = content;
+    while !remaining.is_empty() {
+        if remaining.chars().count() <= budget {
+            chunks.push(remaining.to_owned());
+            break;
+        }
+        let bytes_budget = remaining
+            .char_indices()
+            .nth(budget)
+            .map(|(i, _)| i)
+            .unwrap_or(remaining.len());
+        let window = &remaining[..bytes_budget];
+        let cut = window
+            .rfind("\n\n")
+            .map(|i| i + 2)
+            .or_else(|| window.rfind('\n').map(|i| i + 1))
+            .or_else(|| window.rfind(char::is_whitespace).map(|i| i + 1))
+            .filter(|i| *i > 0)
+            .unwrap_or(bytes_budget);
+        let (head, tail) = remaining.split_at(cut);
+        chunks.push(head.to_owned());
+        remaining = tail;
+    }
+    chunks
+}
+
+// ---------------------------------------------------------------------------
 // Reaction-driven HITL controls (sera-yeg.7, sera-q66q)
 //
 // A *narrow* slice of Discord-as-operator-console: an emoji reaction on a
@@ -1306,6 +1464,50 @@ impl DiscordConnector {
             anyhow::bail!("Discord API error {status}: {body}");
         }
         Ok(())
+    }
+
+    /// Send an outbound reply, chunking it via [`chunk_for_discord`] if the
+    /// content overflows Discord's per-message limit. Returns the chunker's
+    /// audit classification so callers can record provenance / surface the
+    /// truncated case in their own logs. Failures abort on the first
+    /// failed POST so a partial overflow does not leave a half-rendered
+    /// reply in-channel without an error in the caller's log.
+    ///
+    /// The truncation path is intentionally visible: the final chunk
+    /// carries a `⚠ output truncated` notice and the connector logs at
+    /// `warn` so the unsupported case is auditable rather than silent
+    /// (sera-yeg.8).
+    pub async fn send_message_chunked(
+        &self,
+        channel_id: &str,
+        content: &str,
+    ) -> anyhow::Result<ChunkAudit> {
+        let plan = chunk_for_discord(content);
+        match &plan.audit {
+            ChunkAudit::SingleMessage => {}
+            ChunkAudit::Chunked { parts } => {
+                tracing::info!(
+                    parts = *parts,
+                    channel_id = %channel_id,
+                    "Discord reply split across multiple messages",
+                );
+            }
+            ChunkAudit::Truncated {
+                kept,
+                dropped_chunks,
+            } => {
+                tracing::warn!(
+                    kept = *kept,
+                    dropped = *dropped_chunks,
+                    channel_id = %channel_id,
+                    "Discord reply exceeded chunk cap; appending visible truncation notice",
+                );
+            }
+        }
+        for part in &plan.parts {
+            self.send_message(channel_id, part).await?;
+        }
+        Ok(plan.audit)
     }
 
     /// Trigger the Discord typing indicator on a channel.
@@ -3439,6 +3641,147 @@ mod tests {
         match decision {
             ControlGateDecision::Denied(ControlDenyReason::UnauthorizedPrincipal) => {}
             other => panic!("expected denied/unauthorized, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Outbound chunking (sera-yeg.8)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn chunk_short_reply_passes_through_as_single_message() {
+        // Replies under the 2000-char limit must not be touched — no `[1/1]`
+        // suffix, no extra messages. This is the common happy path.
+        let plan = chunk_for_discord("hello operator");
+        assert_eq!(plan.audit, ChunkAudit::SingleMessage);
+        assert_eq!(plan.parts, vec!["hello operator".to_string()]);
+    }
+
+    #[test]
+    fn chunk_empty_reply_emits_single_empty_part() {
+        // The caller may still want to POST nothing rather than skip; we
+        // preserve the empty single-message shape and tag it as such.
+        let plan = chunk_for_discord("   \n  \t\n");
+        assert_eq!(plan.audit, ChunkAudit::SingleMessage);
+        assert_eq!(plan.parts.len(), 1);
+        assert!(plan.parts[0].is_empty());
+    }
+
+    #[test]
+    fn chunk_reply_exactly_at_limit_is_single_message() {
+        // Boundary case: the entire reply fits in one Discord message and
+        // must not be needlessly split.
+        let body = "a".repeat(DISCORD_CONTENT_LIMIT);
+        let plan = chunk_for_discord(&body);
+        assert_eq!(plan.audit, ChunkAudit::SingleMessage);
+        assert_eq!(plan.parts.len(), 1);
+        assert_eq!(plan.parts[0].chars().count(), DISCORD_CONTENT_LIMIT);
+    }
+
+    #[test]
+    fn chunk_long_reply_splits_at_paragraph_boundary() {
+        // Two ~budget-sized paragraphs separated by a blank line: the
+        // chunker must cut on the paragraph break, not inside a word.
+        let p1 = "a".repeat(DISCORD_CHUNK_BUDGET - 50);
+        let p2 = "b".repeat(DISCORD_CHUNK_BUDGET - 50);
+        let body = format!("{p1}\n\n{p2}");
+        let plan = chunk_for_discord(&body);
+        assert_eq!(plan.audit, ChunkAudit::Chunked { parts: 2 });
+        assert_eq!(plan.parts.len(), 2);
+        // First chunk holds paragraph 1 (no remnants of paragraph 2).
+        assert!(plan.parts[0].starts_with(&p1));
+        assert!(!plan.parts[0].contains('b'));
+        // Each part stays under the Discord hard limit, suffix included.
+        for part in &plan.parts {
+            assert!(
+                part.chars().count() <= DISCORD_CONTENT_LIMIT,
+                "chunk over Discord limit: {} chars",
+                part.chars().count()
+            );
+            assert!(part.contains("[1/2]") || part.contains("[2/2]"));
+        }
+    }
+
+    #[test]
+    fn chunk_runaway_reply_truncates_visibly_and_audits() {
+        // A reply large enough to need >MAX_CHUNKS pieces must surface a
+        // visible ⚠ notice as its final part and audit as Truncated with
+        // the count of dropped chunks. This is the acceptance evidence
+        // for the "unsupported case is visible and audited" requirement
+        // of sera-yeg.8.
+        let huge =
+            "x".repeat(DISCORD_CHUNK_BUDGET * (DISCORD_MAX_CHUNKS + 3));
+        let plan = chunk_for_discord(&huge);
+        match &plan.audit {
+            ChunkAudit::Truncated {
+                kept,
+                dropped_chunks,
+            } => {
+                assert_eq!(*kept, DISCORD_MAX_CHUNKS);
+                assert!(*dropped_chunks >= 3);
+            }
+            other => panic!("expected Truncated audit, got {other:?}"),
+        }
+        // One ⚠ notice tail message in addition to the kept chunks.
+        assert_eq!(plan.parts.len(), DISCORD_MAX_CHUNKS + 1);
+        let tail = plan.parts.last().expect("at least one part");
+        assert!(
+            tail.contains("⚠ output truncated"),
+            "truncation notice missing: {tail}"
+        );
+        assert!(
+            tail.contains(&format!("[{n}/{n}]", n = DISCORD_MAX_CHUNKS + 1)),
+            "truncation notice missing tail index suffix: {tail}"
+        );
+        for (i, part) in plan.parts.iter().enumerate() {
+            assert!(
+                part.chars().count() <= DISCORD_CONTENT_LIMIT,
+                "chunk {i} over Discord limit: {} chars",
+                part.chars().count()
+            );
+        }
+    }
+
+    #[test]
+    fn chunk_preserves_leading_indentation_after_paragraph_cut() {
+        // Markdown / code-block indentation on a tail chunk must survive
+        // the split — content after a paragraph boundary keeps its
+        // leading whitespace so indented blocks render identically to
+        // the single-message path. Pins the fix for Codex P2 on PR #1281
+        // (previous splitter trim-stripped both ends of every chunk and
+        // dropped intentional indentation on the next part).
+        let p1 = "a".repeat(DISCORD_CHUNK_BUDGET - 20);
+        let p2 = "    indented start of block\n    second indented line";
+        let body = format!("{p1}\n\n{p2}");
+        let plan = chunk_for_discord(&body);
+        assert_eq!(plan.audit, ChunkAudit::Chunked { parts: 2 });
+        assert_eq!(plan.parts.len(), 2);
+        // Tail chunk keeps its 4-space indent.
+        assert!(
+            plan.parts[1].starts_with("    indented start of block"),
+            "leading indentation stripped from tail chunk: {:?}",
+            plan.parts[1]
+        );
+        assert!(
+            plan.parts[1].contains("    second indented line"),
+            "interior indentation stripped from tail chunk: {:?}",
+            plan.parts[1]
+        );
+    }
+
+    #[test]
+    fn chunk_no_soft_boundary_falls_back_to_hard_cut() {
+        // A single contiguous block with no whitespace must still be
+        // delivered — the chunker hard-cuts at the byte budget rather
+        // than emitting an oversize chunk.
+        let body = "y".repeat(DISCORD_CHUNK_BUDGET + 100);
+        let plan = chunk_for_discord(&body);
+        match &plan.audit {
+            ChunkAudit::Chunked { parts } => assert_eq!(*parts, 2),
+            other => panic!("expected Chunked, got {other:?}"),
+        }
+        for part in &plan.parts {
+            assert!(part.chars().count() <= DISCORD_CONTENT_LIMIT);
         }
     }
 }

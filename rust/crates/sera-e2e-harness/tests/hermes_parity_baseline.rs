@@ -25,7 +25,7 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use sera_e2e_harness::binaries::{gateway_bin, runtime_bin};
-use sera_e2e_harness::mock_llm::start_mock_llm;
+use sera_e2e_harness::mock_llm::start_mock_llm_with_reply;
 use sera_e2e_harness::InProcessGateway;
 
 const SKIP_TAG: &str = "[hermes-parity-baseline]";
@@ -69,15 +69,22 @@ async fn hermes_parity_baseline_gate() -> Result<()> {
         }
     };
 
+    // Generate the freshness nonce up front so the mock LLM (when used)
+    // can be scripted to echo it back. A real upstream LLM is asked to
+    // echo it via the prompt. Either way Probe 2 then asserts the
+    // returned `response` contains this exact nonce, so a stale/canned
+    // reply cannot pass the gate.
+    let nonce = short_nonce();
+
     // ── 1. Resolve an LLM endpoint (operator-supplied or local mock) ──
     //
-    // `start_mock_llm` returns `(url, server)` and the caller must keep
-    // `server` alive for the duration of the test — dropping it tears
-    // down the wiremock listener. The `_mock_handle` binding here is
-    // exactly that lifetime anchor; it is intentionally unused.
+    // The wiremock variant returns `(url, server)` and the caller must
+    // keep `server` alive for the duration of the test — dropping it
+    // tears down the listener. `_mock_handle` is that lifetime anchor.
+    let mock_reply = format!("OK {nonce}");
     let (llm_base_url, _mock_handle) = match std::env::var("SERA_E2E_LLM_BASE_URL") {
         Ok(url) if !url.trim().is_empty() => (url, None),
-        _ => match start_mock_llm().await {
+        _ => match start_mock_llm_with_reply(&mock_reply).await {
             Ok((url, server)) => (url, Some(server)),
             Err(e) => {
                 eprintln!(
@@ -155,7 +162,6 @@ async fn hermes_parity_baseline_gate() -> Result<()> {
     // for operator-run captures against a non-autonomous gateway.
     let bearer_token = std::env::var("SERA_E2E_BEARER_TOKEN")
         .unwrap_or_else(|_| "sera_bootstrap_dev_123".to_string());
-    let nonce = short_nonce();
     let chat: serde_json::Value = http
         .post(format!("{}/api/chat", gateway.base_url))
         .bearer_auth(&bearer_token)
@@ -201,6 +207,21 @@ async fn hermes_parity_baseline_gate() -> Result<()> {
         !response_text.is_empty(),
         "baseline gate: /api/chat returned empty response — Probe 2 \
          requires non-empty operator-visible text. Inspect \
+         /api/sessions/{session_id}/transcript for runtime evidence."
+    );
+
+    // Freshness check: the response must contain the per-test nonce.
+    // With the wiremock fallback the mock was scripted to embed `nonce`
+    // in its reply, so the full gateway → runtime → mock chain is
+    // verified. With a real upstream LLM the prompt explicitly asks
+    // for the nonce to be echoed; a stale or canned response (e.g. a
+    // cached "Pong" frame from a previous session, the historical bug
+    // that drove `sera-yeg.3`) cannot satisfy this assertion.
+    assert!(
+        response_text.contains(&nonce),
+        "baseline gate: /api/chat response did not echo nonce \
+         {nonce:?} — Probe 2 requires per-request freshness. \
+         Got response: {response_text:?}. Inspect \
          /api/sessions/{session_id}/transcript for runtime evidence."
     );
 

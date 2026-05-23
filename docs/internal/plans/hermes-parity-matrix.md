@@ -37,7 +37,7 @@ The smallest acceptance bundle that proves SERA can host a turn at all:
 | Probe | Surface | Expectation |
 |---|---|---|
 | Readiness | `GET /api/health/ready` | HTTP 200 and `runtime_connected=true`. |
-| Authenticated chat nonce | `POST /api/chat` | HTTP 200 with `session_id` and a non-empty `response`, when an LLM is configured. |
+| Authenticated chat nonce | `POST /api/chat` | HTTP 200 with `session_id` and a non-empty `response` that echoes the per-test nonce (freshness guard against stale/canned replies). The request carries `Authorization: Bearer`; auth is only enforced under an auth-enabled harness profile, tracked as a follow-up. |
 | Response sanitizer contract | `POST /api/chat` response body | `response` contains no `<think>` or `</think>` markers (raw chain-of-thought is never leaked to the operator). |
 | Skip contract | All probes | If gateway/runtime binaries or an LLM are not available, the gate skips cleanly with an explicit stderr line rather than failing. |
 
@@ -63,7 +63,7 @@ Columns:
 
 | # | Capability | SERA current path | SERA target path (with differentiation hook) | Acceptance smoke | Owner bead | Status | Priority |
 |---|---|---|---|---|---|---|---|
-| 1 | API chat intake (`/api/chat`) | `sera-gateway` chat handler (`crates/sera-gateway/src/bin/sera.rs::chat_handler`); session-scoped through gateway-owned SQLite. | Stable JSON contract (`session_id`, `response`, `usage`), SSE streaming events, `POST /api/chat/cancel`, response sanitizer applied before operator-visible bytes. **Differentiation:** gateway-owned session and audit, no runtime-side completion text reaching operator without sanitization. | `hermes_parity_baseline.rs::api_chat_nonce` — authenticated POST returns `session_id` + non-empty `response`. | `sera-duo3` (CI smoke pipeline), reinforced by `sera-yj18` (streaming tool-call edge cases). | BASELINE | P2 |
+| 1 | API chat intake (`/api/chat`) | `sera-gateway` chat handler (`crates/sera-gateway/src/bin/sera.rs::chat_handler`); session-scoped through gateway-owned SQLite. | Stable JSON contract (`session_id`, `response`, `usage`), SSE streaming events, `POST /api/chat/cancel`, response sanitizer applied before operator-visible bytes. **Differentiation:** gateway-owned session and audit, no runtime-side completion text reaching operator without sanitization. | `hermes_parity_baseline.rs::hermes_parity_baseline_gate` — POST with `Authorization: Bearer` returns `session_id` + a `response` that echoes the per-test nonce (freshness guard). Auth-enforced harness profile is a follow-up (see recommended new beads below). | `sera-duo3` (CI smoke pipeline), reinforced by `sera-yj18` (streaming tool-call edge cases). | BASELINE | P2 |
 | 2 | Discord intake / egress | `sera-gateway` Discord connector (`crates/sera-gateway/src/discord.rs`, `bin/sera.rs::handle_message`); peer-mention handoff already reversed and stdio transport recycled per readiness probe. | Reliable buffered ingress + typed reactions/typing + visible failure replies + audit per Discord turn. **Differentiation:** rate-limited, audit-logged, capability-policy-checked Discord turns rather than raw bot loops. | Discord smoke fixture pair under `sera-duo3` once `sera-yeg.2` / `sera-s77a` land; manual smoke covered in `docs/internal/sessions/hermes-parity-baseline-template.md`. | `sera-yeg.2` (typing/reactions), `sera-s77a` (buffering / rate-limit), `sera-duo3` (CI smoke). | IN_PROGRESS | P2 |
 | 3 | Provider / fallback conformance | `sera-runtime` OpenAI-compatible client + provider chain (MiniMax primary + local Qwen fallback) merged in #1272. | Ordered provider chain, typed failure classes, no silent fallback for policy/tool/schema errors, redaction of provider-internal errors before operator-facing output. **Differentiation:** routing is an accountable policy decision, not a config toggle. | `cargo test -p sera-runtime --lib provider_chain` + live MiniMax smoke documented in `docs/internal/sessions/hermes-parity-baseline-template.md`. | `sera-m1k8` (primary anchor) + `sera-yj18` (streaming tool-call edge cases). | IN_PROGRESS | P1 |
 | 4 | Response sanitization / strict output | `sera-runtime` think step sanitizes assistant-visible output (`crates/sera-runtime/src/turn.rs::think`) and bridges `reasoning_content`. | Hard contract: no `<think>` / `</think>` markers in operator-visible `response`; `reasoning_content` never bleeds into assistant text unless explicitly enabled. **Differentiation:** sanitizer is a contract enforced by the gateway boundary, not a hope. | `hermes_parity_baseline.rs::response_sanitizer_contract` — asserts no `<think>` / `</think>` markers in the operator-visible `response`. | `sera-yj18` (current streaming tool-call empty-content boundary that drove the sanitizer hardening). | BASELINE | P2 |
@@ -100,6 +100,14 @@ work):
 7. **`sera-control-plane-parity`** — TUI + dashboard control-plane smoke.
 8. **`sera-hitl-parity`** — HITL approval round-trip smoke (joins on
    `sera-q66q`).
+9. **`sera-baseline-auth-enforced`** — extend the Phase 0 baseline gate
+   with an auth-enabled harness profile so Probe 2 enforces
+   `Authorization: Bearer` and a paired negative request asserts 401
+   without it. The current `hermes_parity_baseline_gate` already sends
+   the bearer header and is forward-fit, but autonomous-mode boot
+   (`InProcessGateway::start_local`) does not enforce auth, so the
+   gate verifies HTTP shape + sanitizer + freshness only, not the
+   auth-protected path.
 
 These names are placeholders for the canonical beads; do not invent IDs in
 this matrix. Each row above will be updated to point at the canonical bead

@@ -179,20 +179,20 @@ async fn hermes_parity_baseline_gate() -> Result<()> {
         .with_context(|| format!("chat response missing response: {chat:?}"))?
         .to_owned();
 
-    // When using the wiremock LLM, the scripted reply will land in
-    // `response`. With a real upstream LLM, `response` is whatever the
-    // provider returned. An empty body for a configured LLM is treated
-    // as a soft signal here rather than a hard fail — the existing
-    // `local_profile_turn.rs` documents that runtimes can legitimately
-    // short-circuit a turn (authz rejection, over-budget, tool-dispatch
-    // loop) without that being a parity break on its own.
-    if response_text.is_empty() {
-        eprintln!(
-            "{SKIP_TAG} SOFT: chat response was empty (provider chain may have \
-             swallowed the reply); baseline sanitizer contract holds trivially. \
-             Inspect /api/sessions/{session_id}/transcript for runtime evidence."
-        );
-    }
+    // The parity baseline requires a non-empty operator-visible reply.
+    // An empty `response` makes Probe 3 (sanitizer contract) vacuous —
+    // a leak would be hidden because there is nothing to scan — and the
+    // matrix explicitly defines this row as "session_id + non-empty
+    // response". Hard-fail here so a provider/runtime regression that
+    // swallows the reply cannot ship as a green baseline. The session
+    // hint in the message points at `/api/sessions/<id>/transcript` so
+    // an operator can pull runtime evidence without re-running.
+    assert!(
+        !response_text.is_empty(),
+        "baseline gate: /api/chat returned empty response — Probe 2 \
+         requires non-empty operator-visible text. Inspect \
+         /api/sessions/{session_id}/transcript for runtime evidence."
+    );
 
     // ── Probe 3: response sanitizer contract ──
     //

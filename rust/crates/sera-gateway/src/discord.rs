@@ -883,6 +883,252 @@ pub fn parse_sequence(payload: &Value) -> Option<i64> {
 }
 
 // ---------------------------------------------------------------------------
+// Reaction-driven HITL controls (sera-yeg.7, sera-q66q)
+//
+// A *narrow* slice of Discord-as-operator-console: an emoji reaction on a
+// SERA-owned message (typically a status card) is parsed into a typed
+// `ControlIntent` (Approve/Deny/Cancel/Retry/Pause/Resume). The intent is
+// then authorized against the connector's configured operator allowlist and
+// the inbound message's target principal. Unauthorized reactions surface as
+// `ControlGateDecision::Denied(..)` so the caller can emit an
+// `discord_control_denied` audit row instead of silently dropping the event.
+//
+// Everything in this module is pure data + functions — no I/O. The intent is
+// that callers wire the live MESSAGE_REACTION_ADD dispatch into
+// `gate_control_reaction` and then route accepted intents through the
+// existing ApprovalMatrix / GoalRun control surface rather than mutating
+// session state directly. The state machine + policy boundary is therefore
+// the same as the bot-policy gate (`gate_message`) — pure decision, audit
+// reason on the way out, no policy bypass.
+// ---------------------------------------------------------------------------
+
+/// Typed control intent derived from a Discord reaction. Names mirror the
+/// HITL / GoalRun control surface (`approve`, `deny`, `cancel`, `retry`,
+/// `pause`, `resume`) so the audit + downstream routing path can use a
+/// single vocabulary regardless of which channel surface produced it.
+///
+/// `#[allow(dead_code)]`: only constructed from tests + the not-yet-wired
+/// `gate_control_reaction` (see its rustdoc). Lifted once the bin wires
+/// MESSAGE_REACTION_ADD into the gate.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlIntent {
+    /// Operator approves the pending approval / HITL ticket.
+    Approve,
+    /// Operator denies the pending approval / HITL ticket.
+    Deny,
+    /// Operator cancels the in-flight turn / GoalRun.
+    Cancel,
+    /// Operator asks SERA to retry the last failed step.
+    Retry,
+    /// Operator pauses the in-flight turn / GoalRun (non-terminal).
+    Pause,
+    /// Operator resumes a previously paused turn / GoalRun.
+    Resume,
+}
+
+impl ControlIntent {
+    /// Stable audit tag for this intent. Used by callers when writing a
+    /// `discord_control_*` audit row so log analysis and tests don't have
+    /// to depend on Debug formatting. See [`gate_control_reaction`] for
+    /// the dead-code rationale that applies to the whole control slice.
+    #[allow(dead_code)]
+    pub fn audit_tag(self) -> &'static str {
+        match self {
+            ControlIntent::Approve => "approve",
+            ControlIntent::Deny => "deny",
+            ControlIntent::Cancel => "cancel",
+            ControlIntent::Retry => "retry",
+            ControlIntent::Pause => "pause",
+            ControlIntent::Resume => "resume",
+        }
+    }
+}
+
+/// One configured reaction-to-intent binding. Operators express the mapping
+/// in the connector manifest; this is the in-memory carrier the gate uses.
+///
+/// `emoji` is matched byte-equal against the inbound payload's emoji name
+/// (Discord sends `name` = the unicode char for unicode emoji, or the
+/// custom emoji name otherwise). The match is case-sensitive so a manifest
+/// typo doesn't silently widen the set of accepted reactions.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReactionControlBinding {
+    pub emoji: String,
+    pub intent: ControlIntent,
+}
+
+/// A single inbound reaction event, parsed from MESSAGE_REACTION_ADD. The
+/// `target_message_id` is the bot-owned message the reaction landed on —
+/// the gate uses it to anchor the resulting control to the corresponding
+/// HITL ticket / status card.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscordReactionAdd {
+    pub channel_id: String,
+    pub target_message_id: String,
+    pub user_id: String,
+    pub emoji: String,
+}
+
+/// Parse a MESSAGE_REACTION_ADD Dispatch payload into a
+/// [`DiscordReactionAdd`]. Returns `None` if the payload is the wrong
+/// event type, lacks required fields, or carries a reaction from SERA's
+/// own bot (loop-safety — bot self-reacts must never drive control).
+///
+/// Reactions on messages that are *not* bot-owned are out of scope for
+/// the control gate (an operator @-tagging a peer's message has no
+/// meaningful target), but this parser deliberately stays
+/// principal-agnostic — the caller filters by `target_message_id` against
+/// known bot-owned ids.
+#[allow(dead_code)]
+pub fn parse_reaction_add(payload: &Value, bot_user_id: Option<&str>) -> Option<DiscordReactionAdd> {
+    if payload.get("op")?.as_u64()? != OP_DISPATCH {
+        return None;
+    }
+    if payload.get("t")?.as_str()? != "MESSAGE_REACTION_ADD" {
+        return None;
+    }
+    let d = payload.get("d")?;
+    let user_id = d.get("user_id")?.as_str()?.to_owned();
+    // Loop safety: self-reactions never produce a control intent. The bot
+    // adds 👀 / ✅ / ❌ to its own messages as UX affordances — those must
+    // not be interpreted as operator control input.
+    if let Some(self_id) = bot_user_id
+        && user_id == self_id
+    {
+        return None;
+    }
+    let channel_id = d.get("channel_id")?.as_str()?.to_owned();
+    let target_message_id = d.get("message_id")?.as_str()?.to_owned();
+    let emoji = d.get("emoji")?.get("name")?.as_str()?.to_owned();
+    Some(DiscordReactionAdd {
+        channel_id,
+        target_message_id,
+        user_id,
+        emoji,
+    })
+}
+
+/// Outcome of the reaction-control gate. Mirrors the shape of
+/// [`MessageGateDecision`] so the audit pattern is uniform across the
+/// inbound message gate and the reaction-control gate.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlGateDecision {
+    /// Reaction maps to a known intent AND the reacting principal is on
+    /// the configured operator allowlist. The caller must route the intent
+    /// through ApprovalMatrix / GoalRun controls — this gate deliberately
+    /// does NOT mutate session state.
+    Accepted(ControlIntent),
+    /// Reaction maps to a known intent but the reacting principal is not
+    /// authorized. Caller MUST emit a `discord_control_denied` audit row
+    /// with reason `unauthorized_principal`.
+    Denied(ControlDenyReason),
+    /// Reaction does not map to any configured intent — silently dropped
+    /// to keep low-noise channels usable for non-control reactions
+    /// (operators reacting with hearts, etc.). No audit row.
+    Unmapped,
+}
+
+/// Reason a reaction-driven control was denied. Distinct from the
+/// `Unmapped` (silent) path so the audit pattern stays expressive.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlDenyReason {
+    /// Reacting Discord user id is not on the configured operator
+    /// allowlist. Default-deny: empty allowlist denies everyone.
+    UnauthorizedPrincipal,
+    /// Reaction target message is not a bot-owned control surface. Guards
+    /// against an operator reacting to a peer-bot message with the same
+    /// emoji and inadvertently driving a SERA control.
+    UntargetedSurface,
+}
+
+impl ControlDenyReason {
+    /// Audit tag for `discord_control_denied` rows. Stable across versions.
+    #[allow(dead_code)]
+    pub fn audit_reason(self) -> &'static str {
+        match self {
+            ControlDenyReason::UnauthorizedPrincipal => "unauthorized_principal",
+            ControlDenyReason::UntargetedSurface => "untargeted_surface",
+        }
+    }
+}
+
+/// Map a reaction emoji to a configured intent, if any. Pure lookup over
+/// the manifest bindings — case-sensitive, byte-equal on `emoji`. Multiple
+/// bindings with the same emoji resolve to the first match (manifest
+/// ordering wins) so operators can override defaults by listing them
+/// earlier.
+#[allow(dead_code)]
+pub fn map_reaction_to_intent(
+    emoji: &str,
+    bindings: &[ReactionControlBinding],
+) -> Option<ControlIntent> {
+    bindings
+        .iter()
+        .find(|b| b.emoji == emoji)
+        .map(|b| b.intent)
+}
+
+/// Authorize a reacting principal against the configured operator
+/// allowlist. Default-deny: an empty allowlist denies everyone, which is
+/// the safe default for fresh deployments where the operator hasn't
+/// configured a roster yet.
+///
+/// Matches by exact Discord user id. Username matching is deliberately not
+/// supported here — usernames are mutable and an operator typo would
+/// either lock everyone out or admit a stranger. Ids are the stable
+/// principal identifier on Discord.
+#[allow(dead_code)]
+pub fn authorize_control_principal(user_id: &str, allowed_operators: &[String]) -> bool {
+    if user_id.is_empty() {
+        return false;
+    }
+    allowed_operators
+        .iter()
+        .any(|id| !id.is_empty() && id == user_id)
+}
+
+/// Top-level gate for a parsed reaction-control event. Composes
+/// [`map_reaction_to_intent`] and [`authorize_control_principal`] under a
+/// single decision so the call site has one pure entry point to test.
+///
+/// `bot_owned_message_ids` is the set of message ids this connector
+/// considers control surfaces (typically: posted status cards, HITL
+/// prompts). Empty set means "no surfaces tracked" — all reactions are
+/// gated `UntargetedSurface` so the caller can audit instead of silently
+/// dropping.
+///
+/// `#[allow(dead_code)]`: the bin doesn't wire MESSAGE_REACTION_ADD into
+/// this gate yet — this lands the pure decision + tests first, matching
+/// the status-card slice (sera-yeg.6) where helpers shipped a PR ahead
+/// of the live pipeline integration.
+#[allow(dead_code)]
+pub fn gate_control_reaction(
+    reaction: &DiscordReactionAdd,
+    bindings: &[ReactionControlBinding],
+    bot_owned_message_ids: &[String],
+    allowed_operators: &[String],
+) -> ControlGateDecision {
+    let Some(intent) = map_reaction_to_intent(&reaction.emoji, bindings) else {
+        return ControlGateDecision::Unmapped;
+    };
+    let is_bot_owned = bot_owned_message_ids
+        .iter()
+        .any(|id| !id.is_empty() && id == &reaction.target_message_id);
+    if !is_bot_owned {
+        return ControlGateDecision::Denied(ControlDenyReason::UntargetedSurface);
+    }
+    if !authorize_control_principal(&reaction.user_id, allowed_operators) {
+        return ControlGateDecision::Denied(ControlDenyReason::UnauthorizedPrincipal);
+    }
+    ControlGateDecision::Accepted(intent)
+}
+
+// ---------------------------------------------------------------------------
 // DiscordConnector implementation
 // ---------------------------------------------------------------------------
 
@@ -2867,5 +3113,332 @@ mod tests {
         assert!(!body.contains("channels/"));
         assert!(!body.contains("/home/"));
         assert!(!body.contains("Bot "));
+    }
+
+    // -----------------------------------------------------------------------
+    // Reaction-driven HITL controls (sera-yeg.7 / sera-q66q)
+    //
+    // Pure mapping + authorization gate. No live Discord traffic, no policy
+    // bypass: accepted intents are explicitly NOT mutated through here —
+    // the call site is expected to route them through ApprovalMatrix /
+    // GoalRun controls.
+    // -----------------------------------------------------------------------
+
+    fn reaction_payload(message_id: &str, user_id: &str, emoji: &str) -> Value {
+        serde_json::json!({
+            "op": 0,
+            "t": "MESSAGE_REACTION_ADD",
+            "s": 1,
+            "d": {
+                "user_id": user_id,
+                "channel_id": "ch-control",
+                "message_id": message_id,
+                "emoji": { "name": emoji, "id": null }
+            }
+        })
+    }
+
+    fn default_bindings() -> Vec<ReactionControlBinding> {
+        vec![
+            ReactionControlBinding { emoji: "✅".into(), intent: ControlIntent::Approve },
+            ReactionControlBinding { emoji: "❌".into(), intent: ControlIntent::Deny },
+            ReactionControlBinding { emoji: "🛑".into(), intent: ControlIntent::Cancel },
+            ReactionControlBinding { emoji: "🔁".into(), intent: ControlIntent::Retry },
+            ReactionControlBinding { emoji: "⏸".into(), intent: ControlIntent::Pause },
+            ReactionControlBinding { emoji: "▶".into(), intent: ControlIntent::Resume },
+        ]
+    }
+
+    #[test]
+    fn parse_reaction_add_extracts_fields() {
+        let p = reaction_payload("msg-target", "op-1", "✅");
+        let r = parse_reaction_add(&p, Some("self-bot")).expect("parse");
+        assert_eq!(r.channel_id, "ch-control");
+        assert_eq!(r.target_message_id, "msg-target");
+        assert_eq!(r.user_id, "op-1");
+        assert_eq!(r.emoji, "✅");
+    }
+
+    #[test]
+    fn parse_reaction_add_self_bot_dropped() {
+        // Loop safety: when SERA's own bot adds a 👀/✅/❌ reaction as a UX
+        // affordance, the parser must drop the event so it cannot drive
+        // its own control flow.
+        let p = reaction_payload("msg-target", "self-bot", "✅");
+        assert!(parse_reaction_add(&p, Some("self-bot")).is_none());
+    }
+
+    #[test]
+    fn parse_reaction_add_wrong_event_type() {
+        let p = serde_json::json!({
+            "op": 0,
+            "t": "MESSAGE_CREATE",
+            "s": 1,
+            "d": { "user_id": "x", "channel_id": "y", "message_id": "z",
+                   "emoji": { "name": "✅" } }
+        });
+        assert!(parse_reaction_add(&p, None).is_none());
+    }
+
+    #[test]
+    fn parse_reaction_add_missing_emoji_name() {
+        // Custom-emoji-only payloads (no unicode `name`) are ignored: the
+        // current binding format is unicode-only, so a custom emoji
+        // reaction never maps anywhere.
+        let p = serde_json::json!({
+            "op": 0,
+            "t": "MESSAGE_REACTION_ADD",
+            "s": 1,
+            "d": {
+                "user_id": "op-1",
+                "channel_id": "c",
+                "message_id": "m",
+                "emoji": { "id": "12345" }
+            }
+        });
+        assert!(parse_reaction_add(&p, None).is_none());
+    }
+
+    #[test]
+    fn map_reaction_to_intent_known_emoji() {
+        let b = default_bindings();
+        assert_eq!(map_reaction_to_intent("✅", &b), Some(ControlIntent::Approve));
+        assert_eq!(map_reaction_to_intent("❌", &b), Some(ControlIntent::Deny));
+        assert_eq!(map_reaction_to_intent("🛑", &b), Some(ControlIntent::Cancel));
+        assert_eq!(map_reaction_to_intent("🔁", &b), Some(ControlIntent::Retry));
+        assert_eq!(map_reaction_to_intent("⏸", &b), Some(ControlIntent::Pause));
+        assert_eq!(map_reaction_to_intent("▶", &b), Some(ControlIntent::Resume));
+    }
+
+    #[test]
+    fn map_reaction_to_intent_unknown_emoji_is_unmapped() {
+        // Strict default: anything not explicitly bound is `None`, never
+        // a "default to Approve" or similar. Operators reacting with
+        // hearts, eyes, etc. must NOT produce a control intent.
+        let b = default_bindings();
+        assert_eq!(map_reaction_to_intent("❤", &b), None);
+        assert_eq!(map_reaction_to_intent("👀", &b), None);
+        assert_eq!(map_reaction_to_intent("", &b), None);
+    }
+
+    #[test]
+    fn map_reaction_is_case_and_byte_sensitive() {
+        // The mapping is exact-match on the emoji name; an extra
+        // variation selector or modifier byte must NOT collapse onto the
+        // configured entry. This guards against a misconfigured manifest
+        // silently widening the accepted set.
+        let b = vec![ReactionControlBinding { emoji: "OK".into(), intent: ControlIntent::Approve }];
+        assert_eq!(map_reaction_to_intent("OK", &b), Some(ControlIntent::Approve));
+        assert_eq!(map_reaction_to_intent("ok", &b), None);
+        assert_eq!(map_reaction_to_intent("OK ", &b), None);
+    }
+
+    #[test]
+    fn authorize_control_principal_default_deny() {
+        // Empty allowlist denies everyone — the safe default for a fresh
+        // deployment without an operator roster. Empty user id always
+        // denies regardless of allowlist contents.
+        assert!(!authorize_control_principal("op-1", &[]));
+        assert!(!authorize_control_principal("", &[]));
+        assert!(!authorize_control_principal("", &["op-1".into()]));
+    }
+
+    #[test]
+    fn authorize_control_principal_ignores_empty_entries() {
+        // Empty strings in the allowlist must NOT match an empty principal
+        // id — guards against a manifest with stray blank lines silently
+        // turning into a wildcard match.
+        let allow: Vec<String> = vec!["".into(), "op-1".into()];
+        assert!(!authorize_control_principal("", &allow));
+        assert!(authorize_control_principal("op-1", &allow));
+        assert!(!authorize_control_principal("stranger", &allow));
+    }
+
+    #[test]
+    fn gate_unmapped_reaction_is_silent() {
+        // A reaction the manifest doesn't bind must drop to `Unmapped`
+        // so the caller can choose not to audit. Hearts and eyes are
+        // operator chatter, not control input.
+        let r = DiscordReactionAdd {
+            channel_id: "c".into(),
+            target_message_id: "card-1".into(),
+            user_id: "op-1".into(),
+            emoji: "❤".into(),
+        };
+        let surfaces = vec!["card-1".to_string()];
+        let allow = vec!["op-1".to_string()];
+        assert_eq!(
+            gate_control_reaction(&r, &default_bindings(), &surfaces, &allow),
+            ControlGateDecision::Unmapped,
+        );
+    }
+
+    #[test]
+    fn gate_unauthorized_principal_is_denied_with_audit_reason() {
+        // Mapped reaction + unknown principal → Denied so the caller
+        // emits a `discord_control_denied` audit row. The denial reason
+        // must distinguish `unauthorized_principal` from
+        // `untargeted_surface` for log analysis.
+        let r = DiscordReactionAdd {
+            channel_id: "c".into(),
+            target_message_id: "card-1".into(),
+            user_id: "stranger".into(),
+            emoji: "✅".into(),
+        };
+        let surfaces = vec!["card-1".to_string()];
+        let allow = vec!["op-1".to_string()];
+        let decision = gate_control_reaction(&r, &default_bindings(), &surfaces, &allow);
+        assert_eq!(
+            decision,
+            ControlGateDecision::Denied(ControlDenyReason::UnauthorizedPrincipal),
+        );
+        if let ControlGateDecision::Denied(reason) = decision {
+            assert_eq!(reason.audit_reason(), "unauthorized_principal");
+        }
+    }
+
+    #[test]
+    fn gate_untargeted_surface_is_denied_with_audit_reason() {
+        // Mapped reaction on a non-bot-owned message → Denied. This
+        // guards against an operator reacting to a peer-bot or human
+        // post with ✅ and unintentionally driving a SERA control.
+        let r = DiscordReactionAdd {
+            channel_id: "c".into(),
+            target_message_id: "peer-post".into(),
+            user_id: "op-1".into(),
+            emoji: "✅".into(),
+        };
+        let surfaces = vec!["card-1".to_string()]; // peer-post not in here
+        let allow = vec!["op-1".to_string()];
+        let decision = gate_control_reaction(&r, &default_bindings(), &surfaces, &allow);
+        assert_eq!(
+            decision,
+            ControlGateDecision::Denied(ControlDenyReason::UntargetedSurface),
+        );
+        if let ControlGateDecision::Denied(reason) = decision {
+            assert_eq!(reason.audit_reason(), "untargeted_surface");
+        }
+    }
+
+    #[test]
+    fn gate_authorized_operator_on_bot_surface_accepts_intent() {
+        // Happy path: configured emoji + bot-owned message + operator
+        // on allowlist → Accepted with the mapped intent. The caller is
+        // expected to route through ApprovalMatrix / GoalRun controls;
+        // this gate does NOT mutate any session state.
+        let r = DiscordReactionAdd {
+            channel_id: "c".into(),
+            target_message_id: "card-1".into(),
+            user_id: "op-1".into(),
+            emoji: "✅".into(),
+        };
+        let surfaces = vec!["card-1".to_string()];
+        let allow = vec!["op-1".to_string()];
+        let decision = gate_control_reaction(&r, &default_bindings(), &surfaces, &allow);
+        assert_eq!(decision, ControlGateDecision::Accepted(ControlIntent::Approve));
+        if let ControlGateDecision::Accepted(intent) = decision {
+            assert_eq!(intent.audit_tag(), "approve");
+        }
+    }
+
+    #[test]
+    fn gate_empty_surface_list_denies_untargeted() {
+        // Fresh-deployment safety: with no tracked bot surfaces, every
+        // mapped reaction lands on `UntargetedSurface` so the operator
+        // sees an audit row instead of a silent drop.
+        let r = DiscordReactionAdd {
+            channel_id: "c".into(),
+            target_message_id: "anything".into(),
+            user_id: "op-1".into(),
+            emoji: "✅".into(),
+        };
+        let allow = vec!["op-1".to_string()];
+        let decision = gate_control_reaction(&r, &default_bindings(), &[], &allow);
+        assert_eq!(
+            decision,
+            ControlGateDecision::Denied(ControlDenyReason::UntargetedSurface),
+        );
+    }
+
+    #[test]
+    fn gate_targeted_surface_evaluated_before_principal() {
+        // Surface check runs before principal check so the denial reason
+        // for "stranger reacts to peer message" reports the more useful
+        // `untargeted_surface` rather than masking it as a principal
+        // problem. Documents the gate order so a future refactor can't
+        // silently flip the priority.
+        let r = DiscordReactionAdd {
+            channel_id: "c".into(),
+            target_message_id: "peer-post".into(),
+            user_id: "stranger".into(),
+            emoji: "✅".into(),
+        };
+        let surfaces = vec!["card-1".to_string()];
+        let allow = vec!["op-1".to_string()];
+        let decision = gate_control_reaction(&r, &default_bindings(), &surfaces, &allow);
+        assert_eq!(
+            decision,
+            ControlGateDecision::Denied(ControlDenyReason::UntargetedSurface),
+        );
+    }
+
+    #[test]
+    fn control_intent_audit_tags_are_distinct_and_stable() {
+        // Stable strings are part of the audit contract — log analysis
+        // and downstream filters must be able to pin them.
+        assert_eq!(ControlIntent::Approve.audit_tag(), "approve");
+        assert_eq!(ControlIntent::Deny.audit_tag(), "deny");
+        assert_eq!(ControlIntent::Cancel.audit_tag(), "cancel");
+        assert_eq!(ControlIntent::Retry.audit_tag(), "retry");
+        assert_eq!(ControlIntent::Pause.audit_tag(), "pause");
+        assert_eq!(ControlIntent::Resume.audit_tag(), "resume");
+    }
+
+    #[test]
+    fn control_deny_reason_audit_tags_are_distinct() {
+        assert_eq!(
+            ControlDenyReason::UnauthorizedPrincipal.audit_reason(),
+            "unauthorized_principal",
+        );
+        assert_eq!(
+            ControlDenyReason::UntargetedSurface.audit_reason(),
+            "untargeted_surface",
+        );
+    }
+
+    #[test]
+    fn end_to_end_parse_then_gate_accepts_harmless_approve() {
+        // Wire the parser + gate together on a realistic payload to
+        // pin the contract a caller will exercise: operator reacts ✅
+        // to the bot's status card, the gate emits Accept(Approve),
+        // ready to be routed through ApprovalMatrix.
+        let p = reaction_payload("card-9F0AB", "op-trusted", "✅");
+        let parsed = parse_reaction_add(&p, Some("self-bot")).expect("parse");
+        let bindings = default_bindings();
+        let surfaces = vec!["card-9F0AB".to_string()];
+        let allow = vec!["op-trusted".to_string()];
+        assert_eq!(
+            gate_control_reaction(&parsed, &bindings, &surfaces, &allow),
+            ControlGateDecision::Accepted(ControlIntent::Approve),
+        );
+    }
+
+    #[test]
+    fn end_to_end_parse_then_gate_denies_unauthorized_with_audit() {
+        // Same surface, same emoji, but a stranger's user id — the gate
+        // must reject and surface `unauthorized_principal` so the caller
+        // writes a `discord_control_denied` audit row. This is the
+        // acceptance evidence for "unauthorized controls denied/audited"
+        // from sera-yeg.7.
+        let p = reaction_payload("card-9F0AB", "intruder", "✅");
+        let parsed = parse_reaction_add(&p, Some("self-bot")).expect("parse");
+        let bindings = default_bindings();
+        let surfaces = vec!["card-9F0AB".to_string()];
+        let allow = vec!["op-trusted".to_string()];
+        let decision = gate_control_reaction(&parsed, &bindings, &surfaces, &allow);
+        match decision {
+            ControlGateDecision::Denied(ControlDenyReason::UnauthorizedPrincipal) => {}
+            other => panic!("expected denied/unauthorized, got {other:?}"),
+        }
     }
 }

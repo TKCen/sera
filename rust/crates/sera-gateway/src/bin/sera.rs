@@ -4966,20 +4966,16 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         .map(|dc| start_typing_indicator(Arc::clone(dc), msg.channel_id.clone()));
     add_reaction_best_effort(state, &msg.channel_id, &msg.message_id, "👀").await;
 
-    // sera-yeg.6: opt-in status-card session surface. Each accepted turn
-    // posts one in-place edited card so operators see Accepted → Running →
-    // Done/Failed/Blocked as the lifecycle progresses. Default-off; existing
-    // operators are unaffected unless they set `statusCard: true` on their
-    // connector manifest.
+    // sera-yeg.6: opt-in status-card session surface. The session is created
+    // *inside* `process_message_inner` AFTER the lane-queue decision so a
+    // message that queues behind an active turn does not leave an orphan
+    // card stuck at Running (Codex P1 review on PR #1278). The dispatched
+    // turn that actually executes owns its own card lifecycle.
     let status_card_enabled = {
         let manifests = state.manifests.read().unwrap();
         status_card_enabled_for_connector(&manifests, msg.connector_name.as_deref())
     };
-    let status_card_session = if status_card_enabled {
-        start_status_card_session(state, msg).await
-    } else {
-        None
-    };
+    let mut status_card_session: Option<Arc<StatusCardSession>> = None;
 
     // Audit: Discord message received.
     {
@@ -5028,13 +5024,6 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
     // Run the inner turn pipeline. We wrap everything below in an async block
     // so the typing/reaction lifecycle finalizes consistently (✅ on success,
     // ❌ on failure) regardless of where the inner pipeline returns.
-    // Transition status card to Running just before invoking the inner
-    // pipeline (sera-yeg.6). Best-effort edit — failures are logged debug.
-    if let Some(session) = status_card_session.as_ref() {
-        update_status_card_best_effort(state, session, crate::discord::StatusCardState::Running)
-            .await;
-    }
-
     let outcome = process_message_inner(
         state,
         msg,
@@ -5042,6 +5031,10 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         principal_kind,
         &runtime_content,
         &peer_directory,
+        StatusCardCtx {
+            enabled: status_card_enabled,
+            session: &mut status_card_session,
+        },
     )
     .await;
     if let Some(handle) = typing_task {
@@ -5056,9 +5049,10 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
     if let Some(emoji) = final_emoji {
         add_reaction_best_effort(state, &msg.channel_id, &msg.message_id, emoji).await;
     }
-    // Final status-card edit, mirroring the reaction lifecycle (sera-yeg.6).
-    // Queued turns do not finalize the card — the dispatched turn that
-    // actually runs owns the lifecycle.
+    // Finalize the status card if the inner pipeline created one. A queued
+    // turn never reaches the card-creation point so `status_card_session`
+    // stays `None` and the dispatched turn that actually runs owns the
+    // lifecycle (sera-yeg.6).
     if let Some(session) = status_card_session.as_ref() {
         let terminal = match outcome.as_ref() {
             Ok(TurnOutcome::Success) => Some(crate::discord::StatusCardState::Done),
@@ -5066,6 +5060,10 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
                 "hook rejected".into(),
             )),
             Err(e) => Some(crate::discord::StatusCardState::Failed(e.to_string())),
+            // Unreachable post-yeg.6 refactor: card is only created after
+            // the lane-queue decision passes, so a Queued outcome cannot
+            // co-exist with a populated card slot. Defensive `None` keeps
+            // the match exhaustive without writing a stale edit.
             Ok(TurnOutcome::Queued) => None,
         };
         if let Some(state_next) = terminal {
@@ -5097,6 +5095,18 @@ enum TurnOutcome {
 /// other mentions stripped) — what the LLM and transcript see. The reverse
 /// path: `peer_directory` rewrites `@<handle>` tokens back to `<@id>` on
 /// outbound so the reply actually pings the peer in Discord (sera-yeg.4).
+/// Out-parameter / config bundle for the optional Discord status-card
+/// surface (sera-yeg.6). Threaded through `process_message_inner` so the
+/// card can be created only after the lane-queue decision passes — see
+/// the comment block at the creation site.
+struct StatusCardCtx<'a> {
+    enabled: bool,
+    /// Populated by `process_message_inner` when (and only when) dispatch
+    /// is committed. Stays `None` for queued / rejected-pre-dispatch turns
+    /// so the outer pipeline never finalizes an orphan card.
+    session: &'a mut Option<Arc<StatusCardSession>>,
+}
+
 async fn process_message_inner(
     state: &AppState,
     msg: &DiscordMessage,
@@ -5104,6 +5114,7 @@ async fn process_message_inner(
     principal_kind: PrincipalKind,
     runtime_content: &str,
     peer_directory: &[crate::discord::PeerMentionBinding],
+    status_card_ctx: StatusCardCtx<'_>,
 ) -> anyhow::Result<TurnOutcome> {
     // Load hook chains from manifests.
     let chains = state.manifests.read().unwrap().hook_chain_specs();
@@ -5304,6 +5315,20 @@ async fn process_message_inner(
                 return Ok(TurnOutcome::Rejected);
             }
         }
+    }
+
+    // sera-yeg.6: dispatch is committed (lane was idle or interrupted into
+    // a fresh run). Now is the safe point to post the status-card session
+    // surface — earlier creation would orphan a card on a Queued/Steer
+    // outcome (Codex P1 on PR #1278). The card jumps straight to Running
+    // since the operator only sees it once the turn is actually executing.
+    if status_card_ctx.enabled
+        && state.discord.is_some()
+        && let Some(session) = start_status_card_session(state, msg).await
+    {
+        update_status_card_best_effort(state, &session, crate::discord::StatusCardState::Running)
+            .await;
+        *status_card_ctx.session = Some(session);
     }
 
     // Execute the agent turn via the supervisor (sera-ojp3 — respawns a
@@ -5687,6 +5712,8 @@ async fn update_status_card_best_effort(
         return;
     }
     let body = card.render();
+    let next_state = format!("{:?}", card.state());
+    let audit_id = card.audit_id().to_owned();
     drop(card);
     if let Err(e) = dc
         .edit_message(&session.post_channel_id, &session.card_message_id, &body)
@@ -5695,6 +5722,8 @@ async fn update_status_card_best_effort(
         tracing::debug!(
             channel_id = %session.post_channel_id,
             message_id = %session.card_message_id,
+            audit_id = %audit_id,
+            next_state = %next_state,
             error = %e,
             "Discord status-card edit failed (low-noise — UX affordance only)",
         );

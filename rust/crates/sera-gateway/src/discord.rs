@@ -704,6 +704,12 @@ pub enum StatusCardState {
     Running,
     /// Turn is waiting on an external dependency (hook redirect, HITL, etc.).
     /// Carries a short operator-facing reason (sanitized at render time).
+    ///
+    /// Reserved for the hook/HITL wait integrations that will hang off the
+    /// existing pre_route / pre_tool chains — not constructed by the live
+    /// pipeline today (current paths terminate in `Done`/`Failed`), but is
+    /// part of the state machine contract and exercised by unit tests.
+    #[allow(dead_code)]
     Blocked(String),
     /// Turn ran to completion and a reply was sent.
     Done,

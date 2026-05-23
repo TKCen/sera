@@ -24,8 +24,15 @@
 //! 3. An orphan `</think>` with no opening tag swallows everything from the
 //!    start of the string up to and including the closing tag — the prefix
 //!    is assumed to be hidden reasoning that lost its opening marker.
-//! 4. Leading / trailing whitespace introduced *by* stripping is trimmed,
-//!    but interior whitespace is preserved verbatim.
+//! 4. The sanitizer **never** trims or rewrites whitespace outside the
+//!    stripped region. Caller-intentional leading / trailing / interior
+//!    whitespace — markdown code blocks that begin with `\n`, fenced
+//!    examples that end with `\n`, replies with deliberate indentation,
+//!    blank-line spacing — is preserved verbatim. Only the bytes between
+//!    the `<think>` and `</think>` markers (inclusive of the markers
+//!    themselves) are removed. If the model emitted a separator newline
+//!    on either side of the block it remains in the output, exactly as
+//!    the model wrote it.
 //!
 //! The sanitizer is intentionally line-and-byte agnostic: `<think>` tags
 //! can span newlines, can be adjacent to assistant text on the same line,
@@ -76,7 +83,6 @@ pub fn sanitize_assistant_response(input: &str) -> SanitizationOutcome {
             Some(NextMarker::Open(rel_idx)) => {
                 let abs_idx = cursor + rel_idx;
                 out.push_str(&input[cursor..abs_idx]);
-                // Tag length is fixed regardless of case (`<think>` = 7).
                 let after_open = abs_idx + OPEN_TAG.len();
                 match find_close(&input[after_open..]) {
                     Some(rel_close) => {
@@ -111,13 +117,8 @@ pub fn sanitize_assistant_response(input: &str) -> SanitizationOutcome {
         out.push_str(&input[cursor..]);
     }
 
-    // Stripping a block surrounded by whitespace commonly leaves a leading
-    // newline or trailing dangling space; trim only the outer edges so
-    // interior formatting (lists, code fences) is preserved.
-    let trimmed = out.trim().to_owned();
-
     SanitizationOutcome {
-        text: trimmed,
+        text: out,
         stripped_blocks: stripped,
     }
 }
@@ -212,10 +213,13 @@ mod tests {
 
     #[test]
     fn strips_multiline_block() {
+        // The closer's trailing `\n` is the model's separator and remains
+        // in the output verbatim — the sanitizer only removes the bytes
+        // between the markers (inclusive), never adjacent whitespace.
         let out = sanitize_assistant_response(
             "<think>\nfirst line\nsecond line\n</think>\nactual reply",
         );
-        assert_eq!(out.text, "actual reply");
+        assert_eq!(out.text, "\nactual reply");
         assert_eq!(out.stripped_blocks, 1);
     }
 
@@ -306,12 +310,70 @@ mod tests {
     }
 
     #[test]
-    fn handles_block_surrounded_by_whitespace() {
+    fn surrounding_newlines_survive_strip() {
+        // The model often wraps the block in newlines for readability.
+        // Both newlines belong to the operator-visible byte stream — the
+        // sanitizer must not eat them, only the bytes between `<think>`
+        // and `</think>` (inclusive of the markers).
         let out = sanitize_assistant_response(
-            "  \n<think>r</think>\n  visible \n",
+            "prefix line\n<think>hidden</think>\nvisible line",
         );
-        // Outer whitespace trimmed; interior preserved.
-        assert_eq!(out.text, "visible");
+        assert_eq!(out.text, "prefix line\n\nvisible line");
+        assert_eq!(out.stripped_blocks, 1);
+    }
+
+    #[test]
+    fn preserves_leading_newline_when_caller_intends_it() {
+        // Codex review fix: a markdown code-block reply that starts with
+        // a deliberate `\n\n` (so the fence renders on its own line)
+        // must keep both newlines — they are operator content the
+        // sanitizer has no authority to rewrite.
+        let input = "<think>plan it</think>\n\n```rust\nfn main() {}\n```\n";
+        let out = sanitize_assistant_response(input);
+        assert_eq!(out.text, "\n\n```rust\nfn main() {}\n```\n");
+        assert_eq!(out.stripped_blocks, 1);
+    }
+
+    #[test]
+    fn preserves_pure_outer_whitespace_when_no_strip() {
+        // No `<think>` at all → output is byte-identical to input. This
+        // is the Codex-review fast-path: intentional leading / trailing
+        // whitespace must not be trimmed just because the sanitizer was
+        // invoked.
+        let input = "  \n  hello  \n  ";
+        let out = sanitize_assistant_response(input);
+        assert_eq!(out.text, input);
+        assert_eq!(out.stripped_blocks, 0);
+    }
+
+    #[test]
+    fn preserves_trailing_whitespace_after_strip() {
+        // Trailing spaces *after* the strip boundary are operator
+        // content (e.g., a model that pads with spaces for line-buffer
+        // flush). They must survive.
+        let out = sanitize_assistant_response("<think>r</think>visible  ");
+        assert_eq!(out.text, "visible  ");
+        assert_eq!(out.stripped_blocks, 1);
+    }
+
+    #[test]
+    fn preserves_leading_whitespace_before_strip() {
+        // Indentation before the block (e.g., a markdown blockquote
+        // continuation) is operator content. The sanitizer removes only
+        // the block, not the indentation.
+        let out = sanitize_assistant_response("  <think>r</think>line");
+        assert_eq!(out.text, "  line");
+        assert_eq!(out.stripped_blocks, 1);
+    }
+
+    #[test]
+    fn preserves_crlf_line_endings_around_block() {
+        // Windows-style `\r\n` separators around the block are operator
+        // content too — they remain in the output verbatim.
+        let out = sanitize_assistant_response(
+            "prefix\r\n<think>r</think>\r\nsuffix",
+        );
+        assert_eq!(out.text, "prefix\r\n\r\nsuffix");
         assert_eq!(out.stripped_blocks, 1);
     }
 }

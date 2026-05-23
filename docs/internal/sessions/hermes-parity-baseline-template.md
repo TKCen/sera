@@ -75,7 +75,20 @@ Notes: _capture the `response` body in a redacted form (truncate to first 200 ch
 ## Probe 3 — Response sanitizer contract
 
 For the same chat call above, the operator-visible `response` MUST NOT
-contain raw chain-of-thought tags. Smoke check:
+contain raw chain-of-thought tags. The gateway enforces this with
+[`response_sanitizer::sanitize_assistant_response`](../../../rust/crates/sera-gateway/src/response_sanitizer.rs),
+which is exercised by two layers:
+
+- Unit tests in `rust/crates/sera-gateway/src/response_sanitizer.rs`
+  cover balanced blocks, orphan halves, case variants, multi-line bodies,
+  and whitespace handling.
+- Integration test
+  `rust/crates/sera-e2e-harness/tests/hermes_parity_response_sanitizer.rs`
+  boots the full gateway + runtime + scripted mock LLM that deliberately
+  emits a `<think>…</think>` block, and asserts the operator-visible
+  `response` is stripped before it crosses the boundary.
+
+Operator smoke check (against a real provider):
 
 ```bash
 echo "$RESPONSE_BODY" | grep -iE '<think>|</think>' && echo "LEAK" || echo "CLEAN"
@@ -86,8 +99,17 @@ echo "$RESPONSE_BODY" | grep -iE '<think>|</think>' && echo "LEAK" || echo "CLEA
 | No `<think>` marker in `response` | _PASS / FAIL_ |
 | No `</think>` marker in `response` | _PASS / FAIL_ |
 | No raw `reasoning_content` field bleed | _PASS / FAIL_ |
+| Sanitization event logged when a reasoning model is in use | _PASS / FAIL_ |
 
-Notes: _if leakage occurs, file under `sera-yj18` follow-up and link the capture._
+Notes: when sanitization is applied the gateway emits a `tracing::info!`
+line with `stripped_blocks > 0` plus the raw / sanitized byte lengths;
+the `response_sent` audit row also carries `sanitized_blocks` and
+`raw_response_len` so operators can confirm reasoning-model output is
+being normalised. Streaming (`/api/chat` with `"stream": true`) is the
+open follow-up — deltas can split a `<think>` tag across SSE chunks, so
+a stream-aware sanitizer is tracked as `sera-sanitizer-stream` in the
+matrix's recommended new beads. If leakage occurs in the non-streaming
+path, file under `sera-yj18` and link the redacted capture.
 
 ---
 

@@ -176,6 +176,35 @@ impl SqliteDb {
         }
     }
 
+    /// Look up a session by its `id` (e.g. `ses_…`). Returns `None` when no row
+    /// matches. Callers that need to distinguish "unknown session" from "session
+    /// exists but transcript is empty" should consult this before
+    /// [`Self::get_transcript`] — see the transcript-recovery 404 path in the
+    /// gateway's `/api/sessions/:id/transcript` handler (parity matrix row 8,
+    /// `sera-rj4z`).
+    #[cfg(not(feature = "postgres"))]
+    pub fn get_session_by_id(&self, id: &str) -> rusqlite::Result<Option<SessionRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, agent_id, session_key, state, principal_id, created_at, updated_at
+             FROM sessions WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok(SessionRow {
+                id: row.get(0)?,
+                agent_id: row.get(1)?,
+                session_key: row.get(2)?,
+                state: row.get(3)?,
+                principal_id: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
     #[cfg(not(feature = "postgres"))]
     pub fn list_sessions(&self) -> rusqlite::Result<Vec<SessionRow>> {
         let mut stmt = self.conn.prepare(

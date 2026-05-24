@@ -5577,6 +5577,15 @@ async fn process_message_inner(
     // main turn returned a structured `failure`, so queued events that
     // arrived while the failed run was in flight get processed instead of
     // being stranded until the next inbound message.
+    //
+    // sera-5b349807 (Codex P1 PR #1280 follow-up): capture the first
+    // follow-up runtime failure into a local instead of returning
+    // immediately. The drain loop must keep processing additional queued
+    // events behind a failed follow-up so they don't get stranded during a
+    // multi-message provider/runtime outage; the captured reason is
+    // surfaced at the end so the outer pipeline still drives the status
+    // card to ❌ Failed.
+    let mut follow_up_failure: Option<String> = None;
     loop {
         let has_pending = {
             let lq = state.lane_queue.lock().await;
@@ -5730,7 +5739,16 @@ async fn process_message_inner(
                 .map(|s| s.post_channel_id.clone())
                 .unwrap_or_else(|| msg.channel_id.clone());
             send_error_to_discord(state, &error_channel_id, &card_msg).await;
-            return Ok(TurnOutcome::Failed(sanitized_reason));
+            // sera-5b349807 (Codex P1 PR #1280 follow-up): capture the first
+            // follow-up failure and continue draining instead of returning.
+            // Returning here would strand any additional events queued
+            // behind this failed follow-up (the exact dropped-turn behavior
+            // the main-turn repair just fixed). The captured reason is
+            // surfaced after the loop so the status card still lands on ❌.
+            if follow_up_failure.is_none() {
+                follow_up_failure = Some(sanitized_reason);
+            }
+            continue;
         }
 
         // Render the follow-up reply once: transcript and outbound both see
@@ -5788,7 +5806,14 @@ async fn process_message_inner(
     // sera-89b48a87: surface the original main-turn failure (if any) so
     // the outer pipeline drives the status card to ❌ Failed even though
     // we just drained queued events on the way out.
-    match main_turn_failure {
+    //
+    // sera-5b349807: if the main turn succeeded but a follow-up turn
+    // failed during drain, surface the first follow-up failure so the
+    // status card still lands on ❌ and the outer pipeline emits a
+    // truthful outcome. Main-turn failure takes precedence — it's the
+    // primary signal the operator submitted, and matches the behavior
+    // when only a single message was queued.
+    match main_turn_failure.or(follow_up_failure) {
         Some(reason) => Ok(TurnOutcome::Failed(reason)),
         None => Ok(TurnOutcome::Success),
     }
@@ -7724,6 +7749,37 @@ mod tests {
                 match &self.prev {
                     Some(v) => std::env::set_var("SERA_DISPATCH_MODE", v),
                     None => std::env::remove_var("SERA_DISPATCH_MODE"),
+                }
+            }
+        }
+    }
+
+    /// RAII guard that sets/unsets `SERA_TURN_TIMEOUT_SECS` and restores
+    /// the prior value on drop. Use under `TURN_TIMEOUT_ENV_LOCK` only.
+    /// sera-5b349807: introduced so tests that depend on the default
+    /// turn-timeout window can park the env var safely while other
+    /// tests in the same process pin it to 1 s.
+    struct TurnTimeoutEnvGuard {
+        prev: Option<String>,
+    }
+
+    impl TurnTimeoutEnvGuard {
+        fn unset() -> Self {
+            let prev = std::env::var("SERA_TURN_TIMEOUT_SECS").ok();
+            // SAFETY: callers hold TURN_TIMEOUT_ENV_LOCK so no concurrent
+            // reader can observe a torn value.
+            unsafe { std::env::remove_var("SERA_TURN_TIMEOUT_SECS") };
+            Self { prev }
+        }
+    }
+
+    impl Drop for TurnTimeoutEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: see TurnTimeoutEnvGuard::unset.
+            unsafe {
+                match &self.prev {
+                    Some(v) => std::env::set_var("SERA_TURN_TIMEOUT_SECS", v),
+                    None => std::env::remove_var("SERA_TURN_TIMEOUT_SECS"),
                 }
             }
         }
@@ -10260,6 +10316,123 @@ spec:
         );
     }
 
+    /// sera-5b349807 (Codex P1 PR #1280 follow-up): regression guard for
+    /// the follow-up runtime-failure drain path. Mirrors the main-turn
+    /// drain test but injects a *second* event after the first follow-up
+    /// has been dequeued, so the second event is parked behind a
+    /// follow-up that is itself failing. Pre-fix the follow-up failure
+    /// branch returned immediately and stranded the second event; the
+    /// repair makes the drain loop `continue` after a follow-up failure
+    /// so all queued events are consumed before the lane goes idle.
+    #[tokio::test]
+    async fn process_message_drains_queued_events_after_followup_failure() {
+        let _lock = TURN_TIMEOUT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prior = std::env::var("SERA_TURN_TIMEOUT_SECS").ok();
+        // SAFETY: callers hold TURN_TIMEOUT_ENV_LOCK so no concurrent reader
+        // can observe a torn value.
+        unsafe { std::env::set_var("SERA_TURN_TIMEOUT_SECS", "1") };
+
+        let mut state = test_state_async().await;
+        let hanging_sup: Arc<dyn AgentTurnTransport> =
+            RuntimeChildSupervisor::start_with_factory("sera", || async {
+                StdioHarness::spawn_mock_hang().await
+            })
+            .await
+            .unwrap();
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert("sera".to_string(), hanging_sup);
+
+        let session_key = "discord:sera:ch_drain_after_followup_fail".to_string();
+        let state_for_inject = Arc::clone(&state);
+        let session_key_for_inject = session_key.clone();
+        let injector = tokio::spawn(async move {
+            // First event lands ~250 ms into the main turn (still
+            // hanging). With SERA_TURN_TIMEOUT_SECS=1, the main turn fails
+            // at ~1 s; the drain loop then dequeues this event and starts
+            // a follow-up turn that also hangs.
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let principal = PrincipalRef {
+                id: PrincipalId::new("u_drain_fu"),
+                kind: PrincipalKind::Human,
+            };
+            let event_a = DomainEvent::api_message(
+                "sera",
+                &session_key_for_inject,
+                principal.clone(),
+                "queued during failed main turn",
+            );
+            {
+                let mut lq = state_for_inject.lane_queue.lock().await;
+                let res = lq.enqueue(event_a);
+                assert_eq!(
+                    res,
+                    sera_db::lane_queue::EnqueueResult::Queued,
+                    "first injection must land while the failed main turn \
+                     is still active",
+                );
+            }
+            // Second event lands ~1.5 s in — by then the drain loop has
+            // dequeued event A and started the follow-up (which is also
+            // hanging on the mock and will fail at the 1 s timeout). This
+            // event sits behind the failing follow-up. Pre-fix it would
+            // remain Queued after process_message returns; post-fix the
+            // drain loop continues and consumes it.
+            tokio::time::sleep(std::time::Duration::from_millis(1250)).await;
+            let event_b = DomainEvent::api_message(
+                "sera",
+                &session_key_for_inject,
+                principal,
+                "queued behind failed follow-up",
+            );
+            let mut lq = state_for_inject.lane_queue.lock().await;
+            let res = lq.enqueue(event_b);
+            assert_eq!(
+                res,
+                sera_db::lane_queue::EnqueueResult::Queued,
+                "second injection must land while the failed follow-up is \
+                 still active",
+            );
+        });
+
+        let msg = DiscordMessage {
+            channel_id: "ch_drain_after_followup_fail".into(),
+            user_id: "u_drain_fu".into(),
+            username: "operator".into(),
+            content: "initial".into(),
+            message_id: "msg_drain_after_followup_fail".into(),
+            is_dm: true,
+            mentions_bot: true,
+            is_bot: false,
+            connector_name: Some("discord-main".into()),
+            raw_content: String::new(),
+            mentions: Vec::new(),
+        };
+
+        process_message(&state, &msg)
+            .await
+            .expect("process_message");
+        injector.await.expect("inject task");
+
+        // SAFETY: callers hold TURN_TIMEOUT_ENV_LOCK; restore the
+        // pre-test value.
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("SERA_TURN_TIMEOUT_SECS", v),
+                None => std::env::remove_var("SERA_TURN_TIMEOUT_SECS"),
+            }
+        }
+
+        let lq = state.lane_queue.lock().await;
+        assert!(
+            !lq.has_pending(&session_key),
+            "drain loop must consume events queued behind a failed \
+             follow-up turn; pre-fix the follow-up-failure branch \
+             returned immediately and stranded later queued events",
+        );
+    }
+
     #[tokio::test]
     async fn chat_endpoint_saves_transcript_to_db() {
         let state = test_state_async().await;
@@ -11936,6 +12109,16 @@ spec:
         use serde_json::Value;
         use std::time::{Duration, Instant};
         use tokio::sync::mpsc::Sender;
+
+        // sera-5b349807: hold TURN_TIMEOUT_ENV_LOCK across the whole test
+        // and force-unset SERA_TURN_TIMEOUT_SECS so a concurrent test that
+        // pins the var to 1 s (e.g. `process_message_drains_queued_events_
+        // after_failed_turn`, `execute_steer_drains_until_turn_completed`)
+        // cannot race the chat_handler's env read here. The test's >1.5 s
+        // timing budget would otherwise fail with a "runtime turn timed
+        // out after 1s" frame instead of the expected second delta.
+        let _lock = TURN_TIMEOUT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn_timeout_guard = TurnTimeoutEnvGuard::unset();
 
         struct SlowStreamingTransport;
 

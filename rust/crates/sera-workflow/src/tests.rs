@@ -1525,3 +1525,101 @@ fn change_state_serde_roundtrip() {
         assert_eq!(state, back);
     }
 }
+
+// ---------------------------------------------------------------------------
+// PR closeout watcher — GoalRun / BYOH parity slice
+//
+// See `docs/internal/plans/hermes-parity-goalrun-byoh.md`. Proves that the
+// recurring Hermes-side PR closeout watcher composes cleanly out of types
+// already on hand: a `WorkflowTask` with `AwaitType::GhPr` for bounded
+// authority, `is_gh_pr_ready` for the evaluator, and a
+// `SubagentDelegationObserver` for the evidence trail.
+// ---------------------------------------------------------------------------
+
+use std::sync::{Arc, Mutex};
+
+use crate::coordination::{
+    ConcurrencyPolicy, CoordinationPolicy, Coordinator, FirstSuccess, SubagentDelegationNotice,
+    SubagentDelegationObserver,
+};
+
+#[test]
+fn pr_closeout_watcher_goalrun_emits_evidence_on_terminal() {
+    // ----- Authority envelope: a WorkflowTask bounded to one PR. -----------
+    let now = base_instant();
+    let mut task = make_task(1, vec![]);
+    let pr_id = "pr-42";
+    task.await_type = Some(gh_pr_gate(pr_id));
+
+    // ----- Evidence sink: an observer that records every delegation. -------
+    struct Recorder(Arc<Mutex<Vec<SubagentDelegationNotice>>>);
+    impl SubagentDelegationObserver for Recorder {
+        fn on_delegation(&self, notice: SubagentDelegationNotice) {
+            self.0.lock().unwrap().push(notice);
+        }
+    }
+    let evidence: Arc<Mutex<Vec<SubagentDelegationNotice>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let coord = Coordinator::new(
+        CoordinationPolicy::Sequential,
+        ConcurrencyPolicy::Sequential,
+        Box::new(FirstSuccess),
+    )
+    .with_subagent_observer(Arc::new(Recorder(evidence.clone())));
+
+    // ----- Evaluator stage 1: PR is still Open → task must not be ready. ---
+    let tasks = vec![task.clone()];
+    let mut lookup = MapGhPrLookup::new();
+    lookup.insert(pr_id, GhPrState::Open);
+    let ctx = ctx_with_gh_pr(&lookup);
+    let pending = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(
+        !pending.iter().any(|r| r.id == task.id),
+        "PR is still Open — closeout GoalRun must remain blocked"
+    );
+
+    // ----- Stop condition path A: PR is Merged → task becomes ready. ------
+    lookup.insert(pr_id, GhPrState::Merged);
+    let ctx = ctx_with_gh_pr(&lookup);
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(
+        ready.iter().any(|r| r.id == task.id),
+        "Merged is terminal — closeout GoalRun must wake"
+    );
+
+    // ----- Closeout: simulate the BYOH subagent dispatch. -----------------
+    //
+    // The real wiring is: the runtime's `delegate-task` agent-tool emits a
+    // `DelegationNotice`, a `CoordinatorHook` impl re-packs it into a
+    // `SubagentDelegationNotice`, and forwards it through this observer
+    // seam. The test stands in for that hook by publishing directly.
+    coord.publish_subagent_notice(SubagentDelegationNotice {
+        caller: "workflow.pr-closeout-watcher".into(),
+        target: "byoh.merge-summariser".into(),
+        tokens_used: 1024,
+    });
+
+    let captured = evidence.lock().unwrap().clone();
+    assert_eq!(
+        captured.len(),
+        1,
+        "every closeout dispatch must produce exactly one evidence notice"
+    );
+    assert_eq!(captured[0].caller, "workflow.pr-closeout-watcher");
+    assert_eq!(captured[0].target, "byoh.merge-summariser");
+    assert_eq!(captured[0].tokens_used, 1024);
+
+    // ----- Stop condition path B: PR is Closed without merge → also ready.
+    //
+    // The handler is expected to branch on the concrete `GhPrState` and
+    // pick repair / escalate; the GoalRun must not strand on close-without-
+    // merge.
+    let mut lookup = MapGhPrLookup::new();
+    lookup.insert(pr_id, GhPrState::Closed);
+    let ctx = ctx_with_gh_pr(&lookup);
+    let ready = ready_tasks_with_context(&tasks, now, &ctx);
+    assert!(
+        ready.iter().any(|r| r.id == task.id),
+        "Closed-without-merge is terminal — closeout GoalRun must still wake"
+    );
+}

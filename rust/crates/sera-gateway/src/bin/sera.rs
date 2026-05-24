@@ -5422,7 +5422,14 @@ async fn process_message_inner(
     // operator-visible card with a session/log correlation hint, complete
     // the lane, and return `TurnOutcome::Failed(reason)` so the outer
     // pipeline drives the status card to ❌ instead of ✅ Done.
-    if let Some(reason) = result.failure.as_ref() {
+    //
+    // sera-89b48a87 (Codex P1 PR #1280): capture the failure into a local
+    // variable instead of returning immediately. Falling through lets the
+    // shared drain loop below process queued user events that arrived
+    // while this failed run was in flight — otherwise they remain
+    // buffered until a *new* inbound message re-triggers the lane and
+    // appear as silently dropped turns during a provider/runtime outage.
+    let main_turn_failure: Option<String> = if let Some(reason) = result.failure.as_ref() {
         tracing::error!(
             session_id = %session.id,
             session_key = %session_key,
@@ -5447,8 +5454,19 @@ async fn process_message_inner(
             .map(|s| s.post_channel_id.clone())
             .unwrap_or_else(|| msg.channel_id.clone());
         send_error_to_discord(state, &error_channel_id, &card_msg).await;
-        return Ok(TurnOutcome::Failed(sanitized_reason));
-    }
+        Some(sanitized_reason)
+    } else {
+        None
+    };
+
+    // Success-path body: render → persist → post_turn hook → send reply.
+    // Skipped when the main turn failed (sera-89b48a87) so the drain loop
+    // below still gets a chance to process queued events; the per-step
+    // early returns inside the block (post_turn `Rejected`) are preserved.
+    'success_path: {
+        if main_turn_failure.is_some() {
+            break 'success_path;
+        }
 
     // Render the LLM reply so allowlisted `@<handle>` tokens become Discord
     // `<@id>` mention tags. Reverse peer-mention handoff (sera-yeg.4):
@@ -5550,10 +5568,15 @@ async fn process_message_inner(
     } else {
         tracing::warn!("No Discord connector available to send reply");
     }
+    } // end of 'success_path
 
     // ── Drain pending messages for this session ──
     // After completing a turn, check if more messages arrived while we were busy.
     // Process them sequentially (per-session serialization via lane queue).
+    // sera-89b48a87 (Codex P1 PR #1280): this loop now runs even when the
+    // main turn returned a structured `failure`, so queued events that
+    // arrived while the failed run was in flight get processed instead of
+    // being stranded until the next inbound message.
     loop {
         let has_pending = {
             let lq = state.lane_queue.lock().await;
@@ -5762,7 +5785,13 @@ async fn process_message_inner(
         }
     }
 
-    Ok(TurnOutcome::Success)
+    // sera-89b48a87: surface the original main-turn failure (if any) so
+    // the outer pipeline drives the status card to ❌ Failed even though
+    // we just drained queued events on the way out.
+    match main_turn_failure {
+        Some(reason) => Ok(TurnOutcome::Failed(reason)),
+        None => Ok(TurnOutcome::Success),
+    }
 }
 
 /// Start a background task that periodically triggers the Discord typing
@@ -10129,6 +10158,106 @@ spec:
         let details: serde_json::Value =
             serde_json::from_str(ignored[0].details.as_deref().expect("details")).unwrap();
         assert_eq!(details["reason"], "ignored_unrelated_bot");
+    }
+
+    /// sera-89b48a87 (Codex P1 PR #1280) regression guard: when the
+    /// main Discord turn returns a structured `failure` (transport
+    /// timeout in this fixture), the drain loop must still run so user
+    /// events that arrived while the failed run was in flight are
+    /// processed instead of being stranded in the lane until a *new*
+    /// inbound message re-triggers it.
+    ///
+    /// Setup: replace the always-good mock harness with `spawn_mock_hang`
+    /// and pin `SERA_TURN_TIMEOUT_SECS=1` so every `execute_turn`
+    /// resolves as a 1 s timeout failure. A background task injects a
+    /// second event into the lane queue ~250 ms into the main turn; the
+    /// drain loop must dequeue and consume it, leaving the lane empty
+    /// when `process_message` returns. Pre-repair, the failure branch
+    /// early-returned `TurnOutcome::Failed` before reaching the drain
+    /// loop and the injected event stayed pending — observable as
+    /// `has_pending(session_key)` returning `true`.
+    #[tokio::test]
+    async fn process_message_drains_queued_events_after_failed_turn() {
+        let _lock = TURN_TIMEOUT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prior = std::env::var("SERA_TURN_TIMEOUT_SECS").ok();
+        // SAFETY: callers hold TURN_TIMEOUT_ENV_LOCK so no concurrent reader
+        // can observe a torn value.
+        unsafe { std::env::set_var("SERA_TURN_TIMEOUT_SECS", "1") };
+
+        let mut state = test_state_async().await;
+        let hanging_sup: Arc<dyn AgentTurnTransport> =
+            RuntimeChildSupervisor::start_with_factory("sera", || async {
+                StdioHarness::spawn_mock_hang().await
+            })
+            .await
+            .unwrap();
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert("sera".to_string(), hanging_sup);
+
+        let session_key = "discord:sera:ch_drain_after_fail".to_string();
+        let state_for_inject = Arc::clone(&state);
+        let session_key_for_inject = session_key.clone();
+        let injector = tokio::spawn(async move {
+            // Wait briefly so process_message has admitted the inbound
+            // message and started the in-flight (hung) turn; the next
+            // enqueue then lands as Queued behind the active run.
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let principal = PrincipalRef {
+                id: PrincipalId::new("u_drain"),
+                kind: PrincipalKind::Human,
+            };
+            let event = DomainEvent::api_message(
+                "sera",
+                &session_key_for_inject,
+                principal,
+                "queued during failed turn",
+            );
+            let mut lq = state_for_inject.lane_queue.lock().await;
+            let res = lq.enqueue(event);
+            assert_eq!(
+                res,
+                sera_db::lane_queue::EnqueueResult::Queued,
+                "injection must land while the failed run is still active",
+            );
+        });
+
+        let msg = DiscordMessage {
+            channel_id: "ch_drain_after_fail".into(),
+            user_id: "u_drain".into(),
+            username: "operator".into(),
+            content: "initial".into(),
+            message_id: "msg_drain_after_fail".into(),
+            is_dm: true,
+            mentions_bot: true,
+            is_bot: false,
+            connector_name: Some("discord-main".into()),
+            raw_content: String::new(),
+            mentions: Vec::new(),
+        };
+
+        process_message(&state, &msg)
+            .await
+            .expect("process_message");
+        injector.await.expect("inject task");
+
+        // SAFETY: callers hold TURN_TIMEOUT_ENV_LOCK; restore the
+        // pre-test value.
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("SERA_TURN_TIMEOUT_SECS", v),
+                None => std::env::remove_var("SERA_TURN_TIMEOUT_SECS"),
+            }
+        }
+
+        let lq = state.lane_queue.lock().await;
+        assert!(
+            !lq.has_pending(&session_key),
+            "drain loop must consume queued events even when the main \
+             turn failed; pending events would otherwise sit until the \
+             next inbound message re-triggers the lane",
+        );
     }
 
     #[tokio::test]

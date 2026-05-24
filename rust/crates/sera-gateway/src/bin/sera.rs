@@ -614,6 +614,22 @@ impl StdioHarness {
                 }
                 "tool_call_end" => {
                     if let Some(msg) = event.get("msg") {
+                        // sera-tqzd / sera-q66q: the runtime sets `status` /
+                        // `error_class` on `EventMsg::ToolCallEnd` when
+                        // dispatch fails. Default to `Success` so older
+                        // runtimes (which never emit the fields) still
+                        // produce sensible audit rows.
+                        let status = match msg
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                        {
+                            Some("failure") => sera_types::envelope::ToolCallStatus::Failure,
+                            _ => sera_types::envelope::ToolCallStatus::Success,
+                        };
+                        let error_class = msg
+                            .get("error_class")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
                         result.tool_events.push(ToolEvent::End {
                             call_id: msg
                                 .get("call_id")
@@ -625,6 +641,8 @@ impl StdioHarness {
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string(),
+                            status,
+                            error_class,
                         });
                     }
                 }
@@ -4419,6 +4437,19 @@ async fn execute_turn(
                     capability_registry,
                 )
                 .await;
+                // sera-tqzd / sera-q66q: append one OCSF v1.7 API Activity
+                // audit entry per tool execution End event so success +
+                // failure are equally observable in the immutable ledger.
+                // Runs after `enforce_tool_events` so a runtime-blocked
+                // call (rewritten to `[sera-policy] denied …`) still
+                // produces a paired tool-execution failure row alongside
+                // the upstream policy-denial row from the Begin path.
+                emit_tool_execution_audit(
+                    agent_name,
+                    session_key,
+                    &filtered_events,
+                )
+                .await;
                 MvsTurnResult {
                     reply: events.response,
                     tool_events: filtered_events,
@@ -4502,6 +4533,175 @@ async fn enforce_tool_events(
         }
     }
     events
+}
+
+/// OCSF v1.7.0 class_uid for tool-execution audit entries (`sera-q66q`).
+///
+/// `3006` is "API Activity" — the closest OCSF class for "a tool / API call
+/// executed and reported a status". Pairs `activity_id=4` (Execute) with
+/// `status_id=1`/`status_id=2` (Success/Failure) so dashboards can split
+/// success and failure without parsing the human-readable detail.
+const TOOL_EXECUTION_OCSF_CLASS_UID: u32 = 3006;
+
+/// Cap on the per-row tool-result snippet stored in the audit payload. The
+/// hash-chain stores the entire payload as the body of a SQL row plus the
+/// SHA-256 — keeping the snippet short keeps row size bounded for high-volume
+/// tool loops while still leaving enough context to recognise the failure
+/// shape during closeout.
+const TOOL_EXEC_AUDIT_CONTENT_LIMIT: usize = 512;
+
+/// Build the OCSF payload for one tool execution. Pure (no I/O) so unit
+/// tests can assert the shape without touching the hash-chain backend
+/// (`sera-tqzd` / `sera-q66q` parity slice).
+///
+/// `content_snippet` is truncated to [`TOOL_EXEC_AUDIT_CONTENT_LIMIT`] so a
+/// runaway tool reply cannot bloat the audit ledger. The full body remains
+/// in the session transcript via `persist_tool_events`.
+fn make_tool_execution_audit_payload(
+    agent_name: &str,
+    session_key: &str,
+    call_id: &str,
+    tool_name: &str,
+    status: sera_types::envelope::ToolCallStatus,
+    error_class: Option<&str>,
+    content: &str,
+) -> serde_json::Value {
+    use sera_types::envelope::ToolCallStatus;
+
+    let status_id = match status {
+        ToolCallStatus::Success => 1,  // OCSF "Success"
+        ToolCallStatus::Failure => 2,  // OCSF "Failure"
+    };
+    let severity_id = match status {
+        ToolCallStatus::Success => 1,  // Informational
+        ToolCallStatus::Failure => 3,  // Medium — operator-actionable
+    };
+    // Truncate on a char boundary so a multi-byte UTF-8 codepoint (emoji,
+    // CJK, etc.) never panics audit-payload construction. Walks back from
+    // the byte limit until the prefix is a valid &str slice, then appends
+    // the truncation marker.
+    let snippet: String = if content.len() > TOOL_EXEC_AUDIT_CONTENT_LIMIT {
+        let mut cut = TOOL_EXEC_AUDIT_CONTENT_LIMIT;
+        while cut > 0 && !content.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let mut s = String::with_capacity(cut + 16);
+        s.push_str(&content[..cut]);
+        s.push_str("…[truncated]");
+        s
+    } else {
+        content.to_string()
+    };
+    serde_json::json!({
+        "activity_id": 4, // OCSF API Activity: "Execute"
+        "action_id": status.as_str(),
+        "category_uid": 3, // Application Activity
+        "class_uid": TOOL_EXECUTION_OCSF_CLASS_UID,
+        "severity_id": severity_id,
+        "status_id": status_id,
+        "status": match status {
+            ToolCallStatus::Success => "Success",
+            ToolCallStatus::Failure => "Failure",
+        },
+        "status_detail": error_class.unwrap_or(""),
+        "actor": { "user": { "name": agent_name } },
+        "api": {
+            "operation": tool_name,
+            "request": { "uid": call_id },
+        },
+        "resource": {
+            "name": tool_name,
+            "type": "tool",
+            "uid": session_key,
+        },
+        "unmapped": {
+            "result_snippet": snippet,
+            "error_class": error_class,
+        },
+    })
+}
+
+/// Emit one OCSF v1.7.0 API Activity (class_uid=3006) audit entry per
+/// `ToolEvent::End` observed for this turn (`sera-q66q` immutable ledger +
+/// `sera-tqzd` failure visibility).
+///
+/// Begin events provide the `tool` name that pairs with each End's
+/// `call_id`. If the runtime emits an End without a matching Begin
+/// (defensive guard against truncated streams), the entry still records
+/// `tool="(unknown)"` so the failure remains visible — silence is the
+/// failure mode this bead exists to prevent.
+///
+/// Best-effort: an uninitialised audit backend logs a debug line and
+/// continues; the gateway never fails a turn because of an audit-sink
+/// outage. The hash-chain is computed locally (genesis `prev_hash`) and
+/// the backend reorders/links entries on append.
+async fn emit_tool_execution_audit(
+    agent_name: &str,
+    session_key: &str,
+    events: &[ToolEvent],
+) {
+    use sera_telemetry::audit::{AuditEntry, audit_append};
+
+    let mut tool_for_call: std::collections::HashMap<&str, &str> =
+        std::collections::HashMap::new();
+    for event in events {
+        if let ToolEvent::Begin { call_id, tool, .. } = event {
+            tool_for_call.insert(call_id.as_str(), tool.as_str());
+        }
+    }
+
+    for event in events {
+        if let ToolEvent::End {
+            call_id,
+            content,
+            status,
+            error_class,
+        } = event
+        {
+            let tool_name = tool_for_call
+                .get(call_id.as_str())
+                .copied()
+                .unwrap_or("(unknown)");
+            let payload = make_tool_execution_audit_payload(
+                agent_name,
+                session_key,
+                call_id,
+                tool_name,
+                *status,
+                error_class.as_deref(),
+                content,
+            );
+            let this_hash = AuditEntry::compute_hash(
+                TOOL_EXECUTION_OCSF_CLASS_UID,
+                &payload,
+                &[0u8; 32],
+            );
+            let entry = AuditEntry {
+                ocsf_class_uid: TOOL_EXECUTION_OCSF_CLASS_UID,
+                payload,
+                prev_hash: [0u8; 32],
+                this_hash,
+                signature: None,
+            };
+            if let Err(e) = audit_append(entry).await {
+                tracing::debug!(
+                    error = %e,
+                    tool = %tool_name,
+                    call_id = %call_id,
+                    "audit backend unavailable for tool execution"
+                );
+            } else if *status == sera_types::envelope::ToolCallStatus::Failure {
+                tracing::warn!(
+                    agent = %agent_name,
+                    session_key = %session_key,
+                    tool = %tool_name,
+                    call_id = %call_id,
+                    error_class = error_class.as_deref().unwrap_or(""),
+                    "Tool execution recorded as failure (sera-tqzd)"
+                );
+            }
+        }
+    }
 }
 
 /// Emit an OCSF v1.7.0 Policy Activity (class_uid=6003, action_id=blocked)
@@ -4770,7 +4970,12 @@ fn persist_tool_events(db: &sera_db::sqlite::SqliteDb, session_id: &str, events:
                     None,
                 );
             }
-            ToolEvent::End { call_id, content } => {
+            ToolEvent::End {
+                call_id,
+                content,
+                status: _,
+                error_class: _,
+            } => {
                 let _ =
                     db.append_transcript(session_id, "tool", Some(content), None, Some(call_id));
             }
@@ -8797,6 +9002,198 @@ mod tests {
             "agent:sera-b",
         );
         assert_ne!(e1.this_hash, e2.this_hash);
+    }
+
+    // ── Tool-execution audit payload (sera-tqzd / sera-q66q) ───────────────
+    //
+    // Same testing posture as the external-agent-register helpers above:
+    // the pure builder is unit-tested, the async emission is best-effort
+    // against the global set-once backend and is not exercised here.
+
+    #[test]
+    fn tool_execution_audit_payload_success_shape() {
+        // Success path: status_id=1, severity=Informational, action_id="success".
+        // The OCSF envelope must carry the API Activity class so dashboards
+        // can split tool-call activity from policy denials.
+        let payload = make_tool_execution_audit_payload(
+            "agent-test",
+            "sess-123",
+            "call_ok_1",
+            "file-list",
+            sera_types::envelope::ToolCallStatus::Success,
+            None,
+            "12 entries",
+        );
+
+        assert_eq!(payload["class_uid"], TOOL_EXECUTION_OCSF_CLASS_UID);
+        assert_eq!(payload["class_uid"], 3006);
+        assert_eq!(payload["activity_id"], 4); // Execute
+        assert_eq!(payload["category_uid"], 3); // Application Activity
+        assert_eq!(payload["status_id"], 1);
+        assert_eq!(payload["status"], "Success");
+        assert_eq!(payload["severity_id"], 1);
+        assert_eq!(payload["action_id"], "success");
+        assert_eq!(payload["actor"]["user"]["name"], "agent-test");
+        assert_eq!(payload["api"]["operation"], "file-list");
+        assert_eq!(payload["api"]["request"]["uid"], "call_ok_1");
+        assert_eq!(payload["resource"]["name"], "file-list");
+        assert_eq!(payload["resource"]["type"], "tool");
+        assert_eq!(payload["resource"]["uid"], "sess-123");
+        assert_eq!(payload["status_detail"], "");
+        assert!(payload["unmapped"]["error_class"].is_null());
+        assert_eq!(payload["unmapped"]["result_snippet"], "12 entries");
+    }
+
+    #[test]
+    fn tool_execution_audit_payload_failure_carries_error_class() {
+        // Failure path: status_id=2, severity=Medium, action_id="failure"
+        // and the error_class string lands both in status_detail (operator
+        // surface) and in unmapped.error_class (machine surface).
+        let payload = make_tool_execution_audit_payload(
+            "agent-test",
+            "sess-fail-1",
+            "call_fail_1",
+            "shell-exec",
+            sera_types::envelope::ToolCallStatus::Failure,
+            Some("policy_denied"),
+            "[tool error: policy denied tool execution: denied for test]",
+        );
+
+        assert_eq!(payload["status_id"], 2);
+        assert_eq!(payload["status"], "Failure");
+        assert_eq!(payload["severity_id"], 3);
+        assert_eq!(payload["action_id"], "failure");
+        assert_eq!(payload["status_detail"], "policy_denied");
+        assert_eq!(payload["unmapped"]["error_class"], "policy_denied");
+        let snippet = payload["unmapped"]["result_snippet"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            snippet.contains("policy denied"),
+            "snippet must preserve the failure detail: {snippet}",
+        );
+    }
+
+    #[test]
+    fn tool_execution_audit_payload_truncates_long_snippet() {
+        // Bound the per-row body so a runaway tool reply cannot bloat the
+        // hash-chained ledger. The full content remains in the session
+        // transcript via `persist_tool_events`.
+        let big = "x".repeat(TOOL_EXEC_AUDIT_CONTENT_LIMIT + 100);
+        let payload = make_tool_execution_audit_payload(
+            "agent-test",
+            "sess-trunc",
+            "call_trunc",
+            "file-read",
+            sera_types::envelope::ToolCallStatus::Success,
+            None,
+            &big,
+        );
+        let snippet = payload["unmapped"]["result_snippet"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            snippet.ends_with("…[truncated]"),
+            "oversized snippet must be marked truncated: ends with {:?}",
+            &snippet[snippet.len().saturating_sub(20)..],
+        );
+        // The truncated body is bounded by the limit + the marker suffix.
+        assert!(snippet.len() <= TOOL_EXEC_AUDIT_CONTENT_LIMIT + 32);
+    }
+
+    #[test]
+    fn tool_execution_audit_payload_truncates_on_char_boundary() {
+        // Codex P1 review on PR #1284: a naive `content[..LIMIT]` truncation
+        // panics if the limit lands in the middle of a multi-byte UTF-8
+        // codepoint (emoji, CJK, accented Latin). Build a snippet that
+        // would have landed inside a 4-byte emoji at the byte limit and
+        // assert payload construction returns a valid UTF-8 snippet.
+        let pad = "a".repeat(TOOL_EXEC_AUDIT_CONTENT_LIMIT - 2);
+        let big = format!("{pad}🦀🦀🦀🦀");
+        // The 512th byte falls strictly inside a 🦀 (U+1F980, 4 UTF-8 bytes),
+        // so the byte-index slice would panic without the boundary walk.
+        assert!(!big.is_char_boundary(TOOL_EXEC_AUDIT_CONTENT_LIMIT));
+
+        let payload = make_tool_execution_audit_payload(
+            "agent-test",
+            "sess-utf8",
+            "call_utf8",
+            "file-read",
+            sera_types::envelope::ToolCallStatus::Success,
+            None,
+            &big,
+        );
+        let snippet = payload["unmapped"]["result_snippet"]
+            .as_str()
+            .expect("snippet must serialize");
+        assert!(
+            snippet.ends_with("…[truncated]"),
+            "boundary-safe truncation must still mark output: {snippet}",
+        );
+        // The truncated prefix must be valid UTF-8 — implicitly true because
+        // we built a String, but assert no zero-width replacement happened:
+        // the snippet must start with the original pad characters.
+        assert!(snippet.starts_with("aaaa"));
+    }
+
+    #[test]
+    fn tool_execution_audit_payload_hash_is_well_formed() {
+        use sera_telemetry::audit::AuditEntry;
+
+        let payload = make_tool_execution_audit_payload(
+            "agent-test",
+            "sess-hash",
+            "call_hash",
+            "file-read",
+            sera_types::envelope::ToolCallStatus::Failure,
+            Some("timeout"),
+            "[tool error: tool execution timed out]",
+        );
+        // Genesis-style: prev_hash all-zeros, this_hash deterministic over the
+        // payload. The backend re-links to the chain tail on append, but the
+        // local computation must still be byte-stable for the M1 contract.
+        let this_hash = AuditEntry::compute_hash(
+            TOOL_EXECUTION_OCSF_CLASS_UID,
+            &payload,
+            &[0u8; 32],
+        );
+        let again = AuditEntry::compute_hash(
+            TOOL_EXECUTION_OCSF_CLASS_UID,
+            &payload,
+            &[0u8; 32],
+        );
+        assert_eq!(this_hash, again);
+        assert_ne!(this_hash, [0u8; 32]);
+    }
+
+    #[test]
+    fn tool_execution_audit_payload_distinguishes_status() {
+        // The success and failure variants over otherwise-identical inputs
+        // must differ in the hash so dashboards / closeout audits can't
+        // accidentally collapse them. Catches a future regression where
+        // status flips to a default that no longer reaches the payload.
+        let common = ("agent-test", "sess-x", "call_x", "tool-x", "result body");
+        let ok = make_tool_execution_audit_payload(
+            common.0,
+            common.1,
+            common.2,
+            common.3,
+            sera_types::envelope::ToolCallStatus::Success,
+            None,
+            common.4,
+        );
+        let bad = make_tool_execution_audit_payload(
+            common.0,
+            common.1,
+            common.2,
+            common.3,
+            sera_types::envelope::ToolCallStatus::Failure,
+            Some("execution_failed"),
+            common.4,
+        );
+        assert_ne!(ok["status_id"], bad["status_id"]);
+        assert_ne!(ok["severity_id"], bad["severity_id"]);
+        assert_ne!(ok["action_id"], bad["action_id"]);
     }
 
     #[tokio::test]

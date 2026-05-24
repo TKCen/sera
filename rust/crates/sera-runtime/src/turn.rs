@@ -559,10 +559,18 @@ pub async fn act(
                         let tool_call_id = tc.get("id")
                             .and_then(|id| id.as_str())
                             .unwrap_or("unknown");
+                        // sera-tqzd: stamp the structured failure markers
+                        // alongside the human-readable `content` string so
+                        // the downstream wire path (`stdio::emit_tool_events_from_transcript`)
+                        // can lift them onto `EventMsg::ToolCallEnd::{status,error_class}`
+                        // without re-parsing the error text. The marker keys
+                        // are documented on `sera_types::envelope`.
                         results.push(serde_json::json!({
                             "tool_call_id": tool_call_id,
                             "role": "tool",
                             "content": format!("[tool error: {e}]"),
+                            sera_types::envelope::TOOL_STATUS_MARKER: "failure",
+                            sera_types::envelope::TOOL_ERROR_CLASS_MARKER: e.class_name(),
                         }));
                     }
                 }
@@ -1891,6 +1899,170 @@ mod tests {
         let result = act(&mut ctx, &think_result, None).await;
         match result {
             ActResult::ToolResults(_) => {} // Expected — no approval needed
+            other => panic!("expected ToolResults, got {:?}", other),
+        }
+    }
+
+    // ── sera-tqzd: failure markers on tool result messages ───────────────────
+
+    /// Dispatcher that always returns a fixed `ToolError` variant. Used to
+    /// prove that `act()` stamps `_sera_status` + `_sera_error_class` onto
+    /// the tool result message when dispatch fails, without depending on the
+    /// real tool registry.
+    struct AlwaysFailDispatcher {
+        err: ToolError,
+    }
+
+    #[async_trait]
+    impl ToolDispatcher for AlwaysFailDispatcher {
+        async fn dispatch(
+            &self,
+            _tool_call: &serde_json::Value,
+            _ctx: &ToolContext,
+        ) -> Result<serde_json::Value, ToolError> {
+            Err(self.err.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn act_marks_dispatch_failure_with_status_and_error_class() {
+        // sera-tqzd: when the dispatcher returns an error, the tool result
+        // message put into `ActResult::ToolResults` must carry the
+        // `_sera_status: "failure"` / `_sera_error_class: "<variant>"`
+        // markers so the runtime's NDJSON emitter can lift them onto the
+        // wire `EventMsg::ToolCallEnd`. The human-readable `content` keeps
+        // its `[tool error: …]` shape so the LLM still sees the message.
+        let mut ctx = make_turn_ctx(vec![]);
+        let dispatcher = AlwaysFailDispatcher {
+            err: ToolError::PolicyDenied("denied for test".to_string()),
+        };
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "trying"}),
+            tool_calls: vec![serde_json::json!({
+                "id": "call_fail_1",
+                "type": "function",
+                "function": { "name": "shell-exec", "arguments": "{}" }
+            })],
+            tokens: TokenUsage::default(),
+            plan: None,
+        };
+        let result = act(&mut ctx, &think_result, Some(&dispatcher)).await;
+        match result {
+            ActResult::ToolResults(results) => {
+                assert_eq!(results.len(), 1);
+                let r = &results[0];
+                assert_eq!(r.get("tool_call_id").and_then(|v| v.as_str()), Some("call_fail_1"));
+                assert_eq!(r.get("role").and_then(|v| v.as_str()), Some("tool"));
+                let content = r.get("content").and_then(|v| v.as_str()).unwrap_or_default();
+                assert!(
+                    content.starts_with("[tool error: "),
+                    "content must keep the human-readable prefix: {content}",
+                );
+                assert_eq!(
+                    r.get(sera_types::envelope::TOOL_STATUS_MARKER)
+                        .and_then(|v| v.as_str()),
+                    Some("failure"),
+                    "_sera_status marker must record failure: {r}",
+                );
+                assert_eq!(
+                    r.get(sera_types::envelope::TOOL_ERROR_CLASS_MARKER)
+                        .and_then(|v| v.as_str()),
+                    Some("policy_denied"),
+                    "_sera_error_class must record the canonical ToolError variant: {r}",
+                );
+            }
+            other => panic!("expected ToolResults, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn act_propagates_error_class_for_each_variant() {
+        // Smoke that every ToolError variant maps to a stable class name in
+        // the failure marker — guards against future variants being silently
+        // bucketed under a wrong class by the dispatcher path.
+        let cases: &[(ToolError, &str)] = &[
+            (ToolError::NotFound("x".into()), "not_found"),
+            (ToolError::Unauthorized("x".into()), "unauthorized"),
+            (ToolError::ExecutionFailed("x".into()), "execution_failed"),
+            (ToolError::Timeout, "timeout"),
+            (ToolError::InvalidInput("x".into()), "invalid_input"),
+            (ToolError::PolicyDenied("x".into()), "policy_denied"),
+            (ToolError::InvalidArguments("x".into()), "invalid_arguments"),
+            (
+                ToolError::AbortedByHook {
+                    reason: "x".into(),
+                },
+                "aborted_by_hook",
+            ),
+            (
+                ToolError::PermissionDenied {
+                    reason: "x".into(),
+                },
+                "permission_denied",
+            ),
+        ];
+        for (err, expected_class) in cases {
+            assert_eq!(
+                err.class_name(),
+                *expected_class,
+                "ToolError::class_name() must map {:?} → {}",
+                err,
+                expected_class,
+            );
+
+            let mut ctx = make_turn_ctx(vec![]);
+            let dispatcher = AlwaysFailDispatcher { err: err.clone() };
+            let think_result = ThinkResult {
+                response: serde_json::json!({"role": "assistant", "content": "trying"}),
+                tool_calls: vec![serde_json::json!({
+                    "id": "call_variant",
+                    "type": "function",
+                    "function": { "name": "any-tool", "arguments": "{}" }
+                })],
+                tokens: TokenUsage::default(),
+                plan: None,
+            };
+            let result = act(&mut ctx, &think_result, Some(&dispatcher)).await;
+            match result {
+                ActResult::ToolResults(results) => {
+                    assert_eq!(
+                        results[0]
+                            .get(sera_types::envelope::TOOL_ERROR_CLASS_MARKER)
+                            .and_then(|v| v.as_str()),
+                        Some(*expected_class),
+                    );
+                }
+                other => panic!("expected ToolResults for {:?}, got {:?}", err, other),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn act_does_not_mark_success_path() {
+        // The success path must not carry the failure markers — the wire
+        // ToolCallEnd defaults to Success, so adding markers here would be a
+        // soft regression.
+        let mut ctx = make_turn_ctx(vec![]);
+        let dispatcher = StaticRiskDispatcher::new(&[
+            ("file-list", sera_types::tool::RiskLevel::Read),
+        ]);
+        let think_result = ThinkResult {
+            response: serde_json::json!({"role": "assistant", "content": "listing"}),
+            tool_calls: vec![serde_json::json!({
+                "id": "call_ok_1",
+                "type": "function",
+                "function": { "name": "file-list", "arguments": "{}" }
+            })],
+            tokens: TokenUsage::default(),
+            plan: None,
+        };
+        let result = act(&mut ctx, &think_result, Some(&dispatcher)).await;
+        match result {
+            ActResult::ToolResults(results) => {
+                let r = &results[0];
+                assert!(r.get(sera_types::envelope::TOOL_STATUS_MARKER).is_none());
+                assert!(r.get(sera_types::envelope::TOOL_ERROR_CLASS_MARKER).is_none());
+            }
             other => panic!("expected ToolResults, got {:?}", other),
         }
     }

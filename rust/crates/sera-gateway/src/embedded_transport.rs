@@ -42,6 +42,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use sera_runtime::default_runtime::DefaultRuntime;
+use sera_types::envelope::read_tool_status_markers;
 use sera_types::principal::Principal;
 use sera_types::runtime::{AgentRuntime, TurnContext, TurnOutcome};
 use sera_types::tool::ToolDefinition;
@@ -387,7 +388,13 @@ fn project_tool_events(transcript: &[Value]) -> Vec<ToolEvent> {
                 .and_then(|c| c.as_str())
                 .unwrap_or("")
                 .to_string();
-            events.push(ToolEvent::End { call_id, content });
+            let (status, error_class) = read_tool_status_markers(msg);
+            events.push(ToolEvent::End {
+                call_id,
+                content,
+                status,
+                error_class,
+            });
         }
     }
     events
@@ -406,6 +413,7 @@ mod tests {
     use super::*;
     use sera_runtime::context_engine::pipeline::ContextPipeline;
     use sera_runtime::turn::{LlmProvider, ThinkError, ThinkResult};
+    use sera_types::envelope::ToolCallStatus;
 
     /// Minimal `LlmProvider` that returns a fixed assistant reply with a
     /// canned token count. Used to exercise the embedded transport without
@@ -746,9 +754,11 @@ mod tests {
             other => panic!("expected Begin, got {other:?}"),
         }
         match &events[1] {
-            ToolEvent::End { call_id, content } => {
+            ToolEvent::End { call_id, content, status, error_class } => {
                 assert_eq!(call_id, "call_1");
                 assert_eq!(content, "ok");
+                assert_eq!(*status, ToolCallStatus::Success);
+                assert!(error_class.is_none());
             }
             other => panic!("expected End, got {other:?}"),
         }

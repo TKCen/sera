@@ -365,6 +365,12 @@ async fn emit_tool_events_from_transcript(
                 .and_then(|c| c.as_str())
                 .unwrap_or("")
                 .to_string();
+            // sera-tqzd: lift the structured failure marker the `act()` step
+            // stamps onto a failed tool result so the wire `ToolCallEnd`
+            // carries a typed `status` + `error_class`. Backward-compatible:
+            // a transcript without the markers stays Success/None.
+            let (status, error_class) =
+                sera_types::envelope::read_tool_status_markers(msg);
             emit(
                 stdout,
                 Event {
@@ -374,6 +380,8 @@ async fn emit_tool_events_from_transcript(
                         turn_id,
                         call_id,
                         result: result_content,
+                        status,
+                        error_class,
                     },
                     trace: Default::default(),
                     timestamp: chrono::Utc::now(),

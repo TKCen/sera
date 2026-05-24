@@ -4186,6 +4186,72 @@ fn build_self_introspection_snapshot(
     )
 }
 
+/// Replay persisted transcript rows into the outbound `messages` array.
+///
+/// Enforces the MiniMax-compatible transcript invariant (sera-xbmz):
+/// every `role=tool` row must reference a `tool_call_id` that was emitted
+/// by a preceding `role=assistant` row's `tool_calls[].id`, otherwise the
+/// row is dropped with a warning rather than poisoning the provider with
+/// a request that returns `invalid params, tool result's tool id() not
+/// found (2013)`. The pairing window is the full transcript slice we
+/// were handed — `persist_tool_events` writes Begin/End sequentially so
+/// in steady state the set drains cleanly; the guard is defence in depth
+/// for crashes, partial writes, or legacy rows.
+fn append_transcript_history_messages(
+    transcript: &[sera_db::sqlite::TranscriptRow],
+    messages: &mut Vec<serde_json::Value>,
+) {
+    let mut pending_tool_call_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for row in transcript {
+        if row.role == "tool" {
+            let Some(tc_id) = row.tool_call_id.as_deref() else {
+                tracing::warn!(
+                    transcript_row = row.id,
+                    session_id = %row.session_id,
+                    "dropping tool transcript row with no tool_call_id (sera-xbmz invariant)"
+                );
+                continue;
+            };
+            if !pending_tool_call_ids.remove(tc_id) {
+                tracing::warn!(
+                    transcript_row = row.id,
+                    session_id = %row.session_id,
+                    tool_call_id = %tc_id,
+                    "dropping orphan tool transcript row — no preceding assistant.tool_calls[].id match (sera-xbmz)"
+                );
+                continue;
+            }
+            messages.push(serde_json::json!({
+                "role": "tool",
+                "content": row.content.as_deref().unwrap_or(""),
+                "tool_call_id": tc_id,
+            }));
+        } else if let Some(tc_json) = &row.tool_calls {
+            let mut msg = serde_json::json!({ "role": "assistant" });
+            if let Ok(tc) = serde_json::from_str::<serde_json::Value>(tc_json) {
+                if let Some(arr) = tc.as_array() {
+                    for entry in arr {
+                        if let Some(id) = entry.get("id").and_then(|v| v.as_str()) {
+                            pending_tool_call_ids.insert(id.to_string());
+                        }
+                    }
+                }
+                msg["tool_calls"] = tc;
+            }
+            if let Some(content) = &row.content {
+                msg["content"] = serde_json::json!(content);
+            }
+            messages.push(msg);
+        } else if let Some(content) = &row.content {
+            messages.push(serde_json::json!({
+                "role": row.role,
+                "content": content,
+            }));
+        }
+    }
+}
+
 /// Execute a turn by dispatching through the agent's [`AgentTurnTransport`].
 ///
 /// The gateway builds the conversation messages from the transcript and
@@ -4279,33 +4345,16 @@ async fn execute_turn(
         }
     }
 
-    // Add transcript history (including tool_calls and tool results).
-    for row in transcript {
-        if row.role == "tool" {
-            let mut msg = serde_json::json!({
-                "role": "tool",
-                "content": row.content.as_deref().unwrap_or(""),
-            });
-            if let Some(tc_id) = &row.tool_call_id {
-                msg["tool_call_id"] = serde_json::json!(tc_id);
-            }
-            messages.push(msg);
-        } else if let Some(tc_json) = &row.tool_calls {
-            let mut msg = serde_json::json!({ "role": "assistant" });
-            if let Ok(tc) = serde_json::from_str::<serde_json::Value>(tc_json) {
-                msg["tool_calls"] = tc;
-            }
-            if let Some(content) = &row.content {
-                msg["content"] = serde_json::json!(content);
-            }
-            messages.push(msg);
-        } else if let Some(content) = &row.content {
-            messages.push(serde_json::json!({
-                "role": row.role,
-                "content": content,
-            }));
-        }
-    }
+    // Add transcript history (including tool_calls and tool results), with
+    // sera-xbmz invariant enforcement: drop `tool` role rows whose
+    // `tool_call_id` has no preceding assistant `tool_calls[].id` in scope.
+    // Provider chat APIs (MiniMax in particular) reject the orphan-tool
+    // shape with HTTP 400 `invalid params, tool result's tool id() not
+    // found (2013)`; persisted transcripts can become unpaired across
+    // partial writes or older rows that pre-date the always-pair guarantee
+    // in `persist_tool_events`, and the gateway must not poison the
+    // outbound request on their behalf.
+    append_transcript_history_messages(transcript, &mut messages);
 
     // Add current message (if not already the last in transcript).
     let already_added = transcript
@@ -5320,7 +5369,7 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
     remove_reaction_best_effort(state, &msg.channel_id, &msg.message_id, "👀").await;
     let final_emoji = match outcome.as_ref() {
         Ok(TurnOutcome::Success) => Some("✅"),
-        Ok(TurnOutcome::Rejected) | Err(_) => Some("❌"),
+        Ok(TurnOutcome::Rejected) | Ok(TurnOutcome::Failed(_)) | Err(_) => Some("❌"),
         Ok(TurnOutcome::Queued) => None,
     };
     if let Some(emoji) = final_emoji {
@@ -5336,6 +5385,13 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
             Ok(TurnOutcome::Rejected) => Some(crate::discord::StatusCardState::Failed(
                 "hook rejected".into(),
             )),
+            // sera-xbmz: a runtime `failure` (provider HTTP 4xx/5xx,
+            // transport, timeout) lands here with the sanitized reason
+            // captured by `process_message_inner`. Card transitions to
+            // ❌ Failed with that reason instead of the previous ✅ Done.
+            Ok(TurnOutcome::Failed(reason)) => {
+                Some(crate::discord::StatusCardState::Failed(reason.clone()))
+            }
             Err(e) => Some(crate::discord::StatusCardState::Failed(e.to_string())),
             // Unreachable post-yeg.6 refactor: card is only created after
             // the lane-queue decision passes, so a Queued outcome cannot
@@ -5358,6 +5414,13 @@ enum TurnOutcome {
     /// user-facing error message was already sent). UX-wise this is the same
     /// as a failure, so we land on ❌.
     Rejected,
+    /// Runtime returned a `failure` (transport error, HTTP 4xx/5xx from the
+    /// provider, timeout). The user has already received a sanitized error
+    /// card; the synthetic `[sera] Runtime error: …` reply text is NOT
+    /// persisted to the transcript (sera-xbmz, mirrors the /api/chat 502
+    /// path at chat_handler). The reason is forwarded to the status card so
+    /// the operator sees ❌ Failed with the cause instead of ✅ Done.
+    Failed(String),
     /// Message was queued behind another in-flight turn; no final reaction
     /// — the dispatched turn will own the lifecycle.
     Queued,
@@ -5628,11 +5691,84 @@ async fn process_message_inner(
     .await;
     state.deregister_cancellation_token(&session_key);
 
+    // sera-xbmz: when the runtime reports a structured failure (transport
+    // error, provider HTTP 4xx/5xx, timeout) the `result.reply` is the
+    // synthetic `[sera] Runtime error: …` / `[sera] Runtime timed out …`
+    // text — *not* a real assistant turn. Mirror the /api/chat sync path
+    // (chat_handler ~3228): skip transcript persist, surface a sanitized
+    // operator-visible card with a session/log correlation hint, complete
+    // the lane, and return `TurnOutcome::Failed(reason)` so the outer
+    // pipeline drives the status card to ❌ instead of ✅ Done.
+    //
+    // sera-89b48a87 (Codex P1 PR #1280): capture the failure into a local
+    // variable instead of returning immediately. Falling through lets the
+    // shared drain loop below process queued user events that arrived
+    // while this failed run was in flight — otherwise they remain
+    // buffered until a *new* inbound message re-triggers the lane and
+    // appear as silently dropped turns during a provider/runtime outage.
+    let main_turn_failure: Option<String> = if let Some(reason) = result.failure.as_ref() {
+        tracing::error!(
+            session_id = %session.id,
+            session_key = %session_key,
+            agent = %agent_name,
+            reason = %reason,
+            "Discord turn failed via runtime; skipping transcript persist (sera-xbmz)"
+        );
+        // Release the lane immediately so the next inbound turn is not
+        // wedged behind a synthetic-failure run.
+        {
+            let mut lq = state.lane_queue.lock().await;
+            lq.complete_run(&session_key);
+        }
+        let sanitized_reason = crate::discord::sanitize_status_reason(reason);
+        let card_msg = format!(
+            "[sera] turn failed: {sanitized_reason} (session={})",
+            crate::discord::sanitize_audit_id_for_display(&session.id),
+        );
+        let error_channel_id = status_card_ctx
+            .session
+            .as_ref()
+            .map(|s| s.post_channel_id.clone())
+            .unwrap_or_else(|| msg.channel_id.clone());
+        send_error_to_discord(state, &error_channel_id, &card_msg).await;
+        Some(sanitized_reason)
+    } else {
+        None
+    };
+
+    // Success-path body: render → persist → post_turn hook → send reply.
+    // Skipped when the main turn failed (sera-89b48a87) so the drain loop
+    // below still gets a chance to process queued events; the per-step
+    // early returns inside the block (post_turn `Rejected`) are preserved.
+    'success_path: {
+        if main_turn_failure.is_some() {
+            break 'success_path;
+        }
+
     // Render the LLM reply so allowlisted `@<handle>` tokens become Discord
     // `<@id>` mention tags. Reverse peer-mention handoff (sera-yeg.4):
     // arbitrary user @-names pass through unchanged because they are not in
     // `peer_directory`, preserving the loop-safety contract.
-    let reply_rendered = crate::discord::render_outbound_content(&result.reply, peer_directory);
+    //
+    // sera-xbmz: strip `<think>…</think>` chain-of-thought before either
+    // the transcript persist *or* the outbound Discord send. /api/chat
+    // already applies the same sanitizer (chat_handler ~3254); doing it
+    // here gives Discord parity so reasoning-model leakage cannot reach
+    // the operator channel and gets stored sanitized in the transcript
+    // future turns will replay.
+    let sanitized_reply = sanitize_assistant_response(&result.reply);
+    if sanitized_reply.was_sanitized() {
+        tracing::info!(
+            session_id = %session.id,
+            agent = %agent_name,
+            stripped_blocks = sanitized_reply.stripped_blocks,
+            raw_len = result.reply.len(),
+            sanitized_len = sanitized_reply.text.len(),
+            "stripped chain-of-thought blocks from Discord assistant reply (sera-xbmz)"
+        );
+    }
+    let reply_rendered =
+        crate::discord::render_outbound_content(&sanitized_reply.text, peer_directory);
 
     // Persist tool call events to transcript before the final response.
     // Transcript stores the rendered reply (with `<@id>` tags) so future
@@ -5667,7 +5803,16 @@ async fn process_message_inner(
     match &post_turn_result.outcome {
         HookResult::Reject { reason, .. } => {
             tracing::info!(reason = %reason, "post_turn hook rejected reply");
-            send_error_to_discord(state, &msg.channel_id, reason).await;
+            // sera-xbmz: route the rejection through the same surface the
+            // status card lives on (thread when one was spawned, otherwise
+            // the inbound channel) so the operator does not see lifecycle
+            // and error split across two Discord locations.
+            let error_channel_id = status_card_ctx
+                .session
+                .as_ref()
+                .map(|s| s.post_channel_id.clone())
+                .unwrap_or_else(|| msg.channel_id.clone());
+            send_error_to_discord(state, &error_channel_id, reason).await;
             return Ok(TurnOutcome::Rejected);
         }
         HookResult::Redirect { target, .. } => {
@@ -5678,23 +5823,46 @@ async fn process_message_inner(
 
     // Send the reply back to Discord via the shared connector. The rendered
     // reply already has allowlisted `@<handle>` tokens rewritten to
-    // `<@id>` (sera-yeg.4 reverse handoff). Replies over Discord's 2000-char
-    // limit are split into ordered `[i/N]` chunks; runaway replies past the
-    // policy cap get a visible truncation notice (sera-yeg.8).
+    // `<@id>` (sera-yeg.4 reverse handoff). When a status-card session
+    // exists (post-yeg.6) the reply lands in the same surface as the card
+    // — the spawned thread — so the operator gets one coherent view of
+    // the turn instead of card-in-thread / reply-in-channel split
+    // (sera-xbmz). Replies over Discord's 2000-char limit are split into
+    // ordered `[i/N]` chunks; runaway replies past the policy cap get a
+    // visible truncation notice (sera-yeg.8).
+    let reply_channel_id = status_card_ctx
+        .session
+        .as_ref()
+        .map(|s| s.post_channel_id.clone())
+        .unwrap_or_else(|| msg.channel_id.clone());
     if let Some(ref dc) = state.discord {
         if let Err(e) = dc
-            .send_message_chunked(&msg.channel_id, &reply_rendered)
+            .send_message_chunked(&reply_channel_id, &reply_rendered)
             .await
         {
-            tracing::error!(error = ?e, channel_id = %msg.channel_id, "Discord send_message failed");
+            tracing::error!(error = ?e, channel_id = %reply_channel_id, "Discord send_message failed");
         }
     } else {
         tracing::warn!("No Discord connector available to send reply");
     }
+    } // end of 'success_path
 
     // ── Drain pending messages for this session ──
     // After completing a turn, check if more messages arrived while we were busy.
     // Process them sequentially (per-session serialization via lane queue).
+    // sera-89b48a87 (Codex P1 PR #1280): this loop now runs even when the
+    // main turn returned a structured `failure`, so queued events that
+    // arrived while the failed run was in flight get processed instead of
+    // being stranded until the next inbound message.
+    //
+    // sera-5b349807 (Codex P1 PR #1280 follow-up): capture the first
+    // follow-up runtime failure into a local instead of returning
+    // immediately. The drain loop must keep processing additional queued
+    // events behind a failed follow-up so they don't get stranded during a
+    // multi-message provider/runtime outage; the captured reason is
+    // surfaced at the end so the outer pipeline still drives the status
+    // card to ❌ Failed.
+    let mut follow_up_failure: Option<String> = None;
     loop {
         let has_pending = {
             let lq = state.lane_queue.lock().await;
@@ -5756,12 +5924,31 @@ async fn process_message_inner(
                 lq.complete_run(&session_key);
             }
             // Send steering response to Discord if any. Render allowlisted
-            // peer mentions (sera-yeg.4).
+            // peer mentions (sera-yeg.4) and strip `<think>…</think>` chain-
+            // of-thought (sera-xbmz). Route through the status-card session's
+            // surface when one was spawned so the drain-loop replies stay
+            // colocated with the card instead of leaking back into the main
+            // channel.
             if let Some(ref dc) = state.discord {
-                let rendered =
-                    crate::discord::render_outbound_content(&follow_up.reply, peer_directory);
-                if let Err(e) = dc.send_message_chunked(&msg.channel_id, &rendered).await {
-                    tracing::error!(error = ?e, channel_id = %msg.channel_id, "Discord send_message failed");
+                let sanitized = sanitize_assistant_response(&follow_up.reply);
+                if sanitized.was_sanitized() {
+                    tracing::info!(
+                        session_id = %session.id,
+                        stripped_blocks = sanitized.stripped_blocks,
+                        "stripped chain-of-thought blocks from Discord steer reply (sera-xbmz)"
+                    );
+                }
+                let rendered = crate::discord::render_outbound_content(
+                    &sanitized.text,
+                    peer_directory,
+                );
+                let target_channel = status_card_ctx
+                    .session
+                    .as_ref()
+                    .map(|s| s.post_channel_id.clone())
+                    .unwrap_or_else(|| msg.channel_id.clone());
+                if let Err(e) = dc.send_message_chunked(&target_channel, &rendered).await {
+                    tracing::error!(error = ?e, channel_id = %target_channel, "Discord send_message failed");
                 }
             }
             continue;
@@ -5800,10 +5987,64 @@ async fn process_message_inner(
         .await;
         state.deregister_cancellation_token(&session_key);
 
+        // sera-xbmz: classify follow-up runtime failures the same way as
+        // the main path so the operator never sees a synthetic
+        // `[sera] Runtime error: …` persisted as an assistant turn or
+        // routed to Discord as a normal reply. Surface a sanitized error
+        // card on the same surface the status card lives on; complete the
+        // lane; stop draining and return Failed so the outer pipeline
+        // updates the card to ❌ instead of ✅ Done.
+        if let Some(reason) = follow_up.failure.as_ref() {
+            tracing::error!(
+                session_id = %session.id,
+                session_key = %session_key,
+                reason = %reason,
+                "Discord follow-up turn failed via runtime; skipping transcript persist (sera-xbmz)"
+            );
+            {
+                let mut lq = state.lane_queue.lock().await;
+                lq.complete_run(&session_key);
+            }
+            let sanitized_reason = crate::discord::sanitize_status_reason(reason);
+            let card_msg = format!(
+                "[sera] follow-up turn failed: {sanitized_reason} (session={})",
+                crate::discord::sanitize_audit_id_for_display(&session.id),
+            );
+            let error_channel_id = status_card_ctx
+                .session
+                .as_ref()
+                .map(|s| s.post_channel_id.clone())
+                .unwrap_or_else(|| msg.channel_id.clone());
+            send_error_to_discord(state, &error_channel_id, &card_msg).await;
+            // sera-5b349807 (Codex P1 PR #1280 follow-up): capture the first
+            // follow-up failure and continue draining instead of returning.
+            // Returning here would strand any additional events queued
+            // behind this failed follow-up (the exact dropped-turn behavior
+            // the main-turn repair just fixed). The captured reason is
+            // surfaced after the loop so the status card still lands on ❌.
+            if follow_up_failure.is_none() {
+                follow_up_failure = Some(sanitized_reason);
+            }
+            continue;
+        }
+
         // Render the follow-up reply once: transcript and outbound both see
-        // the `@<handle>` → `<@id>` rewrite (sera-yeg.4).
-        let follow_up_rendered =
-            crate::discord::render_outbound_content(&follow_up.reply, peer_directory);
+        // the `@<handle>` → `<@id>` rewrite (sera-yeg.4). Sanitize
+        // `<think>…</think>` before the rewrite so the transcript matches
+        // what is actually delivered to Discord and stays parity-clean
+        // with /api/chat (sera-xbmz).
+        let sanitized_follow_up = sanitize_assistant_response(&follow_up.reply);
+        if sanitized_follow_up.was_sanitized() {
+            tracing::info!(
+                session_id = %session.id,
+                stripped_blocks = sanitized_follow_up.stripped_blocks,
+                "stripped chain-of-thought blocks from Discord follow-up reply (sera-xbmz)"
+            );
+        }
+        let follow_up_rendered = crate::discord::render_outbound_content(
+            &sanitized_follow_up.text,
+            peer_directory,
+        );
         {
             let db = state.db.lock().await;
             persist_tool_events(&db, &session.id, &follow_up.tool_events);
@@ -5822,17 +6063,37 @@ async fn process_message_inner(
             lq.complete_run(&session_key);
         }
 
-        // Send the follow-up reply to Discord.
+        // Send the follow-up reply to Discord. Route through the status-
+        // card session's surface (thread) when present so card and reply
+        // share one operator-visible target (sera-xbmz).
+        let follow_up_target = status_card_ctx
+            .session
+            .as_ref()
+            .map(|s| s.post_channel_id.clone())
+            .unwrap_or_else(|| msg.channel_id.clone());
         if let Some(ref dc) = state.discord
             && let Err(e) = dc
-                .send_message_chunked(&msg.channel_id, &follow_up_rendered)
+                .send_message_chunked(&follow_up_target, &follow_up_rendered)
                 .await
         {
-            tracing::error!(error = ?e, channel_id = %msg.channel_id, "Discord send_message failed");
+            tracing::error!(error = ?e, channel_id = %follow_up_target, "Discord send_message failed");
         }
     }
 
-    Ok(TurnOutcome::Success)
+    // sera-89b48a87: surface the original main-turn failure (if any) so
+    // the outer pipeline drives the status card to ❌ Failed even though
+    // we just drained queued events on the way out.
+    //
+    // sera-5b349807: if the main turn succeeded but a follow-up turn
+    // failed during drain, surface the first follow-up failure so the
+    // status card still lands on ❌ and the outer pipeline emits a
+    // truthful outcome. Main-turn failure takes precedence — it's the
+    // primary signal the operator submitted, and matches the behavior
+    // when only a single message was queued.
+    match main_turn_failure.or(follow_up_failure) {
+        Some(reason) => Ok(TurnOutcome::Failed(reason)),
+        None => Ok(TurnOutcome::Success),
+    }
 }
 
 /// Start a background task that periodically triggers the Discord typing
@@ -7765,6 +8026,37 @@ mod tests {
                 match &self.prev {
                     Some(v) => std::env::set_var("SERA_DISPATCH_MODE", v),
                     None => std::env::remove_var("SERA_DISPATCH_MODE"),
+                }
+            }
+        }
+    }
+
+    /// RAII guard that sets/unsets `SERA_TURN_TIMEOUT_SECS` and restores
+    /// the prior value on drop. Use under `TURN_TIMEOUT_ENV_LOCK` only.
+    /// sera-5b349807: introduced so tests that depend on the default
+    /// turn-timeout window can park the env var safely while other
+    /// tests in the same process pin it to 1 s.
+    struct TurnTimeoutEnvGuard {
+        prev: Option<String>,
+    }
+
+    impl TurnTimeoutEnvGuard {
+        fn unset() -> Self {
+            let prev = std::env::var("SERA_TURN_TIMEOUT_SECS").ok();
+            // SAFETY: callers hold TURN_TIMEOUT_ENV_LOCK so no concurrent
+            // reader can observe a torn value.
+            unsafe { std::env::remove_var("SERA_TURN_TIMEOUT_SECS") };
+            Self { prev }
+        }
+    }
+
+    impl Drop for TurnTimeoutEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: see TurnTimeoutEnvGuard::unset.
+            unsafe {
+                match &self.prev {
+                    Some(v) => std::env::set_var("SERA_TURN_TIMEOUT_SECS", v),
+                    None => std::env::remove_var("SERA_TURN_TIMEOUT_SECS"),
                 }
             }
         }
@@ -10497,6 +10789,223 @@ spec:
         assert_eq!(details["reason"], "ignored_unrelated_bot");
     }
 
+    /// sera-89b48a87 (Codex P1 PR #1280) regression guard: when the
+    /// main Discord turn returns a structured `failure` (transport
+    /// timeout in this fixture), the drain loop must still run so user
+    /// events that arrived while the failed run was in flight are
+    /// processed instead of being stranded in the lane until a *new*
+    /// inbound message re-triggers it.
+    ///
+    /// Setup: replace the always-good mock harness with `spawn_mock_hang`
+    /// and pin `SERA_TURN_TIMEOUT_SECS=1` so every `execute_turn`
+    /// resolves as a 1 s timeout failure. A background task injects a
+    /// second event into the lane queue ~250 ms into the main turn; the
+    /// drain loop must dequeue and consume it, leaving the lane empty
+    /// when `process_message` returns. Pre-repair, the failure branch
+    /// early-returned `TurnOutcome::Failed` before reaching the drain
+    /// loop and the injected event stayed pending — observable as
+    /// `has_pending(session_key)` returning `true`.
+    #[tokio::test]
+    async fn process_message_drains_queued_events_after_failed_turn() {
+        let _lock = TURN_TIMEOUT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prior = std::env::var("SERA_TURN_TIMEOUT_SECS").ok();
+        // SAFETY: callers hold TURN_TIMEOUT_ENV_LOCK so no concurrent reader
+        // can observe a torn value.
+        unsafe { std::env::set_var("SERA_TURN_TIMEOUT_SECS", "1") };
+
+        let mut state = test_state_async().await;
+        let hanging_sup: Arc<dyn AgentTurnTransport> =
+            RuntimeChildSupervisor::start_with_factory("sera", || async {
+                StdioHarness::spawn_mock_hang().await
+            })
+            .await
+            .unwrap();
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert("sera".to_string(), hanging_sup);
+
+        let session_key = "discord:sera:ch_drain_after_fail".to_string();
+        let state_for_inject = Arc::clone(&state);
+        let session_key_for_inject = session_key.clone();
+        let injector = tokio::spawn(async move {
+            // Wait briefly so process_message has admitted the inbound
+            // message and started the in-flight (hung) turn; the next
+            // enqueue then lands as Queued behind the active run.
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let principal = PrincipalRef {
+                id: PrincipalId::new("u_drain"),
+                kind: PrincipalKind::Human,
+            };
+            let event = DomainEvent::api_message(
+                "sera",
+                &session_key_for_inject,
+                principal,
+                "queued during failed turn",
+            );
+            let mut lq = state_for_inject.lane_queue.lock().await;
+            let res = lq.enqueue(event);
+            assert_eq!(
+                res,
+                sera_db::lane_queue::EnqueueResult::Queued,
+                "injection must land while the failed run is still active",
+            );
+        });
+
+        let msg = DiscordMessage {
+            channel_id: "ch_drain_after_fail".into(),
+            user_id: "u_drain".into(),
+            username: "operator".into(),
+            content: "initial".into(),
+            message_id: "msg_drain_after_fail".into(),
+            is_dm: true,
+            mentions_bot: true,
+            is_bot: false,
+            connector_name: Some("discord-main".into()),
+            raw_content: String::new(),
+            mentions: Vec::new(),
+        };
+
+        process_message(&state, &msg)
+            .await
+            .expect("process_message");
+        injector.await.expect("inject task");
+
+        // SAFETY: callers hold TURN_TIMEOUT_ENV_LOCK; restore the
+        // pre-test value.
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("SERA_TURN_TIMEOUT_SECS", v),
+                None => std::env::remove_var("SERA_TURN_TIMEOUT_SECS"),
+            }
+        }
+
+        let lq = state.lane_queue.lock().await;
+        assert!(
+            !lq.has_pending(&session_key),
+            "drain loop must consume queued events even when the main \
+             turn failed; pending events would otherwise sit until the \
+             next inbound message re-triggers the lane",
+        );
+    }
+
+    /// sera-5b349807 (Codex P1 PR #1280 follow-up): regression guard for
+    /// the follow-up runtime-failure drain path. Mirrors the main-turn
+    /// drain test but injects a *second* event after the first follow-up
+    /// has been dequeued, so the second event is parked behind a
+    /// follow-up that is itself failing. Pre-fix the follow-up failure
+    /// branch returned immediately and stranded the second event; the
+    /// repair makes the drain loop `continue` after a follow-up failure
+    /// so all queued events are consumed before the lane goes idle.
+    #[tokio::test]
+    async fn process_message_drains_queued_events_after_followup_failure() {
+        let _lock = TURN_TIMEOUT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prior = std::env::var("SERA_TURN_TIMEOUT_SECS").ok();
+        // SAFETY: callers hold TURN_TIMEOUT_ENV_LOCK so no concurrent reader
+        // can observe a torn value.
+        unsafe { std::env::set_var("SERA_TURN_TIMEOUT_SECS", "1") };
+
+        let mut state = test_state_async().await;
+        let hanging_sup: Arc<dyn AgentTurnTransport> =
+            RuntimeChildSupervisor::start_with_factory("sera", || async {
+                StdioHarness::spawn_mock_hang().await
+            })
+            .await
+            .unwrap();
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert("sera".to_string(), hanging_sup);
+
+        let session_key = "discord:sera:ch_drain_after_followup_fail".to_string();
+        let state_for_inject = Arc::clone(&state);
+        let session_key_for_inject = session_key.clone();
+        let injector = tokio::spawn(async move {
+            // First event lands ~250 ms into the main turn (still
+            // hanging). With SERA_TURN_TIMEOUT_SECS=1, the main turn fails
+            // at ~1 s; the drain loop then dequeues this event and starts
+            // a follow-up turn that also hangs.
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let principal = PrincipalRef {
+                id: PrincipalId::new("u_drain_fu"),
+                kind: PrincipalKind::Human,
+            };
+            let event_a = DomainEvent::api_message(
+                "sera",
+                &session_key_for_inject,
+                principal.clone(),
+                "queued during failed main turn",
+            );
+            {
+                let mut lq = state_for_inject.lane_queue.lock().await;
+                let res = lq.enqueue(event_a);
+                assert_eq!(
+                    res,
+                    sera_db::lane_queue::EnqueueResult::Queued,
+                    "first injection must land while the failed main turn \
+                     is still active",
+                );
+            }
+            // Second event lands ~1.5 s in — by then the drain loop has
+            // dequeued event A and started the follow-up (which is also
+            // hanging on the mock and will fail at the 1 s timeout). This
+            // event sits behind the failing follow-up. Pre-fix it would
+            // remain Queued after process_message returns; post-fix the
+            // drain loop continues and consumes it.
+            tokio::time::sleep(std::time::Duration::from_millis(1250)).await;
+            let event_b = DomainEvent::api_message(
+                "sera",
+                &session_key_for_inject,
+                principal,
+                "queued behind failed follow-up",
+            );
+            let mut lq = state_for_inject.lane_queue.lock().await;
+            let res = lq.enqueue(event_b);
+            assert_eq!(
+                res,
+                sera_db::lane_queue::EnqueueResult::Queued,
+                "second injection must land while the failed follow-up is \
+                 still active",
+            );
+        });
+
+        let msg = DiscordMessage {
+            channel_id: "ch_drain_after_followup_fail".into(),
+            user_id: "u_drain_fu".into(),
+            username: "operator".into(),
+            content: "initial".into(),
+            message_id: "msg_drain_after_followup_fail".into(),
+            is_dm: true,
+            mentions_bot: true,
+            is_bot: false,
+            connector_name: Some("discord-main".into()),
+            raw_content: String::new(),
+            mentions: Vec::new(),
+        };
+
+        process_message(&state, &msg)
+            .await
+            .expect("process_message");
+        injector.await.expect("inject task");
+
+        // SAFETY: callers hold TURN_TIMEOUT_ENV_LOCK; restore the
+        // pre-test value.
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("SERA_TURN_TIMEOUT_SECS", v),
+                None => std::env::remove_var("SERA_TURN_TIMEOUT_SECS"),
+            }
+        }
+
+        let lq = state.lane_queue.lock().await;
+        assert!(
+            !lq.has_pending(&session_key),
+            "drain loop must consume events queued behind a failed \
+             follow-up turn; pre-fix the follow-up-failure branch \
+             returned immediately and stranded later queued events",
+        );
+    }
+
     #[tokio::test]
     async fn chat_endpoint_saves_transcript_to_db() {
         let state = test_state_async().await;
@@ -12173,6 +12682,16 @@ spec:
         use serde_json::Value;
         use std::time::{Duration, Instant};
         use tokio::sync::mpsc::Sender;
+
+        // sera-5b349807: hold TURN_TIMEOUT_ENV_LOCK across the whole test
+        // and force-unset SERA_TURN_TIMEOUT_SECS so a concurrent test that
+        // pins the var to 1 s (e.g. `process_message_drains_queued_events_
+        // after_failed_turn`, `execute_steer_drains_until_turn_completed`)
+        // cannot race the chat_handler's env read here. The test's >1.5 s
+        // timing budget would otherwise fail with a "runtime turn timed
+        // out after 1s" frame instead of the expected second delta.
+        let _lock = TURN_TIMEOUT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn_timeout_guard = TurnTimeoutEnvGuard::unset();
 
         struct SlowStreamingTransport;
 
@@ -15475,5 +15994,147 @@ spec:
         let trace_partial = extract_trace(&partial);
         assert!(trace_partial.traceparent.is_some());
         assert_eq!(trace_partial.tracestate, None);
+    }
+
+    // ── sera-xbmz: MiniMax-compat transcript invariants ────────────────────
+    //
+    // Cover the assistant.tool_calls → role=tool pairing rule the gateway
+    // must enforce before sending transcript history to a provider. The
+    // failure mode this guards against is the live MiniMax error
+    // `invalid params, tool result's tool id() not found (2013)` (HTTP
+    // 400) which orphaned `role=tool` rows trigger. The drop is silent
+    // to the provider but warned in tracing for operator visibility.
+
+    fn mk_row(
+        id: i64,
+        role: &str,
+        content: Option<&str>,
+        tool_calls: Option<&str>,
+        tool_call_id: Option<&str>,
+    ) -> sera_db::sqlite::TranscriptRow {
+        sera_db::sqlite::TranscriptRow {
+            id,
+            session_id: "ses_test".to_string(),
+            role: role.to_string(),
+            content: content.map(String::from),
+            tool_calls: tool_calls.map(String::from),
+            tool_call_id: tool_call_id.map(String::from),
+            created_at: "1970-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn transcript_history_preserves_paired_assistant_tool_call_then_tool_result() {
+        // The valid sequence: assistant.tool_calls row immediately
+        // followed by a tool row whose tool_call_id matches the call.
+        let transcript = vec![
+            mk_row(1, "user", Some("run ls"), None, None),
+            mk_row(
+                2,
+                "assistant",
+                None,
+                Some(r#"[{"id":"call_a1","type":"function","function":{"name":"ls","arguments":"{}"}}]"#),
+                None,
+            ),
+            mk_row(3, "tool", Some("file-a\nfile-b"), None, Some("call_a1")),
+            mk_row(4, "assistant", Some("done"), None, None),
+        ];
+        let mut out = Vec::new();
+        append_transcript_history_messages(&transcript, &mut out);
+        assert_eq!(out.len(), 4, "valid sequence is preserved unchanged");
+        assert_eq!(out[0]["role"], "user");
+        assert_eq!(out[1]["role"], "assistant");
+        assert!(out[1]["tool_calls"].is_array(), "tool_calls JSON must round-trip");
+        assert_eq!(out[2]["role"], "tool");
+        assert_eq!(out[2]["tool_call_id"], "call_a1");
+        assert_eq!(out[3]["role"], "assistant");
+    }
+
+    #[test]
+    fn transcript_history_drops_orphan_tool_row_without_matching_assistant_call() {
+        // The live MiniMax failure mode: a tool row whose tool_call_id
+        // has no matching assistant.tool_calls[].id earlier in the
+        // transcript. The gateway must drop it before send so the
+        // provider does not return HTTP 400 invalid params (2013).
+        let transcript = vec![
+            mk_row(1, "user", Some("hi"), None, None),
+            mk_row(2, "assistant", Some("hello"), None, None),
+            mk_row(3, "tool", Some("ghost result"), None, Some("call_function_x")),
+            mk_row(4, "user", Some("are you ok?"), None, None),
+        ];
+        let mut out = Vec::new();
+        append_transcript_history_messages(&transcript, &mut out);
+        assert_eq!(out.len(), 3, "orphan tool row must be dropped");
+        assert_eq!(out[0]["role"], "user");
+        assert_eq!(out[1]["role"], "assistant");
+        assert_eq!(out[1]["content"], "hello");
+        assert_eq!(out[2]["role"], "user");
+        assert_eq!(out[2]["content"], "are you ok?");
+    }
+
+    #[test]
+    fn transcript_history_drops_tool_row_with_no_tool_call_id_field() {
+        // Defensive: a `role=tool` row without any tool_call_id at all
+        // is invalid for OpenAI / MiniMax shape; drop rather than send.
+        let transcript = vec![
+            mk_row(1, "user", Some("hi"), None, None),
+            mk_row(2, "tool", Some("dangling result"), None, None),
+        ];
+        let mut out = Vec::new();
+        append_transcript_history_messages(&transcript, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["role"], "user");
+    }
+
+    #[test]
+    fn transcript_history_drops_orphan_after_paired_pair_consumes_its_match() {
+        // A paired (assistant.tool_calls, tool) sequence followed by a
+        // second tool row using the same id must drop the duplicate —
+        // the pending-id set is single-use because MiniMax matches each
+        // tool row 1:1 with the assistant call id.
+        let transcript = vec![
+            mk_row(1, "user", Some("read foo and bar"), None, None),
+            mk_row(
+                2,
+                "assistant",
+                None,
+                Some(r#"[{"id":"call_x","type":"function","function":{"name":"read","arguments":"{\"p\":\"foo\"}"}}]"#),
+                None,
+            ),
+            mk_row(3, "tool", Some("foo contents"), None, Some("call_x")),
+            mk_row(4, "tool", Some("bar contents"), None, Some("call_x")),
+        ];
+        let mut out = Vec::new();
+        append_transcript_history_messages(&transcript, &mut out);
+        assert_eq!(out.len(), 3, "duplicate tool_call_id usage must be dropped");
+        assert_eq!(out[2]["role"], "tool");
+        assert_eq!(out[2]["content"], "foo contents");
+    }
+
+    #[test]
+    fn transcript_history_supports_multi_call_assistant_with_two_tool_results() {
+        // Multiple tool calls in one assistant row each pair with one
+        // tool result row — both ids land in the pending set, so each
+        // matching tool result is preserved.
+        let transcript = vec![
+            mk_row(1, "user", Some("two things"), None, None),
+            mk_row(
+                2,
+                "assistant",
+                None,
+                Some(r#"[
+                    {"id":"call_a","type":"function","function":{"name":"f","arguments":"{}"}},
+                    {"id":"call_b","type":"function","function":{"name":"g","arguments":"{}"}}
+                ]"#),
+                None,
+            ),
+            mk_row(3, "tool", Some("a-result"), None, Some("call_a")),
+            mk_row(4, "tool", Some("b-result"), None, Some("call_b")),
+        ];
+        let mut out = Vec::new();
+        append_transcript_history_messages(&transcript, &mut out);
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[2]["tool_call_id"], "call_a");
+        assert_eq!(out[3]["tool_call_id"], "call_b");
     }
 }

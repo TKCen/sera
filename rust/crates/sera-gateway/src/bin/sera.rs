@@ -3442,13 +3442,49 @@ async fn transcript_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(session_id): Path<String>,
-) -> Result<Json<Vec<TranscriptEntry>>, StatusCode> {
-    validate_api_key(&state, &headers)?;
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    if let Err(status) = validate_api_key(&state, &headers) {
+        return status.into_response();
+    }
 
     let db = state.db.lock().await;
-    let rows = db
-        .get_transcript(&session_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Distinguish "unknown session" from "session exists but empty transcript"
+    // so operators recovering a session see typos/wrong IDs visibly instead of
+    // a silently-empty body. Parity matrix row 8 (`sera-rj4z`) requires
+    // "failure to retrieve is visible rather than silently empty".
+    match db.get_session_by_id(&session_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            tracing::warn!(
+                session_id = %session_id,
+                "transcript fetch for unknown session_id; returning 404"
+            );
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": "session_not_found",
+                    "session_id": session_id,
+                    "message": "no session with this id; verify the session_id from /api/sessions"
+                })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "session lookup failed for transcript handler");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    let rows = match db.get_transcript(&session_id) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "transcript fetch failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
     let entries: Vec<TranscriptEntry> = rows
         .into_iter()
@@ -3463,7 +3499,7 @@ async fn transcript_handler(
         })
         .collect();
 
-    Ok(Json(entries))
+    Json(entries).into_response()
 }
 
 async fn auth_me_handler(
@@ -12168,6 +12204,36 @@ spec:
         assert_eq!(entries[0]["content"], "hello");
         assert_eq!(entries[1]["role"], "assistant");
         assert_eq!(entries[1]["content"], "hi there");
+    }
+
+    #[tokio::test]
+    async fn transcript_endpoint_404s_unknown_session_with_envelope() {
+        // Continuity invariant (parity matrix row 8 / `sera-rj4z`): the
+        // transcript handler must distinguish "no such session" from "session
+        // exists but transcript is empty" so a Discord/HTTP operator recovering
+        // a session sees a typo or wrong session_id immediately instead of a
+        // silently-empty body. Pre-fix this returned 200 [].
+        let state = test_state();
+        let app = build_router(Arc::clone(&state));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/sessions/ses_does_not_exist/transcript")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "session_not_found");
+        assert_eq!(json["session_id"], "ses_does_not_exist");
+        assert!(json["message"].as_str().unwrap().contains("/api/sessions"));
     }
 
     // -- Discord session key scoping --

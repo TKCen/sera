@@ -229,6 +229,16 @@ async fn find_by_frontmatter_name(roots: &[PathBuf], target_name: &str) -> Optio
     None
 }
 
+/// Check whether a skill file's parsed frontmatter `name` matches `expected`.
+async fn path_has_frontmatter_name(path: &Path, expected: &str) -> bool {
+    let Ok(content) = tokio::fs::read_to_string(path).await else {
+        return false;
+    };
+    parse_skill_markdown_str(&content, path.to_path_buf())
+        .map(|p| p.config.name == expected)
+        .unwrap_or(false)
+}
+
 // ── SkillList ───────────────────────────────────────────────────────────────
 
 pub struct SkillList {
@@ -364,7 +374,9 @@ impl Tool for SkillView {
 
             // Directory-style: <root>/<name>/SKILL.md
             let skill_md = skill_path.join("SKILL.md");
-            if skill_md.is_file() {
+            if skill_md.is_file()
+                && path_has_frontmatter_name(&skill_md, name).await
+            {
                 let content = tokio::fs::read_to_string(&skill_md)
                     .await
                     .map_err(|e| ToolError::ExecutionFailed(format!("read SKILL.md: {e}")))?;
@@ -380,7 +392,9 @@ impl Tool for SkillView {
 
             // Single-file: <root>/<name>.md
             let md_file = root.join(format!("{name}.md"));
-            if md_file.is_file() {
+            if md_file.is_file()
+                && path_has_frontmatter_name(&md_file, name).await
+            {
                 let content = tokio::fs::read_to_string(&md_file)
                     .await
                     .map_err(|e| ToolError::ExecutionFailed(format!("read {name}.md: {e}")))?;
@@ -780,11 +794,14 @@ impl SkillManage {
             if let Some(path) = safe_skill_path(root, name)
                 && path.is_dir()
                 && path.join("SKILL.md").exists()
+                && path_has_frontmatter_name(&path.join("SKILL.md"), name).await
             {
                 return Ok((SkillLocation::Directory(path), root.clone()));
             }
             let md_file = root.join(format!("{name}.md"));
-            if md_file.is_file() {
+            if md_file.is_file()
+                && path_has_frontmatter_name(&md_file, name).await
+            {
                 return Ok((SkillLocation::SingleFile(md_file), root.clone()));
             }
         }
@@ -1228,6 +1245,56 @@ mod tests {
         let err = tool.execute(input, make_ctx()).await.unwrap_err();
         assert!(matches!(err, ToolError::ExecutionFailed(_)));
         assert!(!tmp.path().join("bar").exists(), "directory must not be created");
+    }
+
+    #[tokio::test]
+    async fn view_skips_wrong_path_dir_finds_legacy_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        // foo/ dir exists but its SKILL.md has name: bar
+        let wrong_dir = tmp.path().join("foo");
+        tokio::fs::create_dir_all(&wrong_dir).await.unwrap();
+        tokio::fs::write(wrong_dir.join("SKILL.md"), &skill_body("bar", "Wrong dir"))
+            .await
+            .unwrap();
+        // old.md has the real name: foo
+        tokio::fs::write(tmp.path().join("old.md"), &skill_body("foo", "Real foo"))
+            .await
+            .unwrap();
+
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillView::new(ctx);
+        let input = make_input("skill-view", serde_json::json!({"name": "foo"}));
+        let output = tool.execute(input, make_ctx()).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+        assert!(
+            parsed["content"].as_str().unwrap().contains("Real foo"),
+            "should find the legacy file, not the wrong-name dir"
+        );
+    }
+
+    #[tokio::test]
+    async fn view_skips_wrong_path_file_finds_legacy_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        // foo.md exists but its frontmatter has name: bar
+        tokio::fs::write(tmp.path().join("foo.md"), &skill_body("bar", "Wrong file"))
+            .await
+            .unwrap();
+        // old/ dir has SKILL.md with name: foo
+        let legacy_dir = tmp.path().join("old");
+        tokio::fs::create_dir_all(&legacy_dir).await.unwrap();
+        tokio::fs::write(legacy_dir.join("SKILL.md"), &skill_body("foo", "Real foo dir"))
+            .await
+            .unwrap();
+
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillView::new(ctx);
+        let input = make_input("skill-view", serde_json::json!({"name": "foo"}));
+        let output = tool.execute(input, make_ctx()).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+        assert!(
+            parsed["content"].as_str().unwrap().contains("Real foo dir"),
+            "should find the legacy dir, not the wrong-name file"
+        );
     }
 
     #[tokio::test]

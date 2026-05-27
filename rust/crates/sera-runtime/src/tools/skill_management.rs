@@ -179,9 +179,9 @@ struct SkillFrontmatter {
     version: Option<String>,
 }
 
-/// Extract and validate skill frontmatter. Returns `None` if the file is
-/// missing, has no frontmatter, or lacks a `name` field — matching what
-/// `SkillDispatchEngine::load_dir` actually registers.
+/// Parse skill frontmatter using the same parser as `SkillDispatchEngine::load_dir`.
+/// Returns `None` if the file is missing, unparseable, or has an invalid name —
+/// so `skill-list` only advertises skills the runtime actually loads.
 async fn extract_skill_frontmatter(path: &Path) -> Option<SkillFrontmatter> {
     let content_path = if path.is_dir() {
         let skill_md = path.join("SKILL.md");
@@ -191,12 +191,42 @@ async fn extract_skill_frontmatter(path: &Path) -> Option<SkillFrontmatter> {
     };
 
     let content = tokio::fs::read_to_string(&content_path).await.ok()?;
-    let name = extract_frontmatter_field(&content, "name")?;
+    let parsed = parse_skill_markdown_str(&content, content_path).ok()?;
     Some(SkillFrontmatter {
-        name,
-        description: extract_frontmatter_field(&content, "description"),
-        version: extract_frontmatter_field(&content, "version"),
+        name: parsed.config.name,
+        description: if parsed.config.description.is_empty() { None } else { Some(parsed.config.description) },
+        version: if parsed.config.version.is_empty() { None } else { Some(parsed.config.version) },
     })
+}
+
+/// Scan roots for a skill whose frontmatter `name` matches `target_name`.
+/// Returns the content file path and the root it was found in. Used as a
+/// fallback when path-based lookup fails (basename != frontmatter name).
+async fn find_by_frontmatter_name(roots: &[PathBuf], target_name: &str) -> Option<(PathBuf, PathBuf)> {
+    for root in roots {
+        if !root.exists() {
+            continue;
+        }
+        let Ok(mut reader) = tokio::fs::read_dir(root).await else { continue };
+        while let Ok(Some(entry)) = reader.next_entry().await {
+            let path = entry.path();
+            let content_path = if path.is_dir() {
+                let skill_md = path.join("SKILL.md");
+                if skill_md.exists() { skill_md } else { continue }
+            } else if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
+                path.clone()
+            } else {
+                continue;
+            };
+            if let Ok(content) = tokio::fs::read_to_string(&content_path).await
+                && let Ok(parsed) = parse_skill_markdown_str(&content, content_path.clone())
+                && parsed.config.name == target_name
+            {
+                return Some((content_path, root.clone()));
+            }
+        }
+    }
+    None
 }
 
 fn extract_frontmatter_field(content: &str, field: &str) -> Option<String> {
@@ -387,6 +417,22 @@ impl Tool for SkillView {
                     .map(ToolOutput::success)
                     .map_err(|e| ToolError::ExecutionFailed(format!("serialize: {e}")));
             }
+        }
+
+        // Fallback: scan roots for a skill whose frontmatter name matches
+        // (handles basename != frontmatter name cases).
+        if let Some((content_path, root)) = find_by_frontmatter_name(&self.ctx.skill_roots, name).await {
+            let content = tokio::fs::read_to_string(&content_path)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("read: {e}")))?;
+            let output = serde_json::json!({
+                "name": name,
+                "source": root.display().to_string(),
+                "content": content,
+            });
+            return serde_json::to_string_pretty(&output)
+                .map(ToolOutput::success)
+                .map_err(|e| ToolError::ExecutionFailed(format!("serialize: {e}")));
         }
 
         Err(ToolError::ExecutionFailed(format!(
@@ -622,7 +668,7 @@ impl SkillManage {
             .and_then(|v| v.as_str())
             .unwrap_or("1.0.0");
 
-        let (location, _root) = self.find_skill(name)?;
+        let (location, _root) = self.find_skill(name).await?;
 
         if !matches!(&location, SkillLocation::Directory(_)) && patch_kind_str != "update_skill_md" {
             return Err(ToolError::InvalidInput(format!(
@@ -747,7 +793,7 @@ impl SkillManage {
             .map_err(|e| ToolError::ExecutionFailed(format!("serialize: {e}")))
     }
 
-    fn find_skill(&self, name: &str) -> Result<(SkillLocation, PathBuf), ToolError> {
+    async fn find_skill(&self, name: &str) -> Result<(SkillLocation, PathBuf), ToolError> {
         for root in &self.ctx.skill_roots {
             if let Some(path) = safe_skill_path(root, name)
                 && path.is_dir()
@@ -759,6 +805,15 @@ impl SkillManage {
             if md_file.is_file() {
                 return Ok((SkillLocation::SingleFile(md_file), root.clone()));
             }
+        }
+        // Fallback: scan for a skill whose frontmatter name matches.
+        if let Some((content_path, root)) = find_by_frontmatter_name(&self.ctx.skill_roots, name).await {
+            if content_path.file_name().and_then(|f| f.to_str()) == Some("SKILL.md")
+                && let Some(dir) = content_path.parent()
+            {
+                return Ok((SkillLocation::Directory(dir.to_path_buf()), root));
+            }
+            return Ok((SkillLocation::SingleFile(content_path), root));
         }
         Err(ToolError::ExecutionFailed(format!(
             "skill '{name}' not found for patching"

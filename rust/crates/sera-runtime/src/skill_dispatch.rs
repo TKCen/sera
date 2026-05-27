@@ -124,11 +124,8 @@ impl SkillDispatchEngine {
         for (config, definition) in manual_entries {
             replacement.register_loaded(config, definition);
         }
-        for name in active_names {
-            let _ = replacement.registry.activate(&name);
-        }
-
         let mut g = self.inner.lock().expect("skill engine mutex poisoned");
+        restore_active_names(&mut replacement, active_names, &g.registry);
         *g = replacement;
         Ok(count)
     }
@@ -277,6 +274,25 @@ async fn collect_skill_dir(
 impl Default for SkillDispatchEngine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn restore_active_names(
+    replacement: &mut Inner,
+    mut snapshotted_active_names: Vec<String>,
+    current_registry: &SkillRegistry,
+) {
+    snapshotted_active_names.extend(
+        current_registry
+            .active_skill_names()
+            .into_iter()
+            .map(String::from),
+    );
+    snapshotted_active_names.sort();
+    snapshotted_active_names.dedup();
+
+    for name in snapshotted_active_names {
+        let _ = replacement.registry.activate(&name);
     }
 }
 
@@ -529,6 +545,39 @@ mod tests {
         let fired_disk = eng.on_turn("disk please");
         assert_eq!(fired_disk.len(), 1);
         assert_eq!(fired_disk[0].name, "disk");
+    }
+
+
+    #[test]
+    fn restore_active_names_merges_snapshot_and_current_registry() {
+        let mut replacement = Inner::empty();
+        replacement.register_loaded(
+            cfg("snapshot-active", SkillTrigger::Event("snapshot".into()), Some("snapshot ctx")),
+            None,
+        );
+        replacement.register_loaded(
+            cfg("current-active", SkillTrigger::Event("current".into()), Some("current ctx")),
+            None,
+        );
+
+        let mut current = SkillRegistry::new();
+        current.register(cfg(
+            "current-active",
+            SkillTrigger::Event("current".into()),
+            Some("current ctx"),
+        ));
+        current.activate("current-active").unwrap();
+
+        restore_active_names(
+            &mut replacement,
+            vec!["snapshot-active".to_string()],
+            &current,
+        );
+
+        assert_eq!(
+            replacement.registry.active_skill_names(),
+            vec!["current-active", "snapshot-active"],
+        );
     }
 
 }

@@ -7,6 +7,7 @@
 //! [`SkillDispatchEngine::on_turn`] from the harness before the think step
 //! so activated skills contribute their `context_injection` to the prompt.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -25,6 +26,7 @@ pub struct SkillDispatchEngine {
 struct Inner {
     dispatcher: TriggerDispatcher,
     registry: SkillRegistry,
+    definitions: HashMap<String, SkillDefinition>,
     source_dirs: Vec<PathBuf>,
     manual_entries: Vec<(SkillConfig, Option<SkillDefinition>)>,
 }
@@ -34,12 +36,18 @@ impl Inner {
         Self {
             dispatcher: TriggerDispatcher::new(),
             registry: SkillRegistry::new(),
+            definitions: HashMap::new(),
             source_dirs: Vec::new(),
             manual_entries: Vec::new(),
         }
     }
 
     fn register_loaded(&mut self, config: SkillConfig, definition: Option<SkillDefinition>) {
+        if let Some(definition) = &definition {
+            self.definitions.insert(config.name.clone(), definition.clone());
+        } else {
+            self.definitions.remove(&config.name);
+        }
         self.registry.register(config.clone());
         self.dispatcher.register(config, definition);
     }
@@ -155,13 +163,28 @@ impl SkillDispatchEngine {
     /// Returns the `context_injection` strings for every currently-active
     /// skill. Intended to be appended to the system prompt on every turn.
     pub fn active_context_injections(&self) -> Vec<String> {
-        self.inner
-            .lock()
-            .expect("skill engine mutex poisoned")
-            .registry
-            .context_injections()
+        let g = self.inner.lock().expect("skill engine mutex poisoned");
+        g.registry
+            .active_skill_names()
             .into_iter()
-            .map(String::from)
+            .flat_map(|name| {
+                let config_injection = g
+                    .registry
+                    .get_config(name)
+                    .and_then(|config| config.context_injection.as_deref());
+                let body_injection = g.definitions.get(name).and_then(|definition| {
+                    definition
+                        .body
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|body| !body.is_empty())
+                });
+                [config_injection, body_injection]
+                    .into_iter()
+                    .flatten()
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
             .collect()
     }
 
@@ -283,15 +306,12 @@ fn merge_current_manual_entries(
     current_manual_entries: &[(SkillConfig, Option<SkillDefinition>)],
 ) {
     for (config, definition) in current_manual_entries {
-        if !replacement
+        replacement
             .manual_entries
-            .iter()
-            .any(|(existing, _)| existing.name == config.name)
-        {
-            replacement
-                .manual_entries
-                .push((config.clone(), definition.clone()));
-        }
+            .retain(|(existing, _)| existing.name != config.name);
+        replacement
+            .manual_entries
+            .push((config.clone(), definition.clone()));
         replacement.register_loaded(config.clone(), definition.clone());
     }
 }
@@ -428,6 +448,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn active_context_injections_include_loaded_markdown_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        tokio::fs::write(
+            tmp.path().join("hello.md"),
+            "---\nname: hello\nversion: 1.0.0\ntriggers:\n  - hi\n---\nmarkdown skill body\n",
+        )
+        .await
+        .unwrap();
+
+        let eng = SkillDispatchEngine::new();
+        eng.load_dir(tmp.path()).await.unwrap();
+        let (fired, injections) = eng.prepare_loaded_turn_context("hi there");
+
+        assert_eq!(fired.len(), 1);
+        assert_eq!(injections, vec!["markdown skill body"]);
+    }
+
+    #[tokio::test]
     async fn load_dir_reads_directory_style_skills() {
         let tmp = tempfile::tempdir().unwrap();
         let skill_dir = tmp.path().join("my-skill");
@@ -504,7 +542,7 @@ mod tests {
             .unwrap();
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].name, "hello");
-        assert!(injections.is_empty());
+        assert_eq!(injections, vec!["new body"]);
     }
 
     #[tokio::test]
@@ -623,6 +661,28 @@ mod tests {
         replacement.registry.activate("manual-during-reload").unwrap();
         assert_eq!(replacement.registry.active_skill_names(), vec!["manual-during-reload"]);
         assert_eq!(replacement.registry.context_injections(), vec!["manual ctx"]);
+    }
+
+
+    #[test]
+    fn merge_current_manual_entries_replaces_same_name_snapshot() {
+        let mut replacement = Inner::empty();
+        replacement.manual_entries.push((
+            cfg("manual", SkillTrigger::Event("old".into()), Some("old ctx")),
+            None,
+        ));
+
+        let current_manual_entries = vec![(
+            cfg("manual", SkillTrigger::Event("new".into()), Some("new ctx")),
+            None,
+        )];
+
+        merge_current_manual_entries(&mut replacement, &current_manual_entries);
+
+        assert_eq!(replacement.manual_entries.len(), 1);
+        assert_eq!(replacement.manual_entries[0].0.context_injection.as_deref(), Some("new ctx"));
+        assert!(replacement.dispatcher.dispatch("old please").is_empty());
+        assert_eq!(replacement.dispatcher.dispatch("new please").len(), 1);
     }
 
 }

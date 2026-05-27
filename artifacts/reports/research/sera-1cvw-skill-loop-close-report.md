@@ -88,6 +88,7 @@ Repair evidence:
 - Codex follow-up for mixed disk/manual registries: reload now preserves programmatic registrations alongside scanned directories. Verified with `reload_preserves_manual_registrations_alongside_loaded_dirs`, the gateway introspection snapshot test, check, and scoped clippy.
 - Codex concurrent-reload follow-up: final registry swap now merges active names from both the pre-scan snapshot and the current registry while holding the mutex, preventing activations made during async disk scan from being lost. Verified with `restore_active_names_merges_snapshot_and_current_registry` plus focused gateway/check/clippy gates.
 - Codex concurrent-register follow-up: final reload swap now also merges manual registrations added while async disk scan was in flight. Verified with `merge_current_manual_entries_preserves_registrations_added_during_reload` plus focused gateway/check/clippy gates.
+- Codex body-injection/same-name follow-up: runtime now stores loaded `SkillDefinition`s and injects active markdown bodies, and same-name manual registrations observed at swap time replace stale snapshots. Verified with `active_context_injections_include_loaded_markdown_body`, `merge_current_manual_entries_replaces_same_name_snapshot`, skill-management tests, gateway snapshot test, check, and scoped clippy.
 
 ## Remaining Gaps / Follow-up Beads
 

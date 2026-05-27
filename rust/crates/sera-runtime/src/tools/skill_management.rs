@@ -140,7 +140,7 @@ async fn discover_skills(roots: &[PathBuf], query: Option<&str>) -> Vec<SkillLis
                 continue;
             }
 
-            let skill_name = if path.is_dir() {
+            let skill_name = if path.is_dir() && path.join("SKILL.md").exists() {
                 raw_name.to_string()
             } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
                 path.file_stem()
@@ -548,6 +548,13 @@ impl SkillManage {
             return Err(ToolError::ExecutionFailed(format!(
                 "skill '{name}' already exists at {}",
                 skill_dir.display()
+            )));
+        }
+        let single_file = self.ctx.write_root.join(format!("{name}.md"));
+        if single_file.exists() {
+            return Err(ToolError::ExecutionFailed(format!(
+                "skill '{name}' already exists as {}",
+                single_file.display()
             )));
         }
 
@@ -1081,6 +1088,49 @@ mod tests {
         );
         let err = tool.execute(input, make_ctx()).await.unwrap_err();
         assert!(matches!(err, ToolError::ExecutionFailed(_)));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_collision_with_single_file_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        tokio::fs::write(tmp.path().join("legacy.md"), &skill_body("legacy", "Legacy"))
+            .await
+            .unwrap();
+
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillManage::new(ctx);
+        let input = make_input(
+            "skill-manage",
+            serde_json::json!({
+                "action": "create",
+                "name": "legacy",
+                "body": skill_body("legacy", "New version"),
+            }),
+        );
+        let err = tool.execute(input, make_ctx()).await.unwrap_err();
+        assert!(matches!(err, ToolError::ExecutionFailed(_)));
+        assert!(!tmp.path().join("legacy").exists(), "directory must not be created");
+    }
+
+    #[tokio::test]
+    async fn list_skips_non_skill_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Real skill directory
+        setup_skill_dir(tmp.path(), "real", &skill_body("real", "Real skill")).await;
+        // Non-skill directory (no SKILL.md)
+        tokio::fs::create_dir_all(tmp.path().join("stale-tmp")).await.unwrap();
+        tokio::fs::write(tmp.path().join("stale-tmp").join("junk.txt"), "junk")
+            .await
+            .unwrap();
+
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillList::new(ctx);
+        let input = make_input("skill-list", serde_json::json!({}));
+        let output = tool.execute(input, make_ctx()).await.unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["skills"][0]["name"], "real");
     }
 
     #[tokio::test]

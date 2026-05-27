@@ -85,6 +85,7 @@ Repair evidence:
 - `cargo check -p sera-runtime -p sera-gateway -p sera-skills`: clean.
 - `cargo clippy -p sera-runtime -p sera-gateway -p sera-skills -- -D warnings`: clean.
 - CI repair for `execute_turn_injects_truthful_self_introspection_snapshot`: `reload_registered_dirs()` now no-ops when no source directories are registered, preserving programmatically registered skills. Verified with `cargo test -p sera-gateway --bin sera-gateway execute_turn_injects_truthful_self_introspection_snapshot -- --nocapture`.
+- Codex follow-up for mixed disk/manual registries: reload now preserves programmatic registrations alongside scanned directories. Verified with `reload_preserves_manual_registrations_alongside_loaded_dirs`, the gateway introspection snapshot test, check, and scoped clippy.
 
 ## Remaining Gaps / Follow-up Beads
 

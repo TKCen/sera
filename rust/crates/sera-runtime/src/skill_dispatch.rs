@@ -26,6 +26,7 @@ struct Inner {
     dispatcher: TriggerDispatcher,
     registry: SkillRegistry,
     source_dirs: Vec<PathBuf>,
+    manual_entries: Vec<(SkillConfig, Option<SkillDefinition>)>,
 }
 
 impl Inner {
@@ -34,12 +35,19 @@ impl Inner {
             dispatcher: TriggerDispatcher::new(),
             registry: SkillRegistry::new(),
             source_dirs: Vec::new(),
+            manual_entries: Vec::new(),
         }
     }
 
-    fn register(&mut self, config: SkillConfig, definition: Option<SkillDefinition>) {
+    fn register_loaded(&mut self, config: SkillConfig, definition: Option<SkillDefinition>) {
         self.registry.register(config.clone());
         self.dispatcher.register(config, definition);
+    }
+
+    fn register_manual(&mut self, config: SkillConfig, definition: Option<SkillDefinition>) {
+        self.manual_entries.retain(|(existing, _)| existing.name != config.name);
+        self.manual_entries.push((config.clone(), definition.clone()));
+        self.register_loaded(config, definition);
     }
 }
 
@@ -56,7 +64,7 @@ impl SkillDispatchEngine {
     /// markdown frontmatter.
     pub fn register(&self, config: SkillConfig, definition: Option<SkillDefinition>) {
         let mut g = self.inner.lock().expect("skill engine mutex poisoned");
-        g.register(config, definition);
+        g.register_manual(config, definition);
     }
 
     /// Load every `*.md` skill file under `dir` (non-recursive) and register
@@ -71,7 +79,7 @@ impl SkillDispatchEngine {
             g.source_dirs.push(dir);
         }
         for (config, definition) in loaded {
-            g.register(config, Some(definition));
+            g.register_loaded(config, Some(definition));
         }
         Ok(count)
     }
@@ -81,10 +89,11 @@ impl SkillDispatchEngine {
     /// after reload remain active so updated context injections take effect
     /// without a process restart.
     pub async fn reload_registered_dirs(&self) -> Result<usize, SkillsError> {
-        let (source_dirs, active_names) = {
+        let (source_dirs, manual_entries, active_names) = {
             let g = self.inner.lock().expect("skill engine mutex poisoned");
             (
                 g.source_dirs.clone(),
+                g.manual_entries.clone(),
                 g.registry
                     .active_skill_names()
                     .into_iter()
@@ -105,8 +114,15 @@ impl SkillDispatchEngine {
 
         let mut replacement = Inner::empty();
         replacement.source_dirs = source_dirs;
+        replacement.manual_entries = manual_entries.clone();
         for (config, definition) in loaded {
-            replacement.register(config, Some(definition));
+            replacement.register_loaded(config, Some(definition));
+        }
+        // Preserve programmatic registrations across disk reloads. Register
+        // them after disk-loaded skills so embedders can intentionally
+        // override a scanned skill by name.
+        for (config, definition) in manual_entries {
+            replacement.register_loaded(config, definition);
         }
         for name in active_names {
             let _ = replacement.registry.activate(&name);
@@ -481,6 +497,38 @@ mod tests {
 
         eng.reload_registered_dirs().await.unwrap();
         assert_eq!(eng.active_skill_names(), vec!["helper"]);
+    }
+
+
+    #[tokio::test]
+    async fn reload_preserves_manual_registrations_alongside_loaded_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("disk.md");
+        tokio::fs::write(
+            &path,
+            "---\nname: disk\nversion: 1.0.0\ntriggers:\n  - disk\n---\nbody\n",
+        )
+        .await
+        .unwrap();
+
+        let eng = SkillDispatchEngine::new();
+        eng.register(
+            cfg("manual", SkillTrigger::Event("manual".into()), Some("manual ctx")),
+            None,
+        );
+        eng.load_dir(tmp.path()).await.unwrap();
+
+        eng.reload_registered_dirs().await.unwrap();
+
+        let fired = eng.on_turn("manual please");
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].name, "manual");
+        assert_eq!(eng.active_context_injections(), vec!["manual ctx"]);
+
+        eng.deactivate("manual");
+        let fired_disk = eng.on_turn("disk please");
+        assert_eq!(fired_disk.len(), 1);
+        assert_eq!(fired_disk[0].name, "disk");
     }
 
 }

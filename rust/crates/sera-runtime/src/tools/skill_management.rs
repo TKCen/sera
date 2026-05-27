@@ -229,30 +229,6 @@ async fn find_by_frontmatter_name(roots: &[PathBuf], target_name: &str) -> Optio
     None
 }
 
-fn extract_frontmatter_field(content: &str, field: &str) -> Option<String> {
-    if !content.starts_with("---") {
-        return None;
-    }
-    let after_open = &content[3..];
-    let close_pos = after_open.find("\n---")?;
-    let frontmatter = &after_open[..close_pos];
-    let prefix = format!("{field}:");
-    for line in frontmatter.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix(&prefix) {
-            let val = rest.trim().trim_matches('"').trim_matches('\'');
-            if !val.is_empty() {
-                return Some(val.to_string());
-            }
-        }
-    }
-    None
-}
-
-fn extract_version_from_frontmatter(content: &str) -> Option<String> {
-    extract_frontmatter_field(content, "version")
-}
-
 // ── SkillList ───────────────────────────────────────────────────────────────
 
 pub struct SkillList {
@@ -512,7 +488,6 @@ impl Tool for SkillManage {
                 enum_values: Some(vec![
                     "update_skill_md".to_string(),
                     "add_knowledge".to_string(),
-                    "update_metadata".to_string(),
                 ]),
                 default: None,
             },
@@ -522,15 +497,6 @@ impl Tool for SkillManage {
             ParameterSchema {
                 schema_type: "string".to_string(),
                 description: Some("Knowledge filename (for add_knowledge patch)".to_string()),
-                enum_values: None,
-                default: None,
-            },
-        );
-        properties.insert(
-            "field".to_string(),
-            ParameterSchema {
-                schema_type: "string".to_string(),
-                description: Some("Metadata field name (for update_metadata patch)".to_string()),
                 enum_values: None,
                 default: None,
             },
@@ -727,16 +693,12 @@ impl SkillManage {
                 )
             }
             "update_metadata" => {
-                let field = args["field"].as_str().ok_or_else(|| {
-                    ToolError::InvalidInput("missing 'field' for update_metadata".to_string())
-                })?;
-                (
-                    PatchKind::UpdateMetadata,
-                    PatchPayload::Metadata {
-                        field: field.to_string(),
-                        value: body.to_string(),
-                    },
-                )
+                return Err(ToolError::InvalidInput(
+                    "update_metadata is not supported: the runtime only reads SKILL.md frontmatter, \
+                     so metadata changes via this path would not be runtime-visible; \
+                     update the description/version fields via update_skill_md instead"
+                        .to_string(),
+                ));
             }
             other => {
                 return Err(ToolError::InvalidInput(format!(
@@ -854,8 +816,9 @@ async fn load_skill_pack_from_dir(
         String::new()
     };
 
-    let version =
-        extract_version_from_frontmatter(&skill_md).unwrap_or_else(|| "0.0.0".to_string());
+    let version = parse_skill_markdown_str(&skill_md, skill_md_path.clone())
+        .map(|p| p.config.version)
+        .unwrap_or_else(|_| "0.0.0".to_string());
 
     let mut pack = sera_skills::self_patch::SkillPack::new(name, &version);
     pack.skill_md = skill_md;
@@ -886,8 +849,9 @@ async fn load_skill_pack_from_file(
         .await
         .map_err(|e| ToolError::ExecutionFailed(format!("read {}: {e}", path.display())))?;
 
-    let version =
-        extract_version_from_frontmatter(&skill_md).unwrap_or_else(|| "0.0.0".to_string());
+    let version = parse_skill_markdown_str(&skill_md, path.to_path_buf())
+        .map(|p| p.config.version)
+        .unwrap_or_else(|_| "0.0.0".to_string());
 
     let mut pack = sera_skills::self_patch::SkillPack::new(name, &version);
     pack.skill_md = skill_md;

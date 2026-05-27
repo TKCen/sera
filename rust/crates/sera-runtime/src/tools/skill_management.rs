@@ -737,8 +737,20 @@ impl SkillManage {
             }
         };
 
+        // Use the directory basename as skill_id so FsSelfPatchApplier
+        // targets the actual directory, not a re-derived path from the
+        // frontmatter name (which may differ for legacy skills).
+        let patch_skill_id = match &location {
+            SkillLocation::Directory(dir) => dir
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or(name)
+                .to_string(),
+            SkillLocation::SingleFile(_) => name.to_string(),
+        };
+
         let patch = SkillPatch {
-            skill_id: name.to_string(),
+            skill_id: patch_skill_id,
             base_version: base_version.to_string(),
             patch_kind,
             payload,
@@ -835,7 +847,7 @@ async fn load_skill_pack_from_dir(
     };
 
     let version =
-        extract_version_from_frontmatter(&skill_md).unwrap_or_else(|| "1.0.0".to_string());
+        extract_version_from_frontmatter(&skill_md).unwrap_or_else(|| "0.0.0".to_string());
 
     let mut pack = sera_skills::self_patch::SkillPack::new(name, &version);
     pack.skill_md = skill_md;
@@ -867,7 +879,7 @@ async fn load_skill_pack_from_file(
         .map_err(|e| ToolError::ExecutionFailed(format!("read {}: {e}", path.display())))?;
 
     let version =
-        extract_version_from_frontmatter(&skill_md).unwrap_or_else(|| "1.0.0".to_string());
+        extract_version_from_frontmatter(&skill_md).unwrap_or_else(|| "0.0.0".to_string());
 
     let mut pack = sera_skills::self_patch::SkillPack::new(name, &version);
     pack.skill_md = skill_md;

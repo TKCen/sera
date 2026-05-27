@@ -663,11 +663,6 @@ impl SkillManage {
         let body = args["body"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("missing 'body' for patch".to_string()))?;
-        let base_version = args
-            .get("base_version")
-            .and_then(|v| v.as_str())
-            .unwrap_or("1.0.0");
-
         let (location, _root) = self.find_skill(name).await?;
 
         if !matches!(&location, SkillLocation::Directory(_)) && patch_kind_str != "update_skill_md" {
@@ -680,6 +675,11 @@ impl SkillManage {
             SkillLocation::Directory(dir) => load_skill_pack_from_dir(dir, name).await?,
             SkillLocation::SingleFile(path) => load_skill_pack_from_file(path, name).await?,
         };
+
+        let base_version = args
+            .get("base_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&current.version);
 
         let (patch_kind, payload) = match patch_kind_str {
             "update_skill_md" => {
@@ -898,12 +898,17 @@ pub fn build_skill_management_tools(
 }
 
 /// Build a [`SkillManagementContext`] from `SERA_SKILLS_DIR` (or the default
-/// `skills` directory used by the gateway dispatcher). Returns `None` only
-/// when neither path exists on disk.
+/// `skills` directory used by the gateway dispatcher). When the env var is
+/// explicitly set, tools are registered even if the dir doesn't exist yet
+/// (so `skill-manage create` can bootstrap it). When falling back to the
+/// default, tools are only registered if the directory already exists.
 pub fn skill_management_context_from_env() -> Option<Arc<SkillManagementContext>> {
-    let dir = std::env::var("SERA_SKILLS_DIR").unwrap_or_else(|_| "skills".to_string());
+    let (dir, explicit) = match std::env::var("SERA_SKILLS_DIR") {
+        Ok(d) => (d, true),
+        Err(_) => ("skills".to_string(), false),
+    };
     let path = PathBuf::from(&dir);
-    if path.is_dir() {
+    if explicit || path.is_dir() {
         Some(Arc::new(SkillManagementContext::new(vec![path])))
     } else {
         None
@@ -1585,11 +1590,11 @@ mod tests {
     }
 
     #[test]
-    fn context_from_env_returns_none_when_dir_missing() {
+    fn context_from_env_returns_some_when_explicit_dir_missing() {
         unsafe { std::env::set_var("SERA_SKILLS_DIR", "/tmp/__sera_nonexistent_skills_dir__") };
         let ctx = skill_management_context_from_env();
         unsafe { std::env::remove_var("SERA_SKILLS_DIR") };
-        assert!(ctx.is_none());
+        assert!(ctx.is_some(), "explicit SERA_SKILLS_DIR registers tools even if dir doesn't exist yet");
     }
 
     #[test]

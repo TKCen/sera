@@ -616,12 +616,25 @@ impl SkillManage {
         };
 
         let (patch_kind, payload) = match patch_kind_str {
-            "update_skill_md" => (
-                PatchKind::UpdateSkillMd,
-                PatchPayload::SkillMd {
-                    new_body: body.to_string(),
-                },
-            ),
+            "update_skill_md" => {
+                let parsed = parse_skill_markdown_str(
+                    body,
+                    PathBuf::from(format!("{name}/SKILL.md")),
+                )
+                .map_err(|e| ToolError::InvalidInput(format!("invalid SKILL.md body: {e}")))?;
+                if parsed.config.name != name {
+                    return Err(ToolError::InvalidInput(format!(
+                        "frontmatter name '{}' does not match skill '{name}'",
+                        parsed.config.name
+                    )));
+                }
+                (
+                    PatchKind::UpdateSkillMd,
+                    PatchPayload::SkillMd {
+                        new_body: body.to_string(),
+                    },
+                )
+            }
             "add_knowledge" => {
                 let filename = args["filename"].as_str().ok_or_else(|| {
                     ToolError::InvalidInput("missing 'filename' for add_knowledge".to_string())
@@ -1192,6 +1205,33 @@ mod tests {
         );
         let err = tool.execute(input, make_ctx()).await.unwrap_err();
         assert!(matches!(err, ToolError::ExecutionFailed(_)));
+    }
+
+    #[tokio::test]
+    async fn patch_rejects_name_mismatch_in_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_skill_dir(tmp.path(), "foo", &skill_body("foo", "Original")).await;
+
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillManage::new(ctx);
+        let bad_body = skill_body("bar", "Sneaky rename");
+        let input = make_input(
+            "skill-manage",
+            serde_json::json!({
+                "action": "patch",
+                "name": "foo",
+                "patch_kind": "update_skill_md",
+                "body": bad_body,
+                "base_version": "1.0.0",
+            }),
+        );
+        let err = tool.execute(input, make_ctx()).await.unwrap_err();
+        assert!(matches!(err, ToolError::InvalidInput(_)));
+        // Original content must be unchanged
+        let content = tokio::fs::read_to_string(tmp.path().join("foo").join("SKILL.md"))
+            .await
+            .unwrap();
+        assert!(content.contains("Original"));
     }
 
     #[tokio::test]

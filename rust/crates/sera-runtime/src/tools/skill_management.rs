@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use sera_skills::knowledge_activity_log::{KnowledgeActivityEntry, KnowledgeActivityLog, KnowledgeOp};
+use sera_skills::parse_skill_markdown_str;
 use sera_skills::self_patch::{
     DefaultSelfPatchValidator, FsSelfPatchApplier, PatchKind, PatchPayload, SelfPatchApplier,
     SelfPatchValidator, SkillPatch,
@@ -527,6 +528,18 @@ impl SkillManage {
         let body = args["body"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("missing 'body' for create".to_string()))?;
+
+        // Validate the body is parseable SKILL.md before persisting.
+        let parsed = parse_skill_markdown_str(body, PathBuf::from(format!("{name}/SKILL.md")))
+            .map_err(|e| {
+                ToolError::InvalidInput(format!("invalid SKILL.md body: {e}"))
+            })?;
+        if parsed.config.name != name {
+            return Err(ToolError::InvalidInput(format!(
+                "frontmatter name '{}' does not match requested skill name '{name}'",
+                parsed.config.name
+            )));
+        }
 
         let skill_dir = safe_skill_path(&self.ctx.write_root, name)
             .ok_or_else(|| ToolError::InvalidInput(format!("unsafe skill path for '{name}'")))?;
@@ -1050,11 +1063,77 @@ mod tests {
             serde_json::json!({
                 "action": "create",
                 "name": "existing",
-                "body": "new content",
+                "body": skill_body("existing", "Duplicate attempt"),
             }),
         );
         let err = tool.execute(input, make_ctx()).await.unwrap_err();
         assert!(matches!(err, ToolError::ExecutionFailed(_)));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_invalid_body_no_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillManage::new(ctx);
+        let input = make_input(
+            "skill-manage",
+            serde_json::json!({
+                "action": "create",
+                "name": "bad-body",
+                "body": "no frontmatter here, just plain text",
+            }),
+        );
+        let err = tool.execute(input, make_ctx()).await.unwrap_err();
+        assert!(matches!(err, ToolError::InvalidInput(_)));
+        // No directory should have been created
+        assert!(!tmp.path().join("bad-body").exists());
+    }
+
+    #[tokio::test]
+    async fn create_rejects_name_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillManage::new(ctx);
+        let body = skill_body("wrong-name", "Description");
+        let input = make_input(
+            "skill-manage",
+            serde_json::json!({
+                "action": "create",
+                "name": "actual-name",
+                "body": body,
+            }),
+        );
+        let err = tool.execute(input, make_ctx()).await.unwrap_err();
+        assert!(matches!(err, ToolError::InvalidInput(_)));
+        assert!(!tmp.path().join("actual-name").exists());
+    }
+
+    #[tokio::test]
+    async fn created_skill_is_loadable_by_dispatch_engine() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillManage::new(ctx);
+
+        let body = "---\nname: greet\nversion: 1.0.0\ndescription: Greeting skill\ntriggers:\n  - hello\n---\n\nSay hello.\n";
+        let input = make_input(
+            "skill-manage",
+            serde_json::json!({
+                "action": "create",
+                "name": "greet",
+                "body": body,
+            }),
+        );
+        tool.execute(input, make_ctx()).await.unwrap();
+
+        // Verify the dispatch engine can load it (simulates fresh session)
+        let engine = crate::skill_dispatch::SkillDispatchEngine::new();
+        let loaded = engine.load_dir(tmp.path()).await.unwrap();
+        assert_eq!(loaded, 1, "dispatch engine must load the created skill");
+        assert_eq!(engine.registered_count(), 1);
+
+        let fired = engine.on_turn("hello there");
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].name, "greet");
     }
 
     // ── SkillManage: patch ──────────────────────────────────────────────

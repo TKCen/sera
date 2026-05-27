@@ -7,7 +7,7 @@
 //! [`SkillDispatchEngine::on_turn`] from the harness before the think step
 //! so activated skills contribute their `context_injection` to the prompt.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use sera_skills::{SkillsError, TriggerDispatcher, parse_skill_markdown_file};
@@ -25,16 +25,29 @@ pub struct SkillDispatchEngine {
 struct Inner {
     dispatcher: TriggerDispatcher,
     registry: SkillRegistry,
+    source_dirs: Vec<PathBuf>,
+}
+
+impl Inner {
+    fn empty() -> Self {
+        Self {
+            dispatcher: TriggerDispatcher::new(),
+            registry: SkillRegistry::new(),
+            source_dirs: Vec::new(),
+        }
+    }
+
+    fn register(&mut self, config: SkillConfig, definition: Option<SkillDefinition>) {
+        self.registry.register(config.clone());
+        self.dispatcher.register(config, definition);
+    }
 }
 
 impl SkillDispatchEngine {
     /// Construct an empty engine.
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(Inner {
-                dispatcher: TriggerDispatcher::new(),
-                registry: SkillRegistry::new(),
-            }),
+            inner: Mutex::new(Inner::empty()),
         }
     }
 
@@ -43,56 +56,60 @@ impl SkillDispatchEngine {
     /// markdown frontmatter.
     pub fn register(&self, config: SkillConfig, definition: Option<SkillDefinition>) {
         let mut g = self.inner.lock().expect("skill engine mutex poisoned");
-        g.registry.register(config.clone());
-        g.dispatcher.register(config, definition);
+        g.register(config, definition);
     }
 
     /// Load every `*.md` skill file under `dir` (non-recursive) and register
     /// it. Parse failures are logged and skipped so one bad file does not
     /// wedge the runtime.
     pub async fn load_dir(&self, dir: &Path) -> Result<usize, SkillsError> {
-        if !dir.exists() {
-            return Ok(0);
+        let loaded = collect_skill_dir(dir).await?;
+        let count = loaded.len();
+        let mut g = self.inner.lock().expect("skill engine mutex poisoned");
+        let dir = dir.to_path_buf();
+        if !g.source_dirs.iter().any(|existing| existing == &dir) {
+            g.source_dirs.push(dir);
         }
-        let mut count = 0usize;
-        let mut reader = tokio::fs::read_dir(dir).await?;
-        while let Some(entry) = reader.next_entry().await? {
-            let path = entry.path();
-            // Single-file: top-level *.md files
-            if path.is_file() && path.extension().is_some_and(|e| e == "md") {
-                match parse_skill_markdown_file(&path).await {
-                    Ok(parsed) => {
-                        self.register(parsed.config, Some(parsed.definition));
-                        count += 1;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            path = %path.display(),
-                            error = %e,
-                            "skill_dispatch: failed to parse skill markdown, skipping"
-                        );
-                    }
-                }
-            // Directory-style: <name>/SKILL.md (created by skill-manage)
-            } else if path.is_dir() {
-                let skill_md = path.join("SKILL.md");
-                if skill_md.exists() {
-                    match parse_skill_markdown_file(&skill_md).await {
-                        Ok(parsed) => {
-                            self.register(parsed.config, Some(parsed.definition));
-                            count += 1;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                path = %skill_md.display(),
-                                error = %e,
-                                "skill_dispatch: failed to parse directory skill, skipping"
-                            );
-                        }
-                    }
-                }
-            }
+        for (config, definition) in loaded {
+            g.register(config, Some(definition));
         }
+        Ok(count)
+    }
+
+    /// Reload every previously loaded skill directory from disk and replace
+    /// the in-memory dispatcher/registry. Active skill names that still exist
+    /// after reload remain active so updated context injections take effect
+    /// without a process restart.
+    pub async fn reload_registered_dirs(&self) -> Result<usize, SkillsError> {
+        let (source_dirs, active_names) = {
+            let g = self.inner.lock().expect("skill engine mutex poisoned");
+            (
+                g.source_dirs.clone(),
+                g.registry
+                    .active_skill_names()
+                    .into_iter()
+                    .map(String::from)
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        let mut loaded = Vec::new();
+        for dir in &source_dirs {
+            loaded.extend(collect_skill_dir(dir).await?);
+        }
+        let count = loaded.len();
+
+        let mut replacement = Inner::empty();
+        replacement.source_dirs = source_dirs;
+        for (config, definition) in loaded {
+            replacement.register(config, Some(definition));
+        }
+        for name in active_names {
+            let _ = replacement.registry.activate(&name);
+        }
+
+        let mut g = self.inner.lock().expect("skill engine mutex poisoned");
+        *g = replacement;
         Ok(count)
     }
 
@@ -109,7 +126,11 @@ impl SkillDispatchEngine {
     /// of newly activated skills (skills already active are not re-fired).
     pub fn on_turn(&self, content: &str) -> Vec<SkillMatch> {
         let mut g = self.inner.lock().expect("skill engine mutex poisoned");
-        let Inner { dispatcher, registry } = &mut *g;
+        let Inner {
+            dispatcher,
+            registry,
+            ..
+        } = &mut *g;
         dispatcher.fire(content, registry)
     }
 
@@ -168,6 +189,18 @@ impl SkillDispatchEngine {
         (fired, injections)
     }
 
+    /// Refresh registered skill directories from disk, then prepare skill
+    /// context for a turn. Use this in long-running harnesses so
+    /// `skill-manage patch` effects are visible on subsequent turns without
+    /// restarting the process.
+    pub async fn prepare_turn_context_refreshed(
+        &self,
+        turn_content: &str,
+    ) -> Result<(Vec<SkillMatch>, Vec<String>), SkillsError> {
+        self.reload_registered_dirs().await?;
+        Ok(self.prepare_turn_context(turn_content))
+    }
+
     /// Active skill names in deterministic order for self-introspection.
     pub fn active_skill_names(&self) -> Vec<String> {
         self.inner
@@ -179,6 +212,49 @@ impl SkillDispatchEngine {
             .map(String::from)
             .collect()
     }
+}
+
+async fn collect_skill_dir(
+    dir: &Path,
+) -> Result<Vec<(SkillConfig, SkillDefinition)>, SkillsError> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut loaded = Vec::new();
+    let mut reader = tokio::fs::read_dir(dir).await?;
+    while let Some(entry) = reader.next_entry().await? {
+        let path = entry.path();
+        // Single-file: top-level *.md files
+        if path.is_file() && path.extension().is_some_and(|e| e == "md") {
+            match parse_skill_markdown_file(&path).await {
+                Ok(parsed) => loaded.push((parsed.config, parsed.definition)),
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "skill_dispatch: failed to parse skill markdown, skipping"
+                    );
+                }
+            }
+        // Directory-style: <name>/SKILL.md (created by skill-manage)
+        } else if path.is_dir() {
+            let skill_md = path.join("SKILL.md");
+            if skill_md.exists() {
+                match parse_skill_markdown_file(&skill_md).await {
+                    Ok(parsed) => loaded.push((parsed.config, parsed.definition)),
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %skill_md.display(),
+                            error = %e,
+                            "skill_dispatch: failed to parse directory skill, skipping"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(loaded)
 }
 
 impl Default for SkillDispatchEngine {
@@ -347,4 +423,63 @@ mod tests {
         assert_eq!(n, 1, "only the good file should register");
         assert_eq!(eng.registered_count(), 1);
     }
+
+    #[tokio::test]
+    async fn refreshed_turn_context_sees_patched_triggers_without_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("hello.md");
+        tokio::fs::write(
+            &path,
+            "---\nname: hello\nversion: 1.0.0\ntriggers:\n  - hi\n---\nold body\n",
+        )
+        .await
+        .unwrap();
+
+        let eng = SkillDispatchEngine::new();
+        assert_eq!(eng.load_dir(tmp.path()).await.unwrap(), 1);
+        assert!(eng.on_turn("welcome aboard").is_empty());
+
+        tokio::fs::write(
+            &path,
+            "---\nname: hello\nversion: 1.0.0\ntriggers:\n  - welcome\n---\nnew body\n",
+        )
+        .await
+        .unwrap();
+
+        let (fired, injections) = eng
+            .prepare_turn_context_refreshed("welcome aboard")
+            .await
+            .unwrap();
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].name, "hello");
+        assert!(injections.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reload_preserves_active_skill_with_updated_injection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("helper.md");
+        tokio::fs::write(
+            &path,
+            "---\nname: helper\nversion: 1.0.0\ntriggers:\n  - go\n---\nold body\n",
+        )
+        .await
+        .unwrap();
+
+        let eng = SkillDispatchEngine::new();
+        eng.load_dir(tmp.path()).await.unwrap();
+        assert_eq!(eng.on_turn("go now").len(), 1);
+        assert_eq!(eng.active_skill_names(), vec!["helper"]);
+
+        tokio::fs::write(
+            &path,
+            "---\nname: helper\nversion: 1.0.0\ntriggers:\n  - go\n---\nnew body\n",
+        )
+        .await
+        .unwrap();
+
+        eng.reload_registered_dirs().await.unwrap();
+        assert_eq!(eng.active_skill_names(), vec!["helper"]);
+    }
+
 }

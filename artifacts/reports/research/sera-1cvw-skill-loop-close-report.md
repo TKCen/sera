@@ -66,9 +66,28 @@ Repair evidence:
 - `cargo test -p sera-skills --test self_patch`: 13 passed.
 - `cargo check -p sera-runtime -p sera-skills`: clean.
 
+## PR Review / CI Repair 2
+
+A second Codex review on `46e8196b` found that long-running gateway processes still used an in-memory skill registry loaded at startup. This left patched triggers invisible until restart. The repair adds:
+
+- `SkillDispatchEngine` source-dir tracking and `reload_registered_dirs()`;
+- `prepare_turn_context_refreshed()` for turn-loop callers;
+- gateway `execute_turn` wiring to refresh skill dispatch before injecting skill context, with warn-and-fallback behavior if reload fails;
+- regression tests proving patched markdown triggers are visible without process restart and active skills survive reload;
+- corrected markdown parser semantics: frontmatter `triggers` now stay as keyword triggers on the `SkillDefinition` while `SkillConfig::trigger` remains `Manual`, avoiding accidental fire-on-any-turn behavior.
+
+Repair evidence:
+
+- `cargo test --lib -p sera-runtime -- skill_dispatch -- --nocapture`: 11 passed.
+- `cargo test --lib -p sera-runtime -- skill_management::tests::fresh_engine_loads_patched_skill_and_fires_trigger -- --nocapture`: 1 passed.
+- `cargo test --lib -p sera-skills markdown::tests::parses_valid_frontmatter_and_body -- --nocapture`: 1 passed.
+- `cargo test --lib -p sera-skills trigger_dispatcher -- --nocapture`: 18 passed.
+- `cargo check -p sera-runtime -p sera-gateway -p sera-skills`: clean.
+- `cargo clippy -p sera-runtime -p sera-gateway -p sera-skills -- -D warnings`: clean.
+
 ## Remaining Gaps / Follow-up Beads
 
-1. **DefaultRuntime turn-loop wiring**: `prepare_turn_context()` seam exists but `DefaultRuntime` does not call it yet — the next step is adding the call in the runtime's turn orchestration before the think step.
+1. **DefaultRuntime turn-loop wiring**: gateway `execute_turn` now refreshes and prepares skill context before the think step; standalone `DefaultRuntime` integration remains a follow-up if/when it owns skill dispatch directly.
 2. **Full sera-meta PolicyEngine integration**: The narrow `Tier1SkillPatchPolicy` is a focused interface; wiring the full `PolicyEngine` with `ChangeArtifact` + `EvolutionResult` pipeline is a follow-up.
 3. **OCSF audit event emission**: Provenance is captured in `KnowledgeActivityLog` entries; emitting structured OCSF events alongside is a follow-up.
 

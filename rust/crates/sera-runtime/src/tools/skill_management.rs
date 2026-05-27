@@ -2165,7 +2165,7 @@ mod tests {
         assert_eq!(loaded, 1, "fresh engine must load the patched skill");
 
         // 4. Trigger fires on the new keyword added by the patch.
-        let (fired, injections) = engine.prepare_turn_context("welcome aboard");
+        let (fired, injections) = engine.prepare_turn_context("welcome aboard").await.unwrap();
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].name, "greet");
         // The skill has no context_injection field, so injections from the
@@ -2174,7 +2174,7 @@ mod tests {
 
         // 5. Verify the original trigger still works.
         engine.deactivate("greet");
-        let (fired2, _) = engine.prepare_turn_context("hello there");
+        let (fired2, _) = engine.prepare_turn_context("hello there").await.unwrap();
         assert_eq!(fired2.len(), 1);
         assert_eq!(fired2[0].name, "greet");
 
@@ -2190,8 +2190,8 @@ mod tests {
 
     // ── Turn context integration ───────────────────────────────────────
 
-    #[test]
-    fn prepare_turn_context_returns_fired_and_injections() {
+    #[tokio::test]
+    async fn prepare_turn_context_returns_fired_and_injections() {
         let eng = crate::skill_dispatch::SkillDispatchEngine::new();
         use sera_types::skill::{SkillConfig, SkillMode, SkillTrigger};
         let cfg = SkillConfig {
@@ -2206,7 +2206,7 @@ mod tests {
         };
         eng.register(cfg, None);
 
-        let (fired, injections) = eng.prepare_turn_context("please assist me");
+        let (fired, injections) = eng.prepare_loaded_turn_context("please assist me");
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].name, "helper");
         assert_eq!(injections, vec!["You are a helpful assistant."]);

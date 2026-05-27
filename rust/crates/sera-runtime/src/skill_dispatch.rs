@@ -176,29 +176,26 @@ impl SkillDispatchEngine {
             .collect()
     }
 
-    /// Prepare skill context for a turn: dispatch triggers against the
-    /// user message content, activate matched skills, and return the
-    /// context injection strings to include in the system prompt.
-    ///
-    /// This is the integration seam for the turn loop: call this before the
-    /// think step and prepend/append the returned strings to the context
-    /// window. Returns `(newly_fired, injections)`.
-    pub fn prepare_turn_context(&self, turn_content: &str) -> (Vec<SkillMatch>, Vec<String>) {
+    /// Prepare skill context from the currently loaded in-memory registry
+    /// without reloading from disk. This is mainly a fallback/test helper;
+    /// long-running turn loops should call [`Self::prepare_turn_context`] so
+    /// `skill-manage patch` effects are visible without process restart.
+    pub fn prepare_loaded_turn_context(&self, turn_content: &str) -> (Vec<SkillMatch>, Vec<String>) {
         let fired = self.on_turn(turn_content);
         let injections = self.active_context_injections();
         (fired, injections)
     }
 
     /// Refresh registered skill directories from disk, then prepare skill
-    /// context for a turn. Use this in long-running harnesses so
-    /// `skill-manage patch` effects are visible on subsequent turns without
-    /// restarting the process.
-    pub async fn prepare_turn_context_refreshed(
+    /// context for a turn. This is the integration seam for long-running
+    /// harnesses: call before the think step and prepend/append returned
+    /// injections to the context window. Returns `(newly_fired, injections)`.
+    pub async fn prepare_turn_context(
         &self,
         turn_content: &str,
     ) -> Result<(Vec<SkillMatch>, Vec<String>), SkillsError> {
         self.reload_registered_dirs().await?;
-        Ok(self.prepare_turn_context(turn_content))
+        Ok(self.prepare_loaded_turn_context(turn_content))
     }
 
     /// Active skill names in deterministic order for self-introspection.
@@ -425,7 +422,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refreshed_turn_context_sees_patched_triggers_without_restart() {
+    async fn prepare_turn_context_sees_patched_triggers_without_restart() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("hello.md");
         tokio::fs::write(
@@ -447,7 +444,7 @@ mod tests {
         .unwrap();
 
         let (fired, injections) = eng
-            .prepare_turn_context_refreshed("welcome aboard")
+            .prepare_turn_context("welcome aboard")
             .await
             .unwrap();
         assert_eq!(fired.len(), 1);
@@ -456,7 +453,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reload_preserves_active_skill_with_updated_injection() {
+    async fn reload_preserves_active_skill() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("helper.md");
         tokio::fs::write(

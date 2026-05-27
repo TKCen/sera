@@ -4353,11 +4353,11 @@ async fn execute_turn(
     // prepend their active `context_injection` strings as system messages.
     // Injected BEFORE transcript replay so the skill guidance frames the
     // history instead of being buried after it.
-    let injections = match skill_engine.prepare_turn_context_refreshed(user_message).await {
+    let injections = match skill_engine.prepare_turn_context(user_message).await {
         Ok((_fired, injections)) => injections,
         Err(e) => {
             tracing::warn!(error = %e, "skill dispatch refresh failed; using current in-memory registry");
-            let (_fired, injections) = skill_engine.prepare_turn_context(user_message);
+            let (_fired, injections) = skill_engine.prepare_loaded_turn_context(user_message);
             injections
         }
     };

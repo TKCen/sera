@@ -71,14 +71,14 @@ Repair evidence:
 A second Codex review on `46e8196b` found that long-running gateway processes still used an in-memory skill registry loaded at startup. This left patched triggers invisible until restart. The repair adds:
 
 - `SkillDispatchEngine` source-dir tracking and `reload_registered_dirs()`;
-- `prepare_turn_context_refreshed()` for turn-loop callers;
-- gateway `execute_turn` wiring to refresh skill dispatch before injecting skill context, with warn-and-fallback behavior if reload fails;
-- regression tests proving patched markdown triggers are visible without process restart and active skills survive reload;
+- `prepare_turn_context()` as the refreshed async turn-loop seam, plus `prepare_loaded_turn_context()` as the explicit no-refresh fallback;
+- gateway `execute_turn` wiring to call the refreshed `prepare_turn_context()` before injecting skill context, with warn-and-fallback behavior if reload fails;
+- regression tests proving patched markdown triggers are visible through the default turn-context seam without process restart and active skills survive reload;
 - corrected markdown parser semantics: frontmatter `triggers` now stay as keyword triggers on the `SkillDefinition` while `SkillConfig::trigger` remains `Manual`, avoiding accidental fire-on-any-turn behavior.
 
 Repair evidence:
 
-- `cargo test --lib -p sera-runtime -- skill_dispatch -- --nocapture`: 11 passed.
+- `cargo test --lib -p sera-runtime -- skill_dispatch -- --nocapture`: 11 passed, including `prepare_turn_context_sees_patched_triggers_without_restart`.
 - `cargo test --lib -p sera-runtime -- skill_management::tests::fresh_engine_loads_patched_skill_and_fires_trigger -- --nocapture`: 1 passed.
 - `cargo test --lib -p sera-skills markdown::tests::parses_valid_frontmatter_and_body -- --nocapture`: 1 passed.
 - `cargo test --lib -p sera-skills trigger_dispatcher -- --nocapture`: 18 passed.

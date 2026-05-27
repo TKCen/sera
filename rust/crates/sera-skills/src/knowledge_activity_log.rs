@@ -77,11 +77,7 @@ pub struct KnowledgeActivityEntry {
 
 impl KnowledgeActivityEntry {
     /// Create a new entry with the current UTC timestamp.
-    pub fn new(
-        op: KnowledgeOp,
-        scope: impl Into<String>,
-        summary: impl Into<String>,
-    ) -> Self {
+    pub fn new(op: KnowledgeOp, scope: impl Into<String>, summary: impl Into<String>) -> Self {
         Self {
             timestamp: Utc::now(),
             op,
@@ -293,8 +289,7 @@ impl KnowledgeActivityLog {
 impl KnowledgeActivityLog {
     /// Persist the log as JSON to `path` (atomic write via temp file + rename).
     pub fn save_to_path(&self, path: &Path) -> std::io::Result<()> {
-        let json = serde_json::to_string(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let json = serde_json::to_string(self).map_err(std::io::Error::other)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -410,16 +405,14 @@ mod tests {
 
     #[test]
     fn entry_with_page_id() {
-        let e = make_entry(KnowledgeOp::Update, "agent-1", "updated")
-            .with_page_id("page-42");
+        let e = make_entry(KnowledgeOp::Update, "agent-1", "updated").with_page_id("page-42");
         assert_eq!(e.page_id.as_deref(), Some("page-42"));
     }
 
     #[test]
     fn entry_with_metadata() {
         let meta = serde_json::json!({"lines_changed": 10});
-        let e = make_entry(KnowledgeOp::Update, "agent-1", "updated")
-            .with_metadata(meta.clone());
+        let e = make_entry(KnowledgeOp::Update, "agent-1", "updated").with_metadata(meta.clone());
         assert_eq!(e.metadata, Some(meta));
     }
 
@@ -578,12 +571,8 @@ mod tests {
     #[test]
     fn query_by_page_id() {
         let mut log = KnowledgeActivityLog::new(10);
-        log.append(
-            make_entry(KnowledgeOp::Update, "s", "a").with_page_id("page-1"),
-        );
-        log.append(
-            make_entry(KnowledgeOp::Update, "s", "b").with_page_id("page-2"),
-        );
+        log.append(make_entry(KnowledgeOp::Update, "s", "a").with_page_id("page-1"));
+        log.append(make_entry(KnowledgeOp::Update, "s", "b").with_page_id("page-2"));
         log.append(make_entry(KnowledgeOp::Update, "s", "c")); // no page_id
 
         let results = log.query(&ActivityLogFilter::new().with_page_id("page-1"));
@@ -657,9 +646,7 @@ mod tests {
     #[test]
     fn log_serde_roundtrip_json() {
         let mut log = KnowledgeActivityLog::new(5);
-        log.append(
-            make_entry(KnowledgeOp::Store, "agent-1", "hello").with_page_id("p1"),
-        );
+        log.append(make_entry(KnowledgeOp::Store, "agent-1", "hello").with_page_id("p1"));
         log.append(make_entry(KnowledgeOp::Lint, "agent-1", "lint ok"));
         let json = serde_json::to_string(&log).unwrap();
         let parsed: KnowledgeActivityLog = serde_json::from_str(&json).unwrap();

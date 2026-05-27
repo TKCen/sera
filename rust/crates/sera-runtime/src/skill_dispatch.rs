@@ -155,6 +155,19 @@ impl SkillDispatchEngine {
             .collect()
     }
 
+    /// Prepare skill context for a turn: dispatch triggers against the
+    /// user message content, activate matched skills, and return the
+    /// context injection strings to include in the system prompt.
+    ///
+    /// This is the integration seam for the turn loop: call this before the
+    /// think step and prepend/append the returned strings to the context
+    /// window. Returns `(newly_fired, injections)`.
+    pub fn prepare_turn_context(&self, turn_content: &str) -> (Vec<SkillMatch>, Vec<String>) {
+        let fired = self.on_turn(turn_content);
+        let injections = self.active_context_injections();
+        (fired, injections)
+    }
+
     /// Active skill names in deterministic order for self-introspection.
     pub fn active_skill_names(&self) -> Vec<String> {
         self.inner

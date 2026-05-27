@@ -15,6 +15,7 @@
 //! Inspired by Karpathy's LLM `wiki log.md` concept.
 
 use std::fmt;
+use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -286,6 +287,40 @@ impl KnowledgeActivityLog {
     /// Iterate over all entries in chronological order (oldest first).
     pub fn iter(&self) -> impl Iterator<Item = &KnowledgeActivityEntry> {
         self.entries.iter()
+    }
+}
+
+impl KnowledgeActivityLog {
+    /// Persist the log as JSON to `path` (atomic write via temp file + rename).
+    pub fn save_to_path(&self, path: &Path) -> std::io::Result<()> {
+        let json = serde_json::to_string(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, &json)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    }
+
+    /// Load a log from a JSON file. Returns a fresh empty log if the file
+    /// does not exist. `max_entries` overrides the persisted capacity so the
+    /// caller controls the rolling window.
+    pub fn load_from_path(path: &Path, max_entries: usize) -> std::io::Result<Self> {
+        assert!(max_entries > 0, "max_entries must be > 0");
+        if !path.exists() {
+            return Ok(Self::new(max_entries));
+        }
+        let json = std::fs::read_to_string(path)?;
+        let mut log: Self = serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        log.max_entries = max_entries;
+        // Truncate if loaded log exceeds the new max.
+        while log.entries.len() > log.max_entries {
+            log.entries.remove(0);
+        }
+        Ok(log)
     }
 }
 
@@ -650,5 +685,86 @@ mod tests {
         let log = KnowledgeActivityLog::default();
         assert_eq!(log.max_entries(), DEFAULT_MAX_ENTRIES);
         assert!(log.is_empty());
+    }
+
+    // --- persistence ---
+
+    #[test]
+    fn save_and_load_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("activity.json");
+
+        let mut log = KnowledgeActivityLog::new(10);
+        log.append(make_entry(KnowledgeOp::Store, "agent-1", "created skill"));
+        log.append(
+            make_entry(KnowledgeOp::Update, "agent-1", "patched skill")
+                .with_page_id("my-skill")
+                .with_metadata(serde_json::json!({"patch_kind": "update_skill_md"})),
+        );
+        log.save_to_path(&path).unwrap();
+
+        let loaded = KnowledgeActivityLog::load_from_path(&path, 10).unwrap();
+        assert_eq!(loaded.len(), 2);
+        let entries: Vec<_> = loaded.iter().collect();
+        assert_eq!(entries[0].op, KnowledgeOp::Store);
+        assert_eq!(entries[0].summary, "created skill");
+        assert_eq!(entries[1].op, KnowledgeOp::Update);
+        assert_eq!(entries[1].page_id.as_deref(), Some("my-skill"));
+        assert!(entries[1].metadata.is_some());
+    }
+
+    #[test]
+    fn load_missing_file_returns_fresh_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("does-not-exist.json");
+        let log = KnowledgeActivityLog::load_from_path(&path, 5).unwrap();
+        assert!(log.is_empty());
+        assert_eq!(log.max_entries(), 5);
+    }
+
+    #[test]
+    fn load_truncates_when_max_entries_shrinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("activity.json");
+
+        let mut log = KnowledgeActivityLog::new(10);
+        for i in 0..8 {
+            log.append(make_entry(KnowledgeOp::Store, "s", &format!("e{i}")));
+        }
+        log.save_to_path(&path).unwrap();
+
+        let loaded = KnowledgeActivityLog::load_from_path(&path, 3).unwrap();
+        assert_eq!(loaded.len(), 3);
+        assert_eq!(loaded.max_entries(), 3);
+        let entries: Vec<_> = loaded.iter().collect();
+        assert_eq!(entries[0].summary, "e5");
+        assert_eq!(entries[2].summary, "e7");
+    }
+
+    #[test]
+    fn save_creates_parent_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("nested").join("deep").join("activity.json");
+        let log = KnowledgeActivityLog::new(5);
+        log.save_to_path(&path).unwrap();
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn save_is_atomic_via_rename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("activity.json");
+        let mut log = KnowledgeActivityLog::new(5);
+        log.append(make_entry(KnowledgeOp::Store, "s", "first"));
+        log.save_to_path(&path).unwrap();
+
+        // Overwrite with new data
+        log.append(make_entry(KnowledgeOp::Update, "s", "second"));
+        log.save_to_path(&path).unwrap();
+
+        let loaded = KnowledgeActivityLog::load_from_path(&path, 5).unwrap();
+        assert_eq!(loaded.len(), 2);
+        // No .tmp file left behind
+        assert!(!tmp.path().join("activity.tmp").exists());
     }
 }

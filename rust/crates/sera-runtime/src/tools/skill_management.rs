@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use sera_skills::knowledge_activity_log::{KnowledgeActivityEntry, KnowledgeActivityLog, KnowledgeOp};
 use sera_skills::parse_skill_markdown_str;
+use sera_skills::patch_policy::SkillPatchPolicy;
 use sera_skills::self_patch::{
     DefaultSelfPatchValidator, FsSelfPatchApplier, PatchKind, PatchPayload, SelfPatchApplier,
     SelfPatchValidator, SkillPatch,
@@ -36,9 +37,13 @@ pub struct SkillManagementContext {
     pub skill_roots: Vec<PathBuf>,
     /// Directory where new skills are written.
     pub write_root: PathBuf,
-    /// In-memory activity log recording create/patch operations.
-    /// Phase 2 adds persistence to disk/DB.
+    /// Activity log recording create/patch operations, persisted to `log_path`.
     pub activity_log: Mutex<KnowledgeActivityLog>,
+    /// When set, the activity log is persisted after each write operation.
+    pub log_path: Option<PathBuf>,
+    /// Tier 1 policy gate applied before every patch. When `None`, patches
+    /// are ungoverned (test/bootstrap mode only).
+    pub patch_policy: Option<Box<dyn SkillPatchPolicy>>,
 }
 
 impl SkillManagementContext {
@@ -51,12 +56,45 @@ impl SkillManagementContext {
             skill_roots,
             write_root,
             activity_log: Mutex::new(KnowledgeActivityLog::default()),
+            log_path: None,
+            patch_policy: None,
         }
     }
 
     pub fn with_write_root(mut self, root: PathBuf) -> Self {
         self.write_root = root;
         self
+    }
+
+    /// Enable durable activity log at `path`. If the file exists it is loaded;
+    /// otherwise a fresh log is created on the first write.
+    pub fn with_log_persistence(mut self, path: PathBuf) -> Self {
+        if let Ok(loaded) = KnowledgeActivityLog::load_from_path(
+            &path,
+            sera_skills::knowledge_activity_log::DEFAULT_MAX_ENTRIES,
+        ) {
+            self.activity_log = Mutex::new(loaded);
+        }
+        self.log_path = Some(path);
+        self
+    }
+
+    /// Attach a Tier 1 patch policy. When set, every `skill-manage patch`
+    /// call runs this check before validation.
+    pub fn with_patch_policy(mut self, policy: Box<dyn SkillPatchPolicy>) -> Self {
+        self.patch_policy = Some(policy);
+        self
+    }
+
+    /// Persist the activity log to disk if a log path is configured.
+    fn persist_log(&self) {
+        if let Some(ref path) = self.log_path {
+            if let Ok(log) = self.activity_log.lock() {
+                if let Err(e) = log.save_to_path(path) {
+                    tracing::warn!(path = %path.display(), error = %e, "failed to persist activity log");
+                }
+            }
+        }
     }
 }
 
@@ -619,10 +657,13 @@ impl SkillManage {
                 .with_page_id(name)
                 .with_metadata(serde_json::json!({
                     "action": "create",
+                    "skill_name": name,
+                    "root": self.ctx.write_root.display().to_string(),
                     "bytes": body.len(),
                 })),
             );
         }
+        self.ctx.persist_log();
 
         let output = serde_json::json!({
             "status": "created",
@@ -647,6 +688,13 @@ impl SkillManage {
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("missing 'body' for patch".to_string()))?;
         let (location, _root) = self.find_skill(name).await?;
+
+        // ── Tier 1 policy gate ──────────────────────────────────────────
+        if let Some(ref policy) = self.ctx.patch_policy {
+            policy.check_patch(name, &_root, body.len()).map_err(|rej| {
+                ToolError::ExecutionFailed(format!("patch policy rejected: {rej}"))
+            })?;
+        }
 
         if !matches!(&location, SkillLocation::Directory(_)) && patch_kind_str != "update_skill_md" {
             return Err(ToolError::InvalidInput(format!(
@@ -759,6 +807,14 @@ impl SkillManage {
             }
         }
 
+        // Compute before/after hash for provenance.
+        let after_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            body.hash(&mut h);
+            format!("{:016x}", h.finish())
+        };
+
         if let Ok(mut log) = self.ctx.activity_log.lock() {
             log.append(
                 KnowledgeActivityEntry::new(
@@ -769,10 +825,16 @@ impl SkillManage {
                 .with_page_id(name)
                 .with_metadata(serde_json::json!({
                     "action": "patch",
+                    "skill_name": name,
                     "patch_kind": patch_kind_str,
+                    "diff_summary": diff_summary,
+                    "root": _root.display().to_string(),
+                    "body_bytes": body.len(),
+                    "after_hash": after_hash,
                 })),
             );
         }
+        self.ctx.persist_log();
 
         let output = serde_json::json!({
             "status": "patched",
@@ -893,7 +955,16 @@ pub fn skill_management_context_from_env() -> Option<Arc<SkillManagementContext>
     };
     let path = PathBuf::from(&dir);
     if explicit || path.is_dir() {
-        Some(Arc::new(SkillManagementContext::new(vec![path])))
+        let roots = vec![path.clone()];
+        let log_path = path.join(".activity-log.json");
+        let policy = sera_skills::patch_policy::Tier1SkillPatchPolicy::new(
+            roots.clone(),
+            sera_skills::self_patch::MAX_SKILL_MD_BYTES,
+        );
+        let ctx = SkillManagementContext::new(roots)
+            .with_log_persistence(log_path)
+            .with_patch_policy(Box::new(policy));
+        Some(Arc::new(ctx))
     } else {
         None
     }
@@ -1729,41 +1800,211 @@ mod tests {
         assert_eq!(registry.list().len(), 14);
     }
 
-    // ── Dogfood scaffold ────────────────────────────────────────────────
+    // ── Policy gate ──────────────────────────────────────────────────────
 
-    /// Phase 2 expectation: a fresh session should use an improved skill
-    /// after a correction/background review loop updates it. This test
-    /// scaffolds the end-to-end flow without the background review trigger.
     #[tokio::test]
-    #[ignore = "Phase 2: requires background review loop + fresh session spawn"]
-    async fn dogfood_fresh_session_uses_improved_skill() {
+    async fn patch_rejected_by_policy_outside_root() {
         let tmp = tempfile::tempdir().unwrap();
+        let allowed_root = tmp.path().join("allowed");
+        tokio::fs::create_dir_all(&allowed_root).await.unwrap();
+        setup_skill_dir(&allowed_root, "target", &skill_body("target", "Target")).await;
+
+        let policy = sera_skills::patch_policy::Tier1SkillPatchPolicy::new(
+            vec![tmp.path().join("other-root")],
+            64 * 1024,
+        );
+        let ctx = Arc::new(
+            SkillManagementContext::new(vec![allowed_root])
+                .with_patch_policy(Box::new(policy)),
+        );
+        let tool = SkillManage::new(ctx);
+
+        let new_body = skill_body("target", "Patched");
+        let input = make_input(
+            "skill-manage",
+            serde_json::json!({
+                "action": "patch",
+                "name": "target",
+                "patch_kind": "update_skill_md",
+                "body": new_body,
+                "base_version": "1.0.0",
+            }),
+        );
+        let err = tool.execute(input, make_ctx()).await.unwrap_err();
+        match err {
+            ToolError::ExecutionFailed(msg) => {
+                assert!(msg.contains("patch policy rejected"), "unexpected: {msg}");
+                assert!(msg.contains("not in the allowed roots"), "unexpected: {msg}");
+            }
+            other => panic!("expected ExecutionFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn patch_rejected_by_policy_over_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_skill_dir(tmp.path(), "target", &skill_body("target", "Target")).await;
+
+        let policy = sera_skills::patch_policy::Tier1SkillPatchPolicy::new(
+            vec![tmp.path().to_path_buf()],
+            50, // tiny budget
+        );
+        let ctx = Arc::new(
+            SkillManagementContext::new(vec![tmp.path().to_path_buf()])
+                .with_patch_policy(Box::new(policy)),
+        );
+        let tool = SkillManage::new(ctx);
+
+        let new_body = skill_body("target", "Patched content that exceeds the budget");
+        let input = make_input(
+            "skill-manage",
+            serde_json::json!({
+                "action": "patch",
+                "name": "target",
+                "patch_kind": "update_skill_md",
+                "body": new_body,
+                "base_version": "1.0.0",
+            }),
+        );
+        let err = tool.execute(input, make_ctx()).await.unwrap_err();
+        match err {
+            ToolError::ExecutionFailed(msg) => {
+                assert!(msg.contains("exceeds Tier 1 budget"), "unexpected: {msg}");
+            }
+            other => panic!("expected ExecutionFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn patch_allowed_by_policy_within_bounds() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_skill_dir(tmp.path(), "ok-skill", &skill_body("ok-skill", "OK")).await;
+
+        let policy = sera_skills::patch_policy::Tier1SkillPatchPolicy::new(
+            vec![tmp.path().to_path_buf()],
+            64 * 1024,
+        );
+        let ctx = Arc::new(
+            SkillManagementContext::new(vec![tmp.path().to_path_buf()])
+                .with_patch_policy(Box::new(policy)),
+        );
+        let tool = SkillManage::new(ctx);
+
+        let new_body = skill_body("ok-skill", "Patched and approved");
+        let input = make_input(
+            "skill-manage",
+            serde_json::json!({
+                "action": "patch",
+                "name": "ok-skill",
+                "patch_kind": "update_skill_md",
+                "body": new_body,
+                "base_version": "1.0.0",
+            }),
+        );
+        let output = tool.execute(input, make_ctx()).await.unwrap();
+        assert!(!output.is_error);
+    }
+
+    // ── Activity log persistence ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn activity_log_persists_to_disk_and_survives_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log_path = tmp.path().join("activity.json");
+
+        // Session 1: create a skill, persist log.
+        {
+            let ctx = Arc::new(
+                SkillManagementContext::new(vec![tmp.path().to_path_buf()])
+                    .with_log_persistence(log_path.clone()),
+            );
+            let tool = SkillManage::new(Arc::clone(&ctx));
+            let body = skill_body("durable", "Durable skill");
+            let input = make_input(
+                "skill-manage",
+                serde_json::json!({"action": "create", "name": "durable", "body": body}),
+            );
+            tool.execute(input, make_ctx()).await.unwrap();
+        }
+
+        // Session 2: load log from disk, verify entry survived.
+        {
+            let ctx = Arc::new(
+                SkillManagementContext::new(vec![tmp.path().to_path_buf()])
+                    .with_log_persistence(log_path.clone()),
+            );
+            let log = ctx.activity_log.lock().unwrap();
+            assert_eq!(log.len(), 1, "persisted entry must survive process restart");
+            let entry = log.iter().next().unwrap();
+            assert_eq!(entry.op, KnowledgeOp::Store);
+            assert!(entry.summary.contains("durable"));
+        }
+    }
+
+    #[tokio::test]
+    async fn activity_log_provenance_has_required_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_skill_dir(tmp.path(), "prov", &skill_body("prov", "V1")).await;
+
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillManage::new(Arc::clone(&ctx));
+
+        let new_body = skill_body("prov", "V2 improved");
+        let input = make_input(
+            "skill-manage",
+            serde_json::json!({
+                "action": "patch",
+                "name": "prov",
+                "patch_kind": "update_skill_md",
+                "body": new_body,
+                "base_version": "1.0.0",
+            }),
+        );
+        tool.execute(input, make_ctx()).await.unwrap();
+
+        let log = ctx.activity_log.lock().unwrap();
+        assert_eq!(log.len(), 1);
+        let entry = log.iter().next().unwrap();
+        let meta = entry.metadata.as_ref().unwrap();
+        assert_eq!(meta["action"], "patch");
+        assert_eq!(meta["skill_name"], "prov");
+        assert_eq!(meta["patch_kind"], "update_skill_md");
+        assert!(meta["diff_summary"].as_str().unwrap().contains("UpdateSkillMd"));
+        assert!(meta["root"].as_str().is_some());
+        assert!(meta["after_hash"].as_str().is_some());
+        assert!(meta["body_bytes"].as_u64().unwrap() > 0);
+    }
+
+    // ── Fresh-load proof (end-to-end skill loop) ───────────────────────
+
+    #[tokio::test]
+    async fn fresh_engine_loads_patched_skill_and_fires_trigger() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // 1. Create a skill with triggers via skill-manage.
         let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
         let manage = SkillManage::new(Arc::clone(&ctx));
-        let view = SkillView::new(Arc::clone(&ctx));
-
-        // 1. Create initial skill
-        let v1 = skill_body("greeting", "Says hello");
+        let v1 = "---\nname: greet\nversion: 1.0.0\ndescription: Greeting\ntriggers:\n  - hello\n---\n\nSay hi.\n";
         manage
             .execute(
                 make_input(
                     "skill-manage",
-                    serde_json::json!({"action": "create", "name": "greeting", "body": v1}),
+                    serde_json::json!({"action": "create", "name": "greet", "body": v1}),
                 ),
                 make_ctx(),
             )
             .await
             .unwrap();
 
-        // 2. Simulate correction: patch the skill with improved content
-        let v2 = skill_body("greeting", "Says hello warmly with context");
+        // 2. Patch the skill with updated content and a new trigger.
+        let v2 = "---\nname: greet\nversion: 1.0.0\ndescription: Greeting improved\ntriggers:\n  - hello\n  - welcome\n---\n\nSay hello warmly with context.\n";
         manage
             .execute(
                 make_input(
                     "skill-manage",
                     serde_json::json!({
                         "action": "patch",
-                        "name": "greeting",
+                        "name": "greet",
                         "patch_kind": "update_skill_md",
                         "body": v2,
                         "base_version": "1.0.0",
@@ -1774,22 +2015,56 @@ mod tests {
             .await
             .unwrap();
 
-        // 3. Verify the updated skill is visible (simulates fresh session load)
-        let output = view
-            .execute(
-                make_input("skill-view", serde_json::json!({"name": "greeting"})),
-                make_ctx(),
-            )
+        // 3. Simulate fresh runtime session: new SkillDispatchEngine loads from disk.
+        let engine = crate::skill_dispatch::SkillDispatchEngine::new();
+        let loaded = engine.load_dir(tmp.path()).await.unwrap();
+        assert_eq!(loaded, 1, "fresh engine must load the patched skill");
+
+        // 4. Trigger fires on the new keyword added by the patch.
+        let (fired, injections) = engine.prepare_turn_context("welcome aboard");
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].name, "greet");
+        // The skill has no context_injection field, so injections from the
+        // body are empty, but the skill IS active.
+        let _ = injections;
+
+        // 5. Verify the original trigger still works.
+        engine.deactivate("greet");
+        let (fired2, _) = engine.prepare_turn_context("hello there");
+        assert_eq!(fired2.len(), 1);
+        assert_eq!(fired2[0].name, "greet");
+
+        // 6. Verify the updated body is on disk (content proof).
+        let content = tokio::fs::read_to_string(tmp.path().join("greet").join("SKILL.md"))
             .await
             .unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&output.content).unwrap();
-        let content = parsed["content"].as_str().unwrap();
         assert!(
             content.contains("warmly with context"),
-            "fresh session should see the improved skill"
+            "patched content must be on disk for fresh sessions"
         );
+    }
 
-        // Phase 2 TODO: spawn a fresh DefaultRuntime session, load skills,
-        // and verify the agent's behaviour reflects the updated skill content.
+    // ── Turn context integration ───────────────────────────────────────
+
+    #[test]
+    fn prepare_turn_context_returns_fired_and_injections() {
+        let eng = crate::skill_dispatch::SkillDispatchEngine::new();
+        use sera_types::skill::{SkillConfig, SkillMode, SkillTrigger};
+        let cfg = SkillConfig {
+            name: "helper".into(),
+            version: "1.0.0".into(),
+            description: "test".into(),
+            mode: SkillMode::OnDemand,
+            trigger: SkillTrigger::Event("assist".into()),
+            tools: vec![],
+            context_injection: Some("You are a helpful assistant.".into()),
+            config: serde_json::json!({}),
+        };
+        eng.register(cfg, None);
+
+        let (fired, injections) = eng.prepare_turn_context("please assist me");
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].name, "helper");
+        assert_eq!(injections, vec!["You are a helpful assistant."]);
     }
 }

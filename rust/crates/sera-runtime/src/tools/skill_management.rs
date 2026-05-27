@@ -616,6 +616,14 @@ impl SkillManage {
                 single_file.display()
             )));
         }
+        // Check for frontmatter-name collision: a legacy skill stored under a
+        // different basename but whose frontmatter name matches.
+        if let Some((path, _)) = find_by_frontmatter_name(&self.ctx.skill_roots, name).await {
+            return Err(ToolError::ExecutionFailed(format!(
+                "skill with frontmatter name '{name}' already exists at {}",
+                path.display()
+            )));
+        }
 
         tokio::fs::create_dir_all(&skill_dir)
             .await
@@ -1208,6 +1216,54 @@ mod tests {
         let err = tool.execute(input, make_ctx()).await.unwrap_err();
         assert!(matches!(err, ToolError::ExecutionFailed(_)));
         assert!(!tmp.path().join("legacy").exists(), "directory must not be created");
+    }
+
+    #[tokio::test]
+    async fn create_rejects_frontmatter_name_collision_single_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Existing single-file skill stored as old.md but frontmatter name is "foo"
+        tokio::fs::write(tmp.path().join("old.md"), &skill_body("foo", "Legacy foo"))
+            .await
+            .unwrap();
+
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillManage::new(ctx);
+        let input = make_input(
+            "skill-manage",
+            serde_json::json!({
+                "action": "create",
+                "name": "foo",
+                "body": skill_body("foo", "New foo"),
+            }),
+        );
+        let err = tool.execute(input, make_ctx()).await.unwrap_err();
+        assert!(matches!(err, ToolError::ExecutionFailed(_)));
+        assert!(!tmp.path().join("foo").exists(), "directory must not be created");
+    }
+
+    #[tokio::test]
+    async fn create_rejects_frontmatter_name_collision_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Existing directory skill stored as old/ but frontmatter name is "bar"
+        let old_dir = tmp.path().join("old");
+        tokio::fs::create_dir_all(&old_dir).await.unwrap();
+        tokio::fs::write(old_dir.join("SKILL.md"), &skill_body("bar", "Legacy bar"))
+            .await
+            .unwrap();
+
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillManage::new(ctx);
+        let input = make_input(
+            "skill-manage",
+            serde_json::json!({
+                "action": "create",
+                "name": "bar",
+                "body": skill_body("bar", "New bar"),
+            }),
+        );
+        let err = tool.execute(input, make_ctx()).await.unwrap_err();
+        assert!(matches!(err, ToolError::ExecutionFailed(_)));
+        assert!(!tmp.path().join("bar").exists(), "directory must not be created");
     }
 
     #[tokio::test]

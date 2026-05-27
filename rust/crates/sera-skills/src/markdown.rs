@@ -354,14 +354,13 @@ pub fn parse_skill_markdown_str(
 
     // Derive a SkillConfig. Defaults for markdown skills:
     //   mode    = OnDemand (activation decided at runtime)
-    //   trigger = Always if any keyword triggers are declared, else Manual
+    //   trigger = Manual; frontmatter `triggers` live on the definition and
+    //             TriggerDispatcher matches them as keywords. Mapping keyword
+    //             skills to Always would make every triggered markdown skill
+    //             fire on any non-empty turn.
     //   tools   = frontmatter tools
     //   context_injection = None (body lives on the definition)
-    let trigger = if fm.triggers.is_empty() {
-        SkillTrigger::Manual
-    } else {
-        SkillTrigger::Always
-    };
+    let trigger = SkillTrigger::Manual;
 
     let config = SkillConfig {
         name: fm.name.clone(),
@@ -446,7 +445,7 @@ You are a senior code reviewer. When activated, you systematically examine code.
         // Derived config.
         assert_eq!(parsed.config.name, "code-review");
         assert_eq!(parsed.config.mode, SkillMode::OnDemand);
-        assert_eq!(parsed.config.trigger, SkillTrigger::Always);
+        assert_eq!(parsed.config.trigger, SkillTrigger::Manual);
         assert_eq!(parsed.config.tools, vec!["read_file", "search_code"]);
     }
 

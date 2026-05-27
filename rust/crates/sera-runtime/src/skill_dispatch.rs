@@ -7,7 +7,8 @@
 //! [`SkillDispatchEngine::on_turn`] from the harness before the think step
 //! so activated skills contribute their `context_injection` to the prompt.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use sera_skills::{SkillsError, TriggerDispatcher, parse_skill_markdown_file};
@@ -25,16 +26,44 @@ pub struct SkillDispatchEngine {
 struct Inner {
     dispatcher: TriggerDispatcher,
     registry: SkillRegistry,
+    definitions: HashMap<String, SkillDefinition>,
+    source_dirs: Vec<PathBuf>,
+    manual_entries: Vec<(SkillConfig, Option<SkillDefinition>)>,
+}
+
+impl Inner {
+    fn empty() -> Self {
+        Self {
+            dispatcher: TriggerDispatcher::new(),
+            registry: SkillRegistry::new(),
+            definitions: HashMap::new(),
+            source_dirs: Vec::new(),
+            manual_entries: Vec::new(),
+        }
+    }
+
+    fn register_loaded(&mut self, config: SkillConfig, definition: Option<SkillDefinition>) {
+        if let Some(definition) = &definition {
+            self.definitions.insert(config.name.clone(), definition.clone());
+        } else {
+            self.definitions.remove(&config.name);
+        }
+        self.registry.register(config.clone());
+        self.dispatcher.register(config, definition);
+    }
+
+    fn register_manual(&mut self, config: SkillConfig, definition: Option<SkillDefinition>) {
+        self.manual_entries.retain(|(existing, _)| existing.name != config.name);
+        self.manual_entries.push((config.clone(), definition.clone()));
+        self.register_loaded(config, definition);
+    }
 }
 
 impl SkillDispatchEngine {
     /// Construct an empty engine.
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(Inner {
-                dispatcher: TriggerDispatcher::new(),
-                registry: SkillRegistry::new(),
-            }),
+            inner: Mutex::new(Inner::empty()),
         }
     }
 
@@ -43,56 +72,70 @@ impl SkillDispatchEngine {
     /// markdown frontmatter.
     pub fn register(&self, config: SkillConfig, definition: Option<SkillDefinition>) {
         let mut g = self.inner.lock().expect("skill engine mutex poisoned");
-        g.registry.register(config.clone());
-        g.dispatcher.register(config, definition);
+        g.register_manual(config, definition);
     }
 
     /// Load every `*.md` skill file under `dir` (non-recursive) and register
     /// it. Parse failures are logged and skipped so one bad file does not
     /// wedge the runtime.
     pub async fn load_dir(&self, dir: &Path) -> Result<usize, SkillsError> {
-        if !dir.exists() {
-            return Ok(0);
+        let loaded = collect_skill_dir(dir).await?;
+        let count = loaded.len();
+        let mut g = self.inner.lock().expect("skill engine mutex poisoned");
+        let dir = dir.to_path_buf();
+        if !g.source_dirs.iter().any(|existing| existing == &dir) {
+            g.source_dirs.push(dir);
         }
-        let mut count = 0usize;
-        let mut reader = tokio::fs::read_dir(dir).await?;
-        while let Some(entry) = reader.next_entry().await? {
-            let path = entry.path();
-            // Single-file: top-level *.md files
-            if path.is_file() && path.extension().is_some_and(|e| e == "md") {
-                match parse_skill_markdown_file(&path).await {
-                    Ok(parsed) => {
-                        self.register(parsed.config, Some(parsed.definition));
-                        count += 1;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            path = %path.display(),
-                            error = %e,
-                            "skill_dispatch: failed to parse skill markdown, skipping"
-                        );
-                    }
-                }
-            // Directory-style: <name>/SKILL.md (created by skill-manage)
-            } else if path.is_dir() {
-                let skill_md = path.join("SKILL.md");
-                if skill_md.exists() {
-                    match parse_skill_markdown_file(&skill_md).await {
-                        Ok(parsed) => {
-                            self.register(parsed.config, Some(parsed.definition));
-                            count += 1;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                path = %skill_md.display(),
-                                error = %e,
-                                "skill_dispatch: failed to parse directory skill, skipping"
-                            );
-                        }
-                    }
-                }
-            }
+        for (config, definition) in loaded {
+            g.register_loaded(config, Some(definition));
         }
+        Ok(count)
+    }
+
+    /// Reload every previously loaded skill directory from disk and replace
+    /// the in-memory dispatcher/registry. Active skill names that still exist
+    /// after reload remain active so updated context injections take effect
+    /// without a process restart.
+    pub async fn reload_registered_dirs(&self) -> Result<usize, SkillsError> {
+        let (source_dirs, manual_entries, active_names) = {
+            let g = self.inner.lock().expect("skill engine mutex poisoned");
+            (
+                g.source_dirs.clone(),
+                g.manual_entries.clone(),
+                g.registry
+                    .active_skill_names()
+                    .into_iter()
+                    .map(String::from)
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        if source_dirs.is_empty() {
+            return Ok(self.registered_count());
+        }
+
+        let mut loaded = Vec::new();
+        for dir in &source_dirs {
+            loaded.extend(collect_skill_dir(dir).await?);
+        }
+        let count = loaded.len();
+
+        let mut replacement = Inner::empty();
+        replacement.source_dirs = source_dirs;
+        replacement.manual_entries = manual_entries.clone();
+        for (config, definition) in loaded {
+            replacement.register_loaded(config, Some(definition));
+        }
+        // Preserve programmatic registrations across disk reloads. Register
+        // them after disk-loaded skills so embedders can intentionally
+        // override a scanned skill by name.
+        for (config, definition) in manual_entries {
+            replacement.register_loaded(config, definition);
+        }
+        let mut g = self.inner.lock().expect("skill engine mutex poisoned");
+        merge_current_manual_entries(&mut replacement, &g.manual_entries);
+        restore_active_names(&mut replacement, active_names, &g.registry);
+        *g = replacement;
         Ok(count)
     }
 
@@ -109,20 +152,39 @@ impl SkillDispatchEngine {
     /// of newly activated skills (skills already active are not re-fired).
     pub fn on_turn(&self, content: &str) -> Vec<SkillMatch> {
         let mut g = self.inner.lock().expect("skill engine mutex poisoned");
-        let Inner { dispatcher, registry } = &mut *g;
+        let Inner {
+            dispatcher,
+            registry,
+            ..
+        } = &mut *g;
         dispatcher.fire(content, registry)
     }
 
     /// Returns the `context_injection` strings for every currently-active
     /// skill. Intended to be appended to the system prompt on every turn.
     pub fn active_context_injections(&self) -> Vec<String> {
-        self.inner
-            .lock()
-            .expect("skill engine mutex poisoned")
-            .registry
-            .context_injections()
+        let g = self.inner.lock().expect("skill engine mutex poisoned");
+        g.registry
+            .active_skill_names()
             .into_iter()
-            .map(String::from)
+            .flat_map(|name| {
+                let config_injection = g
+                    .registry
+                    .get_config(name)
+                    .and_then(|config| config.context_injection.as_deref());
+                let body_injection = g.definitions.get(name).and_then(|definition| {
+                    definition
+                        .body
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|body| !body.is_empty())
+                });
+                [config_injection, body_injection]
+                    .into_iter()
+                    .flatten()
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
             .collect()
     }
 
@@ -155,6 +217,28 @@ impl SkillDispatchEngine {
             .collect()
     }
 
+    /// Prepare skill context from the currently loaded in-memory registry
+    /// without reloading from disk. This is mainly a fallback/test helper;
+    /// long-running turn loops should call [`Self::prepare_turn_context`] so
+    /// `skill-manage patch` effects are visible without process restart.
+    pub fn prepare_loaded_turn_context(&self, turn_content: &str) -> (Vec<SkillMatch>, Vec<String>) {
+        let fired = self.on_turn(turn_content);
+        let injections = self.active_context_injections();
+        (fired, injections)
+    }
+
+    /// Refresh registered skill directories from disk, then prepare skill
+    /// context for a turn. This is the integration seam for long-running
+    /// harnesses: call before the think step and prepend/append returned
+    /// injections to the context window. Returns `(newly_fired, injections)`.
+    pub async fn prepare_turn_context(
+        &self,
+        turn_content: &str,
+    ) -> Result<(Vec<SkillMatch>, Vec<String>), SkillsError> {
+        self.reload_registered_dirs().await?;
+        Ok(self.prepare_loaded_turn_context(turn_content))
+    }
+
     /// Active skill names in deterministic order for self-introspection.
     pub fn active_skill_names(&self) -> Vec<String> {
         self.inner
@@ -168,9 +252,86 @@ impl SkillDispatchEngine {
     }
 }
 
+async fn collect_skill_dir(
+    dir: &Path,
+) -> Result<Vec<(SkillConfig, SkillDefinition)>, SkillsError> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut loaded = Vec::new();
+    let mut reader = tokio::fs::read_dir(dir).await?;
+    while let Some(entry) = reader.next_entry().await? {
+        let path = entry.path();
+        // Single-file: top-level *.md files
+        if path.is_file() && path.extension().is_some_and(|e| e == "md") {
+            match parse_skill_markdown_file(&path).await {
+                Ok(parsed) => loaded.push((parsed.config, parsed.definition)),
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "skill_dispatch: failed to parse skill markdown, skipping"
+                    );
+                }
+            }
+        // Directory-style: <name>/SKILL.md (created by skill-manage)
+        } else if path.is_dir() {
+            let skill_md = path.join("SKILL.md");
+            if skill_md.exists() {
+                match parse_skill_markdown_file(&skill_md).await {
+                    Ok(parsed) => loaded.push((parsed.config, parsed.definition)),
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %skill_md.display(),
+                            error = %e,
+                            "skill_dispatch: failed to parse directory skill, skipping"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(loaded)
+}
+
 impl Default for SkillDispatchEngine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn merge_current_manual_entries(
+    replacement: &mut Inner,
+    current_manual_entries: &[(SkillConfig, Option<SkillDefinition>)],
+) {
+    for (config, definition) in current_manual_entries {
+        replacement
+            .manual_entries
+            .retain(|(existing, _)| existing.name != config.name);
+        replacement
+            .manual_entries
+            .push((config.clone(), definition.clone()));
+        replacement.register_loaded(config.clone(), definition.clone());
+    }
+}
+
+fn restore_active_names(
+    replacement: &mut Inner,
+    mut snapshotted_active_names: Vec<String>,
+    current_registry: &SkillRegistry,
+) {
+    snapshotted_active_names.extend(
+        current_registry
+            .active_skill_names()
+            .into_iter()
+            .map(String::from),
+    );
+    snapshotted_active_names.sort();
+    snapshotted_active_names.dedup();
+
+    for name in snapshotted_active_names {
+        let _ = replacement.registry.activate(&name);
     }
 }
 
@@ -287,6 +448,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn active_context_injections_include_loaded_markdown_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        tokio::fs::write(
+            tmp.path().join("hello.md"),
+            "---\nname: hello\nversion: 1.0.0\ntriggers:\n  - hi\n---\nmarkdown skill body\n",
+        )
+        .await
+        .unwrap();
+
+        let eng = SkillDispatchEngine::new();
+        eng.load_dir(tmp.path()).await.unwrap();
+        let (fired, injections) = eng.prepare_loaded_turn_context("hi there");
+
+        assert_eq!(fired.len(), 1);
+        assert_eq!(injections, vec!["markdown skill body"]);
+    }
+
+    #[tokio::test]
     async fn load_dir_reads_directory_style_skills() {
         let tmp = tempfile::tempdir().unwrap();
         let skill_dir = tmp.path().join("my-skill");
@@ -334,4 +513,176 @@ mod tests {
         assert_eq!(n, 1, "only the good file should register");
         assert_eq!(eng.registered_count(), 1);
     }
+
+    #[tokio::test]
+    async fn prepare_turn_context_sees_patched_triggers_without_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("hello.md");
+        tokio::fs::write(
+            &path,
+            "---\nname: hello\nversion: 1.0.0\ntriggers:\n  - hi\n---\nold body\n",
+        )
+        .await
+        .unwrap();
+
+        let eng = SkillDispatchEngine::new();
+        assert_eq!(eng.load_dir(tmp.path()).await.unwrap(), 1);
+        assert!(eng.on_turn("welcome aboard").is_empty());
+
+        tokio::fs::write(
+            &path,
+            "---\nname: hello\nversion: 1.0.0\ntriggers:\n  - welcome\n---\nnew body\n",
+        )
+        .await
+        .unwrap();
+
+        let (fired, injections) = eng
+            .prepare_turn_context("welcome aboard")
+            .await
+            .unwrap();
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].name, "hello");
+        assert_eq!(injections, vec!["new body"]);
+    }
+
+    #[tokio::test]
+    async fn reload_preserves_active_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("helper.md");
+        tokio::fs::write(
+            &path,
+            "---\nname: helper\nversion: 1.0.0\ntriggers:\n  - go\n---\nold body\n",
+        )
+        .await
+        .unwrap();
+
+        let eng = SkillDispatchEngine::new();
+        eng.load_dir(tmp.path()).await.unwrap();
+        assert_eq!(eng.on_turn("go now").len(), 1);
+        assert_eq!(eng.active_skill_names(), vec!["helper"]);
+
+        tokio::fs::write(
+            &path,
+            "---\nname: helper\nversion: 1.0.0\ntriggers:\n  - go\n---\nnew body\n",
+        )
+        .await
+        .unwrap();
+
+        eng.reload_registered_dirs().await.unwrap();
+        assert_eq!(eng.active_skill_names(), vec!["helper"]);
+    }
+
+
+    #[tokio::test]
+    async fn reload_preserves_manual_registrations_alongside_loaded_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("disk.md");
+        tokio::fs::write(
+            &path,
+            "---\nname: disk\nversion: 1.0.0\ntriggers:\n  - disk\n---\nbody\n",
+        )
+        .await
+        .unwrap();
+
+        let eng = SkillDispatchEngine::new();
+        eng.register(
+            cfg("manual", SkillTrigger::Event("manual".into()), Some("manual ctx")),
+            None,
+        );
+        eng.load_dir(tmp.path()).await.unwrap();
+
+        eng.reload_registered_dirs().await.unwrap();
+
+        let fired = eng.on_turn("manual please");
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].name, "manual");
+        assert_eq!(eng.active_context_injections(), vec!["manual ctx"]);
+
+        eng.deactivate("manual");
+        let fired_disk = eng.on_turn("disk please");
+        assert_eq!(fired_disk.len(), 1);
+        assert_eq!(fired_disk[0].name, "disk");
+    }
+
+
+    #[test]
+    fn restore_active_names_merges_snapshot_and_current_registry() {
+        let mut replacement = Inner::empty();
+        replacement.register_loaded(
+            cfg("snapshot-active", SkillTrigger::Event("snapshot".into()), Some("snapshot ctx")),
+            None,
+        );
+        replacement.register_loaded(
+            cfg("current-active", SkillTrigger::Event("current".into()), Some("current ctx")),
+            None,
+        );
+
+        let mut current = SkillRegistry::new();
+        current.register(cfg(
+            "current-active",
+            SkillTrigger::Event("current".into()),
+            Some("current ctx"),
+        ));
+        current.activate("current-active").unwrap();
+
+        restore_active_names(
+            &mut replacement,
+            vec!["snapshot-active".to_string()],
+            &current,
+        );
+
+        assert_eq!(
+            replacement.registry.active_skill_names(),
+            vec!["current-active", "snapshot-active"],
+        );
+    }
+
+
+    #[test]
+    fn merge_current_manual_entries_preserves_registrations_added_during_reload() {
+        let mut replacement = Inner::empty();
+        replacement.register_loaded(
+            cfg("disk", SkillTrigger::Event("disk".into()), Some("disk ctx")),
+            None,
+        );
+
+        let current_manual_entries = vec![(
+            cfg("manual-during-reload", SkillTrigger::Event("manual".into()), Some("manual ctx")),
+            None,
+        )];
+
+        merge_current_manual_entries(&mut replacement, &current_manual_entries);
+
+        assert!(replacement
+            .manual_entries
+            .iter()
+            .any(|(config, _)| config.name == "manual-during-reload"));
+        assert_eq!(replacement.dispatcher.dispatch("manual please").len(), 1);
+        replacement.registry.activate("manual-during-reload").unwrap();
+        assert_eq!(replacement.registry.active_skill_names(), vec!["manual-during-reload"]);
+        assert_eq!(replacement.registry.context_injections(), vec!["manual ctx"]);
+    }
+
+
+    #[test]
+    fn merge_current_manual_entries_replaces_same_name_snapshot() {
+        let mut replacement = Inner::empty();
+        replacement.manual_entries.push((
+            cfg("manual", SkillTrigger::Event("old".into()), Some("old ctx")),
+            None,
+        ));
+
+        let current_manual_entries = vec![(
+            cfg("manual", SkillTrigger::Event("new".into()), Some("new ctx")),
+            None,
+        )];
+
+        merge_current_manual_entries(&mut replacement, &current_manual_entries);
+
+        assert_eq!(replacement.manual_entries.len(), 1);
+        assert_eq!(replacement.manual_entries[0].0.context_injection.as_deref(), Some("new ctx"));
+        assert!(replacement.dispatcher.dispatch("old please").is_empty());
+        assert_eq!(replacement.dispatcher.dispatch("new please").len(), 1);
+    }
+
 }

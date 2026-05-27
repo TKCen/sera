@@ -140,35 +140,30 @@ async fn discover_skills(roots: &[PathBuf], query: Option<&str>) -> Vec<SkillLis
                 continue;
             }
 
-            let skill_name = if path.is_dir() && path.join("SKILL.md").exists() {
-                raw_name.to_string()
-            } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string()
-            } else {
-                continue;
-            };
-
-            if skill_name.is_empty() || !seen_names.insert(skill_name.clone()) {
+            let is_candidate = (path.is_dir() && path.join("SKILL.md").exists())
+                || (path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md"));
+            if !is_candidate {
                 continue;
             }
 
-            if let Some(q) = query
-                && !skill_name.contains(q)
-            {
-                continue;
-            }
-
-            // Only include entries whose frontmatter parses with a name field,
-            // matching what SkillDispatchEngine::load_dir actually registers.
+            // Parse frontmatter to get the authoritative name the runtime
+            // loader registers, not the path-derived basename.
             let Some(fm) = extract_skill_frontmatter(&path).await else {
                 continue;
             };
 
+            if !seen_names.insert(fm.name.clone()) {
+                continue;
+            }
+
+            if let Some(q) = query
+                && !fm.name.contains(q)
+            {
+                continue;
+            }
+
             entries.push(SkillListEntry {
-                name: skill_name,
+                name: fm.name,
                 description: fm.description,
                 version: fm.version,
                 source: root.display().to_string(),
@@ -179,6 +174,7 @@ async fn discover_skills(roots: &[PathBuf], query: Option<&str>) -> Vec<SkillLis
 }
 
 struct SkillFrontmatter {
+    name: String,
     description: Option<String>,
     version: Option<String>,
 }
@@ -195,9 +191,9 @@ async fn extract_skill_frontmatter(path: &Path) -> Option<SkillFrontmatter> {
     };
 
     let content = tokio::fs::read_to_string(&content_path).await.ok()?;
-    // Require a name field — without it, the loader skips the file.
-    extract_frontmatter_field(&content, "name")?;
+    let name = extract_frontmatter_field(&content, "name")?;
     Some(SkillFrontmatter {
+        name,
         description: extract_frontmatter_field(&content, "description"),
         version: extract_frontmatter_field(&content, "version"),
     })

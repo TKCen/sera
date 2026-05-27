@@ -125,6 +125,7 @@ impl SkillDispatchEngine {
             replacement.register_loaded(config, definition);
         }
         let mut g = self.inner.lock().expect("skill engine mutex poisoned");
+        merge_current_manual_entries(&mut replacement, &g.manual_entries);
         restore_active_names(&mut replacement, active_names, &g.registry);
         *g = replacement;
         Ok(count)
@@ -274,6 +275,24 @@ async fn collect_skill_dir(
 impl Default for SkillDispatchEngine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn merge_current_manual_entries(
+    replacement: &mut Inner,
+    current_manual_entries: &[(SkillConfig, Option<SkillDefinition>)],
+) {
+    for (config, definition) in current_manual_entries {
+        if !replacement
+            .manual_entries
+            .iter()
+            .any(|(existing, _)| existing.name == config.name)
+        {
+            replacement
+                .manual_entries
+                .push((config.clone(), definition.clone()));
+        }
+        replacement.register_loaded(config.clone(), definition.clone());
     }
 }
 
@@ -578,6 +597,32 @@ mod tests {
             replacement.registry.active_skill_names(),
             vec!["current-active", "snapshot-active"],
         );
+    }
+
+
+    #[test]
+    fn merge_current_manual_entries_preserves_registrations_added_during_reload() {
+        let mut replacement = Inner::empty();
+        replacement.register_loaded(
+            cfg("disk", SkillTrigger::Event("disk".into()), Some("disk ctx")),
+            None,
+        );
+
+        let current_manual_entries = vec![(
+            cfg("manual-during-reload", SkillTrigger::Event("manual".into()), Some("manual ctx")),
+            None,
+        )];
+
+        merge_current_manual_entries(&mut replacement, &current_manual_entries);
+
+        assert!(replacement
+            .manual_entries
+            .iter()
+            .any(|(config, _)| config.name == "manual-during-reload"));
+        assert_eq!(replacement.dispatcher.dispatch("manual please").len(), 1);
+        replacement.registry.activate("manual-during-reload").unwrap();
+        assert_eq!(replacement.registry.active_skill_names(), vec!["manual-during-reload"]);
+        assert_eq!(replacement.registry.context_injections(), vec!["manual ctx"]);
     }
 
 }

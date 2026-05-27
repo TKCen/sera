@@ -87,6 +87,22 @@ fn safe_skill_path(root: &Path, name: &str) -> Option<PathBuf> {
     }
 }
 
+/// Validate a knowledge filename: must be a plain basename with no path components.
+fn is_valid_knowledge_filename(filename: &str) -> bool {
+    !filename.is_empty()
+        && filename.len() <= 255
+        && !filename.contains('/')
+        && !filename.contains('\\')
+        && !filename.contains('\0')
+        && !filename.contains("..")
+}
+
+/// Where a skill was found on disk.
+enum SkillLocation {
+    Directory(PathBuf),
+    SingleFile(PathBuf),
+}
+
 // ── Skill discovery helpers ─────────────────────────────────────────────────
 
 #[derive(Debug, serde::Serialize)]
@@ -138,10 +154,10 @@ async fn discover_skills(roots: &[PathBuf], query: Option<&str>) -> Vec<SkillLis
                 continue;
             }
 
-            if let Some(q) = query {
-                if !skill_name.contains(q) {
-                    continue;
-                }
+            if let Some(q) = query
+                && !skill_name.contains(q)
+            {
+                continue;
             }
 
             let description = extract_description(&path).await;
@@ -573,9 +589,18 @@ impl SkillManage {
             .and_then(|v| v.as_str())
             .unwrap_or("1.0.0");
 
-        let (skill_dir, _root) = self.find_skill_dir(name)?;
+        let (location, _root) = self.find_skill(name)?;
 
-        let current = load_skill_pack_from_dir(&skill_dir, name).await?;
+        if !matches!(&location, SkillLocation::Directory(_)) && patch_kind_str != "update_skill_md" {
+            return Err(ToolError::InvalidInput(format!(
+                "patch_kind '{patch_kind_str}' requires directory-style skill; '{name}' is a single-file skill"
+            )));
+        }
+
+        let current = match &location {
+            SkillLocation::Directory(dir) => load_skill_pack_from_dir(dir, name).await?,
+            SkillLocation::SingleFile(path) => load_skill_pack_from_file(path, name).await?,
+        };
 
         let (patch_kind, payload) = match patch_kind_str {
             "update_skill_md" => (
@@ -588,6 +613,11 @@ impl SkillManage {
                 let filename = args["filename"].as_str().ok_or_else(|| {
                     ToolError::InvalidInput("missing 'filename' for add_knowledge".to_string())
                 })?;
+                if !is_valid_knowledge_filename(filename) {
+                    return Err(ToolError::InvalidInput(format!(
+                        "invalid knowledge filename '{filename}': must be a plain basename with no path separators"
+                    )));
+                }
                 (
                     PatchKind::AddKnowledgeBlock,
                     PatchPayload::Knowledge {
@@ -629,13 +659,22 @@ impl SkillManage {
 
         let diff_summary = validated.diff_summary.clone();
 
-        let parent = skill_dir
-            .parent()
-            .ok_or_else(|| ToolError::ExecutionFailed("skill dir has no parent".to_string()))?;
-        let applier = FsSelfPatchApplier::new(parent);
-        let _updated = applier
-            .apply(validated)
-            .map_err(|e| ToolError::ExecutionFailed(format!("patch apply failed: {e}")))?;
+        match &location {
+            SkillLocation::Directory(skill_dir) => {
+                let parent = skill_dir
+                    .parent()
+                    .ok_or_else(|| ToolError::ExecutionFailed("skill dir has no parent".to_string()))?;
+                let applier = FsSelfPatchApplier::new(parent);
+                applier
+                    .apply(validated)
+                    .map_err(|e| ToolError::ExecutionFailed(format!("patch apply failed: {e}")))?;
+            }
+            SkillLocation::SingleFile(path) => {
+                tokio::fs::write(path, body)
+                    .await
+                    .map_err(|e| ToolError::ExecutionFailed(format!("write {}: {e}", path.display())))?;
+            }
+        }
 
         if let Ok(mut log) = self.ctx.activity_log.lock() {
             log.append(
@@ -662,12 +701,17 @@ impl SkillManage {
             .map_err(|e| ToolError::ExecutionFailed(format!("serialize: {e}")))
     }
 
-    fn find_skill_dir(&self, name: &str) -> Result<(PathBuf, PathBuf), ToolError> {
+    fn find_skill(&self, name: &str) -> Result<(SkillLocation, PathBuf), ToolError> {
         for root in &self.ctx.skill_roots {
-            if let Some(path) = safe_skill_path(root, name) {
-                if path.is_dir() && path.join("SKILL.md").exists() {
-                    return Ok((path, root.clone()));
-                }
+            if let Some(path) = safe_skill_path(root, name)
+                && path.is_dir()
+                && path.join("SKILL.md").exists()
+            {
+                return Ok((SkillLocation::Directory(path), root.clone()));
+            }
+            let md_file = root.join(format!("{name}.md"));
+            if md_file.is_file() {
+                return Ok((SkillLocation::SingleFile(md_file), root.clone()));
             }
         }
         Err(ToolError::ExecutionFailed(format!(
@@ -696,21 +740,36 @@ async fn load_skill_pack_from_dir(
     pack.skill_md = skill_md;
 
     let knowledge_dir = dir.join("knowledge");
-    if knowledge_dir.is_dir() {
-        if let Ok(mut reader) = tokio::fs::read_dir(&knowledge_dir).await {
-            while let Ok(Some(entry)) = reader.next_entry().await {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
-                        if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                            pack.knowledge.insert(fname.to_string(), content);
-                        }
-                    }
-                }
+    if knowledge_dir.is_dir()
+        && let Ok(mut reader) = tokio::fs::read_dir(&knowledge_dir).await
+    {
+        while let Ok(Some(entry)) = reader.next_entry().await {
+            let path = entry.path();
+            if path.is_file()
+                && let Some(fname) = path.file_name().and_then(|n| n.to_str())
+                && let Ok(content) = tokio::fs::read_to_string(&path).await
+            {
+                pack.knowledge.insert(fname.to_string(), content);
             }
         }
     }
 
+    Ok(pack)
+}
+
+async fn load_skill_pack_from_file(
+    path: &Path,
+    name: &str,
+) -> Result<sera_skills::self_patch::SkillPack, ToolError> {
+    let skill_md = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("read {}: {e}", path.display())))?;
+
+    let version =
+        extract_version_from_frontmatter(&skill_md).unwrap_or_else(|| "1.0.0".to_string());
+
+    let mut pack = sera_skills::self_patch::SkillPack::new(name, &version);
+    pack.skill_md = skill_md;
     Ok(pack)
 }
 
@@ -1054,6 +1113,94 @@ mod tests {
         );
         let err = tool.execute(input, make_ctx()).await.unwrap_err();
         assert!(matches!(err, ToolError::ExecutionFailed(_)));
+    }
+
+    #[tokio::test]
+    async fn patch_rejects_path_traversal_in_knowledge_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_skill_dir(tmp.path(), "target", &skill_body("target", "Target")).await;
+
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillManage::new(ctx);
+        let input = make_input(
+            "skill-manage",
+            serde_json::json!({
+                "action": "patch",
+                "name": "target",
+                "patch_kind": "add_knowledge",
+                "body": "malicious content",
+                "filename": "../../etc/pwn",
+                "base_version": "1.0.0",
+            }),
+        );
+        let err = tool.execute(input, make_ctx()).await.unwrap_err();
+        assert!(matches!(err, ToolError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn knowledge_filename_validation() {
+        assert!(is_valid_knowledge_filename("notes.md"));
+        assert!(is_valid_knowledge_filename("my-file.txt"));
+        assert!(!is_valid_knowledge_filename(""));
+        assert!(!is_valid_knowledge_filename("../escape"));
+        assert!(!is_valid_knowledge_filename("sub/dir.md"));
+        assert!(!is_valid_knowledge_filename("back\\slash"));
+        assert!(!is_valid_knowledge_filename("has\0null"));
+    }
+
+    #[tokio::test]
+    async fn patch_single_file_skill_update_skill_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        let original = skill_body("single", "Original single-file");
+        tokio::fs::write(tmp.path().join("single.md"), &original)
+            .await
+            .unwrap();
+
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillManage::new(ctx);
+
+        let new_body = skill_body("single", "Updated single-file");
+        let input = make_input(
+            "skill-manage",
+            serde_json::json!({
+                "action": "patch",
+                "name": "single",
+                "patch_kind": "update_skill_md",
+                "body": new_body,
+                "base_version": "1.0.0",
+            }),
+        );
+        let output = tool.execute(input, make_ctx()).await.unwrap();
+        assert!(!output.is_error);
+
+        let content = tokio::fs::read_to_string(tmp.path().join("single.md"))
+            .await
+            .unwrap();
+        assert!(content.contains("Updated single-file"));
+    }
+
+    #[tokio::test]
+    async fn patch_single_file_rejects_add_knowledge() {
+        let tmp = tempfile::tempdir().unwrap();
+        tokio::fs::write(tmp.path().join("simple.md"), &skill_body("simple", "Simple"))
+            .await
+            .unwrap();
+
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillManage::new(ctx);
+        let input = make_input(
+            "skill-manage",
+            serde_json::json!({
+                "action": "patch",
+                "name": "simple",
+                "patch_kind": "add_knowledge",
+                "body": "some knowledge",
+                "filename": "notes.md",
+                "base_version": "1.0.0",
+            }),
+        );
+        let err = tool.execute(input, make_ctx()).await.unwrap_err();
+        assert!(matches!(err, ToolError::InvalidInput(_)));
     }
 
     // ── Activity log ────────────────────────────────────────────────────

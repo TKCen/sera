@@ -58,20 +58,38 @@ impl SkillDispatchEngine {
         let mut reader = tokio::fs::read_dir(dir).await?;
         while let Some(entry) = reader.next_entry().await? {
             let path = entry.path();
-            if path.extension().is_none_or(|e| e != "md") {
-                continue;
-            }
-            match parse_skill_markdown_file(&path).await {
-                Ok(parsed) => {
-                    self.register(parsed.config, Some(parsed.definition));
-                    count += 1;
+            // Single-file: top-level *.md files
+            if path.is_file() && path.extension().is_some_and(|e| e == "md") {
+                match parse_skill_markdown_file(&path).await {
+                    Ok(parsed) => {
+                        self.register(parsed.config, Some(parsed.definition));
+                        count += 1;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "skill_dispatch: failed to parse skill markdown, skipping"
+                        );
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %e,
-                        "skill_dispatch: failed to parse skill markdown, skipping"
-                    );
+            // Directory-style: <name>/SKILL.md (created by skill-manage)
+            } else if path.is_dir() {
+                let skill_md = path.join("SKILL.md");
+                if skill_md.exists() {
+                    match parse_skill_markdown_file(&skill_md).await {
+                        Ok(parsed) => {
+                            self.register(parsed.config, Some(parsed.definition));
+                            count += 1;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                path = %skill_md.display(),
+                                error = %e,
+                                "skill_dispatch: failed to parse directory skill, skipping"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -266,6 +284,35 @@ mod tests {
         let fired = eng.on_turn("hi there");
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].name, "hello");
+    }
+
+    #[tokio::test]
+    async fn load_dir_reads_directory_style_skills() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("my-skill");
+        tokio::fs::create_dir_all(&skill_dir).await.unwrap();
+        tokio::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: my-skill\nversion: 1.0.0\ntriggers:\n  - greet\n---\nbody\n",
+        )
+        .await
+        .unwrap();
+        // Also a single-file skill alongside it.
+        tokio::fs::write(
+            tmp.path().join("other.md"),
+            "---\nname: other\nversion: 1.0.0\n---\nbody\n",
+        )
+        .await
+        .unwrap();
+
+        let eng = SkillDispatchEngine::new();
+        let n = eng.load_dir(tmp.path()).await.unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(eng.registered_count(), 2);
+
+        let fired = eng.on_turn("greet me");
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].name, "my-skill");
     }
 
     #[tokio::test]

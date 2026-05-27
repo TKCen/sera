@@ -93,6 +93,10 @@ impl SkillDispatchEngine {
             )
         };
 
+        if source_dirs.is_empty() {
+            return Ok(self.registered_count());
+        }
+
         let mut loaded = Vec::new();
         for dir in &source_dirs {
             loaded.extend(collect_skill_dir(dir).await?);

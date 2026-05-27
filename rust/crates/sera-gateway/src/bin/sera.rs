@@ -257,9 +257,12 @@ fn build_embedded_transport(
     let agent_registry = Arc::new(
         sera_runtime::agent_tool_registry::AgentToolRegistry::with_router(agent_router),
     );
-    let registry = TraitToolRegistry::with_builtins_and_authz(runtime_config.tool_authz_enabled)
+    let mut registry = TraitToolRegistry::with_builtins_and_authz(runtime_config.tool_authz_enabled)
         .with_delegation(delegation_bus)
         .with_agent_tools(agent_registry);
+    if let Some(ctx) = sera_runtime::tools::skill_management::skill_management_context_from_env() {
+        registry = registry.with_skill_management(ctx);
+    }
     let registry = Arc::new(registry);
 
     let runtime_defs = registry.definitions();

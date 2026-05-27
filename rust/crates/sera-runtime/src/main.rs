@@ -147,9 +147,12 @@ async fn main() -> anyhow::Result<()> {
     // per-agent handlers in its own construction path.
     let agent_router: Arc<InProcAgentRouter> = Arc::new(InProcAgentRouter::new());
     let agent_registry = Arc::new(AgentToolRegistry::with_router(agent_router));
-    let registry = TraitToolRegistry::with_builtins_and_authz(config.tool_authz_enabled)
+    let mut registry = TraitToolRegistry::with_builtins_and_authz(config.tool_authz_enabled)
         .with_delegation(delegation_bus)
         .with_agent_tools(agent_registry);
+    if let Some(ctx) = sera_runtime::tools::skill_management::skill_management_context_from_env() {
+        registry = registry.with_skill_management(ctx);
+    }
     let registry = Arc::new(registry);
 
     // sera-eo71: load CapabilityRegistry once at startup (no hot-reload in v1

@@ -817,6 +817,19 @@ pub fn build_skill_management_tools(
     )
 }
 
+/// Build a [`SkillManagementContext`] from `SERA_SKILLS_DIR` if the env var
+/// is set and the directory exists. Returns `None` when unconfigured so
+/// callers can skip `.with_skill_management()` and preserve current behavior.
+pub fn skill_management_context_from_env() -> Option<Arc<SkillManagementContext>> {
+    let dir = std::env::var("SERA_SKILLS_DIR").ok()?;
+    let path = PathBuf::from(&dir);
+    if path.is_dir() {
+        Some(Arc::new(SkillManagementContext::new(vec![path])))
+    } else {
+        None
+    }
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1442,6 +1455,53 @@ mod tests {
         assert_eq!(list.metadata().name, "skill-list");
         assert_eq!(view.metadata().name, "skill-view");
         assert_eq!(manage.metadata().name, "skill-manage");
+    }
+
+    // ── Production wire-up ────────────────────────────────────────────
+
+    #[test]
+    fn context_from_env_returns_none_when_unset() {
+        unsafe { std::env::remove_var("SERA_SKILLS_DIR") };
+        assert!(skill_management_context_from_env().is_none());
+    }
+
+    #[test]
+    fn context_from_env_returns_some_when_dir_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("SERA_SKILLS_DIR", tmp.path().as_os_str()) };
+        let ctx = skill_management_context_from_env();
+        unsafe { std::env::remove_var("SERA_SKILLS_DIR") };
+        assert!(ctx.is_some());
+        let ctx = ctx.unwrap();
+        assert_eq!(ctx.skill_roots, vec![tmp.path().to_path_buf()]);
+    }
+
+    #[test]
+    fn context_from_env_returns_none_when_dir_missing() {
+        unsafe { std::env::set_var("SERA_SKILLS_DIR", "/tmp/__sera_nonexistent_skills_dir__") };
+        let ctx = skill_management_context_from_env();
+        unsafe { std::env::remove_var("SERA_SKILLS_DIR") };
+        assert!(ctx.is_none());
+    }
+
+    #[test]
+    fn registry_includes_skill_tools_when_configured() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let registry = crate::tools::TraitToolRegistry::with_builtins().with_skill_management(ctx);
+        assert!(registry.get("skill-list").is_some());
+        assert!(registry.get("skill-view").is_some());
+        assert!(registry.get("skill-manage").is_some());
+        assert_eq!(registry.list().len(), 14 + 3);
+    }
+
+    #[test]
+    fn registry_excludes_skill_tools_when_not_configured() {
+        let registry = crate::tools::TraitToolRegistry::with_builtins();
+        assert!(registry.get("skill-list").is_none());
+        assert!(registry.get("skill-view").is_none());
+        assert!(registry.get("skill-manage").is_none());
+        assert_eq!(registry.list().len(), 14);
     }
 
     // ── Dogfood scaffold ────────────────────────────────────────────────

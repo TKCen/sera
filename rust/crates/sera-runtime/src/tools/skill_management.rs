@@ -132,14 +132,9 @@ async fn discover_skills(roots: &[PathBuf], query: Option<&str>) -> Vec<SkillLis
                 break;
             }
             let path = entry.path();
-            let Some(raw_name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
 
-            if raw_name.starts_with('_') || raw_name.starts_with('.') {
-                continue;
-            }
-
+            // Candidate detection aligned with SkillDispatchEngine::load_dir:
+            // top-level *.md file OR directory containing SKILL.md.
             let is_candidate = (path.is_dir() && path.join("SKILL.md").exists())
                 || (path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md"));
             if !is_candidate {
@@ -1316,6 +1311,36 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&output.content).unwrap();
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["skills"][0]["name"], "real");
+    }
+
+    #[tokio::test]
+    async fn list_includes_dot_and_underscore_prefixed_skills() {
+        let tmp = tempfile::tempdir().unwrap();
+        // .foo.md — hidden-prefix single file with valid frontmatter
+        tokio::fs::write(tmp.path().join(".foo.md"), &skill_body("dot-foo", "Dot foo"))
+            .await
+            .unwrap();
+        // _bar/ — underscore-prefix directory with valid SKILL.md
+        let bar_dir = tmp.path().join("_bar");
+        tokio::fs::create_dir_all(&bar_dir).await.unwrap();
+        tokio::fs::write(bar_dir.join("SKILL.md"), &skill_body("under-bar", "Under bar"))
+            .await
+            .unwrap();
+
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+        let tool = SkillList::new(ctx);
+        let input = make_input("skill-list", serde_json::json!({}));
+        let output = tool.execute(input, make_ctx()).await.unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+        let names: Vec<&str> = parsed["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"dot-foo"), "dot-prefixed skill must appear: {names:?}");
+        assert!(names.contains(&"under-bar"), "underscore-prefixed skill must appear: {names:?}");
     }
 
     #[tokio::test]

@@ -25,6 +25,7 @@ pub mod mvs_tools;
 pub mod propose_correction;
 pub mod safe_client;
 pub mod shell_exec;
+pub mod skill_management;
 pub mod spawn;
 pub mod tool_search;
 pub mod web_fetch;
@@ -154,6 +155,23 @@ impl TraitToolRegistry {
         catalog: std::sync::Arc<sera_tools::corrections::CorrectionCatalog>,
     ) -> Self {
         self.register(Box::new(propose_correction::ProposeCorrection::new(catalog)));
+        self
+    }
+
+    /// Register the three skill management tools (`skill-list`,
+    /// `skill-view`, `skill-manage`) bound to the supplied
+    /// [`skill_management::SkillManagementContext`].
+    ///
+    /// Separate from [`Self::with_builtins`] because the tools need
+    /// runtime-supplied skill root paths and a shared activity log.
+    pub fn with_skill_management(
+        mut self,
+        ctx: std::sync::Arc<skill_management::SkillManagementContext>,
+    ) -> Self {
+        let (list, view, manage) = skill_management::build_skill_management_tools(ctx);
+        self.register(Box::new(list));
+        self.register(Box::new(view));
+        self.register(Box::new(manage));
         self
     }
 
@@ -615,6 +633,49 @@ mod trait_registry_tests {
         assert_eq!(
             registry.get("session_send").unwrap().metadata().scope,
             ToolScope::Agent
+        );
+    }
+
+    /// `with_skill_management` adds exactly three tools (`skill-list`,
+    /// `skill-view`, `skill-manage`).
+    #[test]
+    fn with_skill_management_adds_three_skill_tools() {
+        use crate::tools::skill_management::SkillManagementContext;
+        use std::sync::Arc;
+        let ctx = Arc::new(SkillManagementContext::new(vec![]));
+        let registry = TraitToolRegistry::with_builtins().with_skill_management(ctx);
+        let list = registry.list();
+        assert_eq!(
+            list.len(),
+            14 + 3,
+            "expected 14 builtins + 3 skill management tools; got {}: {:?}",
+            list.len(),
+            list.iter().map(|m| &m.name).collect::<Vec<_>>()
+        );
+        for name in ["skill-list", "skill-view", "skill-manage"] {
+            assert!(registry.get(name).is_some(), "{name} not registered");
+        }
+    }
+
+    /// `with_skill_management` scope assignments: list/view are Read,
+    /// manage is Write.
+    #[test]
+    fn with_skill_management_scopes_match_design() {
+        use crate::tools::skill_management::SkillManagementContext;
+        use std::sync::Arc;
+        let ctx = Arc::new(SkillManagementContext::new(vec![]));
+        let registry = TraitToolRegistry::with_builtins().with_skill_management(ctx);
+        assert_eq!(
+            registry.get("skill-list").unwrap().metadata().scope,
+            ToolScope::Read
+        );
+        assert_eq!(
+            registry.get("skill-view").unwrap().metadata().scope,
+            ToolScope::Read
+        );
+        assert_eq!(
+            registry.get("skill-manage").unwrap().metadata().scope,
+            ToolScope::Write
         );
     }
 

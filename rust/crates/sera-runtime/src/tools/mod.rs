@@ -129,16 +129,18 @@ impl TraitToolRegistry {
         self
     }
 
-    /// Register the three delegation tools (`session_spawn`, `session_yield`,
-    /// `session_send`) bound to the supplied [`crate::delegation_bus::DelegationBus`].
+    /// Register the four delegation tools (`delegation_spawn`, `delegation_list`,
+    /// `delegation_yield`, `delegation_send`) bound to the supplied
+    /// [`crate::delegation_bus::DelegationBus`].
     ///
     /// Separate from [`Self::with_builtins`] because these tools need a
-    /// runtime-supplied bus instance so spawner/yielder/sender share the same
+    /// runtime-supplied bus instance so spawner/lister/yielder/sender share the same
     /// subscriber registry. See bead sera-a1u.
     pub fn with_delegation(mut self, bus: crate::delegation_bus::DelegationBus) -> Self {
-        let (spawn_tool, yield_tool, send_tool) =
+        let (spawn_tool, list_tool, yield_tool, send_tool) =
             delegation::build_delegation_tools(bus);
         self.register(Box::new(spawn_tool));
+        self.register(Box::new(list_tool));
         self.register(Box::new(yield_tool));
         self.register(Box::new(send_tool));
         self
@@ -597,23 +599,27 @@ mod trait_registry_tests {
     }
 
     /// sera-u4gj — `with_delegation` pins `Agent` for the writing surfaces
-    /// (`session_spawn`, `session_send`) and `Read` for the observe-only
-    /// `session_yield`.
+    /// (`delegation_spawn`, `delegation_send`) and `Read` for the observe-only
+    /// `delegation_list` / `delegation_yield` tools.
     #[test]
     fn with_delegation_scopes_match_design() {
         use crate::delegation_bus::DelegationBus;
         let bus = DelegationBus::new();
         let registry = TraitToolRegistry::with_builtins().with_delegation(bus);
         assert_eq!(
-            registry.get("session_spawn").unwrap().metadata().scope,
+            registry.get("delegation_spawn").unwrap().metadata().scope,
             ToolScope::Agent
         );
         assert_eq!(
-            registry.get("session_yield").unwrap().metadata().scope,
+            registry.get("delegation_list").unwrap().metadata().scope,
             ToolScope::Read
         );
         assert_eq!(
-            registry.get("session_send").unwrap().metadata().scope,
+            registry.get("delegation_yield").unwrap().metadata().scope,
+            ToolScope::Read
+        );
+        assert_eq!(
+            registry.get("delegation_send").unwrap().metadata().scope,
             ToolScope::Agent
         );
     }
@@ -628,20 +634,20 @@ mod trait_registry_tests {
         assert_eq!(on.list().len(), 14);
     }
 
-    /// `with_delegation` adds exactly three tools (`session_spawn`,
-    /// `session_yield`, `session_send`) to the registry — bead sera-a1u.
+    /// `with_delegation` adds exactly four tools (`delegation_spawn`,
+    /// `delegation_list`, `delegation_yield`, `delegation_send`) to the registry — bead sera-a1u.
     #[test]
-    fn with_delegation_adds_three_session_tools() {
+    fn with_delegation_adds_four_delegation_tools() {
         use crate::delegation_bus::DelegationBus;
         let bus = DelegationBus::new();
         let registry = TraitToolRegistry::with_builtins().with_delegation(bus);
         let list = registry.list();
         assert_eq!(
             list.len(),
-            14 + 3,
-            "expected 14 builtins + 3 delegation tools"
+            14 + 4,
+            "expected 14 builtins + 4 delegation tools"
         );
-        for name in ["session_spawn", "session_yield", "session_send"] {
+        for name in ["delegation_spawn", "delegation_list", "delegation_yield", "delegation_send"] {
             assert!(
                 registry.get(name).is_some(),
                 "{name} not registered"

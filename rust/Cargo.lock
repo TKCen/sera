@@ -5229,6 +5229,7 @@ dependencies = [
  "sera-hooks",
  "sera-mail",
  "sera-memory",
+ "sera-memory-hindsight",
  "sera-meta",
  "sera-plugins",
  "sera-queue",

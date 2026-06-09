@@ -11,10 +11,18 @@
 //! still own the AuthZ decision at dispatch time. Filtering here just
 //! prevents the LLM from being steered toward tools it isn't allowed to use.
 
+use sera_types::config_manifest::AgentFeatureSetSpec;
+
 use crate::types::ToolDefinition;
 
 const ENV_ALLOW: &str = "SERA_AGENT_TOOLS_ALLOW";
 const ENV_DENY: &str = "SERA_AGENT_TOOLS_DENY";
+const ENV_FEATURES: &str = "SERA_AGENT_FEATURES";
+
+const TOOLSET_MEMORY: &str = "memory";
+const TOOLSET_CONTEXT_ENGINE: &str = "context_engine";
+const TOOLSET_SKILLS: &str = "skills";
+const TOOLSET_SESSION_SEARCH: &str = "session_search";
 
 /// Allow / deny glob lists applied to tool names before they're handed to the LLM.
 #[derive(Debug, Default, Clone)]
@@ -57,11 +65,7 @@ impl ToolNameFilter {
     /// runtime tool names: `_`↔`-` normalisation (`file_*` → `file-read`)
     /// and bare-name family aliasing (`shell` → `shell-exec`).
     pub fn matches(&self, name: &str) -> bool {
-        if self
-            .deny
-            .iter()
-            .any(|p| pattern_matches_tool_name(p, name))
-        {
+        if self.deny.iter().any(|p| pattern_matches_tool_name(p, name)) {
             return false;
         }
         if !self.allow.is_empty()
@@ -99,13 +103,33 @@ fn parse_env_list(var: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Parse `SERA_AGENT_FEATURES` as an [`AgentFeatureSetSpec`].
+///
+/// Missing, empty, or invalid JSON falls back to the all-default feature set,
+/// which [`FeatureSurfaceToolFilter`] treats as a legacy pass-through. The
+/// gateway always sets this env var for stdio children so per-agent explicit
+/// feature gates cannot leak from a previous process environment.
+pub fn agent_features_from_env() -> AgentFeatureSetSpec {
+    std::env::var(ENV_FEATURES)
+        .ok()
+        .and_then(|raw| {
+            let raw = raw.trim();
+            if raw.is_empty() {
+                None
+            } else {
+                serde_json::from_str::<AgentFeatureSetSpec>(raw).ok()
+            }
+        })
+        .unwrap_or_default()
+}
+
 /// Match a manifest tool pattern against a runtime tool name with the two
 /// legacy-compat shims SERA's documented defaults rely on:
 ///
 /// 1. **Direct glob match** via [`glob_match`].
 /// 2. **`_` ↔ `-` normalisation** so manifest patterns written with
-///    underscores (`file_*`, `session_*`) still match runtime tool names
-///    written with hyphens (`file-read`, `session-spawn`) and vice versa.
+///    underscores (`file_*`, `delegation_*`) still match runtime tool names
+///    written with hyphens (`file-read`, `delegation-spawn`) and vice versa.
 /// 3. **Bare-family alias** so a literal pattern with no wildcard (`shell`)
 ///    also matches the hyphenated family `shell-*` (e.g. `shell-exec`).
 ///
@@ -172,10 +196,213 @@ fn glob_match(pattern: &str, name: &str) -> bool {
     true
 }
 
+/// Hermes-parity surface gate for model-visible tool schemas.
+///
+/// `ToolNameFilter` handles legacy allow/deny globs. This filter handles the
+/// newer per-agent `features.toolsets` surfaces: memory, external memory
+/// providers, context-engine tools, `session_search`, and skills. A default
+/// `AgentFeatureSetSpec` is a deliberate legacy pass-through so existing agents
+/// with no `features:` block keep the same visible tools until they opt in to
+/// explicit surface gating.
+#[derive(Debug, Clone)]
+pub struct FeatureSurfaceToolFilter<'a> {
+    features: &'a AgentFeatureSetSpec,
+}
+
+impl<'a> FeatureSurfaceToolFilter<'a> {
+    pub fn new(features: &'a AgentFeatureSetSpec) -> Self {
+        Self { features }
+    }
+
+    pub fn is_pass_through(&self) -> bool {
+        self.features.is_default()
+    }
+
+    pub fn matches(&self, name: &str) -> bool {
+        if self.is_pass_through() {
+            return true;
+        }
+
+        if is_session_search_tool_name(name) {
+            return self.toolset_enabled(TOOLSET_SESSION_SEARCH);
+        }
+
+        if is_skill_tool_name(name) {
+            return self.toolset_enabled(TOOLSET_SKILLS);
+        }
+
+        if is_context_engine_tool_name(name) {
+            return self.context_engine_tool_allowed(name);
+        }
+
+        if is_semantic_memory_tool_name(name) {
+            return self.memory_toolset_enabled() && self.features.semantic_memory.enabled;
+        }
+
+        if is_builtin_memory_tool_name(name) {
+            let Some(memory_gate) = self.features.toolsets.get(TOOLSET_MEMORY) else {
+                return false;
+            };
+            return memory_gate.enabled
+                && memory_gate.builtin_memory_tool
+                && self.features.identity_memory.enabled
+                && self.features.identity_memory.memory_tool;
+        }
+
+        if is_memory_provider_tool_name(name) {
+            return self.memory_provider_tool_allowed();
+        }
+
+        true
+    }
+
+    pub fn filter_definitions(&self, defs: Vec<ToolDefinition>) -> Vec<ToolDefinition> {
+        if self.is_pass_through() {
+            return defs;
+        }
+        defs.into_iter()
+            .filter(|d| self.matches(&d.function.name))
+            .collect()
+    }
+
+    fn toolset_enabled(&self, name: &str) -> bool {
+        self.features
+            .toolsets
+            .get(name)
+            .map(|gate| gate.enabled)
+            .unwrap_or(false)
+    }
+
+    fn memory_toolset_enabled(&self) -> bool {
+        self.toolset_enabled(TOOLSET_MEMORY)
+    }
+
+    fn context_engine_tool_allowed(&self, name: &str) -> bool {
+        if !self.features.context_engine.enabled || !self.features.context_engine.expose_tools {
+            return false;
+        }
+        let Some(gate) = self.features.toolsets.get(TOOLSET_CONTEXT_ENGINE) else {
+            return false;
+        };
+        if !gate.enabled {
+            return false;
+        }
+        matches_intersection_or_single_allow(
+            name,
+            &self.features.context_engine.tool_allow,
+            &gate.tool_allow,
+        )
+    }
+
+    fn memory_provider_tool_allowed(&self) -> bool {
+        let Some(memory_gate) = self.features.toolsets.get(TOOLSET_MEMORY) else {
+            return false;
+        };
+        if !memory_gate.enabled
+            || !memory_gate.provider_tools
+            || !self.features.memory_providers.enabled
+        {
+            return false;
+        }
+
+        if self
+            .features
+            .memory_providers
+            .allow_multiple
+            .unwrap_or(false)
+        {
+            return self
+                .features
+                .memory_providers
+                .providers
+                .values()
+                .any(provider_exposes_tools);
+        }
+
+        let Some(active) = self.features.memory_providers.active.as_deref() else {
+            return false;
+        };
+        self.features
+            .memory_providers
+            .providers
+            .get(active)
+            .map(provider_exposes_tools)
+            .unwrap_or(false)
+    }
+}
+
+fn provider_exposes_tools(
+    provider: &sera_types::config_manifest::MemoryProviderFeatureSpec,
+) -> bool {
+    provider.enabled && provider.expose_tools.unwrap_or(false)
+}
+
+fn matches_intersection_or_single_allow(name: &str, first: &[String], second: &[String]) -> bool {
+    let first_empty = first.is_empty();
+    let second_empty = second.is_empty();
+    match (first_empty, second_empty) {
+        (true, true) => true,
+        (false, true) => matches_any_allow(first, name),
+        (true, false) => matches_any_allow(second, name),
+        (false, false) => matches_any_allow(first, name) && matches_any_allow(second, name),
+    }
+}
+
+fn matches_any_allow(patterns: &[String], name: &str) -> bool {
+    patterns
+        .iter()
+        .any(|pattern| pattern_matches_tool_name(pattern, name))
+}
+
+fn is_builtin_memory_tool_name(name: &str) -> bool {
+    matches!(
+        name,
+        "memory" | "memory_read" | "memory-write" | "memory_write" | "memory_synthesize"
+    )
+}
+
+fn is_semantic_memory_tool_name(name: &str) -> bool {
+    matches!(name, "memory_search" | "memory-search")
+}
+
+fn is_memory_provider_tool_name(name: &str) -> bool {
+    name.starts_with("hindsight_")
+        || name.starts_with("hindsight-")
+        || name.starts_with("memory_provider_")
+        || name.starts_with("memory-provider-")
+}
+
+fn is_context_engine_tool_name(name: &str) -> bool {
+    name.starts_with("lcm_")
+        || name.starts_with("lcm-")
+        || name.starts_with("context_engine_")
+        || name.starts_with("context-engine-")
+}
+
+fn is_session_search_tool_name(name: &str) -> bool {
+    matches!(name, "session_search" | "session-search")
+}
+
+fn is_skill_tool_name(name: &str) -> bool {
+    matches!(
+        name,
+        "skill-search" | "skill_search" | "skills" | "skills_list"
+    ) || name.starts_with("skill_")
+        || name.starts_with("skill-")
+        || name.starts_with("skills_")
+        || name.starts_with("skills-")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::{FunctionDefinition, ToolDefinition};
+    use sera_types::config_manifest::{
+        AgentFeatureSetSpec, ContextEngineFeatureSpec, IdentityMemoryFeatureSpec,
+        MemoryProviderFeatureSpec, MemoryProvidersFeatureSpec, SemanticMemoryFeatureSpec,
+        ToolsetGateSpec,
+    };
+    use std::collections::HashMap;
 
     fn def(name: &str) -> ToolDefinition {
         ToolDefinition {
@@ -310,22 +537,23 @@ mod tests {
         assert!(!f.matches("file-read"));
     }
 
-    /// `session_*` must match both the existing underscore tool names
-    /// (`session_spawn`, …) and any hyphenated variant if/when they are
-    /// renamed (`session-spawn`, …) — the test pins both directions so
-    /// future renames don't silently drop schema disclosure.
+    /// `delegation_*` must match both the underscore tool names
+    /// (`delegation_spawn`, …) and hyphenated variants (`delegation-spawn`, …)
+    /// so future separator-style changes don't silently drop schema disclosure.
     #[test]
-    fn filter_session_glob_matches_both_separator_styles() {
-        let f = ToolNameFilter::from_globs(vec!["session_*".into()], vec![]);
+    fn filter_delegation_glob_matches_both_separator_styles() {
+        let f = ToolNameFilter::from_globs(vec!["delegation_*".into()], vec![]);
         for name in [
-            "session_spawn",
-            "session_yield",
-            "session_send",
-            "session-spawn",
-            "session-yield",
-            "session-send",
+            "delegation_spawn",
+            "delegation_list",
+            "delegation_yield",
+            "delegation_send",
+            "delegation-spawn",
+            "delegation-list",
+            "delegation-yield",
+            "delegation-send",
         ] {
-            assert!(f.matches(name), "expected `session_*` to allow `{name}`");
+            assert!(f.matches(name), "expected `delegation_*` to allow `{name}`");
         }
     }
 
@@ -350,9 +578,9 @@ mod tests {
     }
 
     /// The default documented manifest set
-    /// (`memory_*`, `file_*`, `shell`, `session_*`) must light up every
+    /// (`memory_*`, `file_*`, `shell`, `delegation_*`) must light up every
     /// runtime tool family it was written for, both the underscore-native
-    /// names (`memory_search`, `session_spawn`) and the hyphenated ones
+    /// names (`memory_search`, `delegation_spawn`) and the hyphenated ones
     /// (`file-read`, `shell-exec`).
     #[test]
     fn filter_default_manifest_patterns_match_runtime_names() {
@@ -361,7 +589,7 @@ mod tests {
                 "memory_*".into(),
                 "file_*".into(),
                 "shell".into(),
-                "session_*".into(),
+                "delegation_*".into(),
             ],
             vec![],
         );
@@ -372,9 +600,10 @@ mod tests {
             "file-list",
             "file-edit",
             "shell-exec",
-            "session_spawn",
-            "session_yield",
-            "session_send",
+            "delegation_spawn",
+            "delegation_list",
+            "delegation_yield",
+            "delegation_send",
         ] {
             assert!(
                 f.matches(name),
@@ -384,6 +613,192 @@ mod tests {
         // Tools not covered by the default set stay hidden.
         assert!(!f.matches("http-request"));
         assert!(!f.matches("knowledge-store"));
+    }
+
+    #[test]
+    fn feature_surface_filter_default_features_are_legacy_pass_through() {
+        let features = AgentFeatureSetSpec::default();
+        let f = FeatureSurfaceToolFilter::new(&features);
+        let defs = vec![
+            def("memory_write"),
+            def("memory_search"),
+            def("hindsight_recall"),
+            def("lcm_grep"),
+            def("session_search"),
+            def("skill-search"),
+            def("file-read"),
+        ];
+        let names: Vec<_> = f
+            .filter_definitions(defs)
+            .into_iter()
+            .map(|d| d.function.name)
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "memory_write",
+                "memory_search",
+                "hindsight_recall",
+                "lcm_grep",
+                "session_search",
+                "skill-search",
+                "file-read"
+            ]
+        );
+    }
+
+    #[test]
+    fn feature_surface_filter_hides_disabled_surfaces_but_preserves_unclassified_tools() {
+        let features = AgentFeatureSetSpec {
+            toolsets: HashMap::from([(
+                TOOLSET_MEMORY.to_string(),
+                ToolsetGateSpec {
+                    enabled: false,
+                    builtin_memory_tool: true,
+                    provider_tools: true,
+                    tool_allow: vec![],
+                },
+            )]),
+            ..AgentFeatureSetSpec::default()
+        };
+        let f = FeatureSurfaceToolFilter::new(&features);
+        let defs = vec![
+            def("memory_write"),
+            def("memory_search"),
+            def("hindsight_recall"),
+            def("lcm_grep"),
+            def("skill-search"),
+            def("file-read"),
+        ];
+        let names: Vec<_> = f
+            .filter_definitions(defs)
+            .into_iter()
+            .map(|d| d.function.name)
+            .collect();
+        assert_eq!(names, vec!["file-read"]);
+    }
+
+    #[test]
+    fn feature_surface_filter_enforces_each_explicit_surface_gate() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "hindsight".to_string(),
+            MemoryProviderFeatureSpec {
+                enabled: true,
+                recall: true,
+                reflect: true,
+                retain_policy: Some("disabled".to_string()),
+                expose_tools: Some(true),
+                tags: vec![],
+            },
+        );
+        let features = AgentFeatureSetSpec {
+            identity_memory: IdentityMemoryFeatureSpec {
+                enabled: true,
+                memory_tool: true,
+                ..IdentityMemoryFeatureSpec::default()
+            },
+            semantic_memory: SemanticMemoryFeatureSpec {
+                enabled: true,
+                ..SemanticMemoryFeatureSpec::default()
+            },
+            memory_providers: MemoryProvidersFeatureSpec {
+                enabled: true,
+                active: Some("hindsight".to_string()),
+                providers,
+                ..MemoryProvidersFeatureSpec::default()
+            },
+            context_engine: ContextEngineFeatureSpec {
+                enabled: true,
+                expose_tools: true,
+                tool_allow: vec!["lcm_*".to_string(), "lcm_expand".to_string()],
+                ..ContextEngineFeatureSpec::default()
+            },
+            toolsets: HashMap::from([
+                (
+                    TOOLSET_MEMORY.to_string(),
+                    ToolsetGateSpec {
+                        enabled: true,
+                        builtin_memory_tool: true,
+                        provider_tools: true,
+                        tool_allow: vec![],
+                    },
+                ),
+                (
+                    TOOLSET_CONTEXT_ENGINE.to_string(),
+                    ToolsetGateSpec {
+                        enabled: true,
+                        builtin_memory_tool: false,
+                        provider_tools: false,
+                        tool_allow: vec!["lcm_grep".to_string(), "lcm_expand".to_string()],
+                    },
+                ),
+                (
+                    TOOLSET_SESSION_SEARCH.to_string(),
+                    ToolsetGateSpec {
+                        enabled: true,
+                        ..ToolsetGateSpec::default()
+                    },
+                ),
+                (
+                    TOOLSET_SKILLS.to_string(),
+                    ToolsetGateSpec {
+                        enabled: true,
+                        ..ToolsetGateSpec::default()
+                    },
+                ),
+            ]),
+        };
+        let f = FeatureSurfaceToolFilter::new(&features);
+        let defs = vec![
+            def("memory_write"),
+            def("memory_search"),
+            def("hindsight_recall"),
+            def("lcm_grep"),
+            def("lcm_expand"),
+            def("lcm_describe"),
+            def("session_search"),
+            def("skill-search"),
+            def("file-read"),
+        ];
+        let names: Vec<_> = f
+            .filter_definitions(defs)
+            .into_iter()
+            .map(|d| d.function.name)
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "memory_write",
+                "memory_search",
+                "hindsight_recall",
+                "lcm_grep",
+                "lcm_expand",
+                "session_search",
+                "skill-search",
+                "file-read"
+            ],
+            "context-engine allow lists are intersected, so lcm_describe is hidden"
+        );
+    }
+
+    #[test]
+    fn agent_features_from_env_parses_json_and_invalid_defaults() {
+        let key = ENV_FEATURES;
+        unsafe {
+            std::env::set_var(
+                key,
+                r#"{"toolsets":{"memory":{"enabled":true,"builtin_memory_tool":true}}}"#,
+            )
+        };
+        let parsed = agent_features_from_env();
+        assert!(parsed.toolsets[TOOLSET_MEMORY].enabled);
+        assert!(parsed.toolsets[TOOLSET_MEMORY].builtin_memory_tool);
+
+        unsafe { std::env::set_var(key, "not-json") };
+        assert!(agent_features_from_env().is_default());
+        unsafe { std::env::remove_var(key) };
+        assert!(agent_features_from_env().is_default());
     }
 
     #[test]

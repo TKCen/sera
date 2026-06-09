@@ -235,14 +235,22 @@ pub struct AgentSpec {
     /// cyclic dep on `sera-hitl`. The gateway parses it into
     /// `sera_hitl::HitlMode` via serde when consulted. Defaults to
     /// `autonomous` when absent. Wave D (sera-z6ql).
-    #[serde(default, alias = "enforcementMode", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "enforcementMode",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub enforcement_mode: Option<String>,
     /// HITL approval routing — serialised `sera_hitl::ApprovalRouting`. Kept
     /// as a generic JSON value for the same crate-layering reason as
     /// `enforcement_mode`. The gateway deserialises it into the concrete
     /// type before calling `ApprovalRouter::needs_approval`. Absent =
     /// `{ "mode": "autonomous" }`. Wave D (sera-z6ql).
-    #[serde(default, alias = "approvalPolicy", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "approvalPolicy",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub approval_policy: Option<serde_json::Value>,
     /// Agent IDs this agent may hand off control to (sera-q9i5).
     ///
@@ -251,8 +259,23 @@ pub struct AgentSpec {
     /// `metadata["subagents_allowed"]` into every `TurnContext` so
     /// `default_runtime` builds `handoff_to_<id>` tool definitions for the
     /// LLM. Empty/absent (the default) means no handoff tools are exposed.
-    #[serde(default, alias = "subagentsAllowed", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        alias = "subagentsAllowed",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub subagents_allowed: Vec<String>,
+    /// Hermes-parity feature surface toggles (sera-ibkr.7).
+    ///
+    /// This is intentionally broader than the legacy `tools.allow` list:
+    /// Hermes separates base memory injection, the built-in memory write tool,
+    /// external memory-provider tools, context-engine tools, skills, and
+    /// session-search into separately gated surfaces. SERA mirrors that shape
+    /// here so gateway/runtime assemblers can decide which schemas and context
+    /// blocks are exposed per agent without collapsing everything into one
+    /// generic `memory` boolean.
+    #[serde(default, skip_serializing_if = "AgentFeatureSetSpec::is_default")]
+    pub features: AgentFeatureSetSpec,
 }
 
 /// Persona configuration within an agent spec.
@@ -273,6 +296,210 @@ pub struct PersonaSpec {
 pub struct AgentToolsSpec {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow: Vec<String>,
+}
+
+/// Per-agent Hermes-parity feature toggles (sera-ibkr.7).
+///
+/// These switches model **surfaces**, not backends. They let the gateway and
+/// runtime independently decide whether to inject base identity memory, expose
+/// built-in memory write tools, expose external provider tools, expose
+/// context-engine tools, and load skills/session-search. This mirrors Hermes's
+/// separation between the `memory` toolset, external `MemoryProvider` schemas,
+/// and `context_engine` schemas.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AgentFeatureSetSpec {
+    #[serde(
+        default,
+        alias = "identityMemory",
+        skip_serializing_if = "IdentityMemoryFeatureSpec::is_default"
+    )]
+    pub identity_memory: IdentityMemoryFeatureSpec,
+    #[serde(
+        default,
+        alias = "semanticMemory",
+        skip_serializing_if = "SemanticMemoryFeatureSpec::is_default"
+    )]
+    pub semantic_memory: SemanticMemoryFeatureSpec,
+    #[serde(
+        default,
+        alias = "memoryProviders",
+        skip_serializing_if = "MemoryProvidersFeatureSpec::is_default"
+    )]
+    pub memory_providers: MemoryProvidersFeatureSpec,
+    #[serde(
+        default,
+        alias = "contextEngine",
+        skip_serializing_if = "ContextEngineFeatureSpec::is_default"
+    )]
+    pub context_engine: ContextEngineFeatureSpec,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub toolsets: HashMap<String, ToolsetGateSpec>,
+}
+
+impl AgentFeatureSetSpec {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct IdentityMemoryFeatureSpec {
+    /// Enables base memory assembly for this agent.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Inject immutable identity/persona anchor such as `soul.md`.
+    #[serde(default)]
+    pub soul: bool,
+    /// Inject compact durable notes analogous to Hermes `MEMORY.md`.
+    #[serde(default, alias = "durableMemory")]
+    pub durable_memory: bool,
+    /// Inject compact user profile analogous to Hermes `USER.md`.
+    #[serde(default, alias = "userProfile")]
+    pub user_profile: bool,
+    /// Inject environment/setup facts.
+    #[serde(default)]
+    pub environment: bool,
+    /// Expose the built-in memory mutation tool surface when the memory
+    /// toolset also allows it.
+    #[serde(default, alias = "memoryTool")]
+    pub memory_tool: bool,
+    /// Write policy for built-in memory mutations: `disabled`, `gated`, or
+    /// `allowed`. Kept as string pending policy enum unification.
+    #[serde(
+        default,
+        alias = "writePolicy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub write_policy: Option<String>,
+    #[serde(
+        default,
+        alias = "memoryCharLimit",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub memory_char_limit: Option<u32>,
+    #[serde(
+        default,
+        alias = "userCharLimit",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub user_char_limit: Option<u32>,
+}
+
+impl IdentityMemoryFeatureSpec {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SemanticMemoryFeatureSpec {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Backend selector, e.g. `sqlite`, `pgvector`, or `plugin:<name>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+    #[serde(default, alias = "topK", skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    #[serde(
+        default,
+        alias = "maxInjectedChars",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_injected_chars: Option<u32>,
+    #[serde(
+        default,
+        alias = "writePolicy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub write_policy: Option<String>,
+}
+
+impl SemanticMemoryFeatureSpec {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct MemoryProvidersFeatureSpec {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Active provider name. Hermes allows one external provider at a time;
+    /// SERA starts with the same default constraint to avoid schema bloat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<String>,
+    #[serde(
+        default,
+        alias = "allowMultiple",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub allow_multiple: Option<bool>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub providers: HashMap<String, MemoryProviderFeatureSpec>,
+}
+
+impl MemoryProvidersFeatureSpec {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct MemoryProviderFeatureSpec {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub recall: bool,
+    #[serde(default)]
+    pub reflect: bool,
+    #[serde(
+        default,
+        alias = "retainPolicy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub retain_policy: Option<String>,
+    #[serde(
+        default,
+        alias = "exposeTools",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub expose_tools: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ContextEngineFeatureSpec {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Engine selector, e.g. `compressor`, `lcm`, or `plugin:<name>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    #[serde(default, alias = "exposeTools")]
+    pub expose_tools: bool,
+    #[serde(default, alias = "toolAllow", skip_serializing_if = "Vec::is_empty")]
+    pub tool_allow: Vec<String>,
+}
+
+impl ContextEngineFeatureSpec {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ToolsetGateSpec {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Memory toolset-specific: expose SERA's built-in memory action tool.
+    #[serde(default, alias = "builtinMemoryTool")]
+    pub builtin_memory_tool: bool,
+    /// Memory toolset-specific: expose external MemoryProvider schemas.
+    #[serde(default, alias = "providerTools")]
+    pub provider_tools: bool,
+    /// Context-engine/toolset-specific explicit allow list.
+    #[serde(default, alias = "toolAllow", skip_serializing_if = "Vec::is_empty")]
+    pub tool_allow: Vec<String>,
 }
 
 /// Connector spec — channel connector configuration.
@@ -400,14 +627,134 @@ spec:
         let spec: AgentSpec = serde_json::from_value(manifest.spec).unwrap();
         assert_eq!(spec.provider, "lm-studio");
         assert_eq!(spec.model.as_deref(), Some("gemma-4-12b"));
-        assert!(
-            spec.persona
-                .unwrap()
-                .immutable_anchor
-                .unwrap()
-                .contains("Sera")
-        );
+        assert!(spec
+            .persona
+            .unwrap()
+            .immutable_anchor
+            .unwrap()
+            .contains("Sera"));
         assert_eq!(spec.tools.unwrap().allow.len(), 4);
+        assert!(spec.features.is_default());
+    }
+
+    #[test]
+    fn raw_manifest_parse_agent_hermes_parity_feature_surfaces() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: sera
+spec:
+  provider: minimax
+  model: MiniMax-M2.7
+  features:
+    identityMemory:
+      enabled: true
+      soul: true
+      durableMemory: true
+      userProfile: true
+      environment: true
+      memoryTool: true
+      writePolicy: gated
+      memoryCharLimit: 2200
+      userCharLimit: 1375
+    semanticMemory:
+      enabled: true
+      backend: sqlite
+      topK: 3
+      maxInjectedChars: 3000
+      writePolicy: gated
+    memoryProviders:
+      enabled: true
+      active: hindsight
+      providers:
+        hindsight:
+          enabled: true
+          recall: true
+          reflect: true
+          retainPolicy: gated
+          exposeTools: true
+          tags: [sera, default]
+    contextEngine:
+      enabled: true
+      engine: lcm
+      exposeTools: true
+      toolAllow: [lcm_grep, lcm_expand, lcm_expand_query]
+    toolsets:
+      memory:
+        enabled: false
+        builtinMemoryTool: true
+        providerTools: false
+      context_engine:
+        enabled: false
+        toolAllow: [lcm_grep, lcm_expand]
+      session_search:
+        enabled: true
+      skills:
+        enabled: true
+"#;
+        let raw: RawManifest = serde_yaml::from_str(yaml).unwrap();
+        let manifest = ConfigManifest::from_raw(raw).unwrap();
+        let spec: AgentSpec = serde_json::from_value(manifest.spec).unwrap();
+
+        assert!(spec.features.identity_memory.enabled);
+        assert!(spec.features.identity_memory.soul);
+        assert!(spec.features.identity_memory.durable_memory);
+        assert!(spec.features.identity_memory.user_profile);
+        assert_eq!(
+            spec.features.identity_memory.write_policy.as_deref(),
+            Some("gated")
+        );
+        assert_eq!(spec.features.identity_memory.memory_char_limit, Some(2200));
+        assert_eq!(spec.features.identity_memory.user_char_limit, Some(1375));
+
+        assert!(spec.features.semantic_memory.enabled);
+        assert_eq!(
+            spec.features.semantic_memory.backend.as_deref(),
+            Some("sqlite")
+        );
+        assert_eq!(spec.features.semantic_memory.top_k, Some(3));
+
+        assert!(spec.features.memory_providers.enabled);
+        assert_eq!(
+            spec.features.memory_providers.active.as_deref(),
+            Some("hindsight")
+        );
+        let hindsight = spec
+            .features
+            .memory_providers
+            .providers
+            .get("hindsight")
+            .expect("hindsight provider gate");
+        assert!(hindsight.enabled);
+        assert!(hindsight.recall);
+        assert!(hindsight.reflect);
+        assert_eq!(hindsight.retain_policy.as_deref(), Some("gated"));
+        assert_eq!(hindsight.expose_tools, Some(true));
+
+        assert!(spec.features.context_engine.enabled);
+        assert_eq!(spec.features.context_engine.engine.as_deref(), Some("lcm"));
+        assert!(spec.features.context_engine.expose_tools);
+        assert_eq!(
+            spec.features.context_engine.tool_allow,
+            vec!["lcm_grep", "lcm_expand", "lcm_expand_query"]
+        );
+
+        let memory_toolset = spec.features.toolsets.get("memory").unwrap();
+        assert!(
+            !memory_toolset.enabled,
+            "live memory tools stay gated off by default"
+        );
+        assert!(memory_toolset.builtin_memory_tool);
+        assert!(!memory_toolset.provider_tools);
+        assert!(
+            spec.features
+                .toolsets
+                .get("session_search")
+                .unwrap()
+                .enabled
+        );
+        assert!(spec.features.toolsets.get("skills").unwrap().enabled);
     }
 
     #[test]

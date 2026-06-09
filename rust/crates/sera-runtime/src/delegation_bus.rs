@@ -1,9 +1,10 @@
 //! Delegation bus — child-session event routing for inter-agent delegation.
 //!
 //! The `DelegationBus` is a lightweight in-process pub/sub over child session
-//! events. It backs the `session_spawn` / `session_yield` / `session_send`
-//! tools (bead sera-a1u): the parent agent spawns a named child, then yields
-//! and awaits the child's next [`DelegationEvent`] as a tool result.
+//! events. It backs the `delegation_spawn` / `delegation_list` /
+//! `delegation_yield` / `delegation_send` tools (bead sera-a1u): the parent
+//! agent registers a named delegation, then yields and awaits the child's next
+//! [`DelegationEvent`] as a tool result.
 //!
 //! ## Event types
 //!
@@ -72,11 +73,11 @@ pub struct DelegationBus {
 #[derive(Default)]
 struct BusInner {
     /// Pending subscribers keyed by child session id. Each session may have
-    /// multiple concurrent subscribers (one per `session_yield` call); all
+    /// multiple concurrent subscribers (one per `delegation_yield` call); all
     /// fire on the next `publish`.
     subscribers: HashMap<String, Vec<oneshot::Sender<DelegationEvent>>>,
-    /// Set of known child session ids — populated by `session_spawn` so the
-    /// `session_yield` tool can distinguish "unknown session" from "known but
+    /// Set of known child session ids — populated by `delegation_spawn` so the
+    /// `delegation_yield` tool can distinguish "unknown session" from "known but
     /// no event yet".
     known_sessions: HashMap<String, ChildSessionMeta>,
 }
@@ -99,6 +100,16 @@ pub struct ChildSessionMeta {
     pub child_agent_id: String,
     /// Initial prompt the child was spawned with (for audit/debug).
     pub initial_prompt: String,
+}
+
+/// Read-only snapshot returned by `delegation_list`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChildSessionSnapshot {
+    pub session_id: String,
+    pub parent_agent_id: String,
+    pub child_agent_id: String,
+    pub initial_prompt: String,
+    pub pending_subscribers: usize,
 }
 
 impl DelegationBus {
@@ -127,11 +138,35 @@ impl DelegationBus {
         inner.known_sessions.get(session_id).cloned()
     }
 
+    /// Return read-only snapshots for all known child sessions.
+    ///
+    /// Sorted by `session_id` for deterministic tool output and tests.
+    pub fn list_sessions(&self) -> Vec<ChildSessionSnapshot> {
+        let inner = self.inner.lock().expect("delegation bus mutex poisoned");
+        let mut sessions = inner
+            .known_sessions
+            .iter()
+            .map(|(session_id, meta)| ChildSessionSnapshot {
+                session_id: session_id.clone(),
+                parent_agent_id: meta.parent_agent_id.clone(),
+                child_agent_id: meta.child_agent_id.clone(),
+                initial_prompt: meta.initial_prompt.clone(),
+                pending_subscribers: inner
+                    .subscribers
+                    .get(session_id)
+                    .map(|subscribers| subscribers.len())
+                    .unwrap_or(0),
+            })
+            .collect::<Vec<_>>();
+        sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+        sessions
+    }
+
     /// Subscribe to the next event on a child session. Returns a oneshot
     /// receiver that fires on the next [`Self::publish`] for that session.
     ///
     /// Returns `Err` if the session id is not known — parents must call
-    /// `session_spawn` before yielding.
+    /// `delegation_spawn` before yielding.
     pub fn subscribe_next(
         &self,
         session_id: &str,
@@ -365,5 +400,25 @@ mod tests {
         assert_eq!(got.initial_prompt, "find X");
         assert!(bus.is_known("s6"));
         assert!(!bus.is_known("s-missing"));
+    }
+
+    #[tokio::test]
+    async fn list_sessions_returns_sorted_snapshots_with_subscriber_counts() {
+        let bus = DelegationBus::new();
+        bus.register_session("z-child", meta("parent-z", "coder"));
+        bus.register_session("a-child", meta("parent-a", "researcher"));
+        let _rx1 = bus.subscribe_next("z-child").unwrap();
+        let _rx2 = bus.subscribe_next("z-child").unwrap();
+
+        let sessions = bus.list_sessions();
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].session_id, "a-child");
+        assert_eq!(sessions[0].parent_agent_id, "parent-a");
+        assert_eq!(sessions[0].child_agent_id, "researcher");
+        assert_eq!(sessions[0].pending_subscribers, 0);
+        assert_eq!(sessions[1].session_id, "z-child");
+        assert_eq!(sessions[1].parent_agent_id, "parent-z");
+        assert_eq!(sessions[1].child_agent_id, "coder");
+        assert_eq!(sessions[1].pending_subscribers, 2);
     }
 }

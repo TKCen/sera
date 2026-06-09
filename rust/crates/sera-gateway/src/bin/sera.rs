@@ -11,7 +11,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use axum::extract::{FromRequest, Path, Request, State};
 use axum::extract::rejection::JsonRejection;
@@ -45,9 +45,11 @@ use sera_db::sqlite::SqliteDb;
 use sera_memory::PgVectorStore;
 use sera_memory::SemanticMemoryStore;
 #[allow(unused_imports)]
-use sera_memory::{DEFAULT_SQLITE_VEC_DIMENSIONS, SqliteMemoryStore};
+use sera_memory::{DEFAULT_SQLITE_VEC_DIMENSIONS, PutRequest, SqliteMemoryStore};
+use sera_memory_hindsight::{HindsightConfig, HindsightStore};
 use sera_runtime::skill_dispatch::SkillDispatchEngine;
 use sera_runtime::subagent::SubagentManager;
+use sera_types::memory::SegmentKind;
 // sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +
 // SERA-issued nonce fallback). Wired into AppState + `/api/mail/inbound`.
 use sera_gateway::admin::{
@@ -181,7 +183,7 @@ fn build_embedded_transport(
     use sera_runtime::default_runtime::DefaultRuntime;
     use sera_runtime::tools::TraitToolRegistry;
     use sera_runtime::tools::dispatcher::RegistryDispatcher;
-    use sera_runtime::tools::filter::ToolNameFilter;
+    use sera_runtime::tools::filter::{FeatureSurfaceToolFilter, ToolNameFilter};
 
     // Start from gateway-process env defaults (max_tokens, semantic_*,
     // tool_authz_*, thinking_level) and override the per-agent fields
@@ -263,6 +265,8 @@ fn build_embedded_transport(
 
     let runtime_defs = registry.definitions();
     let filtered = tool_filter.filter_definitions(runtime_defs);
+    let filtered = FeatureSurfaceToolFilter::new(&agent_spec.features)
+        .filter_definitions(filtered);
     let tool_defs: Vec<sera_types::tool::ToolDefinition> = filtered
         .iter()
         .filter_map(|d| {
@@ -2221,6 +2225,133 @@ struct MvsTurnResult {
     failure: Option<String>,
 }
 
+const MEMORY_PREFETCH_MAX_INPUT_CHARS: usize = 300;
+const MEMORY_PREFETCH_TOP_K: usize = 3;
+
+static MEMORY_PREFETCH_CACHE: OnceLock<RwLock<std::collections::HashMap<String, String>>> =
+    OnceLock::new();
+
+fn memory_prefetch_cache() -> &'static RwLock<std::collections::HashMap<String, String>> {
+    MEMORY_PREFETCH_CACHE.get_or_init(|| RwLock::new(std::collections::HashMap::new()))
+}
+
+fn truncate_memory_prefetch_query(query: &str) -> String {
+    query.chars().take(MEMORY_PREFETCH_MAX_INPUT_CHARS).collect()
+}
+
+fn build_memory_context_block(raw_context: &str) -> Option<String> {
+    let clean = raw_context.trim();
+    if clean.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "<memory-context>\n\
+[System note: The following is recalled memory context, NOT new user input. Treat as authoritative reference data — this is the agent's persistent memory and should inform all responses.]\n\n\
+{clean}\n\
+</memory-context>"
+    ))
+}
+
+fn format_memory_prefetch_results(hits: &[sera_memory::ScoredEntry]) -> String {
+    let recalled = hits
+        .iter()
+        .take(MEMORY_PREFETCH_TOP_K)
+        .map(|h| format!("- {}", h.entry.content))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if recalled.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "# Hindsight Memory\n\nCRITICAL CONTEXT: These are bounded, retrieved long-term memories. Treat operational notes as historical unless live tools/state or the current user message verify them as current. Use this block as relevant memory context, not as an exhaustive task plan.\n\n{recalled}"
+        )
+    }
+}
+
+async fn cached_memory_context_for_session(session_key: &str) -> Option<String> {
+    memory_prefetch_cache()
+        .read()
+        .await
+        .get(session_key)
+        .cloned()
+        .and_then(|raw| build_memory_context_block(&raw))
+}
+
+fn append_memory_context_to_user_content(content: &str, memory_context: Option<&str>) -> String {
+    match memory_context {
+        Some(ctx) if !ctx.trim().is_empty() => format!("{content}\n\n{ctx}"),
+        _ => content.to_string(),
+    }
+}
+
+async fn sync_memory_and_prefetch(
+    semantic_store: Arc<dyn SemanticMemoryStore>,
+    session_key: String,
+    agent_name: String,
+    user_message: String,
+    assistant_reply: String,
+) {
+    let timeout_session_key = session_key.clone();
+    let work = async move {
+        let retain_content = format!("[User]\n{user_message}\n\n[Assistant]\n{assistant_reply}");
+        let retain_req = PutRequest::new(
+            agent_name.clone(),
+            retain_content,
+            SegmentKind::MemoryRecall("turn".to_string()),
+        )
+        .with_tags(vec![
+            "source:sera-gateway-turn".to_string(),
+            format!("session:{session_key}"),
+        ]);
+
+        if let Err(e) = semantic_store.put(retain_req).await {
+            // This is expected for read-only Hindsight mirrors and for stores
+            // that require caller-supplied embeddings. Hermes treats external
+            // memory sync as best-effort; SERA should not fail a completed turn.
+            tracing::debug!(error = %e, session_key = %session_key, "memory turn sync skipped/failed; continuing to prefetch");
+        }
+
+        let query_text = truncate_memory_prefetch_query(&user_message);
+        let recall_query = sera_memory::SemanticQuery {
+            agent_id: agent_name.clone(),
+            scope: None,
+            tier_filter: None,
+            text: Some(query_text),
+            query_embedding: None,
+            top_k: MEMORY_PREFETCH_TOP_K,
+            similarity_threshold: None,
+        };
+
+        match semantic_store.query(recall_query).await {
+            Ok(hits) if !hits.is_empty() => {
+                let formatted = format_memory_prefetch_results(&hits);
+                let mut cache = memory_prefetch_cache().write().await;
+                if formatted.trim().is_empty() {
+                    cache.remove(&session_key);
+                } else {
+                    cache.insert(session_key.clone(), formatted);
+                }
+                tracing::debug!(session_key = %session_key, hits = hits.len(), "memory prefetch cached for next turn");
+            }
+            Ok(_) => {
+                memory_prefetch_cache().write().await.remove(&session_key);
+                tracing::debug!(session_key = %session_key, "memory prefetch empty; cache cleared");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, session_key = %session_key, "memory prefetch failed; cache cleared");
+                memory_prefetch_cache().write().await.remove(&session_key);
+            }
+        }
+    };
+
+    if tokio::time::timeout(std::time::Duration::from_secs(20), work)
+        .await
+        .is_err()
+    {
+        tracing::warn!(session_key = %timeout_session_key, "memory sync/prefetch timed out; continuing without warmed next-turn context");
+    }
+}
+
 // ── Authentication ──────────────────────────────────────────────────────────
 
 /// Validate the `Authorization: Bearer <key>` header against the configured
@@ -2917,6 +3048,7 @@ async fn chat_handler(
                 session_id: sid,
                 message_id: mid_clone,
                 agent_name: aname,
+                user_message: message.clone(),
             },
             |fold_state| async move {
                 match fold_state {
@@ -2929,6 +3061,7 @@ async fn chat_handler(
                         session_id,
                         message_id,
                         agent_name,
+                        user_message,
                     } => {
                         // Pull the next live delta. `recv()` resolves to
                         // `None` when every Sender is dropped — that
@@ -2956,6 +3089,7 @@ async fn chat_handler(
                                         session_id,
                                         message_id,
                                         agent_name,
+                                        user_message,
                                     },
                                 ))
                             }
@@ -3139,6 +3273,15 @@ async fn chat_handler(
                                     );
                                 }
 
+                                sync_memory_and_prefetch(
+                                    Arc::clone(&state.semantic_store),
+                                    session_key.clone(),
+                                    agent_name.clone(),
+                                    user_message.clone(),
+                                    result.reply.clone(),
+                                )
+                                .await;
+
                                 let usage = result.usage;
                                 let payload = serde_json::json!({
                                     "status": "complete",
@@ -3293,6 +3436,16 @@ async fn chat_handler(
                 .to_string(),
             ),
         );
+        drop(db);
+
+        sync_memory_and_prefetch(
+            Arc::clone(&state.semantic_store),
+            session_key.clone(),
+            agent_name.clone(),
+            req.message.clone(),
+            result.reply.clone(),
+        )
+        .await;
 
         Ok(Json(ChatResponse {
             response: result.reply,
@@ -3480,6 +3633,7 @@ fn ensure_operator_helper_manifest(
         enforcement_mode: Some("autonomous".to_string()),
         approval_policy: None,
         subagents_allowed: Vec::new(),
+        features: Default::default(),
     };
     let manifest = ConfigManifest {
         api_version: ApiVersion {
@@ -3722,6 +3876,14 @@ async fn operator_task_handler(
         db.append_transcript(&session_id, "assistant", Some(&turn.reply), None, None)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
+    sync_memory_and_prefetch(
+        Arc::clone(&state.semantic_store),
+        session_key.clone(),
+        agent_name.clone(),
+        task.clone(),
+        turn.reply.clone(),
+    )
+    .await;
 
     let active_count = state
         .subagent_manager
@@ -3887,6 +4049,7 @@ enum StreamState {
         session_id: String,
         message_id: String,
         agent_name: String,
+        user_message: String,
     },
     Done,
 }
@@ -4157,6 +4320,103 @@ fn build_self_introspection_snapshot(
     )
 }
 
+fn base_memory_root() -> std::path::PathBuf {
+    std::env::var_os("SERA_BASE_MEMORY_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("data/memory"))
+}
+
+fn safe_agent_memory_dir(root: &std::path::Path, agent_name: &str) -> Option<std::path::PathBuf> {
+    if agent_name.is_empty()
+        || !agent_name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    {
+        return None;
+    }
+    Some(root.join(agent_name))
+}
+
+fn read_identity_memory_segment(
+    dir: &std::path::Path,
+    file_name: &str,
+    limit: Option<u32>,
+) -> Option<String> {
+    let mut content = std::fs::read_to_string(dir.join(file_name)).ok()?;
+    if let Some(limit) = limit {
+        let limit = limit as usize;
+        if content.chars().count() > limit {
+            content = content.chars().take(limit).collect::<String>();
+        }
+    }
+    let content = content.trim();
+    if content.is_empty() {
+        None
+    } else {
+        Some(content.to_string())
+    }
+}
+
+fn build_identity_memory_context(agent_spec: &AgentSpec, agent_name: &str) -> Option<String> {
+    build_identity_memory_context_from_root(agent_spec, agent_name, &base_memory_root())
+}
+
+fn build_tool_use_guidance_context() -> &'static str {
+    "Tool-use guidance: answer conversational, status, memory, relationship, and creative-direction questions directly from the visible context and relevant memories. Use tools only when the user asks for external action or inspection such as files, shell, or delegation. After any tool result, synthesize a final text answer instead of repeating the same tool call."
+}
+
+fn build_identity_memory_context_from_root(
+    agent_spec: &AgentSpec,
+    agent_name: &str,
+    root: &std::path::Path,
+) -> Option<String> {
+    let features = &agent_spec.features.identity_memory;
+    if !features.enabled {
+        return None;
+    }
+    let dir = safe_agent_memory_dir(root, agent_name)?;
+    let mut segments: Vec<(String, String)> = Vec::new();
+
+    if features.soul {
+        if let Some(content) = read_identity_memory_segment(&dir, "soul.md", None) {
+            segments.push(("soul.md".to_string(), content));
+        }
+    }
+    if features.durable_memory {
+        if let Some(content) =
+            read_identity_memory_segment(&dir, "memory.md", features.memory_char_limit)
+        {
+            segments.push(("memory.md".to_string(), content));
+        }
+    }
+    if features.user_profile {
+        if let Some(content) =
+            read_identity_memory_segment(&dir, "user_profile.md", features.user_char_limit)
+        {
+            segments.push(("user_profile.md".to_string(), content));
+        }
+    }
+    if features.environment {
+        if let Some(content) = read_identity_memory_segment(&dir, "environment.md", None) {
+            segments.push(("environment.md".to_string(), content));
+        }
+    }
+
+    if segments.is_empty() {
+        return None;
+    }
+
+    let mut context = format!("SERA base identity memory for agent `{agent_name}`:\n");
+    for (name, content) in segments {
+        context.push_str("\n[");
+        context.push_str(&name);
+        context.push_str("]\n");
+        context.push_str(&content);
+        context.push('\n');
+    }
+    Some(context)
+}
+
 /// Execute a turn by dispatching through the agent's [`AgentTurnTransport`].
 ///
 /// The gateway builds the conversation messages from the transcript and
@@ -4173,7 +4433,7 @@ async fn execute_turn(
     transport: &dyn AgentTurnTransport,
     session_key: &str,
     skill_engine: &SkillDispatchEngine,
-    semantic_store: &Arc<dyn SemanticMemoryStore>,
+    _semantic_store: &Arc<dyn SemanticMemoryStore>,
     agent_name: &str,
     cancel: &CancellationToken,
     capability_registry: &CapabilityRegistry,
@@ -4197,6 +4457,18 @@ async fn execute_turn(
         }));
     }
 
+    if let Some(context) = build_identity_memory_context(agent_spec, agent_name) {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": context,
+        }));
+    }
+
+    messages.push(serde_json::json!({
+        "role": "system",
+        "content": build_tool_use_guidance_context(),
+    }));
+
     // ── Skill dispatch: fire trigger-matched skills for this turn and
     // prepend their active `context_injection` strings as system messages.
     // Injected BEFORE transcript replay so the skill guidance frames the
@@ -4219,39 +4491,16 @@ async fn execute_turn(
         }));
     }
 
-    // ── Memory recall: text-only SemanticMemoryStore query. Best-effort —
-    // any backend error is logged and skipped; a failed recall must never
-    // fail the turn.
-    let recall_query = sera_memory::SemanticQuery {
-        agent_id: agent_name.to_string(),
-        scope: None,
-        tier_filter: None,
-        text: Some(user_message.to_string()),
-        query_embedding: None,
-        top_k: 3,
-        similarity_threshold: None,
-    };
-    match semantic_store.query(recall_query).await {
-        Ok(hits) if !hits.is_empty() => {
-            let recalled = hits
-                .iter()
-                .take(3)
-                .map(|h| format!("- {}", h.entry.content))
-                .collect::<Vec<_>>()
-                .join("\n");
-            messages.push(serde_json::json!({
-                "role": "system",
-                "content": format!("Relevant memories:\n{recalled}"),
-            }));
-        }
-        Ok(_) => {}
-        Err(e) => {
-            tracing::warn!(error = %e, "semantic recall failed; continuing without memory");
-        }
-    }
+    // ── Memory recall: Hermes-style prefetched context. The current turn does
+    // NOT query memory from the current user message. Instead, the previous
+    // successful turn queued a best-effort recall from its original user
+    // message, and this turn injects that cached block ephemerally into the
+    // current user message below. Explicit memory tools remain the current-query
+    // path, mirroring Hermes' `hindsight_recall` / `hindsight_reflect` split.
+    let prefetched_memory_context = cached_memory_context_for_session(session_key).await;
 
     // Add transcript history (including tool_calls and tool results).
-    for row in transcript {
+    for (idx, row) in transcript.iter().enumerate() {
         if row.role == "tool" {
             let mut msg = serde_json::json!({
                 "role": "tool",
@@ -4271,6 +4520,17 @@ async fn execute_turn(
             }
             messages.push(msg);
         } else if let Some(content) = &row.content {
+            let is_current_user_row = idx + 1 == transcript.len()
+                && row.role == "user"
+                && row.content.as_deref() == Some(user_message);
+            let content = if is_current_user_row {
+                append_memory_context_to_user_content(
+                    content,
+                    prefetched_memory_context.as_deref(),
+                )
+            } else {
+                content.to_string()
+            };
             messages.push(serde_json::json!({
                 "role": row.role,
                 "content": content,
@@ -4283,9 +4543,13 @@ async fn execute_turn(
         .last()
         .is_some_and(|r| r.role == "user" && r.content.as_deref() == Some(user_message));
     if !already_added {
+        let content = append_memory_context_to_user_content(
+            user_message,
+            prefetched_memory_context.as_deref(),
+        );
         messages.push(serde_json::json!({
             "role": "user",
-            "content": user_message,
+            "content": content,
         }));
     }
 
@@ -6021,9 +6285,51 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
     let database_url = std::env::var("DATABASE_URL")
         .ok()
         .filter(|s| !s.trim().is_empty());
+    let want_hindsight = matches!(backend_pref.as_deref(), Some("hindsight"));
     let want_pgvector = wants_pgvector_backend(backend_pref.as_deref(), database_url.as_deref());
 
     let semantic_store: Arc<dyn SemanticMemoryStore> = 'store: {
+        if want_hindsight {
+            let base_url = std::env::var("SERA_HINDSIGHT_URL")
+                .or_else(|_| std::env::var("HINDSIGHT_URL"))
+                .unwrap_or_else(|_| "http://localhost:8888".to_string());
+            let bank_id_override = std::env::var("SERA_HINDSIGHT_BANK_ID")
+                .or_else(|_| std::env::var("HINDSIGHT_BANK_ID"))
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let read_only = std::env::var("SERA_HINDSIGHT_READ_ONLY")
+                .or_else(|_| std::env::var("HINDSIGHT_READ_ONLY"))
+                .ok()
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(true);
+            let bearer_token = std::env::var("SERA_HINDSIGHT_BEARER_TOKEN")
+                .or_else(|_| std::env::var("HINDSIGHT_BEARER_TOKEN"))
+                .ok()
+                .filter(|s| !s.trim().is_empty());
+            let config = HindsightConfig {
+                base_url: base_url.clone(),
+                bearer_token,
+                bank_id_override: bank_id_override.clone(),
+                read_only,
+                ..HindsightConfig::default()
+            };
+            match HindsightStore::new(config) {
+                Ok(store) => {
+                    tracing::info!(
+                        base_url = %base_url,
+                        bank_id_override = ?bank_id_override,
+                        read_only,
+                        "SemanticMemoryStore backend: HindsightStore"
+                    );
+                    break 'store Arc::new(store);
+                }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    "HindsightStore initialization failed; falling back to SqliteMemoryStore"
+                ),
+            }
+        }
         if want_pgvector {
             match &database_url {
                 Some(url) => match sera_db::DbPool::connect(url).await {
@@ -6334,6 +6640,9 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
             .map(|t| t.allow.join(","))
             .unwrap_or_default();
         env.insert("SERA_AGENT_TOOLS_ALLOW".to_string(), tools_allow_csv);
+        let features_json = serde_json::to_string(&agent_spec.features)
+            .unwrap_or_else(|_| "{}".to_string());
+        env.insert("SERA_AGENT_FEATURES".to_string(), features_json);
         if let Ok(deny) = std::env::var("SERA_AGENT_TOOLS_DENY") {
             env.insert("SERA_AGENT_TOOLS_DENY".to_string(), deny);
         }
@@ -7165,6 +7474,96 @@ mod tests {
     #[test]
     fn unknown_backend_pref_falls_back_to_sqlite() {
         assert!(!wants_pgvector_backend(Some("redis"), Some("postgres://x")));
+    }
+
+    #[test]
+    fn identity_memory_context_loads_enabled_segments_with_limits() {
+        let root = std::env::temp_dir().join(format!(
+            "sera-identity-memory-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let agent_dir = root.join("sera");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(agent_dir.join("soul.md"), "soul line\n").unwrap();
+        std::fs::write(agent_dir.join("memory.md"), "abcdef").unwrap();
+        std::fs::write(agent_dir.join("user_profile.md"), "profilexyz").unwrap();
+        std::fs::write(agent_dir.join("environment.md"), "env line").unwrap();
+
+        let mut features = sera_types::config_manifest::AgentFeatureSetSpec::default();
+        features.identity_memory = sera_types::config_manifest::IdentityMemoryFeatureSpec {
+            enabled: true,
+            soul: true,
+            durable_memory: true,
+            user_profile: true,
+            environment: true,
+            memory_tool: false,
+            write_policy: None,
+            memory_char_limit: Some(3),
+            user_char_limit: Some(7),
+        };
+        let spec = AgentSpec {
+            provider: "test".to_string(),
+            model: Some("test".to_string()),
+            persona: None,
+            tools: None,
+            workspace: None,
+            policy_ref: None,
+            enforcement_mode: None,
+            approval_policy: None,
+            subagents_allowed: Vec::new(),
+            features,
+        };
+
+        let context = build_identity_memory_context_from_root(&spec, "sera", &root).unwrap();
+        assert!(context.contains("[soul.md]\nsoul line"));
+        assert!(context.contains("[memory.md]\nabc"));
+        assert!(context.contains("[user_profile.md]\nprofile"));
+        assert!(context.contains("[environment.md]\nenv line"));
+        assert!(!context.contains("abcdef"));
+        assert!(!context.contains("profilexyz"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tool_use_guidance_keeps_conversation_questions_direct() {
+        let guidance = build_tool_use_guidance_context();
+        assert!(guidance.contains("answer conversational"));
+        assert!(guidance.contains("creative-direction"));
+        assert!(guidance.contains("After any tool result"));
+    }
+
+    #[test]
+    fn identity_memory_context_is_absent_when_disabled_or_agent_name_is_unsafe() {
+        let root = std::env::temp_dir().join(format!(
+            "sera-identity-memory-disabled-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let agent_dir = root.join("sera");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(agent_dir.join("memory.md"), "should not load").unwrap();
+
+        let spec = AgentSpec {
+            provider: "test".to_string(),
+            model: Some("test".to_string()),
+            persona: None,
+            tools: None,
+            workspace: None,
+            policy_ref: None,
+            enforcement_mode: None,
+            approval_policy: None,
+            subagents_allowed: Vec::new(),
+            features: Default::default(),
+        };
+
+        assert!(build_identity_memory_context_from_root(&spec, "sera", &root).is_none());
+
+        let mut enabled = spec.clone();
+        enabled.features.identity_memory.enabled = true;
+        enabled.features.identity_memory.durable_memory = true;
+        assert!(build_identity_memory_context_from_root(&enabled, "../sera", &root).is_none());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     // ── sera-y45a: dispatch mode parsing & effective-mode reporting ─────────
@@ -10736,6 +11135,7 @@ spec:
             enforcement_mode: None,
             approval_policy: None,
             subagents_allowed: Vec::new(),
+            features: Default::default(),
         };
         let skill_engine = SkillDispatchEngine::new();
         let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
@@ -10871,6 +11271,7 @@ spec:
             enforcement_mode: Some("standard".to_string()),
             approval_policy: None,
             subagents_allowed: vec!["reviewer".to_string()],
+            features: Default::default(),
         };
         let skill_engine = SkillDispatchEngine::new();
         skill_engine.register(
@@ -10939,6 +11340,138 @@ spec:
         }
     }
 
+    #[tokio::test]
+    async fn execute_turn_injects_only_prefetched_memory_context_into_current_user_message() {
+        struct RecordingTransport {
+            seen: Arc<std::sync::Mutex<Vec<Vec<serde_json::Value>>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl AgentTurnTransport for RecordingTransport {
+            async fn send_turn(
+                &self,
+                messages: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                self.seen.lock().unwrap().push(messages);
+                Ok(TurnEvents {
+                    response: "ok".to_string(),
+                    ..TurnEvents::default()
+                })
+            }
+
+            async fn send_steer(
+                &self,
+                _items: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let session_key = "hindsight-prefetch-test-session";
+        memory_prefetch_cache().write().await.insert(
+            session_key.to_string(),
+            "# Hindsight Memory\n\n- Sebastian says TKCen/Sera creative work is picture-first.".to_string(),
+        );
+
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let transport = RecordingTransport {
+            seen: Arc::clone(&seen),
+        };
+        let agent_spec = AgentSpec {
+            provider: "stub-provider".to_string(),
+            model: None,
+            persona: None,
+            tools: None,
+            workspace: None,
+            policy_ref: None,
+            enforcement_mode: None,
+            approval_policy: None,
+            subagents_allowed: Vec::new(),
+            features: Default::default(),
+        };
+        let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
+            SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+        );
+        let transcript = vec![sera_db::sqlite::TranscriptRow {
+            id: 1,
+            session_id: "ses-test".to_string(),
+            role: "user".to_string(),
+            content: Some("and what did we create so far?".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        }];
+
+        let result = execute_turn(
+            &agent_spec,
+            &transcript,
+            "and what did we create so far?",
+            &transport,
+            session_key,
+            &SkillDispatchEngine::new(),
+            &semantic_store,
+            "sera",
+            &CancellationToken::new(),
+            &CapabilityRegistry::empty(),
+            None,
+        )
+        .await;
+
+        assert_eq!(result.reply, "ok");
+        let captured = seen.lock().unwrap();
+        let messages = captured.first().expect("transport should see one turn");
+        let current_user = messages
+            .iter()
+            .rev()
+            .find(|m| m.get("role").and_then(|v| v.as_str()) == Some("user"))
+            .and_then(|m| m.get("content"))
+            .and_then(|v| v.as_str())
+            .expect("current user message missing");
+        assert!(current_user.starts_with("and what did we create so far?"));
+        assert!(current_user.contains("<memory-context>"));
+        assert!(current_user.contains("# Hindsight Memory"));
+        assert!(current_user.contains("picture-first"));
+        assert!(current_user.contains("NOT new user input"));
+        assert!(current_user.contains("</memory-context>"));
+        assert!(
+            !messages.iter().any(|m| m
+                .get("content")
+                .and_then(|v| v.as_str())
+                .is_some_and(|c| c.starts_with("Relevant memories:"))),
+            "memory must not be injected as the old same-turn system block"
+        );
+
+        memory_prefetch_cache().write().await.remove(session_key);
+    }
+
+    #[test]
+    fn memory_context_block_uses_hermes_style_fence_and_system_note() {
+        let block = build_memory_context_block("- durable fact").expect("block");
+        assert!(block.starts_with("<memory-context>\n"));
+        assert!(block.contains("NOT new user input"));
+        assert!(block.contains("authoritative reference data"));
+        assert!(block.contains("- durable fact"));
+        assert!(block.ends_with("</memory-context>"));
+    }
+
+    #[test]
+    fn memory_prefetch_query_truncates_by_chars_not_bytes() {
+        let query = format!("{}é", "a".repeat(MEMORY_PREFETCH_MAX_INPUT_CHARS));
+        let truncated = truncate_memory_prefetch_query(&query);
+        assert_eq!(truncated.chars().count(), MEMORY_PREFETCH_MAX_INPUT_CHARS);
+        assert!(truncated.ends_with('a'));
+    }
+
     #[test]
     fn self_introspection_snapshot_reports_empty_skill_registry_explicitly() {
         let agent_spec = AgentSpec {
@@ -10953,6 +11486,7 @@ spec:
             enforcement_mode: None,
             approval_policy: None,
             subagents_allowed: Vec::new(),
+            features: Default::default(),
         };
         let skill_engine = SkillDispatchEngine::new();
 
@@ -12672,6 +13206,7 @@ spec:
             enforcement_mode: None,
             approval_policy: None,
             subagents_allowed: Vec::new(),
+            features: Default::default(),
         };
         let skill_engine = SkillDispatchEngine::new();
         let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
@@ -12747,6 +13282,7 @@ spec:
             enforcement_mode: None,
             approval_policy: None,
             subagents_allowed: Vec::new(),
+            features: Default::default(),
         };
         let skill_engine = SkillDispatchEngine::new();
         let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(

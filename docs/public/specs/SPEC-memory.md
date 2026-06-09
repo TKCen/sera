@@ -19,6 +19,69 @@ Memory is **not a monolith** — it is a workflow. Memory operations (especially
 
 > **Design decision — 2026-04-13.** Memory looks different depending on deployment mode. From the LLM's perspective, both modes deliver the same thing: injected context and callable tools.
 
+### From the LLM's perspective, memory/context is visible through separately gated surfaces
+
+Hermes Agent parity sharpens the earlier "injected context + tools" framing. SERA must not collapse every memory/context capability into a single backend toggle. Each agent has an explicit `features`/toolset surface map:
+
+1. **Base identity memory injection** — `soul.md`, compact durable memory, user profile, and environment facts. This is analogous to Hermes's prompt-injected `MEMORY.md` / `USER.md` snapshot, but SERA keeps `soul` as a first-class segment.
+2. **Built-in memory mutation tool** — a SERA-owned `memory` action tool for compact curated facts. This is separate from injection and must be independently write-gated.
+3. **External memory providers** — adapters such as Hindsight can add prompt blocks, prefetch/recall, sync hooks, and provider-specific tools. SERA should follow Hermes's one-active-provider default until there is a deliberate multi-provider arbitration design.
+4. **Context engines** — compaction/retrieval systems such as LCM can expose context-management tools, but through a separate `context_engine` toolset, not through the memory-provider surface.
+5. **Semantic memory** — vector/DB-backed retrieval remains a lower-layer backend, not a substitute for the base memory pack or external provider adapter.
+6. **Session search and skills** — these remain their own surfaces. Skills can inject context and bind tools, but they are not a memory provider.
+
+From the LLM's perspective, these still reduce to injected context and callable tools; from SERA's control plane perspective, they are distinct capability surfaces with distinct policy, budget, and schema-injection gates. Runtime tool-schema parity is enforced in both dispatch paths: embedded gateway runtimes apply the feature filter directly, while stdio runtime children receive the same per-agent feature map as `SERA_AGENT_FEATURES`.
+
+Example agent feature configuration:
+
+```yaml
+spec:
+  features:
+    identityMemory:
+      enabled: true
+      soul: true
+      durableMemory: true
+      userProfile: true
+      environment: true
+      memoryTool: true
+      writePolicy: gated
+      memoryCharLimit: 2200
+      userCharLimit: 1375
+    semanticMemory:
+      enabled: true
+      backend: sqlite
+      topK: 3
+      maxInjectedChars: 3000
+      writePolicy: gated
+    memoryProviders:
+      enabled: true
+      active: hindsight
+      providers:
+        hindsight:
+          enabled: true
+          recall: true
+          reflect: true
+          retainPolicy: gated
+          exposeTools: true
+          tags: [sera, default]
+    contextEngine:
+      enabled: true
+      engine: lcm
+      exposeTools: true
+      toolAllow: [lcm_grep, lcm_expand, lcm_expand_query]
+    toolsets:
+      memory:
+        enabled: false        # live write/retain tools stay off until transcript invariants are safe
+        builtinMemoryTool: true
+        providerTools: false
+      context_engine:
+        enabled: false
+      session_search:
+        enabled: true
+      skills:
+        enabled: true
+```
+
 ### From the LLM's perspective, memory is two things only
 
 1. **Injected context** — files/records that appear in the system prompt before the first turn, automatically, without any LLM action. The LLM doesn't retrieve them; they just arrive.

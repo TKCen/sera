@@ -135,9 +135,9 @@ async fn main() -> anyhow::Result<()> {
 
     let authz_provider = authz_builder::build_provider_from_config(&config);
 
-    // sera-a1u: every runtime owns a shared DelegationBus so the three
-    // delegation tools (session_spawn / session_yield / session_send) can
-    // coordinate over a single subscriber registry.
+    // sera-a1u: every runtime owns a shared DelegationBus so the four
+    // delegation tools (delegation_spawn / delegation_list / delegation_yield /
+    // delegation_send) can coordinate over a single subscriber registry.
     let delegation_bus = sera_runtime::delegation_bus::DelegationBus::new();
     // sera-i4en: production AgentToolRegistry backed by an InProcAgentRouter
     // so `delegate-task` / `ask-agent` / `background-task` calls reach
@@ -168,9 +168,13 @@ async fn main() -> anyhow::Result<()> {
     // reserves `SERA_AGENT_TOOLS_DENY` for ops/operator override; an unset or
     // empty allow list preserves the legacy "expose every built-in" behaviour.
     let tool_filter = sera_runtime::tools::filter::ToolNameFilter::from_env();
+    let feature_spec = sera_runtime::tools::filter::agent_features_from_env();
+    let feature_filter =
+        sera_runtime::tools::filter::FeatureSurfaceToolFilter::new(&feature_spec);
     let tool_defs: Vec<sera_types::tool::ToolDefinition> = {
         let runtime_defs = registry.definitions();
         let filtered = tool_filter.filter_definitions(runtime_defs);
+        let filtered = feature_filter.filter_definitions(filtered);
         filtered
             .iter()
             .filter_map(|d| {
@@ -183,6 +187,12 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(
             tool_count = tool_defs.len(),
             "tool schema filter active (SERA_AGENT_TOOLS_ALLOW/DENY)"
+        );
+    }
+    if !feature_filter.is_pass_through() {
+        tracing::info!(
+            tool_count = tool_defs.len(),
+            "feature surface tool filter active (SERA_AGENT_FEATURES)"
         );
     }
 

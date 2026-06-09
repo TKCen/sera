@@ -285,6 +285,28 @@ agents:
 > [!NOTE]
 > Progressive disclosure is most valuable in enterprise deployments with large MCP tool surfaces. Tier 1 deployments with <15 tools can use `strategy: "all"` without penalty.
 
+### 4.2 Hermes-parity toolset surface gates
+
+SERA's registry must distinguish **toolset exposure** from execution authority and from backend availability. Hermes Agent exposes ordinary tools through named toolsets, then appends extra schemas from memory providers and context engines only when their owning toolset is enabled. SERA mirrors that design:
+
+| Surface | Purpose | Example tools/schemas | Gate |
+| --- | --- | --- | --- |
+| `memory` built-in | compact curated memory mutation | `memory` action tool / future `memory_write` | `features.toolsets.memory.enabled && builtinMemoryTool` |
+| `memory` provider | external MemoryProvider schemas | `hindsight_recall`, `hindsight_reflect`, gated `hindsight_retain` | `features.memoryProviders.*` plus `providerTools` |
+| `context_engine` | compaction/session-DAG/context expansion | `lcm_grep`, `lcm_expand`, `lcm_expand_query` | `features.contextEngine.exposeTools` plus `toolsets.context_engine` |
+| `session_search` | transcript/session recall | `session_search` equivalent | `features.toolsets.session_search.enabled` |
+| `skills` | skill list/view/manage and skill-bound context | `skills_list`, `skill_view`, governed manage | `features.toolsets.skills.enabled` |
+
+Required invariants:
+
+1. A disabled toolset contributes no schemas, even if the backend/provider is configured and healthy.
+2. Provider/context-engine tools must not shadow built-in core tool names.
+3. Read tools and write/retain tools must have separate policy. `recall`/`reflect` may be enabled while `retain` remains `gated` or `disabled`.
+4. Context-engine tools are not memory-provider tools. LCM-like tools belong to `context_engine`; Hindsight-like tools belong to `memory` provider gates.
+5. Tool schema injection remains separate from call-time `CapabilityPolicy` / `ToolScope` authorization; both must permit execution.
+6. `features` absent or `{}` is legacy pass-through: agents keep their existing visible tool schemas until they opt into at least one explicit feature gate.
+7. Gateway embedded transports apply `FeatureSurfaceToolFilter` in-process. Stdio runtime children receive the same serialized gate via `SERA_AGENT_FEATURES` and apply it after `SERA_AGENT_TOOLS_ALLOW/DENY`, so the default `runtime` dispatch mode and embedded mode expose the same schemas.
+
 ---
 
 ## 5. Tool Profiles

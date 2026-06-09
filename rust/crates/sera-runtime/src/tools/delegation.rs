@@ -1,17 +1,18 @@
-//! Session delegation tools — `session_spawn`, `session_yield`, `session_send`.
+//! Delegation tools — `delegation_spawn`, `delegation_list`, `delegation_yield`, `delegation_send`.
 //!
-//! These three tools expose the richer delegation primitives landed in bead
+//! These tools expose governed delegation primitives landed in bead
 //! sera-a1u. Together they let an agent:
 //!
-//! 1. `session_spawn` — create a named child session under its own agent id,
-//!    returning a `session_id` the parent can refer to later.
-//! 2. `session_yield` — pause the current turn and await the next event
-//!    emitted by a specific child session. Resumes with the event as a
-//!    tool result. Blocks up to `timeout_secs` (default 120s).
-//! 3. `session_send` — send a message into a named child session
+//! 1. `delegation_spawn` — create a named delegation under its own agent id,
+//!    returning a `delegation_id` the parent can refer to later.
+//! 2. `delegation_list` — inspect known delegations and pending-yield counts.
+//! 3. `delegation_yield` — pause the current turn and await the next event
+//!    emitted by a specific delegation. Resumes with the event as a tool result.
+//!    Blocks up to `timeout_secs` (default 120s).
+//! 4. `delegation_send` — send a message into a named delegation
 //!    (fire-and-forget unless paired with a yield).
 //!
-//! All three implement the native `Tool` trait (bead sera-ttrm-5) with
+//! All four implement the native `Tool` trait (bead sera-ttrm-5) with
 //! appropriate risk levels. Child execution itself flows through the existing
 //! `SubagentManager` + `DelegationBus`; this module only provides the tool
 //! surface.
@@ -27,33 +28,33 @@ use sera_types::tool::{
 
 use crate::delegation_bus::{ChildSessionMeta, DelegationBus, DelegationEvent};
 
-/// Default wall-clock timeout for `session_yield` when the caller omits
+/// Default wall-clock timeout for `delegation_yield` when the caller omits
 /// `timeout_secs`. Matches the ~2-minute "long think" budget used by the
 /// default LLM timeout.
 const DEFAULT_YIELD_TIMEOUT_SECS: u64 = 120;
 
-// ── session_spawn ───────────────────────────────────────────────────────────
+// ── delegation_spawn ───────────────────────────────────────────────────────────
 
-/// Spawn a named child session under the current agent.
+/// Spawn a named delegation under the current agent.
 ///
 /// Arguments:
-/// - `name` (string, required) — caller-supplied child session name. Used
-///   verbatim as the `session_id` the caller will pass to
-///   `session_yield` / `session_send`.
+/// - `name` (string, required) — caller-supplied delegation name. Used
+///   verbatim as the `delegation_id` the caller will pass to
+///   `delegation_yield` / `delegation_send`.
 /// - `prompt` (string, required) — initial prompt for the child.
 /// - `agent_template` (string, optional) — template to instantiate the child
 ///   with. When omitted, the child inherits the parent's template.
 ///
-/// Returns a JSON object `{ "session_id": ..., "spawned": true }`.
+/// Returns a JSON object `{ "delegation_id": ..., "spawned": true }`.
 ///
 /// This MVP registers the child with the [`DelegationBus`] but does not
 /// actually drive a full subagent process — that is handled by the runtime's
 /// existing spawn path (sera-runtime::subagent) and layered on top.
-pub struct SessionSpawnTool {
+pub struct DelegationSpawnTool {
     bus: DelegationBus,
 }
 
-impl SessionSpawnTool {
+impl DelegationSpawnTool {
     /// Build the tool bound to a shared delegation bus.
     pub fn new(bus: DelegationBus) -> Self {
         Self { bus }
@@ -61,12 +62,12 @@ impl SessionSpawnTool {
 }
 
 #[async_trait]
-impl Tool for SessionSpawnTool {
+impl Tool for DelegationSpawnTool {
     fn metadata(&self) -> ToolMetadata {
         ToolMetadata {
-            name: "session_spawn".to_string(),
+            name: "delegation_spawn".to_string(),
             description:
-                "Spawn a named child session under the current agent. Returns a session_id the caller can pass to session_yield / session_send."
+                "Register a named delegation under the current agent. This records the delegation and returns a delegation_id for delegation_yield / delegation_send; it does not by itself execute the child task."
                     .to_string(),
             version: "1.0.0".to_string(),
             author: None,
@@ -86,7 +87,7 @@ impl Tool for SessionSpawnTool {
             ParameterSchema {
                 schema_type: "string".to_string(),
                 description: Some(
-                    "Caller-supplied child session name (used as the session_id).".to_string(),
+                    "Caller-supplied delegation name (used as the delegation_id).".to_string(),
                 ),
                 enum_values: None,
                 default: None,
@@ -134,7 +135,7 @@ impl Tool for SessionSpawnTool {
             .ok_or_else(|| ToolError::InvalidInput("Missing 'prompt'".to_string()))?;
         let agent_template = input.arguments["agent_template"].as_str();
 
-        // The child's session_id is the caller-supplied name — stable, so the
+        // The delegation_id is the caller-supplied name — stable, so the
         // parent can later refer to it. If a name collision occurs we still
         // overwrite the old meta: parents re-spawning with the same name
         // effectively re-bind the child.
@@ -155,28 +156,25 @@ impl Tool for SessionSpawnTool {
         );
 
         let result = serde_json::json!({
-            "session_id": session_id,
+            "delegation_id": session_id,
             "spawned": true,
             "child_agent_id": child_agent_id,
+            "execution_started": false,
+            "status": "registered_only",
+            "note": "delegation_spawn registered the delegation but did not execute the child task in this MVP; do not call delegation_spawn again for the same request unless the operator asks for another delegation",
         });
         Ok(ToolOutput::success(result.to_string()))
     }
 }
 
-// ── session_yield ───────────────────────────────────────────────────────────
+// ── delegation_list ────────────────────────────────────────────────────────────
 
-/// Pause the current turn and await the next event from a named child
-/// session. The event is returned as the tool result.
-///
-/// Arguments:
-/// - `session_id` (string, required) — child session id previously returned
-///   by `session_spawn`.
-/// - `timeout_secs` (number, optional, default 120) — wall-clock timeout.
-pub struct SessionYieldTool {
+/// List known delegations under this runtime's delegation bus.
+pub struct DelegationListTool {
     bus: DelegationBus,
 }
 
-impl SessionYieldTool {
+impl DelegationListTool {
     /// Build the tool bound to a shared delegation bus.
     pub fn new(bus: DelegationBus) -> Self {
         Self { bus }
@@ -184,10 +182,101 @@ impl SessionYieldTool {
 }
 
 #[async_trait]
-impl Tool for SessionYieldTool {
+impl Tool for DelegationListTool {
     fn metadata(&self) -> ToolMetadata {
         ToolMetadata {
-            name: "session_yield".to_string(),
+            name: "delegation_list".to_string(),
+            description:
+                "List known delegations and pending-yield counts for this runtime."
+                    .to_string(),
+            version: "1.0.0".to_string(),
+            author: None,
+            risk_level: RiskLevel::Read,
+            execution_target: ExecutionTarget::InProcess,
+            tags: vec!["delegation".to_string(), "session".to_string()],
+            scope: ToolScope::Read,
+        }
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut properties: HashMap<String, ParameterSchema> = HashMap::new();
+        properties.insert(
+            "limit".to_string(),
+            ParameterSchema {
+                schema_type: "integer".to_string(),
+                description: Some(
+                    "Maximum number of delegations to return (default 100, max 500).".to_string(),
+                ),
+                enum_values: None,
+                default: Some(serde_json::json!(100)),
+            },
+        );
+        ToolSchema {
+            parameters: FunctionParameters {
+                schema_type: "object".to_string(),
+                properties,
+                required: vec![],
+            },
+        }
+    }
+
+    async fn execute(&self, input: ToolInput, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
+        let limit = input.arguments["limit"].as_u64().unwrap_or(100).min(500) as usize;
+        let delegations = self
+            .bus
+            .list_sessions()
+            .into_iter()
+            .take(limit)
+            .map(|snapshot| {
+                serde_json::json!({
+                    "delegation_id": snapshot.session_id,
+                    "parent_agent_id": snapshot.parent_agent_id,
+                    "child_agent_id": snapshot.child_agent_id,
+                    "initial_prompt": snapshot.initial_prompt,
+                    "pending_subscribers": snapshot.pending_subscribers,
+                })
+            })
+            .collect::<Vec<_>>();
+        let count = delegations.len();
+        tracing::info!(
+            tool = "delegation_list",
+            count,
+            limit,
+            "delegation_list executed"
+        );
+        let body = serde_json::json!({
+            "count": count,
+            "delegations": delegations,
+        });
+        Ok(ToolOutput::success(body.to_string()))
+    }
+}
+
+// ── delegation_yield ───────────────────────────────────────────────────────────
+
+/// Pause the current turn and await the next event from a named delegation.
+/// The event is returned as the tool result.
+///
+/// Arguments:
+/// - `delegation_id` (string, required) — delegation id previously returned
+///   by `delegation_spawn`.
+/// - `timeout_secs` (number, optional, default 120) — wall-clock timeout.
+pub struct DelegationYieldTool {
+    bus: DelegationBus,
+}
+
+impl DelegationYieldTool {
+    /// Build the tool bound to a shared delegation bus.
+    pub fn new(bus: DelegationBus) -> Self {
+        Self { bus }
+    }
+}
+
+#[async_trait]
+impl Tool for DelegationYieldTool {
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            name: "delegation_yield".to_string(),
             description:
                 "Pause the current turn and await the next event emitted by a specific child session. Returns the event as a tool result."
                     .to_string(),
@@ -197,7 +286,7 @@ impl Tool for SessionYieldTool {
             execution_target: ExecutionTarget::InProcess,
             tags: vec!["delegation".to_string()],
             // sera-u4gj: yielding only observes the next bus event — the
-            // child session must already exist (gated by `session_spawn`),
+            // child session must already exist (gated by `delegation_spawn`),
             // so this surface is read-only on the parent side.
             scope: ToolScope::Read,
         }
@@ -206,10 +295,10 @@ impl Tool for SessionYieldTool {
     fn schema(&self) -> ToolSchema {
         let mut properties: HashMap<String, ParameterSchema> = HashMap::new();
         properties.insert(
-            "session_id".to_string(),
+            "delegation_id".to_string(),
             ParameterSchema {
                 schema_type: "string".to_string(),
-                description: Some("Child session id (from session_spawn).".to_string()),
+                description: Some("Delegation id (from delegation_spawn).".to_string()),
                 enum_values: None,
                 default: None,
             },
@@ -229,7 +318,7 @@ impl Tool for SessionYieldTool {
             parameters: FunctionParameters {
                 schema_type: "object".to_string(),
                 properties,
-                required: vec!["session_id".to_string()],
+                required: vec!["delegation_id".to_string()],
             },
         }
     }
@@ -239,9 +328,10 @@ impl Tool for SessionYieldTool {
         input: ToolInput,
         _ctx: ToolContext,
     ) -> Result<ToolOutput, ToolError> {
-        let session_id = input.arguments["session_id"]
+        let session_id = input.arguments["delegation_id"]
             .as_str()
-            .ok_or_else(|| ToolError::InvalidInput("Missing 'session_id'".to_string()))?;
+            .or_else(|| input.arguments["session_id"].as_str())
+            .ok_or_else(|| ToolError::InvalidInput("Missing 'delegation_id'".to_string()))?;
         let timeout_secs = input.arguments["timeout_secs"]
             .as_u64()
             .unwrap_or(DEFAULT_YIELD_TIMEOUT_SECS);
@@ -254,7 +344,7 @@ impl Tool for SessionYieldTool {
         match tokio::time::timeout(Duration::from_secs(timeout_secs), rx).await {
             Ok(Ok(event)) => {
                 let body = serde_json::json!({
-                    "session_id": session_id,
+                    "delegation_id": session_id,
                     "event": event,
                 });
                 Ok(ToolOutput::success(body.to_string()))
@@ -267,22 +357,22 @@ impl Tool for SessionYieldTool {
     }
 }
 
-// ── session_send ────────────────────────────────────────────────────────────
+// ── delegation_send ────────────────────────────────────────────────────────────
 
-/// Send a message into a named child session. Fire-and-forget — the caller
-/// must pair this with a [`SessionYieldTool`] call to observe the child's
+/// Send a message into a named delegation. Fire-and-forget — the caller
+/// must pair this with a [`DelegationYieldTool`] call to observe the child's
 /// response.
 ///
 /// Arguments:
-/// - `session_id` (string, required).
+/// - `delegation_id` (string, required).
 /// - `message` (string, required) — the message to deliver.
 ///
 /// Returns `{ "delivered": true, "subscribers_notified": N }` on success.
-pub struct SessionSendTool {
+pub struct DelegationSendTool {
     bus: DelegationBus,
 }
 
-impl SessionSendTool {
+impl DelegationSendTool {
     /// Build the tool bound to a shared delegation bus.
     pub fn new(bus: DelegationBus) -> Self {
         Self { bus }
@@ -290,12 +380,12 @@ impl SessionSendTool {
 }
 
 #[async_trait]
-impl Tool for SessionSendTool {
+impl Tool for DelegationSendTool {
     fn metadata(&self) -> ToolMetadata {
         ToolMetadata {
-            name: "session_send".to_string(),
+            name: "delegation_send".to_string(),
             description:
-                "Send a message into a named child session. Fire-and-forget unless paired with session_yield."
+                "Send a message into a named delegation. Fire-and-forget unless paired with delegation_yield."
                     .to_string(),
             version: "1.0.0".to_string(),
             author: None,
@@ -311,10 +401,10 @@ impl Tool for SessionSendTool {
     fn schema(&self) -> ToolSchema {
         let mut properties: HashMap<String, ParameterSchema> = HashMap::new();
         properties.insert(
-            "session_id".to_string(),
+            "delegation_id".to_string(),
             ParameterSchema {
                 schema_type: "string".to_string(),
-                description: Some("Target child session id.".to_string()),
+                description: Some("Target delegation id.".to_string()),
                 enum_values: None,
                 default: None,
             },
@@ -332,7 +422,7 @@ impl Tool for SessionSendTool {
             parameters: FunctionParameters {
                 schema_type: "object".to_string(),
                 properties,
-                required: vec!["session_id".to_string(), "message".to_string()],
+                required: vec!["delegation_id".to_string(), "message".to_string()],
             },
         }
     }
@@ -342,20 +432,21 @@ impl Tool for SessionSendTool {
         input: ToolInput,
         _ctx: ToolContext,
     ) -> Result<ToolOutput, ToolError> {
-        let session_id = input.arguments["session_id"]
+        let session_id = input.arguments["delegation_id"]
             .as_str()
-            .ok_or_else(|| ToolError::InvalidInput("Missing 'session_id'".to_string()))?;
+            .or_else(|| input.arguments["session_id"].as_str())
+            .ok_or_else(|| ToolError::InvalidInput("Missing 'delegation_id'".to_string()))?;
         let message = input.arguments["message"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("Missing 'message'".to_string()))?;
 
         if !self.bus.is_known(session_id) {
             return Err(ToolError::InvalidInput(format!(
-                "unknown session '{session_id}' — did you call session_spawn first?"
+                "unknown session '{session_id}' — did you call delegation_spawn first?"
             )));
         }
 
-        // `session_send` models an incoming message *to* the child by
+        // `delegation_send` models an incoming message *to* the child by
         // publishing a `MessageEmitted` event on the bus. In an MVP without
         // a real child process this is what a yield-side caller will
         // observe; in a richer deployment the child process itself
@@ -377,21 +468,27 @@ impl Tool for SessionSendTool {
 
 // ── Registration helper ─────────────────────────────────────────────────────
 
-/// Build and return the three delegation tools as a tuple, each bound to the
+/// Build and return the four delegation tools as a tuple, each bound to the
 /// same [`DelegationBus`]. Used by `TraitToolRegistry::with_delegation`.
 pub fn build_delegation_tools(
     bus: DelegationBus,
-) -> (SessionSpawnTool, SessionYieldTool, SessionSendTool) {
+) -> (
+    DelegationSpawnTool,
+    DelegationListTool,
+    DelegationYieldTool,
+    DelegationSendTool,
+) {
     (
-        SessionSpawnTool::new(bus.clone()),
-        SessionYieldTool::new(bus.clone()),
-        SessionSendTool::new(bus),
+        DelegationSpawnTool::new(bus.clone()),
+        DelegationListTool::new(bus.clone()),
+        DelegationYieldTool::new(bus.clone()),
+        DelegationSendTool::new(bus),
     )
 }
 
 // Helper so downstream consumers (runtime main.rs, gateway wiring) can pull
 // the bus through a single Arc without juggling clones directly.
-impl SessionSpawnTool {
+impl DelegationSpawnTool {
     /// Return a clone of the bus this tool is bound to.
     pub fn bus(&self) -> DelegationBus {
         self.bus.clone()
@@ -435,12 +532,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_spawn_registers_with_bus() {
+    async fn delegation_spawn_registers_with_bus() {
         let bus = DelegationBus::new();
-        let tool = SessionSpawnTool::new(bus.clone());
+        let tool = DelegationSpawnTool::new(bus.clone());
 
         let input = mk_input(
-            "session_spawn",
+            "delegation_spawn",
             serde_json::json!({
                 "name": "child-1",
                 "prompt": "research X",
@@ -452,7 +549,7 @@ mod tests {
 
         // The response must contain the session_id we passed in.
         let parsed: serde_json::Value = serde_json::from_str(&out.content).unwrap();
-        assert_eq!(parsed["session_id"], "child-1");
+        assert_eq!(parsed["delegation_id"], "child-1");
         assert_eq!(parsed["spawned"], true);
         assert_eq!(parsed["child_agent_id"], "researcher");
 
@@ -464,12 +561,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_spawn_inherits_parent_template_when_omitted() {
+    async fn delegation_spawn_inherits_parent_template_when_omitted() {
         let bus = DelegationBus::new();
-        let tool = SessionSpawnTool::new(bus.clone());
+        let tool = DelegationSpawnTool::new(bus.clone());
 
         let input = mk_input(
-            "session_spawn",
+            "delegation_spawn",
             serde_json::json!({ "name": "child-2", "prompt": "hi" }),
         );
         tool.execute(input, make_ctx("parent-xyz")).await.unwrap();
@@ -478,15 +575,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_spawn_requires_name_and_prompt() {
+    async fn delegation_spawn_requires_name_and_prompt() {
         let bus = DelegationBus::new();
-        let tool = SessionSpawnTool::new(bus);
+        let tool = DelegationSpawnTool::new(bus);
 
-        let no_name = mk_input("session_spawn", serde_json::json!({ "prompt": "p" }));
+        let no_name = mk_input("delegation_spawn", serde_json::json!({ "prompt": "p" }));
         let err = tool.execute(no_name, make_ctx("a")).await.unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput(_)));
 
-        let no_prompt = mk_input("session_spawn", serde_json::json!({ "name": "c" }));
+        let no_prompt = mk_input("delegation_spawn", serde_json::json!({ "name": "c" }));
         let err = tool
             .execute(no_prompt, make_ctx("a"))
             .await
@@ -495,15 +592,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_yield_receives_next_event() {
+    async fn delegation_list_reports_known_child_sessions() {
         let bus = DelegationBus::new();
-        let spawn = SessionSpawnTool::new(bus.clone());
-        let yield_tool = SessionYieldTool::new(bus.clone());
+        let spawn = DelegationSpawnTool::new(bus.clone());
+        let list = DelegationListTool::new(bus.clone());
 
         spawn
             .execute(
                 mk_input(
-                    "session_spawn",
+                    "delegation_spawn",
+                    serde_json::json!({
+                        "name": "child-list",
+                        "prompt": "inspect me",
+                        "agent_template": "helper",
+                    }),
+                ),
+                make_ctx("parent-list"),
+            )
+            .await
+            .unwrap();
+        let _rx = bus.subscribe_next("child-list").unwrap();
+
+        let out = list
+            .execute(mk_input("delegation_list", serde_json::json!({})), make_ctx("parent-list"))
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["delegations"][0]["delegation_id"], "child-list");
+        assert_eq!(parsed["delegations"][0]["parent_agent_id"], "parent-list");
+        assert_eq!(parsed["delegations"][0]["child_agent_id"], "helper");
+        assert_eq!(parsed["delegations"][0]["initial_prompt"], "inspect me");
+        assert_eq!(parsed["delegations"][0]["pending_subscribers"], 1);
+    }
+
+    #[tokio::test]
+    async fn delegation_yield_receives_next_event() {
+        let bus = DelegationBus::new();
+        let spawn = DelegationSpawnTool::new(bus.clone());
+        let yield_tool = DelegationYieldTool::new(bus.clone());
+
+        spawn
+            .execute(
+                mk_input(
+                    "delegation_spawn",
                     serde_json::json!({ "name": "child-y", "prompt": "p" }),
                 ),
                 make_ctx("parent"),
@@ -526,8 +658,8 @@ mod tests {
         let out = yield_tool
             .execute(
                 mk_input(
-                    "session_yield",
-                    serde_json::json!({ "session_id": "child-y", "timeout_secs": 5 }),
+                    "delegation_yield",
+                    serde_json::json!({ "delegation_id": "child-y", "timeout_secs": 5 }),
                 ),
                 make_ctx("parent"),
             )
@@ -536,13 +668,13 @@ mod tests {
         assert!(!out.is_error);
 
         let parsed: serde_json::Value = serde_json::from_str(&out.content).unwrap();
-        assert_eq!(parsed["session_id"], "child-y");
+        assert_eq!(parsed["delegation_id"], "child-y");
         assert_eq!(parsed["event"]["type"], "turn_completed");
         assert_eq!(parsed["event"]["output"], "answer");
     }
 
     #[tokio::test]
-    async fn session_yield_times_out_cleanly() {
+    async fn delegation_yield_times_out_cleanly() {
         let bus = DelegationBus::new();
         bus.register_session(
             "child-t",
@@ -552,15 +684,15 @@ mod tests {
                 initial_prompt: "".into(),
             },
         );
-        let tool = SessionYieldTool::new(bus);
+        let tool = DelegationYieldTool::new(bus);
         let err = tool
             .execute(
                 mk_input(
-                    "session_yield",
+                    "delegation_yield",
                     // `timeout_secs` is a u64 in args — but we can't set
                     // sub-second values that way; use a direct bus subscribe
                     // to keep the test fast instead.
-                    serde_json::json!({ "session_id": "child-t", "timeout_secs": 1 }),
+                    serde_json::json!({ "delegation_id": "child-t", "timeout_secs": 1 }),
                 ),
                 make_ctx("p"),
             )
@@ -572,14 +704,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_yield_errors_on_unknown_session() {
+    async fn delegation_yield_errors_on_unknown_session() {
         let bus = DelegationBus::new();
-        let tool = SessionYieldTool::new(bus);
+        let tool = DelegationYieldTool::new(bus);
         let err = tool
             .execute(
                 mk_input(
-                    "session_yield",
-                    serde_json::json!({ "session_id": "ghost", "timeout_secs": 5 }),
+                    "delegation_yield",
+                    serde_json::json!({ "delegation_id": "ghost", "timeout_secs": 5 }),
                 ),
                 make_ctx("p"),
             )
@@ -594,16 +726,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_send_delivers_to_yielding_parent() {
+    async fn delegation_send_delivers_to_yielding_parent() {
         let bus = DelegationBus::new();
-        let spawn = SessionSpawnTool::new(bus.clone());
-        let send = SessionSendTool::new(bus.clone());
-        let yield_tool = SessionYieldTool::new(bus.clone());
+        let spawn = DelegationSpawnTool::new(bus.clone());
+        let send = DelegationSendTool::new(bus.clone());
+        let yield_tool = DelegationYieldTool::new(bus.clone());
 
         spawn
             .execute(
                 mk_input(
-                    "session_spawn",
+                    "delegation_spawn",
                     serde_json::json!({ "name": "child-s", "prompt": "" }),
                 ),
                 make_ctx("parent"),
@@ -618,8 +750,8 @@ mod tests {
                 yield_tool
                     .execute(
                         mk_input(
-                            "session_yield",
-                            serde_json::json!({ "session_id": "child-s", "timeout_secs": 5 }),
+                            "delegation_yield",
+                            serde_json::json!({ "delegation_id": "child-s", "timeout_secs": 5 }),
                         ),
                         make_ctx("parent"),
                     )
@@ -633,9 +765,9 @@ mod tests {
         let out = send
             .execute(
                 mk_input(
-                    "session_send",
+                    "delegation_send",
                     serde_json::json!({
-                        "session_id": "child-s",
+                        "delegation_id": "child-s",
                         "message": "ping",
                     }),
                 ),
@@ -655,14 +787,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_send_errors_on_unknown_session() {
+    async fn delegation_send_errors_on_unknown_session() {
         let bus = DelegationBus::new();
-        let tool = SessionSendTool::new(bus);
+        let tool = DelegationSendTool::new(bus);
         let err = tool
             .execute(
                 mk_input(
-                    "session_send",
-                    serde_json::json!({ "session_id": "nope", "message": "x" }),
+                    "delegation_send",
+                    serde_json::json!({ "delegation_id": "nope", "message": "x" }),
                 ),
                 make_ctx("p"),
             )
@@ -677,7 +809,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_send_without_subscribers_returns_zero() {
+    async fn delegation_send_without_subscribers_returns_zero() {
         let bus = DelegationBus::new();
         bus.register_session(
             "quiet",
@@ -687,12 +819,12 @@ mod tests {
                 initial_prompt: "".into(),
             },
         );
-        let tool = SessionSendTool::new(bus);
+        let tool = DelegationSendTool::new(bus);
         let out = tool
             .execute(
                 mk_input(
-                    "session_send",
-                    serde_json::json!({ "session_id": "quiet", "message": "hi" }),
+                    "delegation_send",
+                    serde_json::json!({ "delegation_id": "quiet", "message": "hi" }),
                 ),
                 make_ctx("p"),
             )
@@ -706,13 +838,15 @@ mod tests {
     #[tokio::test]
     async fn metadata_and_schema_shape() {
         let bus = DelegationBus::new();
-        let (spawn, yield_tool, send) = build_delegation_tools(bus);
+        let (spawn, list, yield_tool, send) = build_delegation_tools(bus);
 
-        assert_eq!(spawn.metadata().name, "session_spawn");
+        assert_eq!(spawn.metadata().name, "delegation_spawn");
         assert_eq!(spawn.metadata().risk_level, RiskLevel::Execute);
-        assert_eq!(yield_tool.metadata().name, "session_yield");
+        assert_eq!(list.metadata().name, "delegation_list");
+        assert_eq!(list.metadata().risk_level, RiskLevel::Read);
+        assert_eq!(yield_tool.metadata().name, "delegation_yield");
         assert_eq!(yield_tool.metadata().risk_level, RiskLevel::Read);
-        assert_eq!(send.metadata().name, "session_send");
+        assert_eq!(send.metadata().name, "delegation_send");
         assert_eq!(send.metadata().risk_level, RiskLevel::Write);
 
         // Schemas must advertise required fields.
@@ -721,10 +855,13 @@ mod tests {
         assert!(spawn_required.contains(&"prompt".to_string()));
 
         let yield_required = yield_tool.schema().parameters.required;
-        assert_eq!(yield_required, vec!["session_id".to_string()]);
+        assert_eq!(yield_required, vec!["delegation_id".to_string()]);
+
+        let list_required = list.schema().parameters.required;
+        assert!(list_required.is_empty());
 
         let send_required = send.schema().parameters.required;
-        assert!(send_required.contains(&"session_id".to_string()));
+        assert!(send_required.contains(&"delegation_id".to_string()));
         assert!(send_required.contains(&"message".to_string()));
     }
 
@@ -734,8 +871,9 @@ mod tests {
     #[test]
     fn metadata_scopes() {
         let bus = DelegationBus::new();
-        let (spawn, yield_tool, send) = build_delegation_tools(bus);
+        let (spawn, list, yield_tool, send) = build_delegation_tools(bus);
         assert_eq!(spawn.metadata().scope, ToolScope::Agent);
+        assert_eq!(list.metadata().scope, ToolScope::Read);
         assert_eq!(yield_tool.metadata().scope, ToolScope::Read);
         assert_eq!(send.metadata().scope, ToolScope::Agent);
     }
@@ -752,7 +890,7 @@ mod tests {
             },
         );
 
-        let t1 = Arc::new(SessionYieldTool::new(bus.clone()));
+        let t1 = Arc::new(DelegationYieldTool::new(bus.clone()));
         let t2 = Arc::clone(&t1);
         let t3 = Arc::clone(&t1);
 
@@ -761,8 +899,8 @@ mod tests {
             async move {
                 t.execute(
                     mk_input(
-                        "session_yield",
-                        serde_json::json!({ "session_id": "multi", "timeout_secs": 5 }),
+                        "delegation_yield",
+                        serde_json::json!({ "delegation_id": "multi", "timeout_secs": 5 }),
                     ),
                     make_ctx("p"),
                 )
@@ -774,8 +912,8 @@ mod tests {
             async move {
                 t.execute(
                     mk_input(
-                        "session_yield",
-                        serde_json::json!({ "session_id": "multi", "timeout_secs": 5 }),
+                        "delegation_yield",
+                        serde_json::json!({ "delegation_id": "multi", "timeout_secs": 5 }),
                     ),
                     make_ctx("p"),
                 )
@@ -787,8 +925,8 @@ mod tests {
             async move {
                 t.execute(
                     mk_input(
-                        "session_yield",
-                        serde_json::json!({ "session_id": "multi", "timeout_secs": 5 }),
+                        "delegation_yield",
+                        serde_json::json!({ "delegation_id": "multi", "timeout_secs": 5 }),
                     ),
                     make_ctx("p"),
                 )
@@ -818,12 +956,12 @@ mod tests {
     #[tokio::test]
     async fn build_delegation_tools_share_bus() {
         let bus = DelegationBus::new();
-        let (spawn, yield_tool, send) = build_delegation_tools(bus.clone());
+        let (spawn, _list, yield_tool, send) = build_delegation_tools(bus.clone());
 
         spawn
             .execute(
                 mk_input(
-                    "session_spawn",
+                    "delegation_spawn",
                     serde_json::json!({ "name": "shared", "prompt": "" }),
                 ),
                 make_ctx("p"),
@@ -840,8 +978,8 @@ mod tests {
                 yield_tool
                     .execute(
                         mk_input(
-                            "session_yield",
-                            serde_json::json!({ "session_id": "shared", "timeout_secs": 5 }),
+                            "delegation_yield",
+                            serde_json::json!({ "delegation_id": "shared", "timeout_secs": 5 }),
                         ),
                         make_ctx("p"),
                     )
@@ -856,8 +994,8 @@ mod tests {
         let send_out = send
             .execute(
                 mk_input(
-                    "session_send",
-                    serde_json::json!({ "session_id": "shared", "message": "x" }),
+                    "delegation_send",
+                    serde_json::json!({ "delegation_id": "shared", "message": "x" }),
                 ),
                 make_ctx("p"),
             )

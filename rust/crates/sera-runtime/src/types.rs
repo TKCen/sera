@@ -30,14 +30,16 @@ pub struct TaskOutput {
 
 /// A chat message in the conversation.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
     pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // Provider wire compatibility: OpenAI-compatible chat expects snake_case
+    // `tool_calls` / `tool_call_id`. Accept the old internal camelCase aliases
+    // on read, but never emit them toward providers.
+    #[serde(skip_serializing_if = "Option::is_none", alias = "toolCalls")]
     pub tool_calls: Option<Vec<ToolCall>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "toolCallId")]
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,

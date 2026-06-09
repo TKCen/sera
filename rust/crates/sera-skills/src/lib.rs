@@ -21,6 +21,7 @@
 
 pub mod error;
 pub mod self_patch;
+pub mod discovery;
 pub mod loader;
 pub mod md_loader;
 pub mod skill_pack;

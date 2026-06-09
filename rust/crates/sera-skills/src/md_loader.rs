@@ -49,12 +49,28 @@ pub const DEFAULT_TIER: u8 = 1;
 
 /// Recognised frontmatter keys. Anything outside this set is logged and
 /// dropped so legacy / experimental fields don't cause loads to fail.
-const KNOWN_KEYS: &[&str] = &["name", "description", "inputs", "tier"];
+const KNOWN_KEYS: &[&str] = &[
+    "name",
+    "description",
+    "inputs",
+    "tier",
+    // Hermes-compatible extension fields.
+    "version",
+    "platforms",
+    "environments",
+    "requires_toolsets",
+    "requires_tools",
+    "metadata",
+    "fallback_for_platforms",
+    "fallback_for_environments",
+];
 
 /// A parsed SKILL.md file.
 ///
 /// Carries the four load-bearing fields plus the raw markdown body, which
-/// downstream code injects into the agent prompt.
+/// downstream code injects into the agent prompt. Hermes-compatible extension
+/// fields are optional and default to empty / `None` so existing skills that
+/// omit them continue to parse identically.
 #[derive(Debug, Clone)]
 pub struct Skill {
     /// Stable identifier for the skill; matches the file's `name` field.
@@ -71,6 +87,51 @@ pub struct Skill {
     pub body: String,
     /// Absolute path the skill was loaded from, when known.
     pub source_path: Option<PathBuf>,
+
+    // --- Hermes-compatible extension fields ---
+    /// Semantic version string (e.g. `"1.2.0"`). Hermes uses string versions.
+    pub version: Option<String>,
+    /// Platform identifiers this skill targets (e.g. `["linux", "darwin"]`).
+    /// Empty means "all platforms".
+    pub platforms: Vec<String>,
+    /// Runtime environment tags (e.g. `["docker"]`).
+    pub environments: Vec<String>,
+    /// Named toolsets required by this skill (e.g. `["terminal", "web"]`).
+    pub requires_toolsets: Vec<String>,
+    /// Individual tool names required by this skill.
+    pub requires_tools: Vec<String>,
+    /// Platforms this skill acts as a fallback for.
+    pub fallback_for_platforms: Vec<String>,
+    /// Environments this skill acts as a fallback for.
+    pub fallback_for_environments: Vec<String>,
+    /// Raw metadata blob. Hermes nests its own data under the `hermes` key
+    /// inside this map.
+    pub metadata: Option<serde_yaml::Value>,
+}
+
+impl Skill {
+    /// Returns the `metadata.hermes` sub-value if present.
+    ///
+    /// Hermes stores tags, related skills, and config under a `hermes`
+    /// namespace inside the top-level `metadata` mapping. This helper avoids
+    /// manual YAML navigation at every call site.
+    pub fn hermes_metadata(&self) -> Option<&serde_yaml::Value> {
+        self.metadata
+            .as_ref()
+            .and_then(|m| m.get("hermes"))
+    }
+
+    /// Returns `true` when this skill applies to the given `platform`.
+    ///
+    /// A skill with an empty `platforms` list is treated as a wildcard —
+    /// it applies to every platform. The comparison is case-insensitive.
+    pub fn matches_platform(&self, platform: &str) -> bool {
+        self.platforms.is_empty()
+            || self
+                .platforms
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case(platform))
+    }
 }
 
 /// Intermediate frontmatter shape. Mirrors the public SKILL.md schema.
@@ -84,6 +145,23 @@ struct Frontmatter {
     inputs: HashMap<String, String>,
     #[serde(default)]
     tier: Option<u8>,
+    // Hermes-compatible extension fields.
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    platforms: Vec<String>,
+    #[serde(default)]
+    environments: Vec<String>,
+    #[serde(default)]
+    requires_toolsets: Vec<String>,
+    #[serde(default)]
+    requires_tools: Vec<String>,
+    #[serde(default)]
+    fallback_for_platforms: Vec<String>,
+    #[serde(default)]
+    fallback_for_environments: Vec<String>,
+    #[serde(default)]
+    metadata: Option<serde_yaml::Value>,
 }
 
 /// Split raw SKILL.md text at the leading `---` fences.
@@ -206,6 +284,14 @@ pub fn parse_skill_md(raw: &str, source_path: Option<PathBuf>) -> Result<Skill, 
         tier,
         body,
         source_path,
+        version: fm.version,
+        platforms: fm.platforms,
+        environments: fm.environments,
+        requires_toolsets: fm.requires_toolsets,
+        requires_tools: fm.requires_tools,
+        fallback_for_platforms: fm.fallback_for_platforms,
+        fallback_for_environments: fm.fallback_for_environments,
+        metadata: fm.metadata,
     })
 }
 
@@ -396,5 +482,109 @@ mod tests {
         let path = dir.path().join("does-not-exist.md");
         let err = load_skill_md(&path).await.unwrap_err();
         assert!(matches!(err, SkillsError::Io(_)));
+    }
+
+    #[test]
+    fn parses_hermes_skill_frontmatter_fields() {
+        let raw = "\
+---
+name: research-web
+description: Search the web and synthesise a cited report
+version: \"1.2.0\"
+platforms:
+  - linux
+  - darwin
+environments:
+  - docker
+requires_toolsets:
+  - terminal
+  - web
+metadata:
+  hermes:
+    tags:
+      - research
+    related_skills:
+      - other-skill
+    config:
+      foo: bar
+---
+
+# Behaviour
+Search and report.
+";
+        let skill = parse_skill_md(raw, None).unwrap();
+        assert_eq!(skill.name, "research-web");
+        assert_eq!(skill.description, "Search the web and synthesise a cited report");
+        assert_eq!(skill.version.as_deref(), Some("1.2.0"));
+        assert_eq!(skill.platforms, vec!["linux", "darwin"]);
+        assert_eq!(skill.environments, vec!["docker"]);
+        assert_eq!(skill.requires_toolsets, vec!["terminal", "web"]);
+        assert!(skill.requires_tools.is_empty());
+
+        let hermes = skill.hermes_metadata().expect("hermes metadata present");
+        let tags = hermes.get("tags").and_then(|v| v.as_sequence()).expect("tags list");
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].as_str(), Some("research"));
+
+        let related = hermes
+            .get("related_skills")
+            .and_then(|v| v.as_sequence())
+            .expect("related_skills list");
+        assert_eq!(related[0].as_str(), Some("other-skill"));
+
+        let foo = hermes
+            .get("config")
+            .and_then(|v| v.get("foo"))
+            .and_then(|v| v.as_str());
+        assert_eq!(foo, Some("bar"));
+    }
+
+    #[test]
+    fn legacy_minimal_skill_still_parses() {
+        // A bare 2-field skill (no tier, no new Hermes fields) must parse
+        // identically to before this extension.
+        let raw = "---\nname: minimal\ndescription: just the basics\n---\nbody\n";
+        let skill = parse_skill_md(raw, None).unwrap();
+        assert_eq!(skill.name, "minimal");
+        assert_eq!(skill.description, "just the basics");
+        assert_eq!(skill.tier, DEFAULT_TIER);
+        assert!(skill.version.is_none());
+        assert!(skill.platforms.is_empty());
+        assert!(skill.environments.is_empty());
+        assert!(skill.requires_toolsets.is_empty());
+        assert!(skill.requires_tools.is_empty());
+        assert!(skill.fallback_for_platforms.is_empty());
+        assert!(skill.fallback_for_environments.is_empty());
+        assert!(skill.metadata.is_none());
+    }
+
+    #[test]
+    fn matches_platform_empty_is_wildcard() {
+        let raw = "---\nname: x\ndescription: y\n---\nbody\n";
+        let skill = parse_skill_md(raw, None).unwrap();
+        assert!(skill.platforms.is_empty());
+        assert!(skill.matches_platform("linux"));
+        assert!(skill.matches_platform("windows"));
+        assert!(skill.matches_platform("anything"));
+    }
+
+    #[test]
+    fn matches_platform_mismatch() {
+        let raw = "\
+---
+name: x
+description: y
+platforms:
+  - linux
+  - darwin
+---
+body
+";
+        let skill = parse_skill_md(raw, None).unwrap();
+        assert!(skill.matches_platform("linux"));
+        assert!(skill.matches_platform("Linux")); // case-insensitive
+        assert!(skill.matches_platform("Darwin"));
+        assert!(!skill.matches_platform("windows"));
+        assert!(!skill.matches_platform("freebsd"));
     }
 }

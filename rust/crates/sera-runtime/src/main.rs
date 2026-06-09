@@ -147,9 +147,18 @@ async fn main() -> anyhow::Result<()> {
     // per-agent handlers in its own construction path.
     let agent_router: Arc<InProcAgentRouter> = Arc::new(InProcAgentRouter::new());
     let agent_registry = Arc::new(AgentToolRegistry::with_router(agent_router));
+    // Hermes skill-loop parity (plan area B): resident `skills_list` /
+    // `skill_view` read tools over the same directory the gateway's skill
+    // index block advertises. The dir is fixed for the process lifetime;
+    // visibility is gated downstream by FeatureSurfaceToolFilter's `skills`
+    // toolset and the manifest allow list.
+    let skills_dir = std::path::PathBuf::from(
+        std::env::var("SERA_SKILLS_DIR").unwrap_or_else(|_| "./skills".to_string()),
+    );
     let registry = TraitToolRegistry::with_builtins_and_authz(config.tool_authz_enabled)
         .with_delegation(delegation_bus)
-        .with_agent_tools(agent_registry);
+        .with_agent_tools(agent_registry)
+        .with_skills(skills_dir);
     let registry = Arc::new(registry);
 
     // sera-eo71: load CapabilityRegistry once at startup (no hot-reload in v1

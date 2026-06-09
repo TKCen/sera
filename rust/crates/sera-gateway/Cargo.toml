@@ -24,6 +24,7 @@ sera-tools.workspace = true
 sera-config.workspace = true
 sera-errors.workspace = true
 sera-runtime.workspace = true
+sera-skills.workspace = true
 sera-hooks.workspace = true
 sera-hitl.workspace = true
 sera-workflow.workspace = true

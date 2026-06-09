@@ -4365,6 +4365,28 @@ fn build_tool_use_guidance_context() -> &'static str {
     "Tool-use guidance: answer conversational, status, memory, relationship, and creative-direction questions directly from the visible context and relevant memories. Use tools only when the user asks for external action or inspection such as files, shell, or delegation. After any tool result, synthesize a final text answer instead of repeating the same tool call."
 }
 
+/// Process-wide cache of the Hermes-parity skill index block (plan area B).
+///
+/// `build_skill_index_context` scans the skills directory from disk; running it
+/// per turn would re-walk the tree on every message. The directory is fixed for
+/// the process lifetime (resolved once from `SERA_SKILLS_DIR`, matching the
+/// `SkillDispatchEngine` boot default of `./skills`), so the rendered block is
+/// memoised here and reused for every turn.
+static SKILL_INDEX_BLOCK: tokio::sync::OnceCell<Option<String>> = tokio::sync::OnceCell::const_new();
+
+/// Return the cached skill index system-prompt block, building it on first use.
+async fn cached_skill_index_block() -> Option<&'static String> {
+    SKILL_INDEX_BLOCK
+        .get_or_init(|| async {
+            let skills_dir =
+                std::env::var("SERA_SKILLS_DIR").unwrap_or_else(|_| "./skills".to_string());
+            sera_gateway::skill_index::build_skill_index_context(std::path::Path::new(&skills_dir))
+                .await
+        })
+        .await
+        .as_ref()
+}
+
 fn build_identity_memory_context_from_root(
     agent_spec: &AgentSpec,
     agent_name: &str,
@@ -4377,29 +4399,27 @@ fn build_identity_memory_context_from_root(
     let dir = safe_agent_memory_dir(root, agent_name)?;
     let mut segments: Vec<(String, String)> = Vec::new();
 
-    if features.soul {
-        if let Some(content) = read_identity_memory_segment(&dir, "soul.md", None) {
-            segments.push(("soul.md".to_string(), content));
-        }
+    if features.soul
+        && let Some(content) = read_identity_memory_segment(&dir, "soul.md", None)
+    {
+        segments.push(("soul.md".to_string(), content));
     }
-    if features.durable_memory {
-        if let Some(content) =
+    if features.durable_memory
+        && let Some(content) =
             read_identity_memory_segment(&dir, "memory.md", features.memory_char_limit)
-        {
-            segments.push(("memory.md".to_string(), content));
-        }
+    {
+        segments.push(("memory.md".to_string(), content));
     }
-    if features.user_profile {
-        if let Some(content) =
+    if features.user_profile
+        && let Some(content) =
             read_identity_memory_segment(&dir, "user_profile.md", features.user_char_limit)
-        {
-            segments.push(("user_profile.md".to_string(), content));
-        }
+    {
+        segments.push(("user_profile.md".to_string(), content));
     }
-    if features.environment {
-        if let Some(content) = read_identity_memory_segment(&dir, "environment.md", None) {
-            segments.push(("environment.md".to_string(), content));
-        }
+    if features.environment
+        && let Some(content) = read_identity_memory_segment(&dir, "environment.md", None)
+    {
+        segments.push(("environment.md".to_string(), content));
     }
 
     if segments.is_empty() {
@@ -4461,6 +4481,26 @@ async fn execute_turn(
         messages.push(serde_json::json!({
             "role": "system",
             "content": context,
+        }));
+    }
+
+    // ── Skill index (Hermes parity, plan area B): inject a stable,
+    // descriptions-only listing of available skills with mandatory-load
+    // guidance, gated on the `skills` toolset. Placed AFTER identity memory and
+    // BEFORE tool-use guidance so the agent sees what it can load before it is
+    // told how to use tools. The block is process-cached to avoid a disk scan
+    // per turn.
+    if agent_spec
+        .features
+        .toolsets
+        .get("skills")
+        .map(|g| g.enabled)
+        .unwrap_or(false)
+        && let Some(block) = cached_skill_index_block().await
+    {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": block,
         }));
     }
 
@@ -11337,6 +11377,157 @@ spec:
                 snapshot.contains(needle),
                 "snapshot must contain {needle:?}; got:\n{snapshot}"
             );
+        }
+    }
+
+    /// Hermes parity (plan area B): the skill index block is injected when the
+    /// `skills` toolset is enabled and absent when it is not. This is the only
+    /// test that triggers `cached_skill_index_block()`, so it deterministically
+    /// initialises the process-wide cache from the `SERA_SKILLS_DIR` it sets.
+    #[tokio::test]
+    async fn execute_turn_injects_skill_index_when_skills_toolset_enabled() {
+        struct RecordingTransport {
+            seen: Arc<std::sync::Mutex<Vec<Vec<serde_json::Value>>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl AgentTurnTransport for RecordingTransport {
+            async fn send_turn(
+                &self,
+                messages: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                self.seen.lock().unwrap().push(messages);
+                Ok(TurnEvents {
+                    response: "ok".to_string(),
+                    ..TurnEvents::default()
+                })
+            }
+
+            async fn send_steer(
+                &self,
+                _items: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        // Point the process-wide skill index cache at a tempdir with one skill.
+        // SAFETY: this is the only test that reads SERA_SKILLS_DIR via
+        // `cached_skill_index_block()`, and it sets the value before the first
+        // (and only) cache initialisation, so no concurrent reader observes a
+        // torn value.
+        let skills_dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            skills_dir.path().join("greet.md"),
+            "---\nname: greeter\ndescription: Say hello to the user\n---\n\nbody\n",
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var("SERA_SKILLS_DIR", skills_dir.path());
+        }
+
+        let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
+            SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+        );
+        let capability_registry = CapabilityRegistry::empty();
+        let skill_engine = SkillDispatchEngine::new();
+
+        let run = |skills_enabled: bool| {
+            let mut features = sera_types::config_manifest::AgentFeatureSetSpec::default();
+            if skills_enabled {
+                features.toolsets.insert(
+                    "skills".to_string(),
+                    sera_types::config_manifest::ToolsetGateSpec {
+                        enabled: true,
+                        ..Default::default()
+                    },
+                );
+            }
+            AgentSpec {
+                provider: "stub-provider".to_string(),
+                model: Some("stub-model".to_string()),
+                persona: None,
+                tools: None,
+                workspace: None,
+                policy_ref: None,
+                enforcement_mode: None,
+                approval_policy: None,
+                subagents_allowed: vec![],
+                features,
+            }
+        };
+
+        let block_present = |seen: &Arc<std::sync::Mutex<Vec<Vec<serde_json::Value>>>>| -> bool {
+            let captured = seen.lock().unwrap();
+            let messages = captured.first().expect("transport should see one turn");
+            messages
+                .iter()
+                .filter(|m| m.get("role").and_then(|v| v.as_str()) == Some("system"))
+                .filter_map(|m| m.get("content").and_then(|v| v.as_str()))
+                .any(|c| c.contains("## Skills (mandatory)") && c.contains("greeter"))
+        };
+
+        // Enabled → block present.
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let cancel = CancellationToken::new();
+        execute_turn(
+            &run(true),
+            &[],
+            "hello",
+            &RecordingTransport {
+                seen: Arc::clone(&seen),
+            },
+            "skill-index-test-enabled",
+            &skill_engine,
+            &semantic_store,
+            "sera",
+            &cancel,
+            &capability_registry,
+            None,
+        )
+        .await;
+        assert!(
+            block_present(&seen),
+            "skill index block must be injected when skills toolset is enabled"
+        );
+
+        // Disabled → block absent.
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let cancel = CancellationToken::new();
+        execute_turn(
+            &run(false),
+            &[],
+            "hello",
+            &RecordingTransport {
+                seen: Arc::clone(&seen),
+            },
+            "skill-index-test-disabled",
+            &skill_engine,
+            &semantic_store,
+            "sera",
+            &cancel,
+            &capability_registry,
+            None,
+        )
+        .await;
+        assert!(
+            !block_present(&seen),
+            "skill index block must be absent when skills toolset is disabled"
+        );
+
+        // SAFETY: as above; restore the environment for any later test.
+        unsafe {
+            std::env::remove_var("SERA_SKILLS_DIR");
         }
     }
 

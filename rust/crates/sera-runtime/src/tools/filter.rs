@@ -386,7 +386,7 @@ fn is_session_search_tool_name(name: &str) -> bool {
 fn is_skill_tool_name(name: &str) -> bool {
     matches!(
         name,
-        "skill-search" | "skill_search" | "skills" | "skills_list"
+        "skill-search" | "skill_search" | "skills" | "skills_list" | "skill_view"
     ) || name.starts_with("skill_")
         || name.starts_with("skill-")
         || name.starts_with("skills_")
@@ -799,6 +799,94 @@ mod tests {
         assert!(agent_features_from_env().is_default());
         unsafe { std::env::remove_var(key) };
         assert!(agent_features_from_env().is_default());
+    }
+
+    /// `skills_list` and `skill_view` are gated on the "skills" toolset:
+    /// enabled → visible, disabled/absent → hidden.
+    #[test]
+    fn feature_surface_filter_skills_toolset_gates_skills_list_and_skill_view() {
+        // With skills toolset enabled, both tools are visible.
+        let features_enabled = AgentFeatureSetSpec {
+            toolsets: HashMap::from([(
+                TOOLSET_SKILLS.to_string(),
+                ToolsetGateSpec {
+                    enabled: true,
+                    ..ToolsetGateSpec::default()
+                },
+            )]),
+            ..AgentFeatureSetSpec::default()
+        };
+        let f = FeatureSurfaceToolFilter::new(&features_enabled);
+        assert!(
+            f.matches("skills_list"),
+            "skills_list should be visible when skills toolset is enabled"
+        );
+        assert!(
+            f.matches("skill_view"),
+            "skill_view should be visible when skills toolset is enabled"
+        );
+
+        // With skills toolset disabled, both tools are hidden.
+        let features_disabled = AgentFeatureSetSpec {
+            toolsets: HashMap::from([(
+                TOOLSET_SKILLS.to_string(),
+                ToolsetGateSpec {
+                    enabled: false,
+                    ..ToolsetGateSpec::default()
+                },
+            )]),
+            ..AgentFeatureSetSpec::default()
+        };
+        let f = FeatureSurfaceToolFilter::new(&features_disabled);
+        assert!(
+            !f.matches("skills_list"),
+            "skills_list should be hidden when skills toolset is disabled"
+        );
+        assert!(
+            !f.matches("skill_view"),
+            "skill_view should be hidden when skills toolset is disabled"
+        );
+
+        // With skills toolset absent (non-default spec, no "skills" key), both are hidden.
+        let features_absent = AgentFeatureSetSpec {
+            toolsets: HashMap::from([(
+                TOOLSET_MEMORY.to_string(),
+                ToolsetGateSpec {
+                    enabled: true,
+                    ..ToolsetGateSpec::default()
+                },
+            )]),
+            ..AgentFeatureSetSpec::default()
+        };
+        let f = FeatureSurfaceToolFilter::new(&features_absent);
+        assert!(
+            !f.matches("skills_list"),
+            "skills_list should be hidden when skills toolset is absent"
+        );
+        assert!(
+            !f.matches("skill_view"),
+            "skill_view should be hidden when skills toolset is absent"
+        );
+
+        // filter_definitions reflects the same gate end-to-end.
+        let defs = vec![def("skills_list"), def("skill_view"), def("file-read")];
+        let names_enabled: Vec<_> = FeatureSurfaceToolFilter::new(&features_enabled)
+            .filter_definitions(defs.clone())
+            .into_iter()
+            .map(|d| d.function.name)
+            .collect();
+        assert!(names_enabled.contains(&"skills_list".to_string()));
+        assert!(names_enabled.contains(&"skill_view".to_string()));
+        assert!(names_enabled.contains(&"file-read".to_string()));
+
+        let names_disabled: Vec<_> = FeatureSurfaceToolFilter::new(&features_disabled)
+            .filter_definitions(defs)
+            .into_iter()
+            .map(|d| d.function.name)
+            .collect();
+        assert!(!names_disabled.contains(&"skills_list".to_string()));
+        assert!(!names_disabled.contains(&"skill_view".to_string()));
+        assert!(names_disabled.contains(&"file-read".to_string()));
     }
 
     #[test]

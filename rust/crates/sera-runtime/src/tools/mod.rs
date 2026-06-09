@@ -26,6 +26,7 @@ pub mod propose_correction;
 pub mod safe_client;
 pub mod shell_exec;
 pub mod spawn;
+pub mod skills_tool;
 pub mod tool_search;
 pub mod web_fetch;
 
@@ -143,6 +144,21 @@ impl TraitToolRegistry {
         self.register(Box::new(list_tool));
         self.register(Box::new(yield_tool));
         self.register(Box::new(send_tool));
+        self
+    }
+
+    /// Register the two Hermes-parity resident skill tools ([`skills_tool::SkillsList`]
+    /// and [`skills_tool::SkillView`]) backed by the given local skills directory.
+    ///
+    /// Separate from [`Self::with_builtins`] because these tools need a
+    /// caller-supplied `skills_dir` path so the runtime can point them at
+    /// the correct on-disk location. See SPEC-tools §4.2 and bead
+    /// `sera-hermes-parity` for the full Hermes skill-loop parity story.
+    pub fn with_skills(mut self, skills_dir: std::path::PathBuf) -> Self {
+        self.register(Box::new(skills_tool::SkillsList {
+            skills_dir: skills_dir.clone(),
+        }));
+        self.register(Box::new(skills_tool::SkillView { skills_dir }));
         self
     }
 

@@ -4287,6 +4287,19 @@ fn build_self_introspection_snapshot(
     } else {
         format!("wired via SERA_SKILLS_DIR/default path ({skills_dir})")
     };
+    // Hermes parity (plan area B): report the resident skill loop truthfully so
+    // self-introspection matches what the turn assembly actually does.
+    let skill_loop = if agent_spec
+        .features
+        .toolsets
+        .get("skills")
+        .map(|g| g.enabled)
+        .unwrap_or(false)
+    {
+        "skills toolset enabled — a mandatory skill index block is injected each turn and the skills_list / skill_view tools load full skill instructions on demand"
+    } else {
+        "skills toolset disabled — no skill index block is injected and skills_list / skill_view are not exposed"
+    };
 
     let model = agent_spec.model.as_deref().unwrap_or("<provider default>");
     let policy = agent_spec.policy_ref.as_deref().unwrap_or("none configured");
@@ -4311,6 +4324,7 @@ fn build_self_introspection_snapshot(
          - handoff/subagent tools: {subagents}\n\
          - policy: {policy}; enforcement_mode: {enforcement}\n\
          - skill discovery: {skill_discovery}\n\
+         - skill loop (Hermes parity): {skill_loop}\n\
          - registered skills: {registered_skill_text}\n\
          - active skills: {active_skill_text}\n\
          - memory: semantic memory recall is enabled best-effort through the gateway store\n\

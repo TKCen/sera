@@ -46,6 +46,10 @@ use sera_memory::PgVectorStore;
 use sera_memory::SemanticMemoryStore;
 #[allow(unused_imports)]
 use sera_memory::{DEFAULT_SQLITE_VEC_DIMENSIONS, SqliteMemoryStore};
+use sera_runtime::context_engine::envelope::{
+    ContextEnvelopeBuilder, ContextSegment, PRIORITY_IMMUTABLE_ANCHOR, PRIORITY_SELF_INTROSPECTION,
+    PRIORITY_SEMANTIC_RECALL, PRIORITY_SKILL_INDEX, PRIORITY_SKILL_INJECTION,
+};
 use sera_runtime::skill_dispatch::SkillDispatchEngine;
 use sera_runtime::subagent::SubagentManager;
 // sera-uwk0: Mail gate ingress correlator (Design B — RFC 5322 headers +
@@ -84,6 +88,7 @@ use sera_types::config_manifest::{
 };
 use sera_types::event::IncomingEvent as DomainEvent;
 use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
+use sera_types::memory::SegmentKind;
 use sera_types::principal::{PrincipalId, PrincipalKind, PrincipalRef};
 use sera_meta::constitutional::ConstitutionalRegistry;
 use sera_meta::artifact_pipeline::ArtifactPipeline;
@@ -4350,16 +4355,27 @@ async fn execute_turn(
     // keeps the synchronous behaviour.
     delta_tx: Option<tokio::sync::mpsc::Sender<String>>,
 ) -> MvsTurnResult {
-    let mut messages: Vec<serde_json::Value> = Vec::new();
+    // ── Context envelope (sera-ibkr.3): one ordered assembly path for the
+    // system-role context injected ahead of transcript replay. Segment order
+    // and per-segment message shape match the previous inline assembly
+    // exactly. `SERA_CONTEXT_BUDGET_CHARS` (unset = unlimited = live
+    // behaviour unchanged) enables whole-segment budget eviction; the
+    // persona immutable anchor is never evicted.
+    let budget_chars = std::env::var("SERA_CONTEXT_BUDGET_CHARS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok());
+    let mut envelope = ContextEnvelopeBuilder::new(budget_chars);
 
-    // Add system message from persona if configured.
+    // Persona immutable anchor — priority 0, never evicted.
     if let Some(persona) = &agent_spec.persona
         && let Some(anchor) = &persona.immutable_anchor
     {
-        messages.push(serde_json::json!({
-            "role": "system",
-            "content": anchor,
-        }));
+        envelope.push(ContextSegment::new(
+            SegmentKind::Persona,
+            "persona.immutable_anchor",
+            anchor.clone(),
+            PRIORITY_IMMUTABLE_ANCHOR,
+        ));
     }
 
     // ── Skill dispatch: fire trigger-matched skills for this turn and
@@ -4378,10 +4394,12 @@ async fn execute_turn(
         if injection.trim().is_empty() {
             continue;
         }
-        messages.push(serde_json::json!({
-            "role": "system",
-            "content": injection,
-        }));
+        envelope.push(ContextSegment::new(
+            SegmentKind::Custom("skill_dispatch".into()),
+            "skill_dispatch",
+            injection,
+            PRIORITY_SKILL_INJECTION,
+        ));
     }
 
     // ── Skill index (Hermes parity, plan area B): inject a stable,
@@ -4391,17 +4409,21 @@ async fn execute_turn(
     // replayed. Rebuilt each turn so skills created via `skill-manage` appear
     // without restart; only present when at least one skill is discoverable.
     if let Some(block) = skill_index_block().await {
-        messages.push(serde_json::json!({
-            "role": "system",
-            "content": block,
-        }));
+        envelope.push(ContextSegment::new(
+            SegmentKind::Custom("skill_index".into()),
+            "skill_index",
+            block,
+            PRIORITY_SKILL_INDEX,
+        ));
     }
 
     if self_introspection_requested(user_message) {
-        messages.push(serde_json::json!({
-            "role": "system",
-            "content": build_self_introspection_snapshot(agent_spec, agent_name, skill_engine),
-        }));
+        envelope.push(ContextSegment::new(
+            SegmentKind::Custom("self_introspection".into()),
+            "self_introspection",
+            build_self_introspection_snapshot(agent_spec, agent_name, skill_engine),
+            PRIORITY_SELF_INTROSPECTION,
+        ));
     }
 
     // ── Memory recall: text-only SemanticMemoryStore query. Best-effort —
@@ -4424,16 +4446,22 @@ async fn execute_turn(
                 .map(|h| format!("- {}", h.entry.content))
                 .collect::<Vec<_>>()
                 .join("\n");
-            messages.push(serde_json::json!({
-                "role": "system",
-                "content": format!("Relevant memories:\n{recalled}"),
-            }));
+            envelope.push(ContextSegment::new(
+                SegmentKind::Custom("semantic_recall".into()),
+                "semantic_recall",
+                format!("Relevant memories:\n{recalled}"),
+                PRIORITY_SEMANTIC_RECALL,
+            ));
         }
         Ok(_) => {}
         Err(e) => {
             tracing::warn!(error = %e, "semantic recall failed; continuing without memory");
         }
     }
+
+    let envelope = envelope.build();
+    envelope.introspect();
+    let mut messages = envelope.to_messages();
 
     // Add transcript history (including tool_calls and tool results), with
     // sera-xbmz invariant enforcement: drop `tool` role rows whose
@@ -12756,6 +12784,146 @@ spec:
                 snapshot.contains(needle),
                 "snapshot must contain {needle:?}; got:\n{snapshot}"
             );
+        }
+    }
+
+    /// sera-ibkr.3: envelope segment order — anchor first, all system messages
+    /// before the user turn, recall (when present) is the last system message.
+    #[tokio::test]
+    async fn execute_turn_orders_envelope_segments_before_transcript() {
+        struct RecordingTransport {
+            seen: Arc<std::sync::Mutex<Vec<Vec<serde_json::Value>>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl AgentTurnTransport for RecordingTransport {
+            async fn send_turn(
+                &self,
+                messages: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                self.seen.lock().unwrap().push(messages);
+                Ok(TurnEvents {
+                    response: "ok".to_string(),
+                    ..TurnEvents::default()
+                })
+            }
+
+            async fn send_steer(
+                &self,
+                _items: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let transport = RecordingTransport {
+            seen: Arc::clone(&seen),
+        };
+        let agent_spec = AgentSpec {
+            provider: "stub-provider".to_string(),
+            model: Some("stub-model".to_string()),
+            persona: Some(sera_types::config_manifest::PersonaSpec {
+                immutable_anchor: Some("You are a test anchor.".to_string()),
+                mutable_persona: None,
+                mutable_token_budget: None,
+            }),
+            tools: Some(AgentToolsSpec {
+                allow: vec!["bash".to_string()],
+            }),
+            workspace: Some("/workspace/test".to_string()),
+            policy_ref: None,
+            enforcement_mode: None,
+            approval_policy: None,
+            subagents_allowed: vec![],
+        };
+        let skill_engine = SkillDispatchEngine::new();
+        let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
+            SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+        );
+        let cancel = CancellationToken::new();
+        let capability_registry = CapabilityRegistry::empty();
+
+        let result = execute_turn(
+            &agent_spec,
+            &[],
+            "hello",
+            &transport,
+            "ibkr3-order-test-session",
+            &skill_engine,
+            &semantic_store,
+            "sera",
+            &cancel,
+            &capability_registry,
+            None,
+        )
+        .await;
+
+        assert_eq!(result.reply, "ok");
+        let captured = seen.lock().unwrap();
+        let messages = captured.first().expect("transport should see one turn");
+
+        // First message must be role=system with the anchor content.
+        let first = messages.first().expect("at least one message");
+        assert_eq!(
+            first.get("role").and_then(|v| v.as_str()),
+            Some("system"),
+            "first message must be role=system (persona anchor)"
+        );
+        assert_eq!(
+            first.get("content").and_then(|v| v.as_str()),
+            Some("You are a test anchor."),
+            "first system message must be the persona immutable anchor"
+        );
+
+        // All system messages must precede the first non-system (user) message.
+        let first_user_pos = messages
+            .iter()
+            .position(|m| m.get("role").and_then(|v| v.as_str()) == Some("user"))
+            .expect("there must be a user message");
+        for (i, msg) in messages.iter().enumerate() {
+            if i >= first_user_pos {
+                break;
+            }
+            assert_eq!(
+                msg.get("role").and_then(|v| v.as_str()),
+                Some("system"),
+                "message at index {i} before the user turn must be role=system"
+            );
+        }
+
+        // If a recall segment is present it must be the last system message
+        // and start with "Relevant memories:".
+        let system_messages: Vec<&serde_json::Value> = messages
+            .iter()
+            .filter(|m| m.get("role").and_then(|v| v.as_str()) == Some("system"))
+            .collect();
+        if let Some(last_sys) = system_messages.last() {
+            let content = last_sys
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if content.starts_with("Relevant memories:") {
+                // Confirm it really is after all other system messages.
+                let last_sys_pos = messages
+                    .iter()
+                    .rposition(|m| m.get("role").and_then(|v| v.as_str()) == Some("system"))
+                    .unwrap();
+                assert!(
+                    last_sys_pos < first_user_pos,
+                    "recall segment must still precede the user turn"
+                );
+            }
         }
     }
 

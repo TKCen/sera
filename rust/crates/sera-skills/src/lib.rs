@@ -23,6 +23,7 @@ pub mod error;
 pub mod self_patch;
 pub mod loader;
 pub mod md_loader;
+pub mod discovery;
 pub mod skill_pack;
 pub mod bundle;
 pub mod markdown;

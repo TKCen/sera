@@ -5235,6 +5235,7 @@ dependencies = [
  "sera-runtime",
  "sera-secrets",
  "sera-session",
+ "sera-skills",
  "sera-telemetry",
  "sera-testing",
  "sera-tools",

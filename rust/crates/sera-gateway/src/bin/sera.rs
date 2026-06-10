@@ -4309,6 +4309,19 @@ fn append_transcript_history_messages(
     }
 }
 
+/// Build the Hermes-parity skill index block (plan area B) for this turn.
+///
+/// Scanned fresh on every turn — deliberately NOT cached: `skill-manage` can
+/// create or patch skills at runtime, and a memoised block would advertise a
+/// stale index until restart while `skill-list` rescans live. The scan is a
+/// depth-3 walk of the skills directory (resolved from `SERA_SKILLS_DIR`,
+/// matching the `SkillDispatchEngine` boot default of `./skills`), which is
+/// negligible next to an LLM turn.
+async fn skill_index_block() -> Option<String> {
+    let skills_dir = std::env::var("SERA_SKILLS_DIR").unwrap_or_else(|_| "./skills".to_string());
+    sera_gateway::skill_index::build_skill_index_context(std::path::Path::new(&skills_dir)).await
+}
+
 /// Execute a turn by dispatching through the agent's [`AgentTurnTransport`].
 ///
 /// The gateway builds the conversation messages from the transcript and
@@ -4368,6 +4381,19 @@ async fn execute_turn(
         messages.push(serde_json::json!({
             "role": "system",
             "content": injection,
+        }));
+    }
+
+    // ── Skill index (Hermes parity, plan area B): inject a stable,
+    // descriptions-only listing of available skills with mandatory-load
+    // guidance. Placed alongside the trigger-matched skill injections so the
+    // agent sees what it can load via `skill-view` before the transcript is
+    // replayed. Rebuilt each turn so skills created via `skill-manage` appear
+    // without restart; only present when at least one skill is discoverable.
+    if let Some(block) = skill_index_block().await {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": block,
         }));
     }
 

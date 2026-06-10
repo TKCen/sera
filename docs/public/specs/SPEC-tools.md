@@ -285,6 +285,12 @@ agents:
 > [!NOTE]
 > Progressive disclosure is most valuable in enterprise deployments with large MCP tool surfaces. Tier 1 deployments with <15 tools can use `strategy: "all"` without penalty.
 
+### 4.2 Agent-Visible Skill Tools
+
+The canonical agent-visible skill tool names are `skill-list`, `skill-view`, and `skill-manage` (kebab-case). They let an agent discover installed skills, read a skill's full SKILL.md, and create or patch a skill (governed by the Tier 1 patch policy and recorded in the skill activity log). The snake_case `skills_list` / `skill_view` surface from the B-area lane is superseded by these names.
+
+Skill discovery is shared through `sera_skills::discovery` — a single source of truth that scans `SKILL.md` files recursively to depth 3 plus flat top-level `*.md` files, dedups by skill name, and sorts deterministically. Both `skill-list` and the gateway skill index system-prompt block consume this module, so the index advertises only skills that `skill-view` can resolve (no advertised-but-unviewable skills).
+
 ---
 
 ## 5. Tool Profiles

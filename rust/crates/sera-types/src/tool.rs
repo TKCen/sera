@@ -29,7 +29,10 @@ pub struct FunctionDefinition {
 pub struct FunctionParameters {
     #[serde(rename = "type")]
     pub schema_type: String,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    // Always serialized (even when empty): OpenAI-compatible backends such as
+    // LM Studio reject a function schema whose `parameters.properties` is
+    // missing, so a no-argument tool must emit `"properties": {}`.
+    #[serde(default)]
     pub properties: HashMap<String, ParameterSchema>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required: Vec<String>,
@@ -1052,6 +1055,21 @@ mod tests {
         let json = serde_json::to_string(&schema).unwrap();
         let parsed: ToolSchema = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.parameters.schema_type, "object");
+    }
+
+    /// A no-argument tool (e.g. `skills_list`) must still serialize
+    /// `"properties": {}` — LM Studio's OpenAI-compat endpoint returns
+    /// HTTP 400 (`invalid_type` on `function.parameters.properties`) when
+    /// the key is absent.
+    #[test]
+    fn empty_function_parameters_serialize_properties_key() {
+        let params = FunctionParameters {
+            schema_type: "object".to_string(),
+            properties: HashMap::new(),
+            required: vec![],
+        };
+        let value = serde_json::to_value(&params).unwrap();
+        assert_eq!(value["properties"], serde_json::json!({}));
     }
 
     #[test]

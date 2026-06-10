@@ -211,13 +211,38 @@ mod tests {
     #[tokio::test]
     async fn unparseable_file_is_skipped() {
         let dir = TempDir::new().unwrap();
-        // Missing required `description` → parse error, skipped.
-        fs::write(dir.path().join("broken.md"), "---\nname: broken\n---\nbody\n").unwrap();
+        // Truly unparseable: missing required `name` → parse error, skipped.
+        fs::write(dir.path().join("broken.md"), "---\ndescription: no name here\n---\nbody\n")
+            .unwrap();
         write_skill_md(&dir.path().join("ok.md"), "ok-skill", "works fine");
 
         let skills = discover_skills(dir.path()).await;
         let names: Vec<&str> = skills.iter().map(|(s, _)| s.name.as_str()).collect();
         assert!(names.contains(&"ok-skill"), "valid skill should be present");
-        assert!(!names.contains(&"broken"), "unparseable skill should be skipped");
+        // broken.md has no `name`, so it should still be skipped.
+        assert!(
+            !skills.iter().any(|(s, _)| s.description == "no name here"),
+            "truly unparseable skill should be skipped"
+        );
+    }
+
+    #[tokio::test]
+    async fn description_less_skill_is_preserved() {
+        let dir = TempDir::new().unwrap();
+        // Missing `description` must NOT drop the skill — description defaults to "".
+        fs::write(dir.path().join("nodesc.md"), "---\nname: nodesc\n---\nbody\n").unwrap();
+        write_skill_md(&dir.path().join("ok.md"), "ok-skill", "works fine");
+
+        let skills = discover_skills(dir.path()).await;
+        let names: Vec<&str> = skills.iter().map(|(s, _)| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"nodesc"),
+            "description-less skill must be preserved, got: {names:?}"
+        );
+        let nodesc = skills.iter().find(|(s, _)| s.name == "nodesc").unwrap();
+        assert_eq!(
+            nodesc.0.description, "",
+            "missing description must default to empty string"
+        );
     }
 }

@@ -255,18 +255,14 @@ pub fn parse_skill_md(raw: &str, source_path: Option<PathBuf>) -> Result<Skill, 
     let name = fm
         .name
         .ok_or_else(|| SkillsError::Format("SKILL.md frontmatter missing `name`".to_string()))?;
-    let description = fm.description.ok_or_else(|| {
-        SkillsError::Format("SKILL.md frontmatter missing `description`".to_string())
-    })?;
+    // `description` is optional — missing or absent defaults to empty string so
+    // description-less skills are preserved rather than dropped during discovery.
+    // Matches the `unwrap_or_default()` semantics in SkillDispatchEngine.
+    let description = fm.description.unwrap_or_default();
 
     if name.trim().is_empty() {
         return Err(SkillsError::Format(
             "SKILL.md `name` must not be empty".to_string(),
-        ));
-    }
-    if description.trim().is_empty() {
-        return Err(SkillsError::Format(
-            "SKILL.md `description` must not be empty".to_string(),
         ));
     }
 
@@ -373,13 +369,12 @@ mod tests {
     }
 
     #[test]
-    fn missing_description_errors() {
+    fn missing_description_defaults_to_empty() {
+        // `description` is optional — missing description must NOT drop the skill.
         let raw = "---\nname: x\n---\nbody\n";
-        let err = parse_skill_md(raw, None).unwrap_err();
-        match err {
-            SkillsError::Format(msg) => assert!(msg.contains("`description`")),
-            other => panic!("expected Format error, got {other:?}"),
-        }
+        let skill = parse_skill_md(raw, None).unwrap();
+        assert_eq!(skill.name, "x");
+        assert_eq!(skill.description, "");
     }
 
     #[test]
@@ -390,10 +385,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_description_rejected() {
+    fn empty_description_allowed() {
+        // An explicit empty description is valid — description is optional.
         let raw = "---\nname: ok\ndescription: \"\"\n---\nbody\n";
-        let err = parse_skill_md(raw, None).unwrap_err();
-        assert!(matches!(err, SkillsError::Format(_)));
+        let skill = parse_skill_md(raw, None).unwrap();
+        assert_eq!(skill.description, "");
     }
 
     #[test]

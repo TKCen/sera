@@ -1,6 +1,7 @@
 //! Context engine — pluggable context assembly and compaction.
 
 pub mod enricher;
+pub mod envelope;
 pub mod hybrid;
 pub mod kvcache;
 pub mod pipeline;
@@ -8,6 +9,11 @@ pub mod pipeline;
 pub use enricher::{
     ContextEnricher, ContextEnricherConfig, EnrichmentResult, MAX_RECALL_SEGMENTS,
     MEMORY_RECALL_PRIORITY,
+};
+pub use envelope::{
+    ContextEnvelope, ContextEnvelopeBuilder, ContextSegment, PRIORITY_IMMUTABLE_ANCHOR,
+    PRIORITY_SELF_INTROSPECTION, PRIORITY_SEMANTIC_RECALL, PRIORITY_SKILL_INDEX,
+    PRIORITY_SKILL_INJECTION,
 };
 
 use async_trait::async_trait;

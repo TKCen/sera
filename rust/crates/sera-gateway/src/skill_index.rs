@@ -141,13 +141,33 @@ mod tests {
     #[tokio::test]
     async fn unparseable_skills_are_skipped() {
         let dir = TempDir::new().unwrap();
-        // Missing required `description` frontmatter → parse error, skipped.
-        fs::write(dir.path().join("broken.md"), "---\nname: broken\n---\nbody\n").unwrap();
+        // Truly unparseable: missing required `name` frontmatter → parse error, skipped.
+        fs::write(
+            dir.path().join("broken.md"),
+            "---\ndescription: no name here\n---\nbody\n",
+        )
+        .unwrap();
         write_skill_md(&dir.path().join("ok.md"), "ok-skill", "works fine");
 
         let block = build_skill_index_context(dir.path()).await.unwrap();
         assert!(block.contains("- ok-skill: works fine"));
-        assert!(!block.contains("broken"));
+        // broken.md has no `name` so it is truly unparseable and must not appear.
+        assert!(!block.contains("no name here"));
+    }
+
+    #[tokio::test]
+    async fn description_less_skill_appears_in_index() {
+        let dir = TempDir::new().unwrap();
+        // Missing `description` must NOT exclude the skill from the gateway index.
+        fs::write(dir.path().join("nodesc.md"), "---\nname: nodesc\n---\nbody\n").unwrap();
+        write_skill_md(&dir.path().join("ok.md"), "ok-skill", "works fine");
+
+        let block = build_skill_index_context(dir.path()).await.unwrap();
+        assert!(
+            block.contains("- nodesc:"),
+            "description-less skill must appear in gateway index; block:\n{block}"
+        );
+        assert!(block.contains("- ok-skill: works fine"));
     }
 
     #[tokio::test]

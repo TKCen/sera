@@ -255,9 +255,19 @@ pub fn parse_skill_md(raw: &str, source_path: Option<PathBuf>) -> Result<Skill, 
     let name = fm
         .name
         .ok_or_else(|| SkillsError::Format("SKILL.md frontmatter missing `name`".to_string()))?;
-    // `description` is optional — missing or absent defaults to empty string so
-    // description-less skills are preserved rather than dropped during discovery.
-    // Matches the `unwrap_or_default()` semantics in SkillDispatchEngine.
+    // `description` is optional — absent defaults to empty string so
+    // description-less skills are preserved rather than dropped during
+    // discovery. An explicitly provided empty/whitespace description is
+    // rejected, matching `parse_skill_markdown_str`: the dispatch parser
+    // refuses to register such a skill, so advertising it in discovery or
+    // the gateway index would list a skill that can never fire.
+    if let Some(ref desc) = fm.description
+        && desc.trim().is_empty()
+    {
+        return Err(SkillsError::Format(
+            "SKILL.md `description` must be non-empty when provided".to_string(),
+        ));
+    }
     let description = fm.description.unwrap_or_default();
 
     if name.trim().is_empty() {
@@ -385,11 +395,21 @@ mod tests {
     }
 
     #[test]
-    fn empty_description_allowed() {
-        // An explicit empty description is valid — description is optional.
+    fn explicit_empty_description_rejected() {
+        // An explicitly empty description is invalid — the dispatch parser
+        // (`parse_skill_markdown_str`) rejects it, so accepting it here would
+        // advertise a skill that can never fire.
         let raw = "---\nname: ok\ndescription: \"\"\n---\nbody\n";
-        let skill = parse_skill_md(raw, None).unwrap();
-        assert_eq!(skill.description, "");
+        let err = parse_skill_md(raw, None).unwrap_err();
+        assert!(matches!(err, SkillsError::Format(_)));
+    }
+
+    #[test]
+    fn explicit_whitespace_description_rejected() {
+        // Whitespace-only is treated the same as explicitly empty.
+        let raw = "---\nname: ok\ndescription: \"   \"\n---\nbody\n";
+        let err = parse_skill_md(raw, None).unwrap_err();
+        assert!(matches!(err, SkillsError::Format(_)));
     }
 
     #[test]

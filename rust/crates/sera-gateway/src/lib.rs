@@ -28,6 +28,7 @@ pub mod scheduler;
 pub mod session_persist;
 pub mod session_store;
 pub mod signals;
+pub mod skill_index;
 pub mod transcript_persist;
 pub mod transport;
 pub mod workflow_store;

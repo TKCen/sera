@@ -163,43 +163,35 @@ async fn discover_skills(roots: &[PathBuf], query: Option<&str>) -> Vec<SkillLis
         if !root.exists() {
             continue;
         }
-        let Ok(mut reader) = tokio::fs::read_dir(root).await else {
-            continue;
-        };
-        while let Ok(Some(entry)) = reader.next_entry().await {
+
+        // Route through the shared recursive discovery so skill-list advertises
+        // exactly the skills the gateway index and skill-view can resolve
+        // (Hermes-layout SKILL.md to depth 3 + flat top-level *.md). The shared
+        // module already dedups by name within a root; we dedup across roots
+        // (first root wins) to preserve the existing collision semantics.
+        for (skill, _path) in sera_skills::discovery::discover_skills(root).await {
             if entries.len() >= MAX_LIST_ENTRIES {
                 break;
             }
-            let path = entry.path();
 
-            // Candidate detection aligned with SkillDispatchEngine::load_dir:
-            // top-level *.md file OR directory containing SKILL.md.
-            let is_candidate = (path.is_dir() && path.join("SKILL.md").exists())
-                || (path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md"));
-            if !is_candidate {
-                continue;
-            }
-
-            // Parse frontmatter to get the authoritative name the runtime
-            // loader registers, not the path-derived basename.
-            let Some(fm) = extract_skill_frontmatter(&path).await else {
-                continue;
-            };
-
-            if !seen_names.insert(fm.name.clone()) {
+            if !seen_names.insert(skill.name.clone()) {
                 continue;
             }
 
             if let Some(q) = query
-                && !fm.name.contains(q)
+                && !skill.name.contains(q)
             {
                 continue;
             }
 
             entries.push(SkillListEntry {
-                name: fm.name,
-                description: fm.description,
-                version: fm.version,
+                name: skill.name,
+                description: if skill.description.is_empty() {
+                    None
+                } else {
+                    Some(skill.description)
+                },
+                version: skill.version,
                 source: root.display().to_string(),
             });
         }
@@ -207,47 +199,12 @@ async fn discover_skills(roots: &[PathBuf], query: Option<&str>) -> Vec<SkillLis
     entries
 }
 
-struct SkillFrontmatter {
-    name: String,
-    description: Option<String>,
-    version: Option<String>,
-}
-
-/// Parse skill frontmatter using the same parser as `SkillDispatchEngine::load_dir`.
-/// Returns `None` if the file is missing, unparseable, or has an invalid name —
-/// so `skill-list` only advertises skills the runtime actually loads.
-async fn extract_skill_frontmatter(path: &Path) -> Option<SkillFrontmatter> {
-    let content_path = if path.is_dir() {
-        let skill_md = path.join("SKILL.md");
-        if skill_md.exists() {
-            skill_md
-        } else {
-            return None;
-        }
-    } else {
-        path.to_path_buf()
-    };
-
-    let content = tokio::fs::read_to_string(&content_path).await.ok()?;
-    let parsed = parse_skill_markdown_str(&content, content_path).ok()?;
-    Some(SkillFrontmatter {
-        name: parsed.config.name,
-        description: if parsed.config.description.is_empty() {
-            None
-        } else {
-            Some(parsed.config.description)
-        },
-        version: if parsed.config.version.is_empty() {
-            None
-        } else {
-            Some(parsed.config.version)
-        },
-    })
-}
-
 /// Scan roots for a skill whose frontmatter `name` matches `target_name`.
 /// Returns the content file path and the root it was found in. Used as a
 /// fallback when path-based lookup fails (basename != frontmatter name).
+///
+/// Uses the shared recursive discovery so any skill `skill-list` advertises is
+/// also viewable (the advertised-but-unviewable invariant).
 async fn find_by_frontmatter_name(
     roots: &[PathBuf],
     target_name: &str,
@@ -256,28 +213,9 @@ async fn find_by_frontmatter_name(
         if !root.exists() {
             continue;
         }
-        let Ok(mut reader) = tokio::fs::read_dir(root).await else {
-            continue;
-        };
-        while let Ok(Some(entry)) = reader.next_entry().await {
-            let path = entry.path();
-            let content_path = if path.is_dir() {
-                let skill_md = path.join("SKILL.md");
-                if skill_md.exists() {
-                    skill_md
-                } else {
-                    continue;
-                }
-            } else if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
-                path.clone()
-            } else {
-                continue;
-            };
-            if let Ok(content) = tokio::fs::read_to_string(&content_path).await
-                && let Ok(parsed) = parse_skill_markdown_str(&content, content_path.clone())
-                && parsed.config.name == target_name
-            {
-                return Some((content_path, root.clone()));
+        for (skill, path) in sera_skills::discovery::discover_skills(root).await {
+            if skill.name == target_name {
+                return Some((path, root.clone()));
             }
         }
     }
@@ -1218,6 +1156,65 @@ mod tests {
         let input = make_input("skill-view", serde_json::json!({"name": "../escape"}));
         let err = tool.execute(input, make_ctx()).await.unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn nested_hermes_skill_is_listed_and_viewable() {
+        // A Hermes-layout skill nested at depth 2 (group/research/SKILL.md)
+        // must be advertised by skill-list AND resolvable by skill-view — the
+        // advertised-but-unviewable invariant. Both route through the shared
+        // recursive discovery module.
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("group").join("research");
+        tokio::fs::create_dir_all(&nested).await.unwrap();
+        tokio::fs::write(
+            nested.join("SKILL.md"),
+            &skill_body("research", "Nested research skill"),
+        )
+        .await
+        .unwrap();
+
+        let ctx = Arc::new(SkillManagementContext::new(vec![tmp.path().to_path_buf()]));
+
+        // skill-list advertises it.
+        let list = SkillList::new(Arc::clone(&ctx));
+        let list_out = list
+            .execute(
+                make_input("skill-list", serde_json::json!({})),
+                make_ctx(),
+            )
+            .await
+            .unwrap();
+        let list_parsed: serde_json::Value = serde_json::from_str(&list_out.content).unwrap();
+        let names: Vec<&str> = list_parsed["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
+        assert!(
+            names.contains(&"research"),
+            "nested skill must be listed: {names:?}"
+        );
+
+        // skill-view resolves it (via the recursive fallback).
+        let view = SkillView::new(ctx);
+        let view_out = view
+            .execute(
+                make_input("skill-view", serde_json::json!({"name": "research"})),
+                make_ctx(),
+            )
+            .await
+            .unwrap();
+        assert!(!view_out.is_error);
+        let view_parsed: serde_json::Value = serde_json::from_str(&view_out.content).unwrap();
+        assert_eq!(view_parsed["name"], "research");
+        assert!(
+            view_parsed["content"]
+                .as_str()
+                .unwrap()
+                .contains("Nested research skill")
+        );
     }
 
     // ── SkillManage: create ─────────────────────────────────────────────

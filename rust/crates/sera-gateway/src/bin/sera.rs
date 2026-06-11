@@ -48,9 +48,9 @@ use sera_memory::SemanticMemoryStore;
 use sera_memory::{DEFAULT_SQLITE_VEC_DIMENSIONS, SqliteMemoryStore};
 use sera_memory_hindsight::{HindsightConfig, HindsightStore};
 use sera_runtime::context_engine::envelope::{
-    ContextEnvelopeBuilder, ContextSegment, PRIORITY_IMMUTABLE_ANCHOR, PRIORITY_MUTABLE_PERSONA,
-    PRIORITY_SELF_INTROSPECTION, PRIORITY_SEMANTIC_RECALL, PRIORITY_SKILL_INDEX,
-    PRIORITY_SKILL_INJECTION,
+    ContextEnvelopeBuilder, ContextSegment, PRIORITY_IDENTITY_MEMORY, PRIORITY_IMMUTABLE_ANCHOR,
+    PRIORITY_MUTABLE_PERSONA, PRIORITY_SELF_INTROSPECTION, PRIORITY_SEMANTIC_RECALL,
+    PRIORITY_SKILL_INDEX, PRIORITY_SKILL_INJECTION,
 };
 use sera_runtime::skill_dispatch::SkillDispatchEngine;
 use sera_runtime::subagent::SubagentManager;
@@ -85,8 +85,8 @@ use sera_mail::{
     MailCorrelator, parse_raw_message,
 };
 use sera_types::config_manifest::{
-    AgentSpec, AgentToolsSpec, ApiVersion, ConfigManifest, ConnectorSpec, ProviderSpec,
-    ResourceKind, ResourceMetadata, CONFIG_VERSION,
+    AgentFeatureSetSpec, AgentSpec, AgentToolsSpec, ApiVersion, ConfigManifest, ConnectorSpec,
+    ProviderSpec, ResourceKind, ResourceMetadata, CONFIG_VERSION,
 };
 use sera_types::event::IncomingEvent as DomainEvent;
 use sera_types::hook::{HookChain, HookContext, HookPoint, HookResult};
@@ -3617,6 +3617,7 @@ fn ensure_operator_helper_manifest(
         enforcement_mode: Some("autonomous".to_string()),
         approval_policy: None,
         subagents_allowed: Vec::new(),
+        features: AgentFeatureSetSpec::default(),
     };
     let manifest = ConfigManifest {
         api_version: ApiVersion {
@@ -4213,6 +4214,128 @@ fn existing_relevant_files(cwd: &std::path::Path) -> String {
     display_list(&found, "none of the standard project markers found from cwd")
 }
 
+/// Resolve the filesystem root under which per-agent identity memory packs
+/// live (sera-ibkr.3, Hermes parity). `SERA_BASE_MEMORY_ROOT` overrides the
+/// `data/memory` default so deployments can relocate the pack store without
+/// touching manifests.
+fn base_memory_root() -> std::path::PathBuf {
+    std::env::var("SERA_BASE_MEMORY_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("data/memory"))
+}
+
+/// Map an agent name to its identity-memory directory, refusing any name that
+/// could escape `root` (sera-ibkr.3). Returns `None` unless the name is
+/// non-empty, does not begin with `.` (closes `.`/`..` traversal and hidden
+/// dirs), and is composed solely of ascii-alphanumeric plus `-`, `_`, `.`.
+/// On success the directory is `root/{agent_name}`.
+fn safe_agent_memory_dir(
+    root: &std::path::Path,
+    agent_name: &str,
+) -> Option<std::path::PathBuf> {
+    if agent_name.is_empty() || agent_name.starts_with('.') {
+        return None;
+    }
+    if !agent_name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
+    {
+        return None;
+    }
+    Some(root.join(agent_name))
+}
+
+/// Read one identity-memory file, applying an optional Unicode-scalar (not
+/// byte) char cap and trimming (sera-ibkr.3). Returns `None` when the file is
+/// absent/unreadable or empty after trimming — callers treat that as "skip
+/// this segment", so a missing pack never fails the turn.
+fn read_identity_memory_file(
+    dir: &std::path::Path,
+    file_name: &str,
+    limit: Option<u32>,
+) -> Option<String> {
+    let content = std::fs::read_to_string(dir.join(file_name)).ok()?;
+    let content = match limit {
+        Some(limit) if content.chars().count() > limit as usize => {
+            content.chars().take(limit as usize).collect()
+        }
+        _ => content,
+    };
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+/// Inject the base identity memory pack (sera-ibkr.3, Hermes parity) as ordered
+/// envelope segments. Best-effort: when the feature is off, the agent name is
+/// unsafe, or a file is missing/empty, the relevant segment(s) are silently
+/// skipped — this never fails the turn. Soul is anchored at priority 0 (never
+/// evicted); durable memory, user profile and environment sit at
+/// `PRIORITY_IDENTITY_MEMORY`. Content is injected raw, with no wrapper headers.
+fn push_identity_memory_segments(
+    envelope: &mut ContextEnvelopeBuilder,
+    agent_spec: &AgentSpec,
+    agent_name: &str,
+    root: &std::path::Path,
+) {
+    let im = &agent_spec.features.identity_memory;
+    if !im.enabled {
+        return;
+    }
+    let Some(dir) = safe_agent_memory_dir(root, agent_name) else {
+        tracing::warn!(agent = %agent_name, "identity memory enabled but agent name is unsafe; skipping");
+        return;
+    };
+
+    if im.soul
+        && let Some(content) = read_identity_memory_file(&dir, "soul.md", None)
+    {
+        envelope.push(ContextSegment::new(
+            SegmentKind::Soul,
+            "identity_memory.soul",
+            content,
+            PRIORITY_IMMUTABLE_ANCHOR,
+        ));
+    }
+
+    if im.durable_memory
+        && let Some(content) =
+            read_identity_memory_file(&dir, "memory.md", im.memory_char_limit)
+    {
+        envelope.push(ContextSegment::new(
+            SegmentKind::Custom("identity_memory.durable_memory".into()),
+            "identity_memory.durable_memory",
+            content,
+            PRIORITY_IDENTITY_MEMORY,
+        ));
+    }
+
+    if im.user_profile
+        && let Some(content) =
+            read_identity_memory_file(&dir, "user_profile.md", im.user_char_limit)
+    {
+        envelope.push(ContextSegment::new(
+            SegmentKind::Custom("identity_memory.user_profile".into()),
+            "identity_memory.user_profile",
+            content,
+            PRIORITY_IDENTITY_MEMORY,
+        ));
+    }
+
+    if im.environment
+        && let Some(content) = read_identity_memory_file(&dir, "environment.md", None)
+    {
+        envelope.push(ContextSegment::new(
+            SegmentKind::Custom("identity_memory.environment".into()),
+            "identity_memory.environment",
+            content,
+            PRIORITY_IDENTITY_MEMORY,
+        ));
+    }
+}
+
 /// Build a small, secret-free system note that lets the live agent answer
 /// self-introspection questions from runtime probes/config instead of memory.
 ///
@@ -4573,6 +4696,15 @@ async fn execute_turn(
             PRIORITY_MUTABLE_PERSONA,
         ));
     }
+
+    // ── Base identity memory pack (sera-ibkr.3, Hermes parity): soul, durable
+    // memory, user profile and environment loaded from the agent's memory
+    // directory. The soul anchor rides priority 0 and is never evicted; the
+    // rest sit just below the mutable persona. Each file is injected as its own
+    // envelope segment — never appended to user content — and is best-effort:
+    // off-by-default, silently skipped when files are missing or the agent name
+    // is unsafe, never failing the turn.
+    push_identity_memory_segments(&mut envelope, agent_spec, agent_name, &base_memory_root());
 
     // ── Skill dispatch: fire trigger-matched skills for this turn and
     // prepend their active `context_injection` strings as system messages.
@@ -8588,6 +8720,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
+    use sera_types::config_manifest::IdentityMemoryFeatureSpec;
     use tower::ServiceExt;
 
     #[test]
@@ -12981,6 +13114,7 @@ spec:
             enforcement_mode: None,
             approval_policy: None,
             subagents_allowed: Vec::new(),
+            features: AgentFeatureSetSpec::default(),
         };
         let skill_engine = SkillDispatchEngine::new();
         let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
@@ -13117,6 +13251,7 @@ spec:
             enforcement_mode: Some("standard".to_string()),
             approval_policy: None,
             subagents_allowed: vec!["reviewer".to_string()],
+            features: AgentFeatureSetSpec::default(),
         };
         let skill_engine = SkillDispatchEngine::new();
         skill_engine.register(
@@ -13245,6 +13380,7 @@ spec:
             enforcement_mode: None,
             approval_policy: None,
             subagents_allowed: vec![],
+            features: AgentFeatureSetSpec::default(),
         };
         let skill_engine = SkillDispatchEngine::new();
         let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
@@ -13447,6 +13583,7 @@ spec:
             enforcement_mode: None,
             approval_policy: None,
             subagents_allowed: Vec::new(),
+            features: AgentFeatureSetSpec::default(),
         }
     }
 
@@ -13841,6 +13978,7 @@ Treat as historical reference, not new user input:\n- picture-first creative wor
             enforcement_mode: None,
             approval_policy: None,
             subagents_allowed: vec![],
+            features: AgentFeatureSetSpec::default(),
         };
         let skill_engine = SkillDispatchEngine::new();
         let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
@@ -13914,6 +14052,7 @@ Treat as historical reference, not new user input:\n- picture-first creative wor
             enforcement_mode: None,
             approval_policy: None,
             subagents_allowed: Vec::new(),
+            features: AgentFeatureSetSpec::default(),
         };
         let skill_engine = SkillDispatchEngine::new();
 
@@ -15643,6 +15782,7 @@ Treat as historical reference, not new user input:\n- picture-first creative wor
             enforcement_mode: None,
             approval_policy: None,
             subagents_allowed: Vec::new(),
+            features: AgentFeatureSetSpec::default(),
         };
         let skill_engine = SkillDispatchEngine::new();
         let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
@@ -15719,6 +15859,7 @@ Treat as historical reference, not new user input:\n- picture-first creative wor
             enforcement_mode: None,
             approval_policy: None,
             subagents_allowed: Vec::new(),
+            features: AgentFeatureSetSpec::default(),
         };
         let skill_engine = SkillDispatchEngine::new();
         let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
@@ -17791,5 +17932,215 @@ spec:
         assert_eq!(out.len(), 4);
         assert_eq!(out[2]["tool_call_id"], "call_a");
         assert_eq!(out[3]["tool_call_id"], "call_b");
+    }
+
+    // ── Base identity memory pack (sera-ibkr.3, Hermes parity) ──────────────
+
+    /// Build an `AgentSpec` whose only meaningful field is the supplied
+    /// identity-memory feature spec; all other fields are defaulted.
+    fn identity_memory_agent_spec(im: IdentityMemoryFeatureSpec) -> AgentSpec {
+        AgentSpec {
+            provider: "stub-provider".to_string(),
+            model: None,
+            persona: None,
+            tools: None,
+            workspace: None,
+            policy_ref: None,
+            enforcement_mode: None,
+            approval_policy: None,
+            subagents_allowed: Vec::new(),
+            features: AgentFeatureSetSpec {
+                identity_memory: im,
+            },
+        }
+    }
+
+    /// Unique temp directory rooted at the process id so parallel test runs do
+    /// not collide. The caller is responsible for `remove_dir_all` at the end.
+    fn identity_memory_temp_root(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "sera_identity_memory_{}_{tag}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn identity_memory_pushes_enabled_segments_in_order() {
+        let root = identity_memory_temp_root("order");
+        let agent_dir = root.join("sera");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(agent_dir.join("soul.md"), "I am the soul.").unwrap();
+        // 7 'é' scalars; memory_char_limit=5 must truncate to 5 scalars, proving
+        // char-not-byte truncation (each 'é' is 2 bytes).
+        std::fs::write(agent_dir.join("memory.md"), "ééééééé").unwrap();
+        // 6 'ü' scalars; user_char_limit=4 must truncate to 4 scalars.
+        std::fs::write(agent_dir.join("user_profile.md"), "üüüüüü").unwrap();
+        std::fs::write(agent_dir.join("environment.md"), "Linux box.").unwrap();
+
+        let im = IdentityMemoryFeatureSpec {
+            enabled: true,
+            soul: true,
+            durable_memory: true,
+            user_profile: true,
+            environment: true,
+            memory_char_limit: Some(5),
+            user_char_limit: Some(4),
+        };
+        let spec = identity_memory_agent_spec(im);
+
+        let mut envelope = ContextEnvelopeBuilder::new(None);
+        push_identity_memory_segments(&mut envelope, &spec, "sera", &root);
+        let envelope = envelope.build();
+
+        let sources: Vec<&str> = envelope
+            .segments()
+            .iter()
+            .map(|s| s.source.as_str())
+            .collect();
+        assert_eq!(
+            sources,
+            vec![
+                "identity_memory.soul",
+                "identity_memory.durable_memory",
+                "identity_memory.user_profile",
+                "identity_memory.environment",
+            ]
+        );
+
+        let priorities: Vec<u8> = envelope.segments().iter().map(|s| s.priority).collect();
+        assert_eq!(priorities, vec![0, 2, 2, 2]);
+
+        let contents: Vec<&str> = envelope
+            .segments()
+            .iter()
+            .map(|s| s.content.as_str())
+            .collect();
+        assert_eq!(contents[0], "I am the soul.");
+        assert_eq!(contents[1], "ééééé"); // 5 scalars, not bytes
+        assert_eq!(contents[2], "üüüü"); // 4 scalars, not bytes
+        assert_eq!(contents[3], "Linux box.");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn identity_memory_disabled_pushes_nothing() {
+        let root = identity_memory_temp_root("disabled");
+        let agent_dir = root.join("sera");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(agent_dir.join("soul.md"), "I am the soul.").unwrap();
+        std::fs::write(agent_dir.join("memory.md"), "durable").unwrap();
+
+        let im = IdentityMemoryFeatureSpec {
+            enabled: false,
+            soul: true,
+            durable_memory: true,
+            user_profile: true,
+            environment: true,
+            memory_char_limit: None,
+            user_char_limit: None,
+        };
+        let spec = identity_memory_agent_spec(im);
+
+        let mut envelope = ContextEnvelopeBuilder::new(None);
+        push_identity_memory_segments(&mut envelope, &spec, "sera", &root);
+        assert_eq!(envelope.build().segments().len(), 0);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn identity_memory_missing_files_pushes_nothing() {
+        let root = identity_memory_temp_root("missing");
+        let agent_dir = root.join("sera");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        let im = IdentityMemoryFeatureSpec {
+            enabled: true,
+            soul: true,
+            durable_memory: true,
+            user_profile: true,
+            environment: true,
+            memory_char_limit: None,
+            user_char_limit: None,
+        };
+        let spec = identity_memory_agent_spec(im);
+
+        let mut envelope = ContextEnvelopeBuilder::new(None);
+        push_identity_memory_segments(&mut envelope, &spec, "sera", &root);
+        assert_eq!(envelope.build().segments().len(), 0);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn identity_memory_unsafe_agent_names_push_nothing() {
+        let root = identity_memory_temp_root("unsafe");
+        // Seed a legit dir so it is the name check, not a missing dir, that
+        // rejects the unsafe names.
+        let legit = root.join("sera");
+        std::fs::create_dir_all(&legit).unwrap();
+        std::fs::write(legit.join("soul.md"), "I am the soul.").unwrap();
+
+        let im = IdentityMemoryFeatureSpec {
+            enabled: true,
+            soul: true,
+            durable_memory: true,
+            user_profile: true,
+            environment: true,
+            memory_char_limit: None,
+            user_char_limit: None,
+        };
+        let spec = identity_memory_agent_spec(im);
+
+        for name in ["../sera", "..", ".", ".hidden", "a/b", ""] {
+            let mut envelope = ContextEnvelopeBuilder::new(None);
+            push_identity_memory_segments(&mut envelope, &spec, name, &root);
+            assert_eq!(
+                envelope.build().segments().len(),
+                0,
+                "unsafe agent name {name:?} must push no segments"
+            );
+            assert!(
+                safe_agent_memory_dir(&root, name).is_none(),
+                "safe_agent_memory_dir must reject {name:?}"
+            );
+        }
+
+        for name in ["sera", "sera-2", "sera_x.y"] {
+            assert!(
+                safe_agent_memory_dir(&root, name).is_some(),
+                "safe_agent_memory_dir must accept {name:?}"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn identity_memory_blank_file_skipped() {
+        let root = identity_memory_temp_root("blank");
+        let agent_dir = root.join("sera");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(agent_dir.join("soul.md"), "   \n\t  \n").unwrap();
+
+        let im = IdentityMemoryFeatureSpec {
+            enabled: true,
+            soul: true,
+            durable_memory: false,
+            user_profile: false,
+            environment: false,
+            memory_char_limit: None,
+            user_char_limit: None,
+        };
+        let spec = identity_memory_agent_spec(im);
+
+        let mut envelope = ContextEnvelopeBuilder::new(None);
+        push_identity_memory_segments(&mut envelope, &spec, "sera", &root);
+        assert_eq!(envelope.build().segments().len(), 0);
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

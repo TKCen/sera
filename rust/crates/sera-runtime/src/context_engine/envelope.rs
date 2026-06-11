@@ -26,6 +26,11 @@ pub const PRIORITY_IMMUTABLE_ANCHOR: u8 = 0;
 /// Priority of the mutable persona / evolving identity — evicted only after
 /// all skill/recall segments.
 pub const PRIORITY_MUTABLE_PERSONA: u8 = 1;
+/// Priority of the evictable base identity memory segments (durable memory,
+/// user profile, environment) — more important than skills/recall, evicted
+/// before the mutable persona. The soul anchor uses
+/// [`PRIORITY_IMMUTABLE_ANCHOR`] instead and is never evicted.
+pub const PRIORITY_IDENTITY_MEMORY: u8 = 2;
 /// Priority of a trigger-matched skill injection.
 pub const PRIORITY_SKILL_INJECTION: u8 = 3;
 /// Priority of the skill index block.
@@ -271,6 +276,10 @@ mod tests {
         ContextSegment::new(SegmentKind::Custom(source.into()), source, content, priority)
     }
 
+    fn seg_kind(kind: SegmentKind, source: &str, content: &str, priority: u8) -> ContextSegment {
+        ContextSegment::new(kind, source, content, priority)
+    }
+
     #[test]
     fn ordering_renders_messages_in_canonical_order() {
         let mut b = ContextEnvelopeBuilder::new(None);
@@ -393,6 +402,96 @@ mod tests {
         let env = b.build();
         assert!(!env.pressure);
         assert!(env.evicted().is_empty());
+    }
+
+    #[test]
+    fn identity_memory_evicted_between_skills_and_persona() {
+        // soul anchor(6) + mutable persona(6) + identity durable(6) +
+        // identity user(6) + skill(6) + recall(6) = 36; budget 24 forces two
+        // evictions. Eviction order (priority desc): recall(6) → skill(3) →
+        // identity(2,2) → persona(1), so recall + skill are dropped and both
+        // identity segments survive alongside soul + persona.
+        let mut b = ContextEnvelopeBuilder::new(Some(24));
+        b.push(seg_kind(
+            SegmentKind::Soul,
+            "identity_memory.soul",
+            "soulll",
+            PRIORITY_IMMUTABLE_ANCHOR,
+        ))
+        .push(seg("persona.mutable_persona", "person", PRIORITY_MUTABLE_PERSONA))
+        .push(seg_kind(
+            SegmentKind::Custom("identity_memory.durable_memory".into()),
+            "identity_memory.durable_memory",
+            "durabl",
+            PRIORITY_IDENTITY_MEMORY,
+        ))
+        .push(seg_kind(
+            SegmentKind::Custom("identity_memory.user_profile".into()),
+            "identity_memory.user_profile",
+            "userpr",
+            PRIORITY_IDENTITY_MEMORY,
+        ))
+        .push(seg("skill_dispatch", "skilll", PRIORITY_SKILL_INJECTION))
+        .push(seg("semantic_recall", "recall", PRIORITY_SEMANTIC_RECALL));
+        let env = b.build();
+        assert!(env.pressure);
+        let sources: Vec<&str> = env.segments().iter().map(|s| s.source.as_str()).collect();
+        assert_eq!(
+            sources,
+            vec![
+                "identity_memory.soul",
+                "persona.mutable_persona",
+                "identity_memory.durable_memory",
+                "identity_memory.user_profile",
+            ]
+        );
+        // recall(6) and skill(3) are evicted before any identity segment(2),
+        // and the budget is satisfied once they are dropped, so both identity
+        // segments and the mutable persona(1) are retained.
+        let evicted: Vec<(&str, u8, usize)> = env
+            .evicted()
+            .iter()
+            .map(|e| (e.source.as_str(), e.priority, e.char_len))
+            .collect();
+        assert_eq!(
+            evicted,
+            vec![
+                ("semantic_recall", PRIORITY_SEMANTIC_RECALL, 6),
+                ("skill_dispatch", PRIORITY_SKILL_INJECTION, 6),
+            ]
+        );
+    }
+
+    #[test]
+    fn identity_memory_evicted_before_mutable_persona() {
+        // Tighten budget so an identity segment must go before the mutable
+        // persona: soul(6) + persona(6) + identity(6) = 18; budget 12 forces
+        // one eviction. The identity segment (priority 2) is more evictable
+        // than persona (1), so it is dropped; soul + persona retained.
+        let mut b = ContextEnvelopeBuilder::new(Some(12));
+        b.push(seg_kind(
+            SegmentKind::Soul,
+            "identity_memory.soul",
+            "soulll",
+            PRIORITY_IMMUTABLE_ANCHOR,
+        ))
+        .push(seg("persona.mutable_persona", "person", PRIORITY_MUTABLE_PERSONA))
+        .push(seg_kind(
+            SegmentKind::Custom("identity_memory.environment".into()),
+            "identity_memory.environment",
+            "envvvv",
+            PRIORITY_IDENTITY_MEMORY,
+        ));
+        let env = b.build();
+        assert!(env.pressure);
+        let sources: Vec<&str> = env.segments().iter().map(|s| s.source.as_str()).collect();
+        assert_eq!(sources, vec!["identity_memory.soul", "persona.mutable_persona"]);
+        let evicted = env.evicted();
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0].source, "identity_memory.environment");
+        assert_eq!(evicted[0].priority, PRIORITY_IDENTITY_MEMORY);
+        assert_eq!(evicted[0].kind, SegmentKind::Custom("identity_memory.environment".into()));
+        assert_eq!(evicted[0].char_len, 6);
     }
 
     #[test]

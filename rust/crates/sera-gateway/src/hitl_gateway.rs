@@ -373,6 +373,7 @@ mod tests {
             enforcement_mode: None,
             approval_policy: None,
             subagents_allowed: Vec::new(),
+            features: sera_types::config_manifest::AgentFeatureSetSpec::default(),
         };
         assert_eq!(resolve_hitl_mode(&spec), HitlMode::Autonomous);
     }
@@ -389,6 +390,7 @@ mod tests {
             enforcement_mode: Some("strict".into()),
             approval_policy: None,
             subagents_allowed: Vec::new(),
+            features: sera_types::config_manifest::AgentFeatureSetSpec::default(),
         };
         assert_eq!(resolve_hitl_mode(&spec), HitlMode::Strict);
     }
@@ -405,6 +407,7 @@ mod tests {
             enforcement_mode: Some("bogus".into()),
             approval_policy: None,
             subagents_allowed: Vec::new(),
+            features: sera_types::config_manifest::AgentFeatureSetSpec::default(),
         };
         assert_eq!(resolve_hitl_mode(&spec), HitlMode::Autonomous);
     }
@@ -421,6 +424,7 @@ mod tests {
             enforcement_mode: None,
             approval_policy: None,
             subagents_allowed: Vec::new(),
+            features: sera_types::config_manifest::AgentFeatureSetSpec::default(),
         };
         assert!(matches!(
             resolve_approval_routing(&spec),
@@ -444,6 +448,7 @@ mod tests {
             enforcement_mode: None,
             approval_policy: Some(json),
             subagents_allowed: Vec::new(),
+            features: sera_types::config_manifest::AgentFeatureSetSpec::default(),
         };
         let routing = resolve_approval_routing(&spec);
         match routing {

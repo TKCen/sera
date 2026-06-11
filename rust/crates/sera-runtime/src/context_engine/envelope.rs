@@ -23,6 +23,9 @@ use sera_types::memory::SegmentKind;
 /// Priority of the persona immutable anchor. `0` is never evicted, matching
 /// the Soul convention in [`sera_types::memory::MemoryBlock`].
 pub const PRIORITY_IMMUTABLE_ANCHOR: u8 = 0;
+/// Priority of the mutable persona / evolving identity — evicted only after
+/// all skill/recall segments.
+pub const PRIORITY_MUTABLE_PERSONA: u8 = 1;
 /// Priority of a trigger-matched skill injection.
 pub const PRIORITY_SKILL_INJECTION: u8 = 3;
 /// Priority of the skill index block.
@@ -65,10 +68,28 @@ impl ContextSegment {
     }
 }
 
+/// A structured record of a segment dropped during budget eviction.
+/// Carries provenance for the pressure audit (sera-ibkr.3) without retaining
+/// the (potentially large) segment content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvictedSegment {
+    /// What produced the dropped segment.
+    pub kind: SegmentKind,
+    /// Provenance label of the dropped segment.
+    pub source: String,
+    /// Priority the segment carried when evicted.
+    pub priority: u8,
+    /// Character length of the dropped segment content.
+    pub char_len: usize,
+}
+
 /// An ordered collection of [`ContextSegment`]s with budget bookkeeping.
 #[derive(Debug, Clone)]
 pub struct ContextEnvelope {
     segments: Vec<ContextSegment>,
+    /// Segments dropped by budget eviction, in eviction order. Empty when no
+    /// pressure occurred.
+    evicted: Vec<EvictedSegment>,
     /// `true` when budget pressure forced at least one eviction.
     pub pressure: bool,
 }
@@ -77,6 +98,12 @@ impl ContextEnvelope {
     /// Borrow the retained segments in render order.
     pub fn segments(&self) -> &[ContextSegment] {
         &self.segments
+    }
+
+    /// Borrow the segments dropped by budget eviction, in eviction order.
+    /// Empty when no pressure occurred.
+    pub fn evicted(&self) -> &[EvictedSegment] {
+        &self.evicted
     }
 
     /// Render each segment to one `{"role":"system","content":...}` value, in
@@ -159,6 +186,7 @@ impl ContextEnvelopeBuilder {
             // Unlimited (None / 0): no eviction, no pressure.
             return ContextEnvelope {
                 segments,
+                evicted: Vec::new(),
                 pressure: false,
             };
         };
@@ -167,6 +195,7 @@ impl ContextEnvelopeBuilder {
         if total <= budget {
             return ContextEnvelope {
                 segments,
+                evicted: Vec::new(),
                 pressure: false,
             };
         }
@@ -178,6 +207,7 @@ impl ContextEnvelopeBuilder {
         let mut keep: Vec<bool> = vec![true; segments.len()];
         let mut current = total;
         let mut pressure = false;
+        let mut evicted: Vec<EvictedSegment> = Vec::new();
 
         // Eviction candidates: indices of non-anchor segments, ordered by
         // (priority desc, index desc) so the most evictable goes first.
@@ -199,16 +229,23 @@ impl ContextEnvelopeBuilder {
                 break;
             }
             let seg = &segments[idx];
+            let char_len = seg.content.chars().count();
             tracing::warn!(
                 kind = ?seg.kind,
                 source = %seg.source,
                 priority = seg.priority,
-                char_len = seg.content.chars().count(),
+                char_len,
                 budget,
                 "context envelope budget pressure: evicting segment"
             );
+            evicted.push(EvictedSegment {
+                kind: seg.kind.clone(),
+                source: seg.source.clone(),
+                priority: seg.priority,
+                char_len,
+            });
             keep[idx] = false;
-            current -= seg.content.chars().count();
+            current -= char_len;
             pressure = true;
         }
 
@@ -220,6 +257,7 @@ impl ContextEnvelopeBuilder {
 
         ContextEnvelope {
             segments: retained,
+            evicted,
             pressure,
         }
     }
@@ -308,6 +346,53 @@ mod tests {
         assert!(env.pressure);
         let sources: Vec<&str> = env.segments().iter().map(|s| s.source.as_str()).collect();
         assert_eq!(sources, vec!["persona.immutable_anchor"]);
+    }
+
+    #[test]
+    fn eviction_records_carry_source_priority_char_len_in_order() {
+        // anchor(6) + skill_dispatch(6) + skill_index(6) + recall(6) = 24; budget 6.
+        // Only the anchor survives; recall (most evictable) is evicted first,
+        // then index, then dispatch.
+        let mut b = ContextEnvelopeBuilder::new(Some(6));
+        b.push(seg("persona.immutable_anchor", "anchor", PRIORITY_IMMUTABLE_ANCHOR))
+            .push(seg("skill_dispatch", "skilll", PRIORITY_SKILL_INJECTION))
+            .push(seg("skill_index", "indexx", PRIORITY_SKILL_INDEX))
+            .push(seg("semantic_recall", "recall", PRIORITY_SEMANTIC_RECALL));
+        let env = b.build();
+        assert!(env.pressure);
+        let evicted = env.evicted();
+        let summary: Vec<(&str, u8, usize)> = evicted
+            .iter()
+            .map(|e| (e.source.as_str(), e.priority, e.char_len))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("semantic_recall", PRIORITY_SEMANTIC_RECALL, 6),
+                ("skill_index", PRIORITY_SKILL_INDEX, 6),
+                ("skill_dispatch", PRIORITY_SKILL_INJECTION, 6),
+            ]
+        );
+        // The retained anchor must not appear in the eviction record.
+        assert!(evicted.iter().all(|e| e.source != "persona.immutable_anchor"));
+    }
+
+    #[test]
+    fn evicted_empty_when_no_budget() {
+        let mut b = ContextEnvelopeBuilder::new(None);
+        b.push(seg("a", "x".repeat(1000).as_str(), PRIORITY_SKILL_INJECTION));
+        let env = b.build();
+        assert!(env.evicted().is_empty());
+    }
+
+    #[test]
+    fn evicted_empty_when_under_budget() {
+        let mut b = ContextEnvelopeBuilder::new(Some(100));
+        b.push(seg("persona.immutable_anchor", "anchor", PRIORITY_IMMUTABLE_ANCHOR))
+            .push(seg("semantic_recall", "recall", PRIORITY_SEMANTIC_RECALL));
+        let env = b.build();
+        assert!(!env.pressure);
+        assert!(env.evicted().is_empty());
     }
 
     #[test]

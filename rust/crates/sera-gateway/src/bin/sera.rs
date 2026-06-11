@@ -47,8 +47,9 @@ use sera_memory::SemanticMemoryStore;
 #[allow(unused_imports)]
 use sera_memory::{DEFAULT_SQLITE_VEC_DIMENSIONS, SqliteMemoryStore};
 use sera_runtime::context_engine::envelope::{
-    ContextEnvelopeBuilder, ContextSegment, PRIORITY_IMMUTABLE_ANCHOR, PRIORITY_SELF_INTROSPECTION,
-    PRIORITY_SEMANTIC_RECALL, PRIORITY_SKILL_INDEX, PRIORITY_SKILL_INJECTION,
+    ContextEnvelopeBuilder, ContextSegment, PRIORITY_IMMUTABLE_ANCHOR, PRIORITY_MUTABLE_PERSONA,
+    PRIORITY_SELF_INTROSPECTION, PRIORITY_SEMANTIC_RECALL, PRIORITY_SKILL_INDEX,
+    PRIORITY_SKILL_INJECTION,
 };
 use sera_runtime::skill_dispatch::SkillDispatchEngine;
 use sera_runtime::subagent::SubagentManager;
@@ -4378,6 +4379,24 @@ async fn execute_turn(
         ));
     }
 
+    // Mutable persona / evolving identity (sera-ibkr.3) — honors a manifest
+    // field (`persona.mutable_persona`) that was previously parsed but
+    // silently dropped on this assembly path. Placed right after the
+    // immutable anchor per the Hermes plan order (persona anchor → mutable
+    // persona/identity → skills → recall). Priority 1: evicted only after all
+    // skill/recall segments, never before the anchor.
+    if let Some(persona) = &agent_spec.persona
+        && let Some(mutable) = &persona.mutable_persona
+        && !mutable.trim().is_empty()
+    {
+        envelope.push(ContextSegment::new(
+            SegmentKind::Persona,
+            "persona.mutable_persona",
+            mutable.clone(),
+            PRIORITY_MUTABLE_PERSONA,
+        ));
+    }
+
     // ── Skill dispatch: fire trigger-matched skills for this turn and
     // prepend their active `context_injection` strings as system messages.
     // Injected BEFORE transcript replay so the skill guidance frames the
@@ -4461,6 +4480,12 @@ async fn execute_turn(
 
     let envelope = envelope.build();
     envelope.introspect();
+    // sera-ibkr.3: when budget pressure forced eviction, record an immutable
+    // audit entry naming each dropped segment. Best-effort — never fails the
+    // turn.
+    if envelope.pressure {
+        emit_context_pressure_audit(agent_name, session_key, budget_chars, &envelope).await;
+    }
     let mut messages = envelope.to_messages();
 
     // Add transcript history (including tool_calls and tool results), with
@@ -4801,6 +4826,96 @@ async fn emit_tool_execution_audit(
                 );
             }
         }
+    }
+}
+
+/// OCSF class for a context-budget eviction audit entry (sera-ibkr.3).
+///
+/// `6003` is "Policy Activity". A budget eviction is enforcement of a
+/// configured resource policy (`SERA_CONTEXT_BUDGET_CHARS`) — segments are
+/// dropped to satisfy a cap — so it mirrors the denial precedent
+/// (`emit_policy_denial_audit`) rather than the `3006` API Activity class
+/// used for tool execution. We pair it with `action_id="evicted"` so
+/// dashboards can distinguish a budget eviction from an outright `blocked`
+/// denial.
+const CONTEXT_PRESSURE_OCSF_CLASS_UID: u32 = 6003;
+
+/// Build the OCSF Policy Activity payload for one context-budget pressure
+/// event. Pure (no I/O) so unit tests can assert the shape without touching
+/// the hash-chain backend, mirroring [`make_tool_execution_audit_payload`].
+///
+/// The payload names the agent/session, the configured char budget, the
+/// retained segment count + total chars, and one entry per evicted segment
+/// (`source`, `kind`, `priority`, `char_len`) in eviction order.
+fn make_context_pressure_audit_payload(
+    agent_name: &str,
+    session_key: &str,
+    budget_chars: Option<usize>,
+    envelope: &sera_runtime::context_engine::envelope::ContextEnvelope,
+) -> serde_json::Value {
+    let evicted: Vec<serde_json::Value> = envelope
+        .evicted()
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "source": e.source,
+                "kind": format!("{:?}", e.kind),
+                "priority": e.priority,
+                "char_len": e.char_len,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "activity_id": 1, // OCSF Policy Activity — enforcement action taken
+        "action_id": "evicted",
+        "category_uid": 6, // Application Activity
+        "class_uid": CONTEXT_PRESSURE_OCSF_CLASS_UID,
+        "severity_id": 3, // Medium — operator-actionable budget pressure
+        "actor": { "user": { "name": agent_name } },
+        "policy": { "name": "context_budget_chars" },
+        "resource": {
+            "name": agent_name,
+            "type": "context_envelope",
+            "uid": session_key,
+        },
+        "status": "Success", // the eviction policy was applied successfully
+        "status_detail": "context envelope budget pressure",
+        "unmapped": {
+            "budget_chars": budget_chars,
+            "retained_segments": envelope.segments().len(),
+            "retained_chars": envelope.total_chars(),
+            "evicted_count": envelope.evicted().len(),
+            "evicted": evicted,
+        },
+    })
+}
+
+/// Emit an OCSF v1.7.0 Policy Activity (class_uid=6003, action_id=evicted)
+/// audit entry recording that context-budget pressure dropped one or more
+/// segments (sera-ibkr.3). Follows [`emit_policy_denial_audit`] exactly:
+/// build payload, compute hash, append, debug-log on backend-unavailable.
+/// Best-effort — must never fail the turn.
+async fn emit_context_pressure_audit(
+    agent_name: &str,
+    session_key: &str,
+    budget_chars: Option<usize>,
+    envelope: &sera_runtime::context_engine::envelope::ContextEnvelope,
+) {
+    use sera_telemetry::audit::{AuditEntry, audit_append};
+
+    let payload =
+        make_context_pressure_audit_payload(agent_name, session_key, budget_chars, envelope);
+    let this_hash =
+        AuditEntry::compute_hash(CONTEXT_PRESSURE_OCSF_CLASS_UID, &payload, &[0u8; 32]);
+    let entry = AuditEntry {
+        ocsf_class_uid: CONTEXT_PRESSURE_OCSF_CLASS_UID,
+        payload,
+        prev_hash: [0u8; 32],
+        this_hash,
+        signature: None,
+    };
+    if let Err(e) = audit_append(entry).await {
+        tracing::debug!(error = %e, "audit backend unavailable for context pressure");
     }
 }
 
@@ -12925,6 +13040,194 @@ spec:
                 );
             }
         }
+    }
+
+    /// sera-ibkr.3: pure payload-shape test for the context-pressure audit.
+    /// Builds an envelope directly with a small budget so eviction occurs —
+    /// no `SERA_CONTEXT_BUDGET_CHARS` env mutation (racy under parallel
+    /// tests) — and asserts the audit payload names agent/budget and every
+    /// evicted segment.
+    #[test]
+    fn make_context_pressure_audit_payload_records_evicted_segments() {
+        use sera_runtime::context_engine::envelope::{
+            ContextEnvelopeBuilder, ContextSegment, PRIORITY_IMMUTABLE_ANCHOR,
+            PRIORITY_SEMANTIC_RECALL, PRIORITY_SKILL_INDEX,
+        };
+
+        // anchor(6) + skill_index(10) + recall(10) = 26; budget 12 evicts
+        // recall then index, retaining only the anchor.
+        let mut b = ContextEnvelopeBuilder::new(Some(12));
+        b.push(ContextSegment::new(
+            SegmentKind::Persona,
+            "persona.immutable_anchor",
+            "anchor",
+            PRIORITY_IMMUTABLE_ANCHOR,
+        ))
+        .push(ContextSegment::new(
+            SegmentKind::Custom("skill_index".into()),
+            "skill_index",
+            "skillindex",
+            PRIORITY_SKILL_INDEX,
+        ))
+        .push(ContextSegment::new(
+            SegmentKind::Custom("semantic_recall".into()),
+            "semantic_recall",
+            "recalltext",
+            PRIORITY_SEMANTIC_RECALL,
+        ));
+        let envelope = b.build();
+        assert!(envelope.pressure, "small budget must force eviction");
+
+        let payload = make_context_pressure_audit_payload(
+            "sera",
+            "ibkr3-pressure-session",
+            Some(12),
+            &envelope,
+        );
+
+        assert_eq!(payload["class_uid"], 6003);
+        assert_eq!(payload["action_id"], "evicted");
+        assert_eq!(payload["actor"]["user"]["name"], "sera");
+        assert_eq!(payload["resource"]["uid"], "ibkr3-pressure-session");
+        assert_eq!(payload["unmapped"]["budget_chars"], 12);
+        assert_eq!(payload["unmapped"]["retained_segments"], 1);
+        assert_eq!(payload["unmapped"]["evicted_count"], 2);
+
+        let evicted = payload["unmapped"]["evicted"]
+            .as_array()
+            .expect("evicted must be an array");
+        assert_eq!(evicted.len(), 2);
+        // Eviction order: most-evictable (recall) first, then index.
+        assert_eq!(evicted[0]["source"], "semantic_recall");
+        assert_eq!(evicted[0]["priority"], PRIORITY_SEMANTIC_RECALL);
+        assert_eq!(evicted[0]["char_len"], 10);
+        assert_eq!(evicted[1]["source"], "skill_index");
+        assert_eq!(evicted[1]["priority"], PRIORITY_SKILL_INDEX);
+        assert_eq!(evicted[1]["char_len"], 10);
+        // The retained anchor must never appear in the eviction record.
+        assert!(
+            evicted
+                .iter()
+                .all(|e| e["source"] != "persona.immutable_anchor")
+        );
+    }
+
+    /// sera-ibkr.3: when persona carries both an immutable anchor and a
+    /// mutable persona, the system messages appear in order anchor → mutable
+    /// persona → (rest), all before the transcript/user turn.
+    #[tokio::test]
+    async fn execute_turn_orders_anchor_then_mutable_persona() {
+        struct RecordingTransport {
+            seen: Arc<std::sync::Mutex<Vec<Vec<serde_json::Value>>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl AgentTurnTransport for RecordingTransport {
+            async fn send_turn(
+                &self,
+                messages: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                self.seen.lock().unwrap().push(messages);
+                Ok(TurnEvents {
+                    response: "ok".to_string(),
+                    ..TurnEvents::default()
+                })
+            }
+
+            async fn send_steer(
+                &self,
+                _items: Vec<serde_json::Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let transport = RecordingTransport {
+            seen: Arc::clone(&seen),
+        };
+        let agent_spec = AgentSpec {
+            provider: "stub-provider".to_string(),
+            model: Some("stub-model".to_string()),
+            persona: Some(sera_types::config_manifest::PersonaSpec {
+                immutable_anchor: Some("You are a test anchor.".to_string()),
+                mutable_persona: Some("You currently prefer terse answers.".to_string()),
+                mutable_token_budget: None,
+            }),
+            tools: Some(AgentToolsSpec {
+                allow: vec!["bash".to_string()],
+            }),
+            workspace: Some("/workspace/test".to_string()),
+            policy_ref: None,
+            enforcement_mode: None,
+            approval_policy: None,
+            subagents_allowed: vec![],
+        };
+        let skill_engine = SkillDispatchEngine::new();
+        let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
+            SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+        );
+        let cancel = CancellationToken::new();
+        let capability_registry = CapabilityRegistry::empty();
+
+        let result = execute_turn(
+            &agent_spec,
+            &[],
+            "hello",
+            &transport,
+            "ibkr3-mutable-persona-session",
+            &skill_engine,
+            &semantic_store,
+            "sera",
+            &cancel,
+            &capability_registry,
+            None,
+        )
+        .await;
+
+        assert_eq!(result.reply, "ok");
+        let captured = seen.lock().unwrap();
+        let messages = captured.first().expect("transport should see one turn");
+
+        // anchor is the first system message, mutable persona the second.
+        assert_eq!(
+            messages[0].get("role").and_then(|v| v.as_str()),
+            Some("system")
+        );
+        assert_eq!(
+            messages[0].get("content").and_then(|v| v.as_str()),
+            Some("You are a test anchor."),
+            "first system message must be the immutable anchor"
+        );
+        assert_eq!(
+            messages[1].get("role").and_then(|v| v.as_str()),
+            Some("system")
+        );
+        assert_eq!(
+            messages[1].get("content").and_then(|v| v.as_str()),
+            Some("You currently prefer terse answers."),
+            "second system message must be the mutable persona"
+        );
+
+        // Both persona segments precede the first user message.
+        let first_user_pos = messages
+            .iter()
+            .position(|m| m.get("role").and_then(|v| v.as_str()) == Some("user"))
+            .expect("there must be a user message");
+        assert!(
+            first_user_pos >= 2,
+            "anchor + mutable persona must precede the user turn"
+        );
     }
 
     #[test]

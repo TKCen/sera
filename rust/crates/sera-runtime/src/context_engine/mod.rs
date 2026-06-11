@@ -11,9 +11,9 @@ pub use enricher::{
     MEMORY_RECALL_PRIORITY,
 };
 pub use envelope::{
-    ContextEnvelope, ContextEnvelopeBuilder, ContextSegment, PRIORITY_IMMUTABLE_ANCHOR,
-    PRIORITY_SELF_INTROSPECTION, PRIORITY_SEMANTIC_RECALL, PRIORITY_SKILL_INDEX,
-    PRIORITY_SKILL_INJECTION,
+    ContextEnvelope, ContextEnvelopeBuilder, ContextSegment, EvictedSegment,
+    PRIORITY_IMMUTABLE_ANCHOR, PRIORITY_MUTABLE_PERSONA, PRIORITY_SELF_INTROSPECTION,
+    PRIORITY_SEMANTIC_RECALL, PRIORITY_SKILL_INDEX, PRIORITY_SKILL_INJECTION,
 };
 
 use async_trait::async_trait;

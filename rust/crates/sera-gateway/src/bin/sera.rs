@@ -46,6 +46,7 @@ use sera_memory::PgVectorStore;
 use sera_memory::SemanticMemoryStore;
 #[allow(unused_imports)]
 use sera_memory::{DEFAULT_SQLITE_VEC_DIMENSIONS, SqliteMemoryStore};
+use sera_memory_hindsight::{HindsightConfig, HindsightStore};
 use sera_runtime::context_engine::envelope::{
     ContextEnvelopeBuilder, ContextSegment, PRIORITY_IMMUTABLE_ANCHOR, PRIORITY_MUTABLE_PERSONA,
     PRIORITY_SELF_INTROSPECTION, PRIORITY_SEMANTIC_RECALL, PRIORITY_SKILL_INDEX,
@@ -1353,6 +1354,14 @@ struct CancelHandle {
     client_cancelled: std::sync::atomic::AtomicBool,
 }
 
+// ── Memory prefetch cache (sera-ibkr.3) ──────────────────────────────────────
+/// Per-session warmed semantic-recall block, keyed by `session_key`. Owned by
+/// [`AppState`] (not a process-global static) so each gateway instance carries
+/// its own cache. Populated by `warm_memory_prefetch` after a completed turn
+/// and read in `execute_turn` to inject an evictable prefetch segment ahead of
+/// the next turn's transcript.
+type MemoryPrefetchCache = Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>;
+
 struct AppState {
     db: Arc<Mutex<SqliteDb>>,
     manifests: Arc<std::sync::RwLock<ManifestSet>>,
@@ -1426,6 +1435,12 @@ struct AppState {
     /// threaded into `execute_turn` for best-effort memory recall. A failure
     /// to recall must never fail the turn — we log and continue.
     semantic_store: Arc<dyn SemanticMemoryStore>,
+    /// Per-session warmed memory-prefetch cache (sera-ibkr.3). Filled by the
+    /// fire-and-forget `warm_memory_prefetch` task after a completed turn and
+    /// read in `execute_turn` to inject the previous turn's best-effort recall
+    /// as its own evictable context segment. Empty by default — live behaviour
+    /// is unchanged until a turn warms an entry.
+    memory_prefetch_cache: MemoryPrefetchCache,
     /// Admin kill switch (SPEC-gateway §7a.4). Armed via `ROLLBACK` on the
     /// Unix admin socket; causes all HTTP submissions to be rejected with 503
     /// until disarmed with `DISARM`.
@@ -2914,6 +2929,7 @@ async fn chat_handler(
                     &task_session_key,
                     &task_state.skill_engine,
                     &task_state.semantic_store,
+                    &task_state.memory_prefetch_cache,
                     &task_agent_name,
                     &cancel_for_task,
                     &cap_reg,
@@ -2945,6 +2961,7 @@ async fn chat_handler(
                 session_id: sid,
                 message_id: mid_clone,
                 agent_name: aname,
+                user_message: message.clone(),
             },
             |fold_state| async move {
                 match fold_state {
@@ -2957,6 +2974,7 @@ async fn chat_handler(
                         session_id,
                         message_id,
                         agent_name,
+                        user_message,
                     } => {
                         // Pull the next live delta. `recv()` resolves to
                         // `None` when every Sender is dropped — that
@@ -2984,6 +3002,7 @@ async fn chat_handler(
                                         session_id,
                                         message_id,
                                         agent_name,
+                                        user_message,
                                     },
                                 ))
                             }
@@ -3167,6 +3186,19 @@ async fn chat_handler(
                                     );
                                 }
 
+                                // ── Memory prefetch warm (sera-ibkr.3): the
+                                // streaming turn completed successfully — queue a
+                                // best-effort recall on the original user message
+                                // so the next turn injects it as an evictable
+                                // segment. Read-only, fire-and-forget.
+                                tokio::spawn(warm_memory_prefetch(
+                                    Arc::clone(&state.semantic_store),
+                                    Arc::clone(&state.memory_prefetch_cache),
+                                    session_key.clone(),
+                                    agent_name.clone(),
+                                    user_message.clone(),
+                                ));
+
                                 let usage = result.usage;
                                 let payload = serde_json::json!({
                                     "status": "complete",
@@ -3204,6 +3236,7 @@ async fn chat_handler(
             &session_key,
             &state.skill_engine,
             &state.semantic_store,
+            &state.memory_prefetch_cache,
             &agent_name,
             &cancel,
             &cap_reg,
@@ -3349,6 +3382,18 @@ async fn chat_handler(
                 .to_string(),
             ),
         );
+        drop(db);
+
+        // ── Memory prefetch warm (sera-ibkr.3): fire-and-forget recall on the
+        // just-handled user message so the *next* turn can inject it as an
+        // evictable segment. Best-effort, read-only — never blocks the reply.
+        tokio::spawn(warm_memory_prefetch(
+            Arc::clone(&state.semantic_store),
+            Arc::clone(&state.memory_prefetch_cache),
+            session_key.clone(),
+            agent_name.clone(),
+            req.message.clone(),
+        ));
 
         Ok(Json(ChatResponse {
             response: response_text,
@@ -3801,6 +3846,7 @@ async fn operator_task_handler(
         &session_key,
         &state.skill_engine,
         &state.semantic_store,
+        &state.memory_prefetch_cache,
         &agent_name,
         &cancel,
         cap_reg.as_ref(),
@@ -3813,6 +3859,19 @@ async fn operator_task_handler(
         let db = state.db.lock().await;
         db.append_transcript(&session_id, "assistant", Some(&turn.reply), None, None)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    // ── Memory prefetch warm (sera-ibkr.3): only on a clean turn. A failed
+    // operator turn carries a synthetic reply and must not poison the
+    // next-turn prefetch. Read-only, fire-and-forget.
+    if turn.failure.is_none() {
+        tokio::spawn(warm_memory_prefetch(
+            Arc::clone(&state.semantic_store),
+            Arc::clone(&state.memory_prefetch_cache),
+            session_key.clone(),
+            agent_name.clone(),
+            task.clone(),
+        ));
     }
 
     let active_count = state
@@ -3979,6 +4038,9 @@ enum StreamState {
         session_id: String,
         message_id: String,
         agent_name: String,
+        /// sera-ibkr.3: the original user message, carried so the streaming
+        /// completion path can warm the next-turn memory prefetch.
+        user_message: String,
     },
     Done,
 }
@@ -4328,6 +4390,117 @@ async fn skill_index_block() -> Option<String> {
     sera_gateway::skill_index::build_skill_index_context(std::path::Path::new(&skills_dir)).await
 }
 
+// ── Memory prefetch (sera-ibkr.3) ────────────────────────────────────────────
+// Hermes-style lifecycle split: the current turn never queries memory from its
+// own user message for the prefetch segment. Instead the previous completed
+// turn fires `warm_memory_prefetch`, which runs a best-effort recall and caches
+// the formatted block; the next turn injects it as an evictable
+// `MemoryRecall("semantic_prefetch")` context segment. Read-only — the gateway
+// never writes to the memory backend on this path.
+
+/// Max chars of the user message used as the prefetch recall query (truncated
+/// by chars, not bytes, to stay UTF-8 safe).
+const MEMORY_PREFETCH_MAX_INPUT_CHARS: usize = 300;
+/// Number of recall hits folded into a warmed prefetch block.
+const MEMORY_PREFETCH_TOP_K: usize = 3;
+/// Hard cap on a single warm recall so a slow backend cannot pin the spawned
+/// task indefinitely.
+const MEMORY_PREFETCH_TIMEOUT_SECS: u64 = 10;
+
+/// Truncate a prefetch query to [`MEMORY_PREFETCH_MAX_INPUT_CHARS`] characters
+/// (not bytes), keeping multi-byte boundaries intact.
+fn truncate_memory_prefetch_query(query: &str) -> String {
+    query.chars().take(MEMORY_PREFETCH_MAX_INPUT_CHARS).collect()
+}
+
+/// Pure backend-label logic for the prefetch segment source, factored out of
+/// [`memory_prefetch_source`] so it can be tested without mutating the
+/// process-wide `SERA_MEMORY_BACKEND` env var.
+fn memory_prefetch_source_for(backend: Option<&str>) -> &'static str {
+    match backend {
+        Some(b) if b.trim().eq_ignore_ascii_case("hindsight") => "memory.hindsight.prefetch",
+        _ => "memory.semantic.prefetch",
+    }
+}
+
+/// Provenance label for the prefetch segment, derived from `SERA_MEMORY_BACKEND`.
+fn memory_prefetch_source() -> &'static str {
+    memory_prefetch_source_for(std::env::var("SERA_MEMORY_BACKEND").ok().as_deref())
+}
+
+/// Format recall hits into a warmed prefetch block, or `None` when empty.
+///
+/// The preamble frames the block as historical reference (Hermes lifecycle
+/// principle): the recall was warmed from the *previous* turn and must not be
+/// mistaken for new user input.
+fn format_memory_prefetch_block(hits: &[sera_memory::ScoredEntry]) -> Option<String> {
+    let recalled = hits
+        .iter()
+        .take(MEMORY_PREFETCH_TOP_K)
+        .map(|h| format!("- {}", h.entry.content))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if recalled.trim().is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Recalled memory context (semantic prefetch warmed from the previous turn). \
+Treat as historical reference, not new user input:\n{recalled}"
+    ))
+}
+
+/// Best-effort recall warmer (sera-ibkr.3). Runs after a completed turn as a
+/// fire-and-forget task: queries the semantic store with the just-handled user
+/// message and caches a formatted block under `session_key` for the next turn
+/// to inject. Read-only — never writes to the backend. Empty results, errors,
+/// and timeouts all clear any stale cached entry. Never panics, never
+/// propagates.
+async fn warm_memory_prefetch(
+    semantic_store: Arc<dyn SemanticMemoryStore>,
+    cache: MemoryPrefetchCache,
+    session_key: String,
+    agent_name: String,
+    user_message: String,
+) {
+    let query_text = truncate_memory_prefetch_query(&user_message);
+    let recall_query = sera_memory::SemanticQuery {
+        agent_id: agent_name,
+        scope: None,
+        tier_filter: None,
+        text: Some(query_text),
+        query_embedding: None,
+        top_k: MEMORY_PREFETCH_TOP_K,
+        similarity_threshold: None,
+    };
+
+    let recall = tokio::time::timeout(
+        std::time::Duration::from_secs(MEMORY_PREFETCH_TIMEOUT_SECS),
+        semantic_store.query(recall_query),
+    )
+    .await;
+
+    match recall {
+        Ok(Ok(hits)) => match format_memory_prefetch_block(&hits) {
+            Some(block) => {
+                cache.write().await.insert(session_key.clone(), block);
+                tracing::debug!(session_key = %session_key, hits = hits.len(), "memory prefetch cached for next turn");
+            }
+            None => {
+                cache.write().await.remove(&session_key);
+                tracing::debug!(session_key = %session_key, "memory prefetch empty; cache cleared");
+            }
+        },
+        Ok(Err(e)) => {
+            cache.write().await.remove(&session_key);
+            tracing::warn!(error = %e, session_key = %session_key, "memory prefetch failed; cache cleared");
+        }
+        Err(_) => {
+            cache.write().await.remove(&session_key);
+            tracing::warn!(session_key = %session_key, "memory prefetch timed out; cache cleared");
+        }
+    }
+}
+
 /// Execute a turn by dispatching through the agent's [`AgentTurnTransport`].
 ///
 /// The gateway builds the conversation messages from the transcript and
@@ -4345,6 +4518,10 @@ async fn execute_turn(
     session_key: &str,
     skill_engine: &SkillDispatchEngine,
     semantic_store: &Arc<dyn SemanticMemoryStore>,
+    // sera-ibkr.3: per-session memory-prefetch cache. The previous turn's
+    // best-effort recall is read from here and injected as its own evictable
+    // segment. Empty cache = live behaviour unchanged.
+    prefetch_cache: &MemoryPrefetchCache,
     agent_name: &str,
     cancel: &CancellationToken,
     capability_registry: &CapabilityRegistry,
@@ -4476,6 +4653,18 @@ async fn execute_turn(
         Err(e) => {
             tracing::warn!(error = %e, "semantic recall failed; continuing without memory");
         }
+    }
+
+    // ── Memory prefetch (sera-ibkr.3): block warmed by the previous turn's
+    // best-effort recall. Injected as its own evictable segment — never
+    // appended to user content. Empty cache = live behaviour unchanged.
+    if let Some(block) = prefetch_cache.read().await.get(session_key).cloned() {
+        envelope.push(ContextSegment::new(
+            SegmentKind::MemoryRecall("semantic_prefetch".into()),
+            memory_prefetch_source(),
+            block,
+            PRIORITY_SEMANTIC_RECALL,
+        ));
     }
 
     let envelope = envelope.build();
@@ -6103,6 +6292,7 @@ async fn process_message_inner(
         &session_key,
         &state.skill_engine,
         &state.semantic_store,
+        &state.memory_prefetch_cache,
         &agent_name,
         &cancel,
         &cap_reg,
@@ -6164,6 +6354,18 @@ async fn process_message_inner(
         if main_turn_failure.is_some() {
             break 'success_path;
         }
+
+        // ── Memory prefetch warm (sera-ibkr.3): the Discord turn completed
+        // cleanly — queue a best-effort recall on the inbound message so the
+        // next turn injects it as an evictable segment. Read-only,
+        // fire-and-forget.
+        tokio::spawn(warm_memory_prefetch(
+            Arc::clone(&state.semantic_store),
+            Arc::clone(&state.memory_prefetch_cache),
+            session_key.clone(),
+            agent_name.clone(),
+            runtime_content.to_string(),
+        ));
 
     // Render the LLM reply so allowlisted `@<handle>` tokens become Discord
     // `<@id>` mention tags. Reverse peer-mention handoff (sera-yeg.4):
@@ -6399,6 +6601,7 @@ async fn process_message_inner(
             &session_key,
             &state.skill_engine,
             &state.semantic_store,
+            &state.memory_prefetch_cache,
             &agent_name,
             &cancel,
             &cap_reg,
@@ -7218,9 +7421,55 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
     let database_url = std::env::var("DATABASE_URL")
         .ok()
         .filter(|s| !s.trim().is_empty());
+    let want_hindsight = matches!(backend_pref.as_deref(), Some("hindsight"));
     let want_pgvector = wants_pgvector_backend(backend_pref.as_deref(), database_url.as_deref());
 
     let semantic_store: Arc<dyn SemanticMemoryStore> = 'store: {
+        // sera-ibkr.3: Hindsight read-only prefetch backend. Selected via
+        // SERA_MEMORY_BACKEND=hindsight; read-only by default so the gateway
+        // never writes to the external memory service. On init failure we log
+        // and fall through to the existing sqlite/pgvector selection.
+        if want_hindsight {
+            let base_url = std::env::var("SERA_HINDSIGHT_URL")
+                .or_else(|_| std::env::var("HINDSIGHT_URL"))
+                .unwrap_or_else(|_| "http://localhost:8888".to_string());
+            let bank_id_override = std::env::var("SERA_HINDSIGHT_BANK_ID")
+                .or_else(|_| std::env::var("HINDSIGHT_BANK_ID"))
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let read_only = std::env::var("SERA_HINDSIGHT_READ_ONLY")
+                .or_else(|_| std::env::var("HINDSIGHT_READ_ONLY"))
+                .ok()
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(true);
+            let bearer_token = std::env::var("SERA_HINDSIGHT_BEARER_TOKEN")
+                .or_else(|_| std::env::var("HINDSIGHT_BEARER_TOKEN"))
+                .ok()
+                .filter(|s| !s.trim().is_empty());
+            let config = HindsightConfig {
+                base_url: base_url.clone(),
+                bearer_token,
+                bank_id_override: bank_id_override.clone(),
+                read_only,
+                ..HindsightConfig::default()
+            };
+            match HindsightStore::new(config) {
+                Ok(store) => {
+                    tracing::info!(
+                        base_url = %base_url,
+                        bank_id_override = ?bank_id_override,
+                        read_only,
+                        "SemanticMemoryStore backend: HindsightStore"
+                    );
+                    break 'store Arc::new(store);
+                }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    "HindsightStore initialization failed; falling back to SqliteMemoryStore"
+                ),
+            }
+        }
         if want_pgvector {
             match &database_url {
                 Some(url) => match sera_db::DbPool::connect(url).await {
@@ -7685,6 +7934,9 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         plugin_registry: Arc::new(InMemoryPluginRegistry::new()),
         skill_engine,
         semantic_store,
+        memory_prefetch_cache: Arc::new(tokio::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
         kill_switch: Arc::new(KillSwitch::new()),
         active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
             std::collections::HashMap::new(),
@@ -8577,6 +8829,9 @@ mod tests {
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            memory_prefetch_cache: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             kill_switch: Arc::new(KillSwitch::new()),
             active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -8630,6 +8885,9 @@ mod tests {
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            memory_prefetch_cache: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             kill_switch: Arc::new(KillSwitch::new()),
             active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -8683,6 +8941,9 @@ mod tests {
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            memory_prefetch_cache: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             kill_switch: Arc::new(KillSwitch::new()),
             active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -8736,6 +8997,9 @@ mod tests {
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            memory_prefetch_cache: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             kill_switch: Arc::new(KillSwitch::new()),
             active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -10091,6 +10355,9 @@ spec:
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            memory_prefetch_cache: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             kill_switch: Arc::new(KillSwitch::new()),
             active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -11774,6 +12041,9 @@ spec:
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            memory_prefetch_cache: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             kill_switch: Arc::new(KillSwitch::new()),
             active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -11830,6 +12100,9 @@ spec:
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            memory_prefetch_cache: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             kill_switch: Arc::new(KillSwitch::new()),
             active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -11887,6 +12160,9 @@ spec:
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            memory_prefetch_cache: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             kill_switch: Arc::new(KillSwitch::new()),
             active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -11947,6 +12223,9 @@ spec:
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            memory_prefetch_cache: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             kill_switch: Arc::new(KillSwitch::new()),
             active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -12723,6 +13002,7 @@ spec:
             "bsem-test-session",
             &skill_engine,
             &semantic_store,
+            &Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             "sera",
             &cancel,
             &capability_registry,
@@ -12863,6 +13143,7 @@ spec:
             "7b0q-test-session",
             &skill_engine,
             &semantic_store,
+            &Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             "sera",
             &cancel,
             &capability_registry,
@@ -12977,6 +13258,7 @@ spec:
             "ibkr3-order-test-session",
             &skill_engine,
             &semantic_store,
+            &Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             "sera",
             &cancel,
             &capability_registry,
@@ -13112,6 +13394,357 @@ spec:
         );
     }
 
+    // ── Memory prefetch segment (sera-ibkr.3) ───────────────────────────────
+
+    /// Recording transport that captures the messages handed to each turn and
+    /// returns a fixed `ok` reply. Reused by the prefetch tests below.
+    struct PrefetchRecordingTransport {
+        seen: Arc<std::sync::Mutex<Vec<Vec<serde_json::Value>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl AgentTurnTransport for PrefetchRecordingTransport {
+        async fn send_turn(
+            &self,
+            messages: Vec<serde_json::Value>,
+            _session_key: &str,
+        ) -> anyhow::Result<TurnEvents> {
+            self.seen.lock().unwrap().push(messages);
+            Ok(TurnEvents {
+                response: "ok".to_string(),
+                ..TurnEvents::default()
+            })
+        }
+
+        async fn send_steer(
+            &self,
+            _items: Vec<serde_json::Value>,
+            _session_key: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn shutdown(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn liveness_probe(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn prefetch_test_agent_spec() -> AgentSpec {
+        AgentSpec {
+            provider: "stub-provider".to_string(),
+            model: None,
+            persona: None,
+            tools: None,
+            workspace: None,
+            policy_ref: None,
+            enforcement_mode: None,
+            approval_policy: None,
+            subagents_allowed: Vec::new(),
+        }
+    }
+
+    fn empty_prefetch_cache() -> MemoryPrefetchCache {
+        Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()))
+    }
+
+    #[tokio::test]
+    async fn execute_turn_injects_prefetched_memory_as_own_segment() {
+        let session_key = "prefetch-inject-session";
+        let block = "Recalled memory context (semantic prefetch warmed from the previous turn). \
+Treat as historical reference, not new user input:\n- picture-first creative work";
+
+        let cache = empty_prefetch_cache();
+        cache
+            .write()
+            .await
+            .insert(session_key.to_string(), block.to_string());
+
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let transport = PrefetchRecordingTransport {
+            seen: Arc::clone(&seen),
+        };
+        let agent_spec = prefetch_test_agent_spec();
+        let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
+            SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+        );
+
+        let result = execute_turn(
+            &agent_spec,
+            &[],
+            "and what did we create so far?",
+            &transport,
+            session_key,
+            &SkillDispatchEngine::new(),
+            &semantic_store,
+            &cache,
+            "sera",
+            &CancellationToken::new(),
+            &CapabilityRegistry::empty(),
+            None,
+        )
+        .await;
+
+        assert_eq!(result.reply, "ok");
+        let captured = seen.lock().unwrap();
+        let messages = captured.first().expect("transport should see one turn");
+
+        // (a) a system message equals the warmed block.
+        let block_msg = messages.iter().find(|m| {
+            m.get("role").and_then(|v| v.as_str()) == Some("system")
+                && m.get("content").and_then(|v| v.as_str()) == Some(block)
+        });
+        assert!(
+            block_msg.is_some(),
+            "prefetched block must appear as its own system message"
+        );
+
+        // (b) it precedes the transcript/user message.
+        let block_pos = messages
+            .iter()
+            .position(|m| m.get("content").and_then(|v| v.as_str()) == Some(block))
+            .expect("block present");
+        let first_user_pos = messages
+            .iter()
+            .position(|m| m.get("role").and_then(|v| v.as_str()) == Some("user"))
+            .expect("a user message must exist");
+        assert!(
+            block_pos < first_user_pos,
+            "prefetch segment must precede the user turn"
+        );
+
+        // (c) the user message content is EXACTLY the user message — no memory
+        // text appended.
+        let user_content = messages
+            .iter()
+            .rev()
+            .find(|m| m.get("role").and_then(|v| v.as_str()) == Some("user"))
+            .and_then(|m| m.get("content"))
+            .and_then(|v| v.as_str())
+            .expect("user content");
+        assert_eq!(user_content, "and what did we create so far?");
+
+        // (d) the cached content appears in no other message.
+        let occurrences = messages
+            .iter()
+            .filter(|m| m.get("content").and_then(|v| v.as_str()).is_some_and(|c| c.contains("picture-first creative work")))
+            .count();
+        assert_eq!(occurrences, 1, "cached content must appear exactly once");
+    }
+
+    #[tokio::test]
+    async fn execute_turn_without_cached_prefetch_adds_no_extra_message() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let transport = PrefetchRecordingTransport {
+            seen: Arc::clone(&seen),
+        };
+        let agent_spec = prefetch_test_agent_spec();
+        let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
+            SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+        );
+        let cache = empty_prefetch_cache();
+
+        let result = execute_turn(
+            &agent_spec,
+            &[],
+            "hello",
+            &transport,
+            "prefetch-empty-session",
+            &SkillDispatchEngine::new(),
+            &semantic_store,
+            &cache,
+            "sera",
+            &CancellationToken::new(),
+            &CapabilityRegistry::empty(),
+            None,
+        )
+        .await;
+
+        assert_eq!(result.reply, "ok");
+        let captured = seen.lock().unwrap();
+        let messages = captured.first().expect("transport should see one turn");
+        assert!(
+            !messages.iter().any(|m| m
+                .get("content")
+                .and_then(|v| v.as_str())
+                .is_some_and(|c| c.contains("semantic prefetch"))),
+            "empty cache must inject no prefetch preamble"
+        );
+    }
+
+    /// Store whose `query` always errors — used to verify warm clears stale
+    /// cache entries on failure. Other trait methods are unreachable no-ops.
+    struct FailingQueryStore;
+
+    #[async_trait::async_trait]
+    impl SemanticMemoryStore for FailingQueryStore {
+        async fn put(
+            &self,
+            _req: sera_memory::PutRequest,
+        ) -> Result<sera_memory::MemoryId, sera_memory::SemanticError> {
+            Err(sera_memory::SemanticError::Backend("unused".into()))
+        }
+
+        async fn query(
+            &self,
+            _query: sera_memory::SemanticQuery,
+        ) -> Result<Vec<sera_memory::ScoredEntry>, sera_memory::SemanticError> {
+            Err(sera_memory::SemanticError::Backend("boom".into()))
+        }
+
+        async fn delete(
+            &self,
+            _id: &sera_memory::MemoryId,
+        ) -> Result<(), sera_memory::SemanticError> {
+            Err(sera_memory::SemanticError::Backend("unused".into()))
+        }
+
+        async fn evict(
+            &self,
+            _policy: &sera_memory::store::EvictionPolicy,
+        ) -> Result<usize, sera_memory::SemanticError> {
+            Err(sera_memory::SemanticError::Backend("unused".into()))
+        }
+
+        async fn stats(
+            &self,
+        ) -> Result<sera_memory::store::SemanticStats, sera_memory::SemanticError> {
+            Err(sera_memory::SemanticError::Backend("unused".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn warm_memory_prefetch_failure_clears_cached_entry() {
+        let session_key = "warm-fail-session";
+        let cache = empty_prefetch_cache();
+        cache
+            .write()
+            .await
+            .insert(session_key.to_string(), "stale block".to_string());
+
+        let store: Arc<dyn SemanticMemoryStore> = Arc::new(FailingQueryStore);
+        warm_memory_prefetch(
+            store,
+            Arc::clone(&cache),
+            session_key.to_string(),
+            "sera".to_string(),
+            "what changed?".to_string(),
+        )
+        .await;
+
+        assert!(
+            !cache.read().await.contains_key(session_key),
+            "failed warm must clear the stale cache entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn warm_memory_prefetch_empty_results_clears_cached_entry() {
+        let session_key = "warm-empty-session";
+        let cache = empty_prefetch_cache();
+        cache
+            .write()
+            .await
+            .insert(session_key.to_string(), "stale block".to_string());
+
+        // Empty in-memory store → recall returns Ok(empty) (or Backend error on
+        // a text-only query against an empty FTS index); either path clears.
+        let store: Arc<dyn SemanticMemoryStore> = Arc::new(
+            SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+        );
+        warm_memory_prefetch(
+            store,
+            Arc::clone(&cache),
+            session_key.to_string(),
+            "sera".to_string(),
+            "anything".to_string(),
+        )
+        .await;
+
+        assert!(
+            !cache.read().await.contains_key(session_key),
+            "empty recall must clear the cache entry"
+        );
+    }
+
+    #[test]
+    fn warm_memory_prefetch_truncates_query_by_chars() {
+        let query = format!("{}é", "a".repeat(MEMORY_PREFETCH_MAX_INPUT_CHARS));
+        let truncated = truncate_memory_prefetch_query(&query);
+        assert_eq!(truncated.chars().count(), MEMORY_PREFETCH_MAX_INPUT_CHARS);
+        assert!(truncated.ends_with('a'));
+    }
+
+    #[test]
+    fn memory_prefetch_segment_is_evictable_and_audited() {
+        use sera_runtime::context_engine::envelope::{
+            ContextEnvelopeBuilder, ContextSegment, PRIORITY_IMMUTABLE_ANCHOR,
+            PRIORITY_SEMANTIC_RECALL,
+        };
+
+        // persona(6) + prefetch(8) = 14; budget 6 evicts the prefetch segment,
+        // retaining only the priority-0 persona anchor.
+        let mut b = ContextEnvelopeBuilder::new(Some(6));
+        b.push(ContextSegment::new(
+            SegmentKind::Persona,
+            "persona.immutable_anchor",
+            "anchor",
+            PRIORITY_IMMUTABLE_ANCHOR,
+        ))
+        .push(ContextSegment::new(
+            SegmentKind::MemoryRecall("semantic_prefetch".into()),
+            "memory.hindsight.prefetch",
+            "prefetch",
+            PRIORITY_SEMANTIC_RECALL,
+        ));
+        let envelope = b.build();
+
+        assert!(envelope.pressure, "tight budget must force eviction");
+        let evicted = envelope.evicted();
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0].source, "memory.hindsight.prefetch");
+        assert_eq!(
+            evicted[0].kind,
+            SegmentKind::MemoryRecall("semantic_prefetch".into())
+        );
+        assert_eq!(evicted[0].priority, PRIORITY_SEMANTIC_RECALL);
+        // The persona anchor is retained.
+        assert!(
+            envelope
+                .segments()
+                .iter()
+                .any(|s| s.source == "persona.immutable_anchor"),
+            "priority-0 persona segment must be retained"
+        );
+        assert!(
+            envelope
+                .segments()
+                .iter()
+                .all(|s| s.source != "memory.hindsight.prefetch"),
+            "evicted prefetch segment must not be retained"
+        );
+    }
+
+    #[test]
+    fn memory_prefetch_source_labels_backend() {
+        assert_eq!(
+            memory_prefetch_source_for(Some("hindsight")),
+            "memory.hindsight.prefetch"
+        );
+        assert_eq!(
+            memory_prefetch_source_for(Some("  Hindsight  ")),
+            "memory.hindsight.prefetch"
+        );
+        assert_eq!(
+            memory_prefetch_source_for(Some("sqlite")),
+            "memory.semantic.prefetch"
+        );
+        assert_eq!(memory_prefetch_source_for(None), "memory.semantic.prefetch");
+    }
+
     /// sera-ibkr.3: when persona carries both an immutable anchor and a
     /// mutable persona, the system messages appear in order anchor → mutable
     /// persona → (rest), all before the transcript/user turn.
@@ -13188,6 +13821,7 @@ spec:
             "ibkr3-mutable-persona-session",
             &skill_engine,
             &semantic_store,
+            &Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             "sera",
             &cancel,
             &capability_registry,
@@ -14990,6 +15624,7 @@ spec:
             "ojp3-e2e-cold",
             &skill_engine,
             &semantic_store,
+            &Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             "agent",
             &cancel,
             &capability_registry,
@@ -15066,6 +15701,7 @@ spec:
             "ojp3-during-1",
             &skill_engine,
             &semantic_store,
+            &Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             "agent",
             &cancel,
             &capability_registry,
@@ -15086,6 +15722,7 @@ spec:
             "ojp3-during-2",
             &skill_engine,
             &semantic_store,
+            &Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             "agent",
             &cancel,
             &capability_registry,
@@ -15199,6 +15836,9 @@ spec:
             semantic_store: Arc::new(
                 SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
             ),
+            memory_prefetch_cache: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             kill_switch: Arc::new(KillSwitch::new()),
             active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -15294,6 +15934,9 @@ spec:
                 semantic_store: Arc::new(
                     SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
                 ),
+                memory_prefetch_cache: Arc::new(tokio::sync::RwLock::new(
+                    std::collections::HashMap::new(),
+                )),
                 kill_switch: Arc::new(KillSwitch::new()),
                 active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
                     std::collections::HashMap::new(),
@@ -15388,6 +16031,9 @@ spec:
                 semantic_store: Arc::new(
                     SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
                 ),
+                memory_prefetch_cache: Arc::new(tokio::sync::RwLock::new(
+                    std::collections::HashMap::new(),
+                )),
                 kill_switch: Arc::new(KillSwitch::new()),
                 active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
                     std::collections::HashMap::new(),
@@ -16141,6 +16787,9 @@ spec:
                     SqliteMemoryStore::open_in_memory(None)
                         .expect("open in-memory semantic store"),
                 ),
+                memory_prefetch_cache: Arc::new(tokio::sync::RwLock::new(
+                    std::collections::HashMap::new(),
+                )),
                 kill_switch: Arc::new(KillSwitch::new()),
                 active_cancellation_tokens: Arc::new(std::sync::Mutex::new(
                     std::collections::HashMap::new(),

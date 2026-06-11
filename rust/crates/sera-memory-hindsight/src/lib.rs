@@ -72,6 +72,17 @@ pub struct HindsightConfig {
     pub poll_max_attempts: u32,
     /// Optional Bearer token for Hindsight authentication.
     pub bearer_token: Option<String>,
+    /// Optional fixed bank id. When set, all reads/writes use this Hindsight
+    /// bank instead of deriving a bank from SERA memory scope.
+    pub bank_id_override: Option<String>,
+    /// When true, `put` refuses to write before making any HTTP request.
+    pub read_only: bool,
+    /// Hindsight recall budget (`low`, `mid`, `high`) for bounded prefetch/tool recall.
+    pub recall_budget: Option<String>,
+    /// Maximum tokens returned by Hindsight recall when the server supports it.
+    pub recall_max_tokens: Option<usize>,
+    /// Optional Hindsight memory types to request (for example `observation`).
+    pub recall_types: Vec<String>,
 }
 
 impl Default for HindsightConfig {
@@ -82,6 +93,11 @@ impl Default for HindsightConfig {
             poll_interval: Duration::from_millis(500),
             poll_max_attempts: 20,
             bearer_token: None,
+            bank_id_override: None,
+            read_only: false,
+            recall_budget: Some("low".to_string()),
+            recall_max_tokens: Some(500),
+            recall_types: vec!["observation".to_string()],
         }
     }
 }
@@ -158,12 +174,19 @@ struct OperationStatus {
 struct RecallBody<'a> {
     query: &'a str,
     top_k: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    budget: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    types: Option<&'a [String]>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RecallResult {
     #[serde(default)]
     id: Option<String>,
+    #[serde(alias = "text")]
     content: String,
     #[serde(default)]
     score: f32,
@@ -204,6 +227,20 @@ impl HindsightStore {
             .build()
             .map_err(|e| SemanticError::Backend(format!("reqwest client build failed: {e}")))?;
         Ok(Self { client, config })
+    }
+
+    fn bank_id_for_put(&self, req: &PutRequest) -> String {
+        self.config
+            .bank_id_override
+            .clone()
+            .unwrap_or_else(|| bank_id_for_put(req))
+    }
+
+    fn bank_id_for_query(&self, query: &SemanticQuery) -> String {
+        self.config
+            .bank_id_override
+            .clone()
+            .unwrap_or_else(|| bank_id_for_query(query))
     }
 
     /// `POST /v1/default/banks/{bank_id}/memories`
@@ -318,6 +355,13 @@ impl HindsightStore {
         let body = RecallBody {
             query: query_text,
             top_k,
+            budget: self.config.recall_budget.as_deref(),
+            max_tokens: self.config.recall_max_tokens,
+            types: if self.config.recall_types.is_empty() {
+                None
+            } else {
+                Some(self.config.recall_types.as_slice())
+            },
         };
         let resp = self
             .client
@@ -354,7 +398,12 @@ impl SemanticMemoryStore for HindsightStore {
     /// If the response carries a non-null `operation_id`, the adapter polls
     /// the operations endpoint until the operation reaches a terminal state.
     async fn put(&self, req: PutRequest) -> Result<MemoryId, SemanticError> {
-        let bank_id = bank_id_for_put(&req);
+        if self.config.read_only {
+            return Err(SemanticError::Backend(
+                "hindsight backend is configured read-only; put refused".into(),
+            ));
+        }
+        let bank_id = self.bank_id_for_put(&req);
         let put_resp = self.put_memory(&bank_id, &req).await?;
 
         // Opportunistic async path: poll until terminal.
@@ -381,7 +430,7 @@ impl SemanticMemoryStore for HindsightStore {
             )
         })?;
 
-        let bank_id = bank_id_for_query(&query);
+        let bank_id = self.bank_id_for_query(&query);
         let results = self
             .recall_memories(&bank_id, query_text, query.top_k)
             .await?;
@@ -447,7 +496,7 @@ impl SemanticMemoryStore for HindsightStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{body_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // ── helpers ──────────────────────────────────────────────────────────────
@@ -459,6 +508,11 @@ mod tests {
             poll_interval: Duration::from_millis(10),
             poll_max_attempts: 5,
             bearer_token: None,
+            bank_id_override: None,
+            read_only: false,
+            recall_budget: Some("low".to_string()),
+            recall_max_tokens: Some(500),
+            recall_types: vec!["observation".to_string()],
         }
     }
 
@@ -568,17 +622,19 @@ mod tests {
     async fn query_returns_entries_with_no_embedding() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/default/banks/agent:agent-1/memories/recall"))
+            .and(path("/v1/default/banks/hermes/memories/recall"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "results": [
-                    {"id": "r-1", "content": "first result", "score": 0.9},
+                    {"id": "r-1", "text": "first result", "score": 0.9},
                     {"id": "r-2", "content": "second result", "score": 0.7},
                 ]
             })))
             .mount(&server)
             .await;
 
-        let store = HindsightStore::new(fast_config(server.uri())).unwrap();
+        let mut config = fast_config(server.uri());
+        config.bank_id_override = Some("hermes".to_string());
+        let store = HindsightStore::new(config).unwrap();
         let q = SemanticQuery {
             agent_id: "agent-1".into(),
             scope: None,
@@ -598,6 +654,57 @@ mod tests {
         }
         assert_eq!(results[0].entry.content, "first result");
         assert!((results[0].score - 0.9).abs() < 1e-6);
+    }
+
+    // ── read-only refuses put before HTTP ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn read_only_put_refuses_before_http() {
+        let server = MockServer::start().await;
+        let mut config = fast_config(server.uri());
+        config.read_only = true;
+        let store = HindsightStore::new(config).unwrap();
+        let err = store.put(put_req("agent-1")).await.unwrap_err();
+        match &err {
+            SemanticError::Backend(msg) => {
+                assert!(msg.contains("read-only"), "expected read-only in: {msg}");
+            }
+            other => panic!("expected Backend error, got: {other:?}"),
+        }
+    }
+
+    // ── recall request body carries budget / max_tokens / types ───────────────
+
+    #[tokio::test]
+    async fn recall_request_body_includes_budget_max_tokens_and_types() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/default/banks/agent:agent-1/memories/recall"))
+            .and(body_json(serde_json::json!({
+                "query": "what do I know?",
+                "top_k": 5,
+                "budget": "low",
+                "max_tokens": 500,
+                "types": ["observation"],
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": [{"id": "r-1", "content": "hit", "score": 0.5}]
+            })))
+            .mount(&server)
+            .await;
+
+        let store = HindsightStore::new(fast_config(server.uri())).unwrap();
+        let q = SemanticQuery {
+            agent_id: "agent-1".into(),
+            scope: None,
+            tier_filter: None,
+            text: Some("what do I know?".into()),
+            query_embedding: None,
+            top_k: 5,
+            similarity_threshold: None,
+        };
+        let results = store.query(q).await.unwrap();
+        assert_eq!(results.len(), 1);
     }
 
     // ── delete returns Backend error ──────────────────────────────────────────

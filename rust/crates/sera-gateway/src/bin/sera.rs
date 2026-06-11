@@ -4658,7 +4658,10 @@ async fn execute_turn(
     // ── Memory prefetch (sera-ibkr.3): block warmed by the previous turn's
     // best-effort recall. Injected as its own evictable segment — never
     // appended to user content. Empty cache = live behaviour unchanged.
-    if let Some(block) = prefetch_cache.read().await.get(session_key).cloned() {
+    // Single-use: the entry is consumed on injection (Codex P2 on PR #1303)
+    // so a block can never repeat into later turns when the next warm is
+    // slow, fails, or is skipped after a failed turn.
+    if let Some(block) = prefetch_cache.write().await.remove(session_key) {
         envelope.push(ContextSegment::new(
             SegmentKind::MemoryRecall("semantic_prefetch".into()),
             memory_prefetch_source(),
@@ -13533,6 +13536,39 @@ Treat as historical reference, not new user input:\n- picture-first creative wor
             .filter(|m| m.get("content").and_then(|v| v.as_str()).is_some_and(|c| c.contains("picture-first creative work")))
             .count();
         assert_eq!(occurrences, 1, "cached content must appear exactly once");
+        drop(captured);
+
+        // (e) single-use (Codex P2 on PR #1303): injection consumes the cache
+        // entry, so a second turn without a fresh warm sees no prefetch.
+        assert!(
+            !cache.read().await.contains_key(session_key),
+            "injection must consume the cached prefetch entry"
+        );
+        let result2 = execute_turn(
+            &agent_spec,
+            &[],
+            "follow-up question",
+            &transport,
+            session_key,
+            &SkillDispatchEngine::new(),
+            &semantic_store,
+            &cache,
+            "sera",
+            &CancellationToken::new(),
+            &CapabilityRegistry::empty(),
+            None,
+        )
+        .await;
+        assert_eq!(result2.reply, "ok");
+        let captured = seen.lock().unwrap();
+        let second = captured.get(1).expect("transport should see second turn");
+        assert!(
+            !second.iter().any(|m| m
+                .get("content")
+                .and_then(|v| v.as_str())
+                .is_some_and(|c| c.contains("picture-first creative work"))),
+            "consumed prefetch must not repeat into a later turn"
+        );
     }
 
     #[tokio::test]

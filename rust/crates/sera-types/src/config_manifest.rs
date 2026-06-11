@@ -253,6 +253,78 @@ pub struct AgentSpec {
     /// LLM. Empty/absent (the default) means no handoff tools are exposed.
     #[serde(default, alias = "subagentsAllowed", skip_serializing_if = "Vec::is_empty")]
     pub subagents_allowed: Vec<String>,
+    /// Per-agent feature toggles (sera-ibkr.3, Hermes-parity identity memory
+    /// layer). Defaults to all-off, which serializes to nothing so existing
+    /// manifests parse and re-serialize identically.
+    #[serde(default, skip_serializing_if = "AgentFeatureSetSpec::is_default")]
+    pub features: AgentFeatureSetSpec,
+}
+
+/// Agent feature toggles (sera-ibkr.3). Currently only the Hermes-parity
+/// identity memory layer; write-governance and other feature groups are out
+/// of scope here.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AgentFeatureSetSpec {
+    /// Base identity memory pack — soul, durable memory, user profile and
+    /// environment segments loaded from the agent's memory directory.
+    #[serde(
+        default,
+        alias = "identityMemory",
+        skip_serializing_if = "IdentityMemoryFeatureSpec::is_default"
+    )]
+    pub identity_memory: IdentityMemoryFeatureSpec,
+}
+
+impl AgentFeatureSetSpec {
+    /// `true` when no feature toggles deviate from the defaults — used to skip
+    /// serialization so existing manifests round-trip unchanged.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+/// Base identity memory pack toggles (sera-ibkr.3, Hermes parity). Each flag
+/// gates one provenance-labelled context segment loaded from the agent's
+/// memory directory. All-off (the default) injects nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct IdentityMemoryFeatureSpec {
+    /// Master switch — when `false`, no identity memory segments are loaded
+    /// regardless of the per-file toggles below.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Inject `soul.md` as an immutable (priority 0, never evicted) anchor.
+    #[serde(default)]
+    pub soul: bool,
+    /// Inject `memory.md` as the durable memory segment.
+    #[serde(default, alias = "durableMemory")]
+    pub durable_memory: bool,
+    /// Inject `user_profile.md` as the user profile segment.
+    #[serde(default, alias = "userProfile")]
+    pub user_profile: bool,
+    /// Inject `environment.md` as the environment segment.
+    #[serde(default)]
+    pub environment: bool,
+    /// Optional Unicode-scalar char cap applied to the durable memory segment.
+    #[serde(
+        default,
+        alias = "memoryCharLimit",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub memory_char_limit: Option<u32>,
+    /// Optional Unicode-scalar char cap applied to the user profile segment.
+    #[serde(
+        default,
+        alias = "userCharLimit",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub user_char_limit: Option<u32>,
+}
+
+impl IdentityMemoryFeatureSpec {
+    /// `true` when every toggle is at its default — used to skip serialization.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
 }
 
 /// Persona configuration within an agent spec.
@@ -532,6 +604,104 @@ spec: {}
         assert_eq!(raw.config_version, 2);
         let manifest = ConfigManifest::from_raw(raw).unwrap();
         assert_eq!(manifest.config_version, 2);
+    }
+
+    #[test]
+    fn agent_without_features_is_default() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: sera
+spec:
+  provider: lm-studio
+"#;
+        let raw: RawManifest = serde_yaml::from_str(yaml).unwrap();
+        let manifest = ConfigManifest::from_raw(raw).unwrap();
+        let spec: AgentSpec = serde_json::from_value(manifest.spec).unwrap();
+        assert!(spec.features.is_default());
+        assert!(spec.features.identity_memory.is_default());
+    }
+
+    #[test]
+    fn agent_features_identity_memory_snake_case() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: sera
+spec:
+  provider: lm-studio
+  features:
+    identity_memory:
+      enabled: true
+      soul: true
+      durable_memory: true
+      user_profile: true
+      environment: true
+      memory_char_limit: 1000
+      user_char_limit: 500
+"#;
+        let raw: RawManifest = serde_yaml::from_str(yaml).unwrap();
+        let manifest = ConfigManifest::from_raw(raw).unwrap();
+        let spec: AgentSpec = serde_json::from_value(manifest.spec).unwrap();
+        let im = &spec.features.identity_memory;
+        assert!(im.enabled);
+        assert!(im.soul);
+        assert!(im.durable_memory);
+        assert!(im.user_profile);
+        assert!(im.environment);
+        assert_eq!(im.memory_char_limit, Some(1000));
+        assert_eq!(im.user_char_limit, Some(500));
+        assert!(!spec.features.is_default());
+    }
+
+    #[test]
+    fn agent_features_identity_memory_camel_case_aliases() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: sera
+spec:
+  provider: lm-studio
+  features:
+    identityMemory:
+      enabled: true
+      durableMemory: true
+      userProfile: true
+      memoryCharLimit: 2048
+      userCharLimit: 256
+"#;
+        let raw: RawManifest = serde_yaml::from_str(yaml).unwrap();
+        let manifest = ConfigManifest::from_raw(raw).unwrap();
+        let spec: AgentSpec = serde_json::from_value(manifest.spec).unwrap();
+        let im = &spec.features.identity_memory;
+        assert!(im.enabled);
+        assert!(im.durable_memory);
+        assert!(im.user_profile);
+        assert!(!im.soul);
+        assert!(!im.environment);
+        assert_eq!(im.memory_char_limit, Some(2048));
+        assert_eq!(im.user_char_limit, Some(256));
+    }
+
+    #[test]
+    fn agent_features_default_omits_serialization() {
+        let spec = AgentSpec {
+            provider: "lm-studio".into(),
+            model: None,
+            persona: None,
+            tools: None,
+            workspace: None,
+            policy_ref: None,
+            enforcement_mode: None,
+            approval_policy: None,
+            subagents_allowed: Vec::new(),
+            features: AgentFeatureSetSpec::default(),
+        };
+        let json = serde_json::to_value(&spec).unwrap();
+        assert!(json.get("features").is_none());
     }
 
     #[test]

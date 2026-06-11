@@ -39,7 +39,7 @@
     "clean": "rm -rf dist src/generated/*.ts"
   },
   "dependencies": {
-    "@grpc/grpc-js": "^1.12.0",
+    "@grpc/grpc-js": "^1.14.4",
     "@grpc/proto-loader": "^0.7.13",
     "zod": "^3.23.0"
   },

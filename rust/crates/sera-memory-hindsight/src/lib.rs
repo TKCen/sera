@@ -231,10 +231,36 @@ struct ReflectBody<'a> {
 struct ReflectSourceWire {
     #[serde(default)]
     id: Option<String>,
-    #[serde(alias = "text")]
+    #[serde(alias = "text", alias = "fact")]
     content: String,
     #[serde(default)]
     score: f32,
+}
+
+/// The documented live `based_on` shape: a `ReflectBasedOn` object whose cited
+/// memories live under `based_on.memories`. A bare array is also tolerated for
+/// compatibility with the earlier/alternate shape. `null` is handled one level
+/// up by `Option<ReflectBasedOn>`, so a null `based_on` yields no sources
+/// instead of a parse error.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ReflectBasedOn {
+    /// `based_on: { "memories": [...] }`
+    Object {
+        #[serde(default)]
+        memories: Vec<ReflectSourceWire>,
+    },
+    /// `based_on: [...]` — legacy/alternate array form.
+    Array(Vec<ReflectSourceWire>),
+}
+
+impl ReflectBasedOn {
+    fn into_memories(self) -> Vec<ReflectSourceWire> {
+        match self {
+            ReflectBasedOn::Object { memories } => memories,
+            ReflectBasedOn::Array(memories) => memories,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -243,10 +269,15 @@ struct ReflectResponse {
     /// `text`; `answer` is accepted as a compatible alias.
     #[serde(default, alias = "text")]
     answer: String,
-    /// Hindsight's live reflect endpoint returns supporting evidence under
-    /// `based_on`; `sources` / `results` are accepted as compatible aliases.
-    #[serde(default, alias = "based_on", alias = "results")]
+    /// Array-shaped evidence under `sources` (with `results` as a compatible
+    /// alias). Used as-is and merged with any `based_on.memories`.
+    #[serde(default, alias = "results")]
     sources: Vec<ReflectSourceWire>,
+    /// Documented live evidence container: an object `{ memories: [...] }`, a
+    /// bare array, or `null`. Parsed as its own field so a null/object value
+    /// never turns a successful reflect into a parse error.
+    #[serde(default)]
+    based_on: Option<ReflectBasedOn>,
 }
 
 // ── Public reflect types ─────────────────────────────────────────────────────────
@@ -595,8 +626,14 @@ impl HindsightStore {
             .await
             .map_err(|e| SemanticError::Backend(format!("hindsight reflect parse: {e}")))?;
 
-        let sources = reflect
-            .sources
+        // Merge top-level array evidence with the documented `based_on`
+        // container (object `{memories}`, array, or null). The shapes are
+        // mutually exclusive in practice; merging is lossless either way.
+        let mut sources_wire = reflect.sources;
+        if let Some(based_on) = reflect.based_on {
+            sources_wire.extend(based_on.into_memories());
+        }
+        let sources = sources_wire
             .into_iter()
             .map(|s| ReflectSource {
                 id: s.id,
@@ -1006,6 +1043,59 @@ mod tests {
         assert_eq!(ans.sources[0].content, "user asked to keep it short");
         assert!((ans.sources[0].score - 0.91).abs() < 1e-6);
         assert_eq!(ans.sources[1].content, "dislikes preamble");
+        assert_eq!(ans.provenance, "hindsight:reflect:agent:agent-1");
+    }
+
+    #[tokio::test]
+    async fn reflect_reads_based_on_object_with_memories() {
+        // Documented live shape: `based_on` is a ReflectBasedOn object whose
+        // cited memories live under `based_on.memories`, not a top-level array.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/default/banks/agent:agent-1/reflect"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "text": "You ship small, verified PRs.",
+                "based_on": {
+                    "memories": [
+                        {"id": "m-1", "text": "prefers narrow slices", "score": 0.88},
+                        {"id": "m-2", "fact": "verifies before claiming done", "score": 0.5},
+                    ]
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let store = HindsightStore::new(fast_config(server.uri())).unwrap();
+        let ans = store.reflect(&reflect_query("how do I work?")).await.unwrap();
+
+        assert_eq!(ans.answer, "You ship small, verified PRs.");
+        assert_eq!(ans.sources.len(), 2, "based_on.memories must be extracted");
+        assert_eq!(ans.sources[0].content, "prefers narrow slices");
+        assert!((ans.sources[0].score - 0.88).abs() < 1e-6);
+        // `fact` is accepted as a content alias for memory objects.
+        assert_eq!(ans.sources[1].content, "verifies before claiming done");
+        assert_eq!(ans.provenance, "hindsight:reflect:agent:agent-1");
+    }
+
+    #[tokio::test]
+    async fn reflect_accepts_null_based_on() {
+        // `based_on: null` must yield a successful reflect with an empty
+        // source list — not a deserialization failure.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/default/banks/agent:agent-1/reflect"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "text": "No supporting memories were found.",
+                "based_on": null
+            })))
+            .mount(&server)
+            .await;
+
+        let store = HindsightStore::new(fast_config(server.uri())).unwrap();
+        let ans = store.reflect(&reflect_query("anything?")).await.unwrap();
+
+        assert_eq!(ans.answer, "No supporting memories were found.");
+        assert!(ans.sources.is_empty(), "null based_on yields no sources");
         assert_eq!(ans.provenance, "hindsight:reflect:agent:agent-1");
     }
 

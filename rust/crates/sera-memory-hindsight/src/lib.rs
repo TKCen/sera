@@ -99,8 +99,14 @@ pub struct HindsightConfig {
     pub recall_budget: Option<String>,
     /// Maximum tokens returned by Hindsight recall when the server supports it.
     pub recall_max_tokens: Option<usize>,
-    /// Optional Hindsight memory types to request (for example `observation`).
+    /// Optional Hindsight memory types to request from the recall endpoint (for
+    /// example `observation`). Reflect intentionally does not inherit this
+    /// default: the live reflect endpoint treats omitted `fact_types` as all
+    /// facts, which is the desired default for synthesis.
     pub recall_types: Vec<String>,
+    /// Optional fact-type filter for the reflect endpoint. When `None` or empty,
+    /// reflect omits `fact_types` so the provider can synthesize over all facts.
+    pub reflect_fact_types: Option<Vec<String>>,
 }
 
 impl Default for HindsightConfig {
@@ -116,6 +122,7 @@ impl Default for HindsightConfig {
             recall_budget: Some("low".to_string()),
             recall_max_tokens: Some(500),
             recall_types: vec!["observation".to_string()],
+            reflect_fact_types: None,
         }
     }
 }
@@ -239,9 +246,9 @@ struct ReflectBody<'a> {
     budget: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<usize>,
-    /// Reflect's fact-type filter. The reflect schema names this `fact_types`
-    /// (recall uses `types`); serializing under the wrong key makes the live
-    /// provider ignore the restriction and reflect over all fact types.
+    /// Reflect's explicit fact-type filter. The reflect schema names this
+    /// `fact_types` (recall uses `types`). Omit by default so reflect preserves
+    /// the live endpoint's full-memory behavior.
     #[serde(rename = "fact_types", skip_serializing_if = "Option::is_none")]
     fact_types: Option<&'a [String]>,
 }
@@ -621,11 +628,11 @@ impl HindsightStore {
             },
             budget: self.config.recall_budget.as_deref(),
             max_tokens: self.config.recall_max_tokens,
-            fact_types: if self.config.recall_types.is_empty() {
-                None
-            } else {
-                Some(self.config.recall_types.as_slice())
-            },
+            fact_types: self
+                .config
+                .reflect_fact_types
+                .as_deref()
+                .filter(|types| !types.is_empty()),
         };
         let resp = self
             .client
@@ -796,6 +803,7 @@ mod tests {
             recall_budget: Some("low".to_string()),
             recall_max_tokens: Some(500),
             recall_types: vec!["observation".to_string()],
+            reflect_fact_types: None,
         }
     }
 
@@ -1122,17 +1130,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reflect_request_body_requests_facts_and_carries_controls() {
+    async fn default_reflect_request_body_requests_facts_and_omits_fact_types() {
         // The reflect request must ask for evidence (`include.facts`) so the
-        // live endpoint returns `based_on`, alongside the existing
-        // query/budget/max_tokens/types controls.
+        // live endpoint returns `based_on`, but the default request must omit
+        // `fact_types` so reflect preserves the provider's full-memory behavior.
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/default/banks/agent:agent-1/reflect"))
-            // Reflect filters the configured fact types under `fact_types`
-            // (the reflect schema's field); `types` is recall-only and must
-            // not appear in a reflect body. `body_json` is an exact match, so
-            // a stray `types` key would fail this assertion.
+            // `body_json` is an exact match: this proves both `fact_types` and
+            // the recall-only `types` key are absent from default reflect.
+            .and(body_json(serde_json::json!({
+                "query": "what do I know?",
+                "include": {"facts": {}},
+                "budget": "low",
+                "max_tokens": 500,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "text": "ok",
+                "based_on": {"memories": []}
+            })))
+            .mount(&server)
+            .await;
+
+        let store = HindsightStore::new(fast_config(server.uri())).unwrap();
+        let ans = store.reflect(&reflect_query("what do I know?")).await.unwrap();
+        assert_eq!(ans.answer, "ok");
+    }
+
+    #[tokio::test]
+    async fn explicit_reflect_fact_types_serialize_as_fact_types() {
+        // Reflect has its own explicit fact-type filter. It must serialize as
+        // `fact_types` (the reflect schema), never recall's `types` key.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/default/banks/agent:agent-1/reflect"))
             .and(body_json(serde_json::json!({
                 "query": "what do I know?",
                 "include": {"facts": {}},
@@ -1147,7 +1178,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let store = HindsightStore::new(fast_config(server.uri())).unwrap();
+        let mut config = fast_config(server.uri());
+        config.reflect_fact_types = Some(vec!["observation".to_string()]);
+        let store = HindsightStore::new(config).unwrap();
         let ans = store.reflect(&reflect_query("what do I know?")).await.unwrap();
         assert_eq!(ans.answer, "ok");
     }

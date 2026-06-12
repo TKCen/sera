@@ -36,12 +36,30 @@
 //! `promote`, `touch`, and `maintenance` inherit the trait defaults (no-op /
 //! `Backend` not-implemented).
 //!
-//! ## `reflect` is NOT mapped
+//! ## Read-only `reflect` (RAG Q&A)
 //!
 //! Hindsight's `POST /v1/default/banks/{bank_id}/reflect` is a synchronous
-//! RAG Q&A endpoint, not a memory-retention primitive. It does not belong in
-//! the `SemanticMemoryStore` surface. A future bead may expose it separately.
+//! RAG Q&A endpoint: it synthesises an answer from existing memories without
+//! retaining anything. Because it does not match the retention semantics of
+//! [`SemanticMemoryStore::put`], it is exposed as the SERA-owned inherent
+//! method [`HindsightStore::reflect`] rather than on the trait surface — the
+//! same separation the spec applies to `HindsightStore::list`
+//! (SPEC-memory-pluggability §4). Reflect is always read-only and is allowed
+//! even when the store is configured [`HindsightConfig::read_only`]. Results
+//! carry a `provenance` label so injected/read answers stay attributable.
+//!
+//! ## Write governance
+//!
+//! Retain/write is governed by SERA, not passed through uncontrolled. When
+//! [`HindsightConfig::read_only`] is set (the gateway default for the
+//! external Hindsight backend), [`HindsightStore::put`] refuses **before** any
+//! HTTP/provider mutation, returns a clear policy error to the caller, emits a
+//! structured `tracing` governance event on the `sera.memory.governance`
+//! target, and notifies the optional [`WriteAuditSink`] supplied via
+//! [`HindsightStore::with_audit_sink`]. Recall/reflect failures degrade read
+//! context truthfully; write failures are surfaced explicitly, never swallowed.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -198,6 +216,93 @@ struct RecallResponse {
     results: Vec<RecallResult>,
 }
 
+#[derive(Debug, Serialize)]
+struct ReflectBody<'a> {
+    query: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    budget: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    types: Option<&'a [String]>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReflectSourceWire {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(alias = "text")]
+    content: String,
+    #[serde(default)]
+    score: f32,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReflectResponse {
+    #[serde(default)]
+    answer: String,
+    #[serde(default, alias = "results")]
+    sources: Vec<ReflectSourceWire>,
+}
+
+// ── Public reflect types ─────────────────────────────────────────────────────────
+
+/// A single source memory cited by a [`HindsightStore::reflect`] answer.
+///
+/// Carried verbatim so callers can render or audit the evidence behind a
+/// synthesised answer.
+#[derive(Debug, Clone)]
+pub struct ReflectSource {
+    /// Hindsight memory id, when the server returns one.
+    pub id: Option<String>,
+    /// Memory content backing the answer.
+    pub content: String,
+    /// Relevance score reported by Hindsight (`0.0` when absent).
+    pub score: f32,
+}
+
+/// Result of a read-only Hindsight `reflect` (synchronous RAG Q&A).
+#[derive(Debug, Clone)]
+pub struct ReflectAnswer {
+    /// The synthesised answer text.
+    pub answer: String,
+    /// Source memories cited by Hindsight, preserved for provenance.
+    pub sources: Vec<ReflectSource>,
+    /// Provenance label identifying the backend + bank that produced this
+    /// answer (for example `"hindsight:reflect:agent:agent-1"`). Injected /
+    /// read results stay attributable to their origin.
+    pub provenance: String,
+}
+
+// ── Write governance ─────────────────────────────────────────────────────────────
+
+/// A write-governance decision recorded when a retain/write is refused
+/// **before** any provider mutation.
+#[derive(Debug, Clone)]
+pub struct WriteDenial {
+    /// Hindsight bank the write targeted.
+    pub bank_id: String,
+    /// Caller agent identity.
+    pub agent_id: String,
+    /// Operation that was refused (for example `"put"`).
+    pub operation: &'static str,
+    /// Machine-stable reason (for example `"read_only"`).
+    pub reason: &'static str,
+}
+
+/// Sink for SERA-owned write-governance decisions.
+///
+/// The gateway supplies an implementation that bridges denials to its OCSF
+/// audit log; tests use a recording stub. When no sink is set, denials are
+/// still emitted via `tracing` on the `sera.memory.governance` target and the
+/// caller still receives the policy error — the sink only adds a programmatic
+/// hook for callers that own audit primitives.
+pub trait WriteAuditSink: Send + Sync {
+    /// Called exactly once per refused write, before the policy error is
+    /// returned to the caller.
+    fn record_denial(&self, denial: &WriteDenial);
+}
+
 // ── Adapter ────────────────────────────────────────────────────────────────────
 
 /// [`SemanticMemoryStore`] backed by the Hindsight HTTP API.
@@ -207,6 +312,7 @@ struct RecallResponse {
 pub struct HindsightStore {
     client: Client,
     config: HindsightConfig,
+    audit_sink: Option<Arc<dyn WriteAuditSink>>,
 }
 
 impl HindsightStore {
@@ -226,7 +332,50 @@ impl HindsightStore {
         let client = builder
             .build()
             .map_err(|e| SemanticError::Backend(format!("reqwest client build failed: {e}")))?;
-        Ok(Self { client, config })
+        Ok(Self {
+            client,
+            config,
+            audit_sink: None,
+        })
+    }
+
+    /// Attach a [`WriteAuditSink`] that is notified whenever write governance
+    /// refuses a retain/write before any provider mutation.
+    pub fn with_audit_sink(mut self, sink: Arc<dyn WriteAuditSink>) -> Self {
+        self.audit_sink = Some(sink);
+        self
+    }
+
+    /// SERA-owned write-governance gate. Returns `Ok(())` when writes are
+    /// permitted; otherwise emits a structured governance event, notifies the
+    /// optional [`WriteAuditSink`], and returns a clear policy error — all
+    /// **before** any HTTP/provider mutation.
+    fn ensure_write_allowed(&self, agent_id: &str, bank_id: &str) -> Result<(), SemanticError> {
+        if !self.config.read_only {
+            return Ok(());
+        }
+        let denial = WriteDenial {
+            bank_id: bank_id.to_string(),
+            agent_id: agent_id.to_string(),
+            operation: "put",
+            reason: "read_only",
+        };
+        warn!(
+            target: "sera.memory.governance",
+            decision = "denied",
+            reason = denial.reason,
+            operation = denial.operation,
+            bank_id = %denial.bank_id,
+            agent_id = %denial.agent_id,
+            "hindsight write refused by SERA governance"
+        );
+        if let Some(sink) = &self.audit_sink {
+            sink.record_denial(&denial);
+        }
+        Err(SemanticError::Backend(format!(
+            "hindsight write refused by SERA governance (read_only): \
+             retain/write disabled for bank {bank_id}; no provider mutation attempted"
+        )))
     }
 
     fn bank_id_for_put(&self, req: &PutRequest) -> String {
@@ -386,6 +535,78 @@ impl HindsightStore {
 
         Ok(recall.results)
     }
+
+    /// Read-only RAG Q&A via Hindsight `reflect`.
+    ///
+    /// `POST /v1/default/banks/{bank_id}/reflect` synthesises an answer from
+    /// existing memories; it never retains anything, so it is permitted even
+    /// when the store is configured [`HindsightConfig::read_only`]. Requires
+    /// [`SemanticQuery::text`] (Hindsight reflect has no raw-vector form) and
+    /// returns [`SemanticError::Backend`] when text is absent.
+    ///
+    /// Failures degrade truthfully: a provider error surfaces as
+    /// [`SemanticError::Backend`] rather than an empty answer. The returned
+    /// [`ReflectAnswer::provenance`] labels the backend + bank so injected
+    /// answers stay attributable.
+    pub async fn reflect(&self, query: &SemanticQuery) -> Result<ReflectAnswer, SemanticError> {
+        let query_text = query.text.as_deref().ok_or_else(|| {
+            SemanticError::Backend(
+                "hindsight reflect requires query.text; raw-vector reflect is not supported".into(),
+            )
+        })?;
+
+        let bank_id = self.bank_id_for_query(query);
+        let url = format!(
+            "{}/v1/default/banks/{}/reflect",
+            self.config.base_url, bank_id
+        );
+        let body = ReflectBody {
+            query: query_text,
+            budget: self.config.recall_budget.as_deref(),
+            max_tokens: self.config.recall_max_tokens,
+            types: if self.config.recall_types.is_empty() {
+                None
+            } else {
+                Some(self.config.recall_types.as_slice())
+            },
+        };
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| SemanticError::Backend(format!("hindsight reflect request failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(SemanticError::Backend(format!(
+                "hindsight reflect returned {status}: {text}"
+            )));
+        }
+
+        let reflect: ReflectResponse = resp
+            .json()
+            .await
+            .map_err(|e| SemanticError::Backend(format!("hindsight reflect parse: {e}")))?;
+
+        let sources = reflect
+            .sources
+            .into_iter()
+            .map(|s| ReflectSource {
+                id: s.id,
+                content: s.content,
+                score: s.score,
+            })
+            .collect();
+
+        Ok(ReflectAnswer {
+            answer: reflect.answer,
+            sources,
+            provenance: format!("hindsight:reflect:{bank_id}"),
+        })
+    }
 }
 
 // ── SemanticMemoryStore impl ───────────────────────────────────────────────────
@@ -398,12 +619,11 @@ impl SemanticMemoryStore for HindsightStore {
     /// If the response carries a non-null `operation_id`, the adapter polls
     /// the operations endpoint until the operation reaches a terminal state.
     async fn put(&self, req: PutRequest) -> Result<MemoryId, SemanticError> {
-        if self.config.read_only {
-            return Err(SemanticError::Backend(
-                "hindsight backend is configured read-only; put refused".into(),
-            ));
-        }
+        // SERA-owned write governance: refuse before any provider mutation.
+        // Bank derivation is pure (no HTTP), so computing it here keeps the
+        // governance event/audit attributable without touching Hindsight.
         let bank_id = self.bank_id_for_put(&req);
+        self.ensure_write_allowed(&req.agent_id, &bank_id)?;
         let put_resp = self.put_memory(&bank_id, &req).await?;
 
         // Opportunistic async path: poll until terminal.
@@ -522,6 +742,18 @@ mod tests {
             "Hello, Hindsight!",
             SegmentKind::MemoryRecall("r-1".into()),
         )
+    }
+
+    fn reflect_query(text: &str) -> SemanticQuery {
+        SemanticQuery {
+            agent_id: "agent-1".into(),
+            scope: None,
+            tier_filter: None,
+            text: Some(text.into()),
+            query_embedding: None,
+            top_k: 5,
+            similarity_threshold: None,
+        }
     }
 
     // ── scope_to_bank_id ─────────────────────────────────────────────────────
@@ -656,21 +888,146 @@ mod tests {
         assert!((results[0].score - 0.9).abs() < 1e-6);
     }
 
-    // ── read-only refuses put before HTTP ─────────────────────────────────────
+    // ── read-only refuses put before any provider mutation ────────────────────
+
+    /// A recording [`WriteAuditSink`] for governance assertions.
+    #[derive(Default)]
+    struct RecordingSink {
+        denials: std::sync::Mutex<Vec<WriteDenial>>,
+    }
+
+    impl WriteAuditSink for RecordingSink {
+        fn record_denial(&self, denial: &WriteDenial) {
+            self.denials.lock().unwrap().push(denial.clone());
+        }
+    }
 
     #[tokio::test]
-    async fn read_only_put_refuses_before_http() {
+    async fn read_only_put_refuses_before_provider_mutation() {
+        // If the governance gate let the request through, this mock would be
+        // hit and return a recognisable sentinel body. We assert the sentinel
+        // never appears in the error, proving no provider mutation occurred.
         let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/default/banks/agent:agent-1/memories"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("PROVIDER_WAS_CALLED"))
+            .mount(&server)
+            .await;
+
         let mut config = fast_config(server.uri());
         config.read_only = true;
-        let store = HindsightStore::new(config).unwrap();
+        let sink = Arc::new(RecordingSink::default());
+        let store = HindsightStore::new(config).unwrap().with_audit_sink(sink.clone());
+
         let err = store.put(put_req("agent-1")).await.unwrap_err();
         match &err {
             SemanticError::Backend(msg) => {
-                assert!(msg.contains("read-only"), "expected read-only in: {msg}");
+                assert!(msg.contains("read_only"), "expected read_only in: {msg}");
+                assert!(
+                    msg.contains("no provider mutation attempted"),
+                    "expected explicit no-mutation marker in: {msg}"
+                );
+                assert!(
+                    !msg.contains("PROVIDER_WAS_CALLED"),
+                    "provider must not be reached on a governed refusal: {msg}"
+                );
             }
             other => panic!("expected Backend error, got: {other:?}"),
         }
+
+        // The denial is auditable: the sink received exactly one record with
+        // the attributable bank/agent/reason.
+        let denials = sink.denials.lock().unwrap();
+        assert_eq!(denials.len(), 1, "exactly one denial recorded");
+        assert_eq!(denials[0].bank_id, "agent:agent-1");
+        assert_eq!(denials[0].agent_id, "agent-1");
+        assert_eq!(denials[0].operation, "put");
+        assert_eq!(denials[0].reason, "read_only");
+    }
+
+    // ── reflect — read-only RAG Q&A ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn reflect_returns_answer_sources_and_provenance() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/default/banks/agent:agent-1/reflect"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "answer": "You prefer concise replies.",
+                "sources": [
+                    {"id": "m-1", "text": "user asked for brevity", "score": 0.8},
+                    {"id": "m-2", "content": "short answers preferred", "score": 0.6},
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let store = HindsightStore::new(fast_config(server.uri())).unwrap();
+        let q = reflect_query("what tone do I prefer?");
+        let ans = store.reflect(&q).await.unwrap();
+
+        assert_eq!(ans.answer, "You prefer concise replies.");
+        assert_eq!(ans.sources.len(), 2);
+        assert_eq!(ans.sources[0].id.as_deref(), Some("m-1"));
+        assert_eq!(ans.sources[0].content, "user asked for brevity");
+        assert!((ans.sources[1].score - 0.6).abs() < 1e-6);
+        assert_eq!(ans.provenance, "hindsight:reflect:agent:agent-1");
+    }
+
+    #[tokio::test]
+    async fn reflect_requires_query_text() {
+        let store = HindsightStore::new(HindsightConfig::default()).unwrap();
+        let mut q = reflect_query("ignored");
+        q.text = None;
+        let err = store.reflect(&q).await.unwrap_err();
+        match &err {
+            SemanticError::Backend(msg) => {
+                assert!(msg.contains("requires query.text"), "got: {msg}");
+            }
+            other => panic!("expected Backend error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reflect_propagates_backend_error_truthfully() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/default/banks/agent:agent-1/reflect"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("hindsight down"))
+            .mount(&server)
+            .await;
+
+        let store = HindsightStore::new(fast_config(server.uri())).unwrap();
+        let err = store.reflect(&reflect_query("anything")).await.unwrap_err();
+        match &err {
+            SemanticError::Backend(msg) => {
+                assert!(msg.contains("503"), "expected status in: {msg}");
+                assert!(msg.contains("hindsight down"), "expected body in: {msg}");
+            }
+            other => panic!("expected Backend error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reflect_allowed_when_read_only() {
+        // Reflect never retains, so the read-only governance gate must not
+        // block it.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/default/banks/agent:agent-1/reflect"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "answer": "ok",
+                "sources": []
+            })))
+            .mount(&server)
+            .await;
+
+        let mut config = fast_config(server.uri());
+        config.read_only = true;
+        let store = HindsightStore::new(config).unwrap();
+        let ans = store.reflect(&reflect_query("q")).await.unwrap();
+        assert_eq!(ans.answer, "ok");
+        assert!(ans.sources.is_empty());
     }
 
     // ── recall request body carries budget / max_tokens / types ───────────────

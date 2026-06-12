@@ -35,6 +35,23 @@ spec:
       commands, and manage your memory. Be helpful, concise, and safe.
   tools:
     allow: ["memory_*", "file_*", "shell", "session_*"]
+  # Per-agent feature toggles (sera-ibkr.1). Every group defaults to the
+  # live behaviour shown here, so the block is optional. A test agent can
+  # e.g. disable skills/memory while `sera` keeps the defaults:
+  #
+  # features:
+  #   identity_memory:        # base memory pack — off unless opted in
+  #     enabled: false
+  #   context_engine:         # master switch over the context extras
+  #     enabled: true
+  #   skills:                 # skill injection + skill index
+  #     enabled: true
+  #   semantic_memory:        # recall + memory prefetch
+  #     enabled: true
+  #   memory_plugins:         # external providers (e.g. Hindsight)
+  #     enabled: true
+  #   memory_tools:           # LLM-visible memory* tool schemas
+  #     enabled: true
 ---
 apiVersion: sera.dev/v1
 kind: Connector

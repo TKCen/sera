@@ -253,26 +253,69 @@ pub struct AgentSpec {
     /// LLM. Empty/absent (the default) means no handoff tools are exposed.
     #[serde(default, alias = "subagentsAllowed", skip_serializing_if = "Vec::is_empty")]
     pub subagents_allowed: Vec<String>,
-    /// Per-agent feature toggles (sera-ibkr.3, Hermes-parity identity memory
-    /// layer). Defaults to all-off, which serializes to nothing so existing
-    /// manifests parse and re-serialize identically.
+    /// Per-agent feature toggles (sera-ibkr.3 identity memory, sera-ibkr.1
+    /// feature-group toggles). The default value reproduces live behaviour
+    /// exactly (identity memory off, all other groups on) and serializes to
+    /// nothing, so existing manifests parse and re-serialize identically.
     #[serde(default, skip_serializing_if = "AgentFeatureSetSpec::is_default")]
     pub features: AgentFeatureSetSpec,
 }
 
-/// Agent feature toggles (sera-ibkr.3). Currently only the Hermes-parity
-/// identity memory layer; write-governance and other feature groups are out
-/// of scope here.
+/// Agent feature toggles (sera-ibkr.1 / sera-ibkr.3). Each field gates one
+/// per-agent feature group; defaults preserve live behaviour. Richer per-tool
+/// gating semantics belong to sera-ibkr.7 and are out of scope here.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct AgentFeatureSetSpec {
     /// Base identity memory pack — soul, durable memory, user profile and
     /// environment segments loaded from the agent's memory directory.
+    /// Off by default (live behaviour: nothing injected unless opted in).
     #[serde(
         default,
         alias = "identityMemory",
         skip_serializing_if = "IdentityMemoryFeatureSpec::is_default"
     )]
     pub identity_memory: IdentityMemoryFeatureSpec,
+    /// ContextEngine envelope assembly — master switch over the per-turn
+    /// context extras (identity memory, skill injection/index, semantic
+    /// recall, memory prefetch). Persona segments are always assembled; they
+    /// are the agent's prompt identity, not a ContextEngine extra. On by
+    /// default.
+    #[serde(
+        default,
+        alias = "contextEngine",
+        skip_serializing_if = "FeatureToggleSpec::is_default"
+    )]
+    pub context_engine: FeatureToggleSpec,
+    /// Skills injection — trigger-matched skill context and the skill index
+    /// block. On by default.
+    #[serde(default, skip_serializing_if = "FeatureToggleSpec::is_default")]
+    pub skills: FeatureToggleSpec,
+    /// Semantic memory reads — per-turn recall and the warmed memory
+    /// prefetch segment. On by default.
+    #[serde(
+        default,
+        alias = "semanticMemory",
+        skip_serializing_if = "FeatureToggleSpec::is_default"
+    )]
+    pub semantic_memory: FeatureToggleSpec,
+    /// External memory plugins/providers (e.g. the Hindsight backend) — when
+    /// disabled, semantic memory reads are skipped for this agent whenever
+    /// the process-wide backend is a plugin-backed store. On by default.
+    #[serde(
+        default,
+        alias = "memoryPlugins",
+        skip_serializing_if = "FeatureToggleSpec::is_default"
+    )]
+    pub memory_plugins: FeatureToggleSpec,
+    /// Memory tool surface — LLM-visible `memory*` tool schemas. Disclosure
+    /// control only; execution gating stays with CapabilityRegistry and the
+    /// sera-ibkr.7 tool-gating bead. On by default.
+    #[serde(
+        default,
+        alias = "memoryTools",
+        skip_serializing_if = "FeatureToggleSpec::is_default"
+    )]
+    pub memory_tools: FeatureToggleSpec,
 }
 
 impl AgentFeatureSetSpec {
@@ -281,6 +324,47 @@ impl AgentFeatureSetSpec {
     pub fn is_default(&self) -> bool {
         self == &Self::default()
     }
+
+    /// `(group, enabled)` pairs for every feature group — the single source
+    /// for introspection/log surfaces (sera-ibkr.1).
+    pub fn toggle_states(&self) -> [(&'static str, bool); 6] {
+        [
+            ("identity_memory", self.identity_memory.enabled),
+            ("context_engine", self.context_engine.enabled),
+            ("skills", self.skills.enabled),
+            ("semantic_memory", self.semantic_memory.enabled),
+            ("memory_plugins", self.memory_plugins.enabled),
+            ("memory_tools", self.memory_tools.enabled),
+        ]
+    }
+}
+
+/// Single on/off toggle for a per-agent feature group (sera-ibkr.1).
+/// `enabled` defaults to `true`, so an absent toggle preserves live
+/// behaviour; sub-fields can be added per group later without breaking the
+/// `{ enabled: bool }` wire shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeatureToggleSpec {
+    /// Whether this feature group is active for the agent.
+    #[serde(default = "feature_toggle_enabled_default")]
+    pub enabled: bool,
+}
+
+impl Default for FeatureToggleSpec {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+impl FeatureToggleSpec {
+    /// `true` when the toggle is at its default — used to skip serialization.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+fn feature_toggle_enabled_default() -> bool {
+    true
 }
 
 /// Base identity memory pack toggles (sera-ibkr.3, Hermes parity). Each flag
@@ -621,6 +705,112 @@ spec:
         let spec: AgentSpec = serde_json::from_value(manifest.spec).unwrap();
         assert!(spec.features.is_default());
         assert!(spec.features.identity_memory.is_default());
+        // sera-ibkr.1: absent feature groups default to live behaviour —
+        // identity memory off, everything else on.
+        assert!(!spec.features.identity_memory.enabled);
+        assert!(spec.features.context_engine.enabled);
+        assert!(spec.features.skills.enabled);
+        assert!(spec.features.semantic_memory.enabled);
+        assert!(spec.features.memory_plugins.enabled);
+        assert!(spec.features.memory_tools.enabled);
+    }
+
+    #[test]
+    fn agent_features_group_toggles_snake_case_overrides() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: quiet-test-agent
+spec:
+  provider: lm-studio
+  features:
+    context_engine:
+      enabled: true
+    skills:
+      enabled: false
+    semantic_memory:
+      enabled: false
+    memory_plugins:
+      enabled: false
+    memory_tools:
+      enabled: false
+"#;
+        let raw: RawManifest = serde_yaml::from_str(yaml).unwrap();
+        let manifest = ConfigManifest::from_raw(raw).unwrap();
+        let spec: AgentSpec = serde_json::from_value(manifest.spec).unwrap();
+        let f = &spec.features;
+        assert!(f.context_engine.enabled);
+        assert!(!f.skills.enabled);
+        assert!(!f.semantic_memory.enabled);
+        assert!(!f.memory_plugins.enabled);
+        assert!(!f.memory_tools.enabled);
+        assert!(!f.is_default());
+    }
+
+    #[test]
+    fn agent_features_group_toggles_camel_case_aliases() {
+        let yaml = r#"
+apiVersion: sera.dev/v1
+kind: Agent
+metadata:
+  name: quiet-test-agent
+spec:
+  provider: lm-studio
+  features:
+    contextEngine:
+      enabled: false
+    semanticMemory:
+      enabled: false
+    memoryPlugins:
+      enabled: false
+    memoryTools:
+      enabled: false
+"#;
+        let raw: RawManifest = serde_yaml::from_str(yaml).unwrap();
+        let manifest = ConfigManifest::from_raw(raw).unwrap();
+        let spec: AgentSpec = serde_json::from_value(manifest.spec).unwrap();
+        let f = &spec.features;
+        assert!(!f.context_engine.enabled);
+        assert!(!f.semantic_memory.enabled);
+        assert!(!f.memory_plugins.enabled);
+        assert!(!f.memory_tools.enabled);
+        // Untouched groups keep their defaults.
+        assert!(f.skills.enabled);
+        assert!(!f.identity_memory.enabled);
+    }
+
+    #[test]
+    fn agent_features_toggle_states_reports_every_group() {
+        let f = AgentFeatureSetSpec {
+            semantic_memory: FeatureToggleSpec { enabled: false },
+            ..AgentFeatureSetSpec::default()
+        };
+        let states = f.toggle_states();
+        assert_eq!(states.len(), 6);
+        assert!(states.contains(&("identity_memory", false)));
+        assert!(states.contains(&("context_engine", true)));
+        assert!(states.contains(&("skills", true)));
+        assert!(states.contains(&("semantic_memory", false)));
+        assert!(states.contains(&("memory_plugins", true)));
+        assert!(states.contains(&("memory_tools", true)));
+    }
+
+    #[test]
+    fn agent_features_disabled_groups_round_trip_serialization() {
+        let spec = AgentFeatureSetSpec {
+            skills: FeatureToggleSpec { enabled: false },
+            memory_tools: FeatureToggleSpec { enabled: false },
+            ..AgentFeatureSetSpec::default()
+        };
+        let json = serde_json::to_value(&spec).unwrap();
+        // Non-default groups serialize; default groups are skipped.
+        assert_eq!(json["skills"]["enabled"], serde_json::json!(false));
+        assert_eq!(json["memory_tools"]["enabled"], serde_json::json!(false));
+        assert!(json.get("semantic_memory").is_none());
+        assert!(json.get("context_engine").is_none());
+        let back: AgentFeatureSetSpec = serde_json::from_value(json).unwrap();
+        assert_eq!(back, spec);
     }
 
     #[test]

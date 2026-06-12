@@ -250,6 +250,9 @@ fn build_embedded_transport(
                 .collect()
         })
         .unwrap_or_default();
+    // sera-ibkr.1: a disabled `memory_tools` feature group hides the
+    // `memory*` tool schemas from this agent's LLM.
+    let tools_deny = effective_tools_deny(&agent_spec.features, tools_deny);
     let tool_filter = ToolNameFilter::from_globs(tools_allow, tools_deny);
 
     // sera-a1u: per-agent DelegationBus, mirroring the runtime binary path.
@@ -2910,6 +2913,10 @@ async fn chat_handler(
         let task_message = message.clone();
         let task_transcript = transcript.clone();
         let task_agent_spec = agent_spec.clone();
+        // sera-ibkr.1: prefetch-warm gate for the SSE finalisation closure,
+        // precomputed here as a `Copy` bool because the unfold closure below
+        // cannot borrow `task_agent_spec` once the turn task owns it.
+        let warm_prefetch_enabled = semantic_memory_reads_enabled_env(&agent_spec.features);
 
         // sera-k8do (Codex review on PR #1153): bounded channel applies
         // backpressure to the runtime read loop when a slow SSE client is
@@ -2963,7 +2970,7 @@ async fn chat_handler(
                 agent_name: aname,
                 user_message: message.clone(),
             },
-            |fold_state| async move {
+            move |fold_state| async move {
                 match fold_state {
                     StreamState::Streaming {
                         mut rx,
@@ -3190,14 +3197,20 @@ async fn chat_handler(
                                 // streaming turn completed successfully — queue a
                                 // best-effort recall on the original user message
                                 // so the next turn injects it as an evictable
-                                // segment. Read-only, fire-and-forget.
-                                tokio::spawn(warm_memory_prefetch(
-                                    Arc::clone(&state.semantic_store),
-                                    Arc::clone(&state.memory_prefetch_cache),
-                                    session_key.clone(),
-                                    agent_name.clone(),
-                                    user_message.clone(),
-                                ));
+                                // segment. Read-only, fire-and-forget,
+                                // feature-toggled (sera-ibkr.1) — the gate is
+                                // precomputed as a `Copy` bool because this
+                                // `FnMut` unfold closure cannot borrow the
+                                // spawned turn task's `task_agent_spec`.
+                                if warm_prefetch_enabled {
+                                    tokio::spawn(warm_memory_prefetch(
+                                        Arc::clone(&state.semantic_store),
+                                        Arc::clone(&state.memory_prefetch_cache),
+                                        session_key.clone(),
+                                        agent_name.clone(),
+                                        user_message.clone(),
+                                    ));
+                                }
 
                                 let usage = result.usage;
                                 let payload = serde_json::json!({
@@ -3387,13 +3400,15 @@ async fn chat_handler(
         // ── Memory prefetch warm (sera-ibkr.3): fire-and-forget recall on the
         // just-handled user message so the *next* turn can inject it as an
         // evictable segment. Best-effort, read-only — never blocks the reply.
-        tokio::spawn(warm_memory_prefetch(
+        // Feature-toggled (sera-ibkr.1).
+        maybe_warm_memory_prefetch(
+            &agent_spec,
             Arc::clone(&state.semantic_store),
             Arc::clone(&state.memory_prefetch_cache),
             session_key.clone(),
             agent_name.clone(),
             req.message.clone(),
-        ));
+        );
 
         Ok(Json(ChatResponse {
             response: response_text,
@@ -3866,13 +3881,14 @@ async fn operator_task_handler(
     // operator turn carries a synthetic reply and must not poison the
     // next-turn prefetch. Read-only, fire-and-forget.
     if turn.failure.is_none() {
-        tokio::spawn(warm_memory_prefetch(
+        maybe_warm_memory_prefetch(
+            &agent_spec,
             Arc::clone(&state.semantic_store),
             Arc::clone(&state.memory_prefetch_cache),
             session_key.clone(),
             agent_name.clone(),
             task.clone(),
-        ));
+        );
     }
 
     let active_count = state
@@ -4408,6 +4424,14 @@ fn build_self_introspection_snapshot(
         .enforcement_mode
         .as_deref()
         .unwrap_or("autonomous/default");
+    // sera-ibkr.1: surface the active per-agent feature toggles so the agent
+    // answers capability questions from config, not guesswork.
+    let feature_toggles = feature_toggle_summary(&agent_spec.features);
+    let memory_state = if semantic_memory_reads_enabled_env(&agent_spec.features) {
+        "semantic memory recall is enabled best-effort through the gateway store"
+    } else {
+        "semantic memory recall is disabled for this agent by feature toggles"
+    };
 
     format!(
         "SERA self-introspection snapshot (generated by gateway probes/config; secrets: redacted/not included):\n\
@@ -4427,7 +4451,8 @@ fn build_self_introspection_snapshot(
          - skill discovery: {skill_discovery}\n\
          - registered skills: {registered_skill_text}\n\
          - active skills: {active_skill_text}\n\
-         - memory: semantic memory recall is enabled best-effort through the gateway store\n\
+         - feature toggles (sera-ibkr.1): {feature_toggles}\n\
+         - memory: {memory_state}\n\
          - sessions: gateway transcript/session persistence is enabled; session keys and secrets are not exposed\n\
          Answer self-introspection questions from this snapshot. Distinguish tools, skills, model/provider, memory, and sessions. If skills are empty, say no skills are currently discoverable instead of inventing skills.",
         provider = agent_spec.provider,
@@ -4546,9 +4571,139 @@ fn memory_prefetch_source_for(backend: Option<&str>) -> &'static str {
     }
 }
 
-/// Provenance label for the prefetch segment, derived from `SERA_MEMORY_BACKEND`.
+/// Provenance label for the prefetch segment, derived from the effective
+/// selected backend (sera-ibkr.1 repair: a Hindsight request that fell back
+/// to sqlite must not label segments as Hindsight-sourced).
 fn memory_prefetch_source() -> &'static str {
-    memory_prefetch_source_for(std::env::var("SERA_MEMORY_BACKEND").ok().as_deref())
+    memory_prefetch_source_for(memory_backend_for_gating().as_deref())
+}
+
+/// Semantic-memory backend actually selected at boot (sera-ibkr.1 repair,
+/// Codex P2 on PR #1310). `run_start` records the constructed store's kind —
+/// including fallback resolution, e.g. `SERA_MEMORY_BACKEND=hindsight` whose
+/// `HindsightStore::new` failed and fell back to sqlite. Gating must consult
+/// this, not the raw env request, so a `memory_plugins=false` agent keeps
+/// recall/prefetch against the built-in fallback store.
+static EFFECTIVE_MEMORY_BACKEND: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// Record the constructed semantic-memory backend kind. First write wins;
+/// `run_start` calls this exactly once per process right after selection.
+fn record_effective_memory_backend(kind: &'static str) {
+    let _ = EFFECTIVE_MEMORY_BACKEND.set(kind);
+}
+
+/// Pure layered resolution for the backend kind used by gating/provenance:
+/// the recorded effective backend wins; the raw requested env value is only
+/// a fallback for paths that run before/without boot-time selection (unit
+/// tests, helpers exercised standalone). Factored out so the
+/// fallback-vs-request truth table is testable without process globals.
+fn memory_backend_for_gating_with(
+    recorded: Option<&'static str>,
+    requested: Option<String>,
+) -> Option<String> {
+    recorded.map(str::to_string).or(requested)
+}
+
+/// [`memory_backend_for_gating_with`] against the live process state.
+fn memory_backend_for_gating() -> Option<String> {
+    memory_backend_for_gating_with(
+        EFFECTIVE_MEMORY_BACKEND.get().copied(),
+        std::env::var("SERA_MEMORY_BACKEND").ok(),
+    )
+}
+
+// ── Per-agent feature toggles (sera-ibkr.1) ─────────────────────────────────
+
+/// `true` when the process-wide memory backend is an external plugin-backed
+/// store (currently only Hindsight) rather than a built-in sqlite/pgvector
+/// store. Pure so the `memory_plugins` toggle logic is testable without
+/// mutating env vars.
+fn is_plugin_memory_backend(backend: Option<&str>) -> bool {
+    matches!(backend, Some(b) if b.trim().eq_ignore_ascii_case("hindsight"))
+}
+
+/// Decide whether this agent may read from the semantic memory store —
+/// per-turn recall, prefetch injection, and the post-turn prefetch warm
+/// (sera-ibkr.1). All defaults are `enabled`, so absent toggles preserve
+/// live behaviour. Disabling `memory_plugins` only blocks reads when the
+/// process-wide backend is plugin-backed (e.g. Hindsight); built-in stores
+/// stay governed by `semantic_memory` alone.
+fn semantic_memory_reads_enabled(
+    features: &sera_types::config_manifest::AgentFeatureSetSpec,
+    backend: Option<&str>,
+) -> bool {
+    if !features.context_engine.enabled || !features.semantic_memory.enabled {
+        return false;
+    }
+    if !features.memory_plugins.enabled && is_plugin_memory_backend(backend) {
+        return false;
+    }
+    true
+}
+
+/// [`semantic_memory_reads_enabled`] against the effective selected backend
+/// (recorded at boot, falling back to the raw `SERA_MEMORY_BACKEND` request
+/// only when selection has not run — see [`memory_backend_for_gating`]).
+fn semantic_memory_reads_enabled_env(
+    features: &sera_types::config_manifest::AgentFeatureSetSpec,
+) -> bool {
+    semantic_memory_reads_enabled(features, memory_backend_for_gating().as_deref())
+}
+
+/// Spawn the fire-and-forget prefetch warm unless the agent's feature
+/// toggles disable semantic memory reads (sera-ibkr.1). Keeping the gate
+/// here means a memory-disabled agent never queries the backend at all —
+/// not even on the read-only warm path.
+fn maybe_warm_memory_prefetch(
+    agent_spec: &AgentSpec,
+    semantic_store: Arc<dyn SemanticMemoryStore>,
+    cache: MemoryPrefetchCache,
+    session_key: String,
+    agent_name: String,
+    user_message: String,
+) {
+    if !semantic_memory_reads_enabled_env(&agent_spec.features) {
+        return;
+    }
+    tokio::spawn(warm_memory_prefetch(
+        semantic_store,
+        cache,
+        session_key,
+        agent_name,
+        user_message,
+    ));
+}
+
+/// Glob appended to the runtime tool-deny list when `features.memory_tools`
+/// is disabled (sera-ibkr.1). `ToolNameFilter`'s `_`↔`-` normalisation makes
+/// this match `memory`, `memory_*`, and `memory-*` tool names. Disclosure
+/// control only — execution gating stays with CapabilityRegistry.
+const MEMORY_TOOLS_DENY_GLOB: &str = "memory*";
+
+/// Merge the operator deny list with the agent's `memory_tools` toggle
+/// (sera-ibkr.1). Pure so both the embedded-transport and runtime-child env
+/// paths share one tested seam.
+fn effective_tools_deny(
+    features: &sera_types::config_manifest::AgentFeatureSetSpec,
+    mut deny: Vec<String>,
+) -> Vec<String> {
+    if !features.memory_tools.enabled {
+        deny.push(MEMORY_TOOLS_DENY_GLOB.to_string());
+    }
+    deny
+}
+
+/// Human-readable `group=on/off` summary of an agent's feature toggles —
+/// shared by the boot log and the self-introspection snapshot (sera-ibkr.1).
+fn feature_toggle_summary(
+    features: &sera_types::config_manifest::AgentFeatureSetSpec,
+) -> String {
+    features
+        .toggle_states()
+        .iter()
+        .map(|(name, on)| format!("{name}={}", if *on { "on" } else { "off" }))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Format recall hits into a warmed prefetch block, or `None` when empty.
@@ -4703,6 +4858,16 @@ async fn execute_turn(
         ));
     }
 
+    // ── Per-agent feature toggles (sera-ibkr.1): `context_engine` is the
+    // master switch over the envelope extras below (identity memory, skill
+    // injection/index, recall, prefetch); the per-group toggles narrow
+    // further. All defaults are `enabled`, so absent manifest config keeps
+    // live behaviour byte-identical. Persona segments above are deliberately
+    // NOT gated — they are the agent's prompt identity, not a context extra.
+    let features = &agent_spec.features;
+    let skills_on = features.context_engine.enabled && features.skills.enabled;
+    let memory_reads_on = semantic_memory_reads_enabled_env(features);
+
     // ── Base identity memory pack (sera-ibkr.3, Hermes parity): soul, durable
     // memory, user profile and environment loaded from the agent's memory
     // directory. The soul anchor rides priority 0 and is never evicted; the
@@ -4710,30 +4875,34 @@ async fn execute_turn(
     // envelope segment — never appended to user content — and is best-effort:
     // off-by-default, silently skipped when files are missing or the agent name
     // is unsafe, never failing the turn.
-    push_identity_memory_segments(&mut envelope, agent_spec, agent_name, &base_memory_root());
+    if features.context_engine.enabled {
+        push_identity_memory_segments(&mut envelope, agent_spec, agent_name, &base_memory_root());
+    }
 
     // ── Skill dispatch: fire trigger-matched skills for this turn and
     // prepend their active `context_injection` strings as system messages.
     // Injected BEFORE transcript replay so the skill guidance frames the
     // history instead of being buried after it.
-    let injections = match skill_engine.prepare_turn_context(user_message).await {
-        Ok((_fired, injections)) => injections,
-        Err(e) => {
-            tracing::warn!(error = %e, "skill dispatch refresh failed; using current in-memory registry");
-            let (_fired, injections) = skill_engine.prepare_loaded_turn_context(user_message);
-            injections
+    if skills_on {
+        let injections = match skill_engine.prepare_turn_context(user_message).await {
+            Ok((_fired, injections)) => injections,
+            Err(e) => {
+                tracing::warn!(error = %e, "skill dispatch refresh failed; using current in-memory registry");
+                let (_fired, injections) = skill_engine.prepare_loaded_turn_context(user_message);
+                injections
+            }
+        };
+        for injection in injections {
+            if injection.trim().is_empty() {
+                continue;
+            }
+            envelope.push(ContextSegment::new(
+                SegmentKind::Custom("skill_dispatch".into()),
+                "skill_dispatch",
+                injection,
+                PRIORITY_SKILL_INJECTION,
+            ));
         }
-    };
-    for injection in injections {
-        if injection.trim().is_empty() {
-            continue;
-        }
-        envelope.push(ContextSegment::new(
-            SegmentKind::Custom("skill_dispatch".into()),
-            "skill_dispatch",
-            injection,
-            PRIORITY_SKILL_INJECTION,
-        ));
     }
 
     // ── Skill index (Hermes parity, plan area B): inject a stable,
@@ -4742,7 +4911,7 @@ async fn execute_turn(
     // agent sees what it can load via `skill-view` before the transcript is
     // replayed. Rebuilt each turn so skills created via `skill-manage` appear
     // without restart; only present when at least one skill is discoverable.
-    if let Some(block) = skill_index_block().await {
+    if skills_on && let Some(block) = skill_index_block().await {
         envelope.push(ContextSegment::new(
             SegmentKind::Custom("skill_index".into()),
             "skill_index",
@@ -4762,34 +4931,37 @@ async fn execute_turn(
 
     // ── Memory recall: text-only SemanticMemoryStore query. Best-effort —
     // any backend error is logged and skipped; a failed recall must never
-    // fail the turn.
-    let recall_query = sera_memory::SemanticQuery {
-        agent_id: agent_name.to_string(),
-        scope: None,
-        tier_filter: None,
-        text: Some(user_message.to_string()),
-        query_embedding: None,
-        top_k: 3,
-        similarity_threshold: None,
-    };
-    match semantic_store.query(recall_query).await {
-        Ok(hits) if !hits.is_empty() => {
-            let recalled = hits
-                .iter()
-                .take(3)
-                .map(|h| format!("- {}", h.entry.content))
-                .collect::<Vec<_>>()
-                .join("\n");
-            envelope.push(ContextSegment::new(
-                SegmentKind::Custom("semantic_recall".into()),
-                "semantic_recall",
-                format!("Relevant memories:\n{recalled}"),
-                PRIORITY_SEMANTIC_RECALL,
-            ));
-        }
-        Ok(_) => {}
-        Err(e) => {
-            tracing::warn!(error = %e, "semantic recall failed; continuing without memory");
+    // fail the turn. Skipped entirely when the agent's feature toggles
+    // disable semantic memory reads (sera-ibkr.1).
+    if memory_reads_on {
+        let recall_query = sera_memory::SemanticQuery {
+            agent_id: agent_name.to_string(),
+            scope: None,
+            tier_filter: None,
+            text: Some(user_message.to_string()),
+            query_embedding: None,
+            top_k: 3,
+            similarity_threshold: None,
+        };
+        match semantic_store.query(recall_query).await {
+            Ok(hits) if !hits.is_empty() => {
+                let recalled = hits
+                    .iter()
+                    .take(3)
+                    .map(|h| format!("- {}", h.entry.content))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                envelope.push(ContextSegment::new(
+                    SegmentKind::Custom("semantic_recall".into()),
+                    "semantic_recall",
+                    format!("Relevant memories:\n{recalled}"),
+                    PRIORITY_SEMANTIC_RECALL,
+                ));
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "semantic recall failed; continuing without memory");
+            }
         }
     }
 
@@ -4798,8 +4970,10 @@ async fn execute_turn(
     // appended to user content. Empty cache = live behaviour unchanged.
     // Single-use: the entry is consumed on injection (Codex P2 on PR #1303)
     // so a block can never repeat into later turns when the next warm is
-    // slow, fails, or is skipped after a failed turn.
-    if let Some(block) = prefetch_cache.write().await.remove(session_key) {
+    // slow, fails, or is skipped after a failed turn. Feature-toggled
+    // (sera-ibkr.1): a memory-disabled agent injects nothing and leaves the
+    // cache untouched (the warm path is gated too, so nothing accumulates).
+    if memory_reads_on && let Some(block) = prefetch_cache.write().await.remove(session_key) {
         envelope.push(ContextSegment::new(
             SegmentKind::MemoryRecall("semantic_prefetch".into()),
             memory_prefetch_source(),
@@ -6556,14 +6730,15 @@ async fn process_message_inner(
         // ── Memory prefetch warm (sera-ibkr.3): the Discord turn completed
         // cleanly — queue a best-effort recall on the inbound message so the
         // next turn injects it as an evictable segment. Read-only,
-        // fire-and-forget.
-        tokio::spawn(warm_memory_prefetch(
+        // fire-and-forget, feature-toggled (sera-ibkr.1).
+        maybe_warm_memory_prefetch(
+            &agent_spec,
             Arc::clone(&state.semantic_store),
             Arc::clone(&state.memory_prefetch_cache),
             session_key.clone(),
             agent_name.clone(),
             runtime_content.to_string(),
-        ));
+        );
 
     // Render the LLM reply so allowlisted `@<handle>` tokens become Discord
     // `<@id>` mention tags. Reverse peer-mention handoff (sera-yeg.4):
@@ -7660,6 +7835,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
                         read_only,
                         "SemanticMemoryStore backend: HindsightStore"
                     );
+                    record_effective_memory_backend("hindsight");
                     break 'store Arc::new(store);
                 }
                 Err(e) => tracing::warn!(
@@ -7678,6 +7854,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
                                 tracing::info!(
                                     "SemanticMemoryStore backend: PgVectorStore (DATABASE_URL set)"
                                 );
+                                record_effective_memory_backend("pgvector");
                                 break 'store Arc::new(store);
                             }
                             Err(e) => tracing::warn!(
@@ -7708,6 +7885,10 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
             vec_available = store.vector_available(),
             "SemanticMemoryStore backend: SqliteMemoryStore"
         );
+        // sera-ibkr.1 repair: record the *effective* kind — this branch is
+        // also the fallback for a failed hindsight/pgvector request, and
+        // plugin gating must see sqlite here, not the raw env request.
+        record_effective_memory_backend("sqlite");
         Arc::new(store)
     };
 
@@ -7978,9 +8159,21 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
             .map(|t| t.allow.join(","))
             .unwrap_or_default();
         env.insert("SERA_AGENT_TOOLS_ALLOW".to_string(), tools_allow_csv);
-        if let Ok(deny) = std::env::var("SERA_AGENT_TOOLS_DENY") {
-            env.insert("SERA_AGENT_TOOLS_DENY".to_string(), deny);
-        }
+        // sera-ibkr.1: merge the operator deny override with the agent's
+        // `memory_tools` toggle, then always set the var (empty = no deny)
+        // so a stale parent-process value cannot leak into a
+        // freshly-restricted agent.
+        let tools_deny: Vec<String> = std::env::var("SERA_AGENT_TOOLS_DENY")
+            .ok()
+            .map(|raw| {
+                raw.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let tools_deny = effective_tools_deny(&agent_spec.features, tools_deny);
+        env.insert("SERA_AGENT_TOOLS_DENY".to_string(), tools_deny.join(","));
         // sera-q9i5: forward the agent's `subagents_allowed` list as a
         // comma-separated string so the runtime can populate ctx.handoffs
         // and surface `handoff_to_<id>` tools to the LLM. Always set the
@@ -7990,6 +8183,15 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         env.insert(
             "SERA_AGENT_SUBAGENTS_ALLOWED".to_string(),
             subagents_csv,
+        );
+
+        // sera-ibkr.1: one boot-time line per agent naming every feature
+        // group's active state, so the live toggle set is visible in logs
+        // without any new endpoint.
+        tracing::info!(
+            agent = %agent_name,
+            feature_toggles = %feature_toggle_summary(&agent_spec.features),
+            "Agent feature toggles (sera-ibkr.1)"
         );
 
         // sera-ve9x: branch on the effective dispatch mode. `runtime` (default)
@@ -8781,6 +8983,7 @@ fn build_router(state: Arc<AppState>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sera_types::config_manifest::FeatureToggleSpec;
     use axum::body::Body;
     use axum::http::Request;
     use sera_types::config_manifest::IdentityMemoryFeatureSpec;
@@ -13996,6 +14199,285 @@ Treat as historical reference, not new user input:\n- picture-first creative wor
         );
     }
 
+    // ── Per-agent feature toggles (sera-ibkr.1) ─────────────────────────────
+
+    /// Test agent expressing the sera-ibkr.1 acceptance case: memory,
+    /// Hindsight (memory plugins) and skills disabled, while the default
+    /// `prefetch_test_agent_spec()` agent keeps live behaviour.
+    fn quiet_test_agent_spec() -> AgentSpec {
+        AgentSpec {
+            features: AgentFeatureSetSpec {
+                skills: FeatureToggleSpec { enabled: false },
+                semantic_memory: FeatureToggleSpec { enabled: false },
+                memory_plugins: FeatureToggleSpec { enabled: false },
+                memory_tools: FeatureToggleSpec { enabled: false },
+                ..AgentFeatureSetSpec::default()
+            },
+            ..prefetch_test_agent_spec()
+        }
+    }
+
+    #[test]
+    fn semantic_memory_reads_enabled_truth_table() {
+        let defaults = AgentFeatureSetSpec::default();
+        // Defaults read memory on every backend (live behaviour).
+        assert!(semantic_memory_reads_enabled(&defaults, None));
+        assert!(semantic_memory_reads_enabled(&defaults, Some("sqlite")));
+        assert!(semantic_memory_reads_enabled(&defaults, Some("hindsight")));
+
+        // semantic_memory off blocks reads on every backend.
+        let no_semantic = AgentFeatureSetSpec {
+            semantic_memory: FeatureToggleSpec { enabled: false },
+            ..AgentFeatureSetSpec::default()
+        };
+        assert!(!semantic_memory_reads_enabled(&no_semantic, None));
+        assert!(!semantic_memory_reads_enabled(&no_semantic, Some("hindsight")));
+
+        // context_engine off is a master switch over memory reads.
+        let no_engine = AgentFeatureSetSpec {
+            context_engine: FeatureToggleSpec { enabled: false },
+            ..AgentFeatureSetSpec::default()
+        };
+        assert!(!semantic_memory_reads_enabled(&no_engine, None));
+
+        // memory_plugins off only blocks plugin-backed (Hindsight) reads.
+        let no_plugins = AgentFeatureSetSpec {
+            memory_plugins: FeatureToggleSpec { enabled: false },
+            ..AgentFeatureSetSpec::default()
+        };
+        assert!(semantic_memory_reads_enabled(&no_plugins, None));
+        assert!(semantic_memory_reads_enabled(&no_plugins, Some("sqlite")));
+        assert!(!semantic_memory_reads_enabled(&no_plugins, Some("hindsight")));
+        assert!(!semantic_memory_reads_enabled(&no_plugins, Some(" Hindsight ")));
+    }
+
+    #[test]
+    fn memory_backend_for_gating_prefers_recorded_effective_backend() {
+        // Codex P2 on PR #1310: SERA_MEMORY_BACKEND=hindsight requested but
+        // HindsightStore::new failed and selection fell back to sqlite. The
+        // recorded effective backend must win over the raw request, so a
+        // memory_plugins=false agent keeps recall/prefetch on the built-in
+        // fallback store.
+        let no_plugins = AgentFeatureSetSpec {
+            memory_plugins: FeatureToggleSpec { enabled: false },
+            ..AgentFeatureSetSpec::default()
+        };
+        let fallback =
+            memory_backend_for_gating_with(Some("sqlite"), Some("hindsight".to_string()));
+        assert_eq!(fallback.as_deref(), Some("sqlite"));
+        assert!(semantic_memory_reads_enabled(&no_plugins, fallback.as_deref()));
+
+        // Successfully selected Hindsight: plugin gating applies.
+        let selected =
+            memory_backend_for_gating_with(Some("hindsight"), Some("hindsight".to_string()));
+        assert!(!semantic_memory_reads_enabled(&no_plugins, selected.as_deref()));
+
+        // No recorded selection (pre-boot/unit paths): the raw request is the
+        // only signal available and is used as-is.
+        let unrecorded = memory_backend_for_gating_with(None, Some("hindsight".to_string()));
+        assert!(!semantic_memory_reads_enabled(&no_plugins, unrecorded.as_deref()));
+        assert_eq!(memory_backend_for_gating_with(None, None), None);
+
+        // The prefetch provenance label follows the effective backend too —
+        // a fallback store must not produce hindsight-labelled segments.
+        assert_eq!(
+            memory_prefetch_source_for(fallback.as_deref()),
+            "memory.semantic.prefetch"
+        );
+        assert_eq!(
+            memory_prefetch_source_for(selected.as_deref()),
+            "memory.hindsight.prefetch"
+        );
+    }
+
+    #[test]
+    fn effective_tools_deny_appends_memory_glob_only_when_disabled() {
+        let defaults = AgentFeatureSetSpec::default();
+        assert!(effective_tools_deny(&defaults, vec![]).is_empty());
+
+        let no_memory_tools = AgentFeatureSetSpec {
+            memory_tools: FeatureToggleSpec { enabled: false },
+            ..AgentFeatureSetSpec::default()
+        };
+        assert_eq!(
+            effective_tools_deny(&no_memory_tools, vec![]),
+            vec!["memory*".to_string()]
+        );
+        // Operator deny entries are preserved ahead of the toggle glob.
+        assert_eq!(
+            effective_tools_deny(&no_memory_tools, vec!["shell-exec".to_string()]),
+            vec!["shell-exec".to_string(), "memory*".to_string()]
+        );
+    }
+
+    #[test]
+    fn feature_toggle_summary_names_every_group() {
+        assert_eq!(
+            feature_toggle_summary(&AgentFeatureSetSpec::default()),
+            "identity_memory=off, context_engine=on, skills=on, \
+             semantic_memory=on, memory_plugins=on, memory_tools=on"
+        );
+        assert_eq!(
+            feature_toggle_summary(&quiet_test_agent_spec().features),
+            "identity_memory=off, context_engine=on, skills=off, \
+             semantic_memory=off, memory_plugins=off, memory_tools=off"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_turn_with_semantic_memory_disabled_skips_prefetch_injection() {
+        let session_key = "feature-toggle-disabled-session";
+        let block = "Recalled memory context (semantic prefetch warmed from the previous turn). \
+Treat as historical reference, not new user input:\n- should never appear";
+
+        let cache = empty_prefetch_cache();
+        cache
+            .write()
+            .await
+            .insert(session_key.to_string(), block.to_string());
+
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let transport = PrefetchRecordingTransport {
+            seen: Arc::clone(&seen),
+        };
+        let agent_spec = quiet_test_agent_spec();
+        let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
+            SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+        );
+
+        let result = execute_turn(
+            &agent_spec,
+            &[],
+            "what do you remember?",
+            &transport,
+            session_key,
+            &SkillDispatchEngine::new(),
+            &semantic_store,
+            &cache,
+            "quiet-test-agent",
+            &CancellationToken::new(),
+            &CapabilityRegistry::empty(),
+            None,
+        )
+        .await;
+
+        assert_eq!(result.reply, "ok");
+        let captured = seen.lock().unwrap();
+        let messages = captured.first().expect("transport should see one turn");
+        assert!(
+            !messages.iter().any(|m| m
+                .get("content")
+                .and_then(|v| v.as_str())
+                .is_some_and(|c| c.contains("should never appear"))),
+            "memory-disabled agent must not inject the cached prefetch block"
+        );
+        drop(captured);
+        // The cache entry is left untouched — injection is skipped before the
+        // single-use `remove`.
+        assert!(cache.read().await.contains_key(session_key));
+    }
+
+    #[tokio::test]
+    async fn execute_turn_with_context_engine_disabled_skips_prefetch_injection() {
+        let session_key = "feature-toggle-master-off-session";
+        let cache = empty_prefetch_cache();
+        cache
+            .write()
+            .await
+            .insert(session_key.to_string(), "master-off cached block".to_string());
+
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let transport = PrefetchRecordingTransport {
+            seen: Arc::clone(&seen),
+        };
+        let agent_spec = AgentSpec {
+            features: AgentFeatureSetSpec {
+                context_engine: FeatureToggleSpec { enabled: false },
+                ..AgentFeatureSetSpec::default()
+            },
+            ..prefetch_test_agent_spec()
+        };
+        let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
+            SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+        );
+
+        let result = execute_turn(
+            &agent_spec,
+            &[],
+            "hello",
+            &transport,
+            session_key,
+            &SkillDispatchEngine::new(),
+            &semantic_store,
+            &cache,
+            "quiet-test-agent",
+            &CancellationToken::new(),
+            &CapabilityRegistry::empty(),
+            None,
+        )
+        .await;
+
+        assert_eq!(result.reply, "ok");
+        let captured = seen.lock().unwrap();
+        let messages = captured.first().expect("transport should see one turn");
+        assert!(
+            !messages.iter().any(|m| m
+                .get("content")
+                .and_then(|v| v.as_str())
+                .is_some_and(|c| c.contains("master-off cached block"))),
+            "context_engine=off must skip every envelope extra"
+        );
+    }
+
+    #[tokio::test]
+    async fn maybe_warm_memory_prefetch_skips_disabled_agents() {
+        // Disabled agent: the warm must not run, so a pre-seeded stale cache
+        // entry survives (warm_memory_prefetch would have cleared it on an
+        // empty recall).
+        let cache = empty_prefetch_cache();
+        cache
+            .write()
+            .await
+            .insert("warm-gate-session".to_string(), "stale".to_string());
+        let semantic_store: Arc<dyn SemanticMemoryStore> = Arc::new(
+            SqliteMemoryStore::open_in_memory(None).expect("open in-memory semantic store"),
+        );
+        maybe_warm_memory_prefetch(
+            &quiet_test_agent_spec(),
+            Arc::clone(&semantic_store),
+            Arc::clone(&cache),
+            "warm-gate-session".to_string(),
+            "quiet-test-agent".to_string(),
+            "hello".to_string(),
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            cache.read().await.contains_key("warm-gate-session"),
+            "disabled agent must not trigger a warm (which would clear the entry)"
+        );
+
+        // Default agent: the warm runs and clears the stale entry on an
+        // empty recall result.
+        maybe_warm_memory_prefetch(
+            &prefetch_test_agent_spec(),
+            semantic_store,
+            Arc::clone(&cache),
+            "warm-gate-session".to_string(),
+            "sera".to_string(),
+            "hello".to_string(),
+        );
+        for _ in 0..50 {
+            if !cache.read().await.contains_key("warm-gate-session") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            !cache.read().await.contains_key("warm-gate-session"),
+            "default agent warm must run and clear the stale entry"
+        );
+    }
+
     /// Store whose `query` always errors — used to verify warm clears stale
     /// cache entries on failure. Other trait methods are unreachable no-ops.
     struct FailingQueryStore;
@@ -18199,6 +18681,7 @@ spec:
             subagents_allowed: Vec::new(),
             features: AgentFeatureSetSpec {
                 identity_memory: im,
+                ..AgentFeatureSetSpec::default()
             },
         }
     }

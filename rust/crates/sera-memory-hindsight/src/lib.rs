@@ -216,9 +216,25 @@ struct RecallResponse {
     results: Vec<RecallResult>,
 }
 
+/// Serializes to `{}` — an empty `include` sub-option marker.
+#[derive(Debug, Serialize)]
+struct IncludeFacts {}
+
+/// Reflect `include` controls. Requesting `facts` makes the live endpoint
+/// return `based_on` evidence; without it a successful reflect carries no
+/// supporting memories and [`ReflectAnswer::sources`] is empty even when
+/// supporting memories exist.
+#[derive(Debug, Serialize)]
+struct ReflectInclude {
+    facts: IncludeFacts,
+}
+
 #[derive(Debug, Serialize)]
 struct ReflectBody<'a> {
     query: &'a str,
+    /// Always request `facts` so `based_on` evidence is returned for
+    /// [`ReflectAnswer::sources`].
+    include: ReflectInclude,
     #[serde(skip_serializing_if = "Option::is_none")]
     budget: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -597,6 +613,9 @@ impl HindsightStore {
         );
         let body = ReflectBody {
             query: query_text,
+            include: ReflectInclude {
+                facts: IncludeFacts {},
+            },
             budget: self.config.recall_budget.as_deref(),
             max_tokens: self.config.recall_max_tokens,
             types: if self.config.recall_types.is_empty() {
@@ -1097,6 +1116,33 @@ mod tests {
         assert_eq!(ans.answer, "No supporting memories were found.");
         assert!(ans.sources.is_empty(), "null based_on yields no sources");
         assert_eq!(ans.provenance, "hindsight:reflect:agent:agent-1");
+    }
+
+    #[tokio::test]
+    async fn reflect_request_body_requests_facts_and_carries_controls() {
+        // The reflect request must ask for evidence (`include.facts`) so the
+        // live endpoint returns `based_on`, alongside the existing
+        // query/budget/max_tokens/types controls.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/default/banks/agent:agent-1/reflect"))
+            .and(body_json(serde_json::json!({
+                "query": "what do I know?",
+                "include": {"facts": {}},
+                "budget": "low",
+                "max_tokens": 500,
+                "types": ["observation"],
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "text": "ok",
+                "based_on": {"memories": []}
+            })))
+            .mount(&server)
+            .await;
+
+        let store = HindsightStore::new(fast_config(server.uri())).unwrap();
+        let ans = store.reflect(&reflect_query("what do I know?")).await.unwrap();
+        assert_eq!(ans.answer, "ok");
     }
 
     #[tokio::test]

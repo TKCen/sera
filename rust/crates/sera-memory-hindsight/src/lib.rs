@@ -239,8 +239,11 @@ struct ReflectBody<'a> {
     budget: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    types: Option<&'a [String]>,
+    /// Reflect's fact-type filter. The reflect schema names this `fact_types`
+    /// (recall uses `types`); serializing under the wrong key makes the live
+    /// provider ignore the restriction and reflect over all fact types.
+    #[serde(rename = "fact_types", skip_serializing_if = "Option::is_none")]
+    fact_types: Option<&'a [String]>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -618,7 +621,7 @@ impl HindsightStore {
             },
             budget: self.config.recall_budget.as_deref(),
             max_tokens: self.config.recall_max_tokens,
-            types: if self.config.recall_types.is_empty() {
+            fact_types: if self.config.recall_types.is_empty() {
                 None
             } else {
                 Some(self.config.recall_types.as_slice())
@@ -1126,12 +1129,16 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/default/banks/agent:agent-1/reflect"))
+            // Reflect filters the configured fact types under `fact_types`
+            // (the reflect schema's field); `types` is recall-only and must
+            // not appear in a reflect body. `body_json` is an exact match, so
+            // a stray `types` key would fail this assertion.
             .and(body_json(serde_json::json!({
                 "query": "what do I know?",
                 "include": {"facts": {}},
                 "budget": "low",
                 "max_tokens": 500,
-                "types": ["observation"],
+                "fact_types": ["observation"],
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "text": "ok",

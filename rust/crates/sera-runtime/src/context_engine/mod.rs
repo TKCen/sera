@@ -18,7 +18,26 @@ pub use envelope::{
 };
 
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use tiktoken_rs::CoreBPE;
+use tiktoken_rs::cl100k_base;
+
+/// `cl100k_base` encoder shared by the envelope token-budget estimator.
+/// Mirrors `pipeline.rs`'s private `TOKENIZER_CL100K` static; kept separate so
+/// `pipeline.rs` stays untouched. Budgeting only — an approximation, not an
+/// exact per-provider token count.
+static ENVELOPE_TOKENIZER_CL100K: Lazy<CoreBPE> =
+    Lazy::new(|| cl100k_base().expect("cl100k_base encoding must be available"));
+
+/// Estimate the token count of a single text blob for envelope segment
+/// budgeting (sera-ibkr.3). Mirrors `pipeline.rs`'s `estimate_tokens`
+/// (`cl100k_base` + `encode_ordinary`) but operates on raw text rather than
+/// JSON messages. Approximation for budgeting only — not an exact
+/// per-provider token count.
+pub fn estimate_text_tokens(text: &str) -> usize {
+    ENVELOPE_TOKENIZER_CL100K.encode_ordinary(text).len()
+}
 
 /// Token budget for context assembly.
 #[derive(Debug, Clone)]

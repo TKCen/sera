@@ -4659,13 +4659,19 @@ async fn execute_turn(
     // ── Context envelope (sera-ibkr.3): one ordered assembly path for the
     // system-role context injected ahead of transcript replay. Segment order
     // and per-segment message shape match the previous inline assembly
-    // exactly. `SERA_CONTEXT_BUDGET_CHARS` (unset = unlimited = live
-    // behaviour unchanged) enables whole-segment budget eviction; the
-    // persona immutable anchor is never evicted.
-    let budget_chars = std::env::var("SERA_CONTEXT_BUDGET_CHARS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok());
-    let mut envelope = ContextEnvelopeBuilder::new(budget_chars);
+    // exactly. `SERA_CONTEXT_BUDGET_CHARS` and `SERA_CONTEXT_BUDGET_TOKENS`
+    // (both unset = unlimited = live behaviour unchanged) enable whole-segment
+    // budget eviction; the two compose as a union constraint and the persona
+    // immutable anchor is never evicted.
+    let budget_chars = parse_context_budget(
+        "SERA_CONTEXT_BUDGET_CHARS",
+        std::env::var("SERA_CONTEXT_BUDGET_CHARS").ok(),
+    );
+    let budget_tokens = parse_context_budget(
+        "SERA_CONTEXT_BUDGET_TOKENS",
+        std::env::var("SERA_CONTEXT_BUDGET_TOKENS").ok(),
+    );
+    let mut envelope = ContextEnvelopeBuilder::new(budget_chars).with_budget_tokens(budget_tokens);
 
     // Persona immutable anchor — priority 0, never evicted.
     if let Some(persona) = &agent_spec.persona
@@ -4808,7 +4814,14 @@ async fn execute_turn(
     // audit entry naming each dropped segment. Best-effort — never fails the
     // turn.
     if envelope.pressure {
-        emit_context_pressure_audit(agent_name, session_key, budget_chars, &envelope).await;
+        emit_context_pressure_audit(
+            agent_name,
+            session_key,
+            budget_chars,
+            budget_tokens,
+            &envelope,
+        )
+        .await;
     }
     let mut messages = envelope.to_messages();
 
@@ -5153,11 +5166,35 @@ async fn emit_tool_execution_audit(
     }
 }
 
+/// Parse an optional context-budget env value (sera-ibkr.3). Unset, empty,
+/// unparseable, or nonpositive values fail closed to `None` = budget disabled.
+///
+/// Kept pure (takes the raw `Option<String>` rather than reading the env)
+/// so unit tests can exercise it without env mutation, which is racy under
+/// parallel tests. Backward-compat note for chars: routing the chars var
+/// through here keeps observable behaviour identical (an unparseable or zero
+/// value already disabled the budget) and only adds a `warn!`.
+fn parse_context_budget(var_name: &str, raw: Option<String>) -> Option<usize> {
+    let raw = raw?;
+    match raw.parse::<usize>() {
+        Ok(n) if n > 0 => Some(n),
+        _ => {
+            tracing::warn!(
+                var = var_name,
+                value = %raw,
+                "invalid context budget value; disabling this budget"
+            );
+            None
+        }
+    }
+}
+
 /// OCSF class for a context-budget eviction audit entry (sera-ibkr.3).
 ///
 /// `6003` is "Policy Activity". A budget eviction is enforcement of a
-/// configured resource policy (`SERA_CONTEXT_BUDGET_CHARS`) — segments are
-/// dropped to satisfy a cap — so it mirrors the denial precedent
+/// configured resource policy (`SERA_CONTEXT_BUDGET_CHARS` /
+/// `SERA_CONTEXT_BUDGET_TOKENS`) — segments are dropped to satisfy a cap —
+/// so it mirrors the denial precedent
 /// (`emit_policy_denial_audit`) rather than the `3006` API Activity class
 /// used for tool execution. We pair it with `action_id="evicted"` so
 /// dashboards can distinguish a budget eviction from an outright `blocked`
@@ -5168,13 +5205,18 @@ const CONTEXT_PRESSURE_OCSF_CLASS_UID: u32 = 6003;
 /// event. Pure (no I/O) so unit tests can assert the shape without touching
 /// the hash-chain backend, mirroring [`make_tool_execution_audit_payload`].
 ///
-/// The payload names the agent/session, the configured char budget, the
-/// retained segment count + total chars, and one entry per evicted segment
-/// (`source`, `kind`, `priority`, `char_len`) in eviction order.
+/// The payload names the agent/session, the configured char/token budgets, the
+/// retained segment count + total chars (+ total tokens when a token budget is
+/// active), and one entry per evicted segment (`source`, `kind`, `priority`,
+/// `char_len`, `token_len`) in eviction order. `policy.name` distinguishes the
+/// active budget(s): `context_budget_chars`, `context_budget_tokens`, or
+/// `context_budget` when both are configured. Segment content is never
+/// included.
 fn make_context_pressure_audit_payload(
     agent_name: &str,
     session_key: &str,
     budget_chars: Option<usize>,
+    budget_tokens: Option<usize>,
     envelope: &sera_runtime::context_engine::envelope::ContextEnvelope,
 ) -> serde_json::Value {
     let evicted: Vec<serde_json::Value> = envelope
@@ -5186,9 +5228,22 @@ fn make_context_pressure_audit_payload(
                 "kind": format!("{:?}", e.kind),
                 "priority": e.priority,
                 "char_len": e.char_len,
+                "token_len": e.token_len,
             })
         })
         .collect();
+    // Name the policy by which budget(s) are configured. Preserves the
+    // historical "context_budget_chars" value for the char-only path. The
+    // no-budget arm is unreachable in production (this audit is only emitted
+    // under `envelope.pressure`, which requires an active budget), but is kept
+    // total with a distinct value so it can never masquerade as the
+    // both-active "context_budget" record if a future caller drops the gate.
+    let policy_name = match (budget_chars.is_some(), budget_tokens.is_some()) {
+        (true, true) => "context_budget",
+        (false, true) => "context_budget_tokens",
+        (true, false) => "context_budget_chars",
+        (false, false) => "context_budget_none",
+    };
     serde_json::json!({
         "activity_id": 1, // OCSF Policy Activity — enforcement action taken
         "action_id": "evicted",
@@ -5196,7 +5251,7 @@ fn make_context_pressure_audit_payload(
         "class_uid": CONTEXT_PRESSURE_OCSF_CLASS_UID,
         "severity_id": 3, // Medium — operator-actionable budget pressure
         "actor": { "user": { "name": agent_name } },
-        "policy": { "name": "context_budget_chars" },
+        "policy": { "name": policy_name },
         "resource": {
             "name": agent_name,
             "type": "context_envelope",
@@ -5206,8 +5261,10 @@ fn make_context_pressure_audit_payload(
         "status_detail": "context envelope budget pressure",
         "unmapped": {
             "budget_chars": budget_chars,
+            "budget_tokens": budget_tokens,
             "retained_segments": envelope.segments().len(),
             "retained_chars": envelope.total_chars(),
+            "retained_tokens": envelope.total_tokens(),
             "evicted_count": envelope.evicted().len(),
             "evicted": evicted,
         },
@@ -5223,12 +5280,18 @@ async fn emit_context_pressure_audit(
     agent_name: &str,
     session_key: &str,
     budget_chars: Option<usize>,
+    budget_tokens: Option<usize>,
     envelope: &sera_runtime::context_engine::envelope::ContextEnvelope,
 ) {
     use sera_telemetry::audit::{AuditEntry, audit_append};
 
-    let payload =
-        make_context_pressure_audit_payload(agent_name, session_key, budget_chars, envelope);
+    let payload = make_context_pressure_audit_payload(
+        agent_name,
+        session_key,
+        budget_chars,
+        budget_tokens,
+        envelope,
+    );
     let this_hash =
         AuditEntry::compute_hash(CONTEXT_PRESSURE_OCSF_CLASS_UID, &payload, &[0u8; 32]);
     let entry = AuditEntry {
@@ -13503,6 +13566,7 @@ spec:
             "sera",
             "ibkr3-pressure-session",
             Some(12),
+            None,
             &envelope,
         );
 
@@ -13513,6 +13577,10 @@ spec:
         assert_eq!(payload["unmapped"]["budget_chars"], 12);
         assert_eq!(payload["unmapped"]["retained_segments"], 1);
         assert_eq!(payload["unmapped"]["evicted_count"], 2);
+        // Char-only path: token fields are null and policy names chars only.
+        assert!(payload["unmapped"]["budget_tokens"].is_null());
+        assert!(payload["unmapped"]["retained_tokens"].is_null());
+        assert_eq!(payload["policy"]["name"], "context_budget_chars");
 
         let evicted = payload["unmapped"]["evicted"]
             .as_array()
@@ -13522,15 +13590,195 @@ spec:
         assert_eq!(evicted[0]["source"], "semantic_recall");
         assert_eq!(evicted[0]["priority"], PRIORITY_SEMANTIC_RECALL);
         assert_eq!(evicted[0]["char_len"], 10);
+        assert!(evicted[0]["token_len"].is_null());
         assert_eq!(evicted[1]["source"], "skill_index");
         assert_eq!(evicted[1]["priority"], PRIORITY_SKILL_INDEX);
         assert_eq!(evicted[1]["char_len"], 10);
+        assert!(evicted[1]["token_len"].is_null());
         // The retained anchor must never appear in the eviction record.
         assert!(
             evicted
                 .iter()
                 .all(|e| e["source"] != "persona.immutable_anchor")
         );
+    }
+
+    /// sera-ibkr.3: token-only pressure payload. Uses
+    /// `estimate_text_tokens` to derive a budget that admits only the anchor,
+    /// then asserts the token fields are populated and chars null.
+    #[test]
+    fn make_context_pressure_audit_payload_token_only() {
+        use sera_runtime::context_engine::envelope::{
+            ContextEnvelopeBuilder, ContextSegment, PRIORITY_IMMUTABLE_ANCHOR,
+            PRIORITY_SEMANTIC_RECALL,
+        };
+        use sera_runtime::context_engine::estimate_text_tokens;
+
+        let anchor = "anchor text";
+        let recall = "a semantic recall segment that should be evicted under token pressure";
+        let budget = estimate_text_tokens(anchor) + estimate_text_tokens(recall) - 1;
+
+        let mut b = ContextEnvelopeBuilder::new(None).with_budget_tokens(Some(budget));
+        b.push(ContextSegment::new(
+            SegmentKind::Persona,
+            "persona.immutable_anchor",
+            anchor,
+            PRIORITY_IMMUTABLE_ANCHOR,
+        ))
+        .push(ContextSegment::new(
+            SegmentKind::Custom("semantic_recall".into()),
+            "semantic_recall",
+            recall,
+            PRIORITY_SEMANTIC_RECALL,
+        ));
+        let envelope = b.build();
+        assert!(envelope.pressure, "token budget must force eviction");
+
+        let payload = make_context_pressure_audit_payload(
+            "sera",
+            "ibkr3-token-session",
+            None,
+            Some(budget),
+            &envelope,
+        );
+
+        assert_eq!(payload["policy"]["name"], "context_budget_tokens");
+        assert!(payload["unmapped"]["budget_chars"].is_null());
+        assert_eq!(payload["unmapped"]["budget_tokens"], budget);
+        let retained_tokens = payload["unmapped"]["retained_tokens"]
+            .as_u64()
+            .expect("retained_tokens must be a number under a token budget");
+        assert!(retained_tokens <= budget as u64);
+
+        let evicted = payload["unmapped"]["evicted"]
+            .as_array()
+            .expect("evicted must be an array");
+        assert_eq!(evicted.len(), 1);
+        // Evicted entry carries numeric token_len and char_len, and exposes
+        // exactly the five provenance keys — never any segment content.
+        let entry = &evicted[0];
+        assert!(entry["token_len"].as_u64().is_some());
+        assert!(entry["char_len"].as_u64().is_some());
+        let obj = entry.as_object().expect("evicted entry must be an object");
+        let mut keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["char_len", "kind", "priority", "source", "token_len"]);
+    }
+
+    /// sera-ibkr.3: both budgets configured → `policy.name == "context_budget"`.
+    #[test]
+    fn make_context_pressure_audit_payload_both_budgets() {
+        use sera_runtime::context_engine::envelope::{
+            ContextEnvelopeBuilder, ContextSegment, PRIORITY_IMMUTABLE_ANCHOR,
+            PRIORITY_SEMANTIC_RECALL,
+        };
+
+        // anchor(6) + recall(10) = 16; char budget 12 evicts recall.
+        let mut b = ContextEnvelopeBuilder::new(Some(12)).with_budget_tokens(Some(4096));
+        b.push(ContextSegment::new(
+            SegmentKind::Persona,
+            "persona.immutable_anchor",
+            "anchor",
+            PRIORITY_IMMUTABLE_ANCHOR,
+        ))
+        .push(ContextSegment::new(
+            SegmentKind::Custom("semantic_recall".into()),
+            "semantic_recall",
+            "recalltext",
+            PRIORITY_SEMANTIC_RECALL,
+        ));
+        let envelope = b.build();
+        assert!(envelope.pressure);
+
+        let payload = make_context_pressure_audit_payload(
+            "sera",
+            "ibkr3-both-session",
+            Some(12),
+            Some(4096),
+            &envelope,
+        );
+        assert_eq!(payload["policy"]["name"], "context_budget");
+        assert_eq!(payload["unmapped"]["budget_chars"], 12);
+        assert_eq!(payload["unmapped"]["budget_tokens"], 4096);
+    }
+
+    /// sera-ibkr.3: `parse_context_budget` fails closed for unset, empty,
+    /// unparseable, and nonpositive values; accepts positive integers.
+    #[test]
+    fn parse_context_budget_fails_closed() {
+        assert_eq!(parse_context_budget("V", None), None);
+        assert_eq!(parse_context_budget("V", Some("abc".into())), None);
+        assert_eq!(parse_context_budget("V", Some("0".into())), None);
+        assert_eq!(parse_context_budget("V", Some("-5".into())), None);
+        assert_eq!(parse_context_budget("V", Some("".into())), None);
+        assert_eq!(parse_context_budget("V", Some("4096".into())), Some(4096));
+    }
+
+    /// sera-ibkr.3: a generous token budget preserves segment structure —
+    /// each context source stays its own segment and renders to one system
+    /// message (the token budget never appends to user content). Mirrors the
+    /// envelope-order tests that use `ContextEnvelopeBuilder::new(None)`.
+    #[test]
+    fn token_budget_preserves_segment_structure() {
+        use sera_runtime::context_engine::envelope::{
+            ContextEnvelopeBuilder, ContextSegment, PRIORITY_IDENTITY_MEMORY,
+            PRIORITY_IMMUTABLE_ANCHOR, PRIORITY_SEMANTIC_RECALL, PRIORITY_SKILL_INDEX,
+        };
+
+        let mut b = ContextEnvelopeBuilder::new(None).with_budget_tokens(Some(100_000));
+        b.push(ContextSegment::new(
+            SegmentKind::Soul,
+            "identity_memory.soul",
+            "I am the soul.",
+            PRIORITY_IMMUTABLE_ANCHOR,
+        ))
+        .push(ContextSegment::new(
+            SegmentKind::Custom("identity_memory.durable_memory".into()),
+            "identity_memory.durable_memory",
+            "durable memory content",
+            PRIORITY_IDENTITY_MEMORY,
+        ))
+        .push(ContextSegment::new(
+            SegmentKind::Custom("skill_index".into()),
+            "skill_index",
+            "skill index block",
+            PRIORITY_SKILL_INDEX,
+        ))
+        .push(ContextSegment::new(
+            SegmentKind::Custom("semantic_recall".into()),
+            "semantic_recall",
+            "semantic recall content",
+            PRIORITY_SEMANTIC_RECALL,
+        ))
+        .push(ContextSegment::new(
+            SegmentKind::MemoryRecall("semantic_prefetch".into()),
+            "memory.hindsight.prefetch",
+            "prefetched recall content",
+            PRIORITY_SEMANTIC_RECALL,
+        ));
+        let envelope = b.build();
+
+        assert!(!envelope.pressure, "generous token budget must not evict");
+        let sources: Vec<&str> = envelope
+            .segments()
+            .iter()
+            .map(|s| s.source.as_str())
+            .collect();
+        assert_eq!(
+            sources,
+            vec![
+                "identity_memory.soul",
+                "identity_memory.durable_memory",
+                "skill_index",
+                "semantic_recall",
+                "memory.hindsight.prefetch",
+            ]
+        );
+        // One system message per segment — token budget never collapses or
+        // appends to user content.
+        let msgs = envelope.to_messages();
+        assert_eq!(msgs.len(), 5);
+        assert!(msgs.iter().all(|m| m["role"] == "system"));
     }
 
     // ── Memory prefetch segment (sera-ibkr.3) ───────────────────────────────

@@ -17,8 +17,19 @@
 //! (highest `priority` value) evictable segments are dropped first; the
 //! persona immutable anchor (`priority == 0`) is **never** evicted. A drop
 //! sets the [`ContextEnvelope::pressure`] flag and emits a `warn!` event.
+//!
+//! An optional **token budget** ([`ContextEnvelopeBuilder::with_budget_tokens`])
+//! sits alongside the char budget. When configured it estimates each segment's
+//! tokens via [`crate::context_engine::estimate_text_tokens`] (`cl100k_base`,
+//! budgeting only) and evicts in the **same** (priority desc, index desc) order
+//! until both active budgets are satisfied. The two budgets compose as a union
+//! constraint: eviction continues while either cap is exceeded, and each evicted
+//! segment is recorded exactly once. A `None`/zero token budget is disabled,
+//! leaving char-only behaviour byte-identical (no token estimation performed).
 
 use sera_types::memory::SegmentKind;
+
+use crate::context_engine::estimate_text_tokens;
 
 /// Priority of the persona immutable anchor. `0` is never evicted, matching
 /// the Soul convention in [`sera_types::memory::MemoryBlock`].
@@ -86,6 +97,10 @@ pub struct EvictedSegment {
     pub priority: u8,
     /// Character length of the dropped segment content.
     pub char_len: usize,
+    /// Estimated token length of the dropped segment content. `Some` only when
+    /// a token budget was configured — tokens are estimated only under an active
+    /// token budget, since estimation isn't free.
+    pub token_len: Option<usize>,
 }
 
 /// An ordered collection of [`ContextSegment`]s with budget bookkeeping.
@@ -97,6 +112,10 @@ pub struct ContextEnvelope {
     evicted: Vec<EvictedSegment>,
     /// `true` when budget pressure forced at least one eviction.
     pub pressure: bool,
+    /// Sum of retained segments' estimated tokens, computed during `build`
+    /// **only** when a token budget was configured. `None` when the token
+    /// budget is disabled (no estimation was performed).
+    total_tokens: Option<usize>,
 }
 
 impl ContextEnvelope {
@@ -140,6 +159,7 @@ impl ContextEnvelope {
         tracing::debug!(
             segments = self.segments.len(),
             total_chars = self.total_chars(),
+            total_tokens = ?self.total_tokens(),
             pressure = self.pressure,
             "context envelope assembled"
         );
@@ -149,6 +169,13 @@ impl ContextEnvelope {
     pub fn total_chars(&self) -> usize {
         self.segments.iter().map(|s| s.content.chars().count()).sum()
     }
+
+    /// Sum of retained segments' estimated tokens, available **only** when a
+    /// token budget was configured at build time. `None` when the token budget
+    /// is disabled — no estimation was performed.
+    pub fn total_tokens(&self) -> Option<usize> {
+        self.total_tokens
+    }
 }
 
 /// Builds a [`ContextEnvelope`] by pushing segments in canonical order, then
@@ -157,6 +184,9 @@ impl ContextEnvelope {
 pub struct ContextEnvelopeBuilder {
     segments: Vec<ContextSegment>,
     budget_chars: Option<usize>,
+    /// Optional token cap, composed as a union with the char budget. `None`
+    /// (default) = disabled = no token estimation performed.
+    budget_tokens: Option<usize>,
 }
 
 impl ContextEnvelopeBuilder {
@@ -166,7 +196,17 @@ impl ContextEnvelopeBuilder {
         Self {
             segments: Vec::new(),
             budget_chars,
+            budget_tokens: None,
         }
+    }
+
+    /// Configure an optional token budget (sera-ibkr.3). `None`/zero =
+    /// disabled = char-only behaviour byte-identical (no token estimation).
+    /// Composes with the char budget as a union constraint: eviction continues
+    /// while either active cap is exceeded.
+    pub fn with_budget_tokens(mut self, budget_tokens: Option<usize>) -> Self {
+        self.budget_tokens = budget_tokens;
+        self
     }
 
     /// Append a pre-built segment in canonical order.
@@ -185,23 +225,47 @@ impl ContextEnvelopeBuilder {
         let Self {
             segments,
             budget_chars,
+            budget_tokens,
         } = self;
 
-        let Some(budget) = budget_chars.filter(|b| *b > 0) else {
-            // Unlimited (None / 0): no eviction, no pressure.
+        // Effective budgets: zero/None disables that constraint (mirrors the
+        // historical char-budget semantics exactly).
+        let char_budget = budget_chars.filter(|b| *b > 0);
+        let token_budget = budget_tokens.filter(|b| *b > 0);
+
+        // Per-segment char lengths (always cheap) and token estimates (only
+        // when a token budget is active — estimation isn't free).
+        let char_lens: Vec<usize> = segments.iter().map(|s| s.content.chars().count()).collect();
+        let token_lens: Option<Vec<usize>> = token_budget
+            .map(|_| segments.iter().map(|s| estimate_text_tokens(&s.content)).collect());
+
+        if char_budget.is_none() && token_budget.is_none() {
+            // Both constraints disabled: no eviction, no pressure, and no token
+            // total (none was estimated).
             return ContextEnvelope {
                 segments,
                 evicted: Vec::new(),
                 pressure: false,
+                total_tokens: None,
             };
+        }
+
+        let mut current_chars: usize = char_lens.iter().sum();
+        let mut current_tokens: usize = token_lens.as_ref().map_or(0, |t| t.iter().sum());
+
+        // Union constraint: over budget when either active cap is exceeded.
+        let over_budget = |chars: usize, tokens: usize| -> bool {
+            char_budget.is_some_and(|b| chars > b) || token_budget.is_some_and(|b| tokens > b)
         };
 
-        let total: usize = segments.iter().map(|s| s.content.chars().count()).sum();
-        if total <= budget {
+        if !over_budget(current_chars, current_tokens) {
+            // Within all active budgets: no eviction. Token total is still
+            // reported when a token budget was configured.
             return ContextEnvelope {
                 segments,
                 evicted: Vec::new(),
                 pressure: false,
+                total_tokens: token_budget.map(|_| current_tokens),
             };
         }
 
@@ -210,7 +274,6 @@ impl ContextEnvelopeBuilder {
         // (input-order) segments first so earlier context is preferentially
         // retained.
         let mut keep: Vec<bool> = vec![true; segments.len()];
-        let mut current = total;
         let mut pressure = false;
         let mut evicted: Vec<EvictedSegment> = Vec::new();
 
@@ -230,17 +293,20 @@ impl ContextEnvelopeBuilder {
         });
 
         for idx in candidates {
-            if current <= budget {
+            if !over_budget(current_chars, current_tokens) {
                 break;
             }
             let seg = &segments[idx];
-            let char_len = seg.content.chars().count();
+            let char_len = char_lens[idx];
+            let token_len = token_lens.as_ref().map(|t| t[idx]);
             tracing::warn!(
                 kind = ?seg.kind,
                 source = %seg.source,
                 priority = seg.priority,
                 char_len,
-                budget,
+                budget = ?char_budget,
+                token_len = ?token_len,
+                budget_tokens = ?token_budget,
                 "context envelope budget pressure: evicting segment"
             );
             evicted.push(EvictedSegment {
@@ -248,9 +314,15 @@ impl ContextEnvelopeBuilder {
                 source: seg.source.clone(),
                 priority: seg.priority,
                 char_len,
+                token_len,
             });
             keep[idx] = false;
-            current -= char_len;
+            // saturating_sub for defence in depth: each candidate index is
+            // visited at most once today, so plain subtraction never underflows,
+            // but this keeps the running totals sound if candidate construction
+            // ever changes.
+            current_chars = current_chars.saturating_sub(char_len);
+            current_tokens = current_tokens.saturating_sub(token_len.unwrap_or(0));
             pressure = true;
         }
 
@@ -264,6 +336,7 @@ impl ContextEnvelopeBuilder {
             segments: retained,
             evicted,
             pressure,
+            total_tokens: token_budget.map(|_| current_tokens),
         }
     }
 }
@@ -501,5 +574,167 @@ mod tests {
             .push(seg("semantic_recall", "recall", PRIORITY_SEMANTIC_RECALL));
         let env = b.build();
         assert_eq!(env.total_chars(), 6);
+    }
+
+    // ── Token budget (sera-ibkr.3) ──────────────────────────────────────────
+
+    #[test]
+    fn token_only_pressure_evicts_most_evictable() {
+        // Chars unlimited; token budget set just below the two-segment sum so
+        // the most-evictable (recall) is dropped.
+        let anchor = "anchor text";
+        let recall = "this is the most evictable recall segment";
+        let anchor_t = estimate_text_tokens(anchor);
+        // Budget admits only the anchor.
+        let budget = anchor_t + estimate_text_tokens(recall) - 1;
+        let mut b = ContextEnvelopeBuilder::new(None).with_budget_tokens(Some(budget));
+        b.push(seg("persona.immutable_anchor", anchor, PRIORITY_IMMUTABLE_ANCHOR))
+            .push(seg("semantic_recall", recall, PRIORITY_SEMANTIC_RECALL));
+        let env = b.build();
+        assert!(env.pressure);
+        let sources: Vec<&str> = env.segments().iter().map(|s| s.source.as_str()).collect();
+        assert_eq!(sources, vec!["persona.immutable_anchor"]);
+        let total = env.total_tokens().expect("token budget active → Some");
+        assert!(total <= budget, "retained tokens {total} must be <= {budget}");
+    }
+
+    #[test]
+    fn token_eviction_order_recall_then_introspection_then_index() {
+        // Mirror eviction_order_recall_then_introspection_then_index, driven by
+        // a token budget that admits only the anchor.
+        let anchor = "anchor";
+        let budget = estimate_text_tokens(anchor);
+        let mut b = ContextEnvelopeBuilder::new(None).with_budget_tokens(Some(budget));
+        b.push(seg("persona.immutable_anchor", anchor, PRIORITY_IMMUTABLE_ANCHOR))
+            .push(seg("skill_dispatch", "skill dispatch text", PRIORITY_SKILL_INJECTION))
+            .push(seg("skill_index", "skill index text", PRIORITY_SKILL_INDEX))
+            .push(seg("self_introspection", "self introspection text", PRIORITY_SELF_INTROSPECTION))
+            .push(seg("semantic_recall", "semantic recall text", PRIORITY_SEMANTIC_RECALL));
+        let env = b.build();
+        assert!(env.pressure);
+        let sources: Vec<&str> = env.segments().iter().map(|s| s.source.as_str()).collect();
+        assert_eq!(sources, vec!["persona.immutable_anchor"]);
+        // Evicted in canonical order: recall, introspection, index, dispatch.
+        let evicted: Vec<&str> = env.evicted().iter().map(|e| e.source.as_str()).collect();
+        assert_eq!(
+            evicted,
+            vec!["semantic_recall", "self_introspection", "skill_index", "skill_dispatch"]
+        );
+    }
+
+    #[test]
+    fn token_equal_priority_later_evicted_first() {
+        // Two equal-priority segments under token pressure: the later one is
+        // evicted first so earlier context is preferentially retained.
+        let anchor = "anchor";
+        let first = "first recall block of words";
+        let second = "second recall block of words";
+        // Budget admits the anchor plus exactly one recall block.
+        let budget = estimate_text_tokens(anchor)
+            + estimate_text_tokens(first).max(estimate_text_tokens(second));
+        let mut b = ContextEnvelopeBuilder::new(None).with_budget_tokens(Some(budget));
+        b.push(seg("persona.immutable_anchor", anchor, PRIORITY_IMMUTABLE_ANCHOR))
+            .push(seg("recall_first", first, PRIORITY_SEMANTIC_RECALL))
+            .push(seg("recall_second", second, PRIORITY_SEMANTIC_RECALL));
+        let env = b.build();
+        assert!(env.pressure);
+        let evicted: Vec<&str> = env.evicted().iter().map(|e| e.source.as_str()).collect();
+        assert_eq!(evicted, vec!["recall_second"]);
+    }
+
+    #[test]
+    fn anchor_never_evicted_under_token_pressure() {
+        // Anchor alone exceeds the token budget, yet it is retained.
+        let anchor = "this is a fairly long immutable anchor segment that exceeds the budget";
+        let budget = 1;
+        let mut b = ContextEnvelopeBuilder::new(None).with_budget_tokens(Some(budget));
+        b.push(seg("persona.immutable_anchor", anchor, PRIORITY_IMMUTABLE_ANCHOR))
+            .push(seg("semantic_recall", "recall text", PRIORITY_SEMANTIC_RECALL));
+        let env = b.build();
+        assert!(env.pressure);
+        let sources: Vec<&str> = env.segments().iter().map(|s| s.source.as_str()).collect();
+        assert_eq!(sources, vec!["persona.immutable_anchor"]);
+    }
+
+    #[test]
+    fn char_only_evicted_have_no_token_len_and_total_tokens_none() {
+        // Only a char budget set: evicted records carry token_len None and
+        // total_tokens() is None.
+        let mut b = ContextEnvelopeBuilder::new(Some(6));
+        b.push(seg("persona.immutable_anchor", "anchor", PRIORITY_IMMUTABLE_ANCHOR))
+            .push(seg("semantic_recall", "recall", PRIORITY_SEMANTIC_RECALL));
+        let env = b.build();
+        assert!(env.pressure);
+        assert!(env.total_tokens().is_none());
+        assert!(env.evicted().iter().all(|e| e.token_len.is_none()));
+    }
+
+    #[test]
+    fn combined_char_and_token_pressure_satisfies_union() {
+        // Construct so the char budget alone would evict only the largest
+        // (recall) segment, but the token budget forces a second eviction.
+        let anchor = "anchor";
+        let mid = "midmid"; // 6 chars
+        let recall = "recallrecallrecall"; // 18 chars, largest
+        let anchor_c = anchor.chars().count();
+        let mid_c = mid.chars().count();
+        let recall_c = recall.chars().count();
+        // Char budget admits anchor + mid (evicts only recall).
+        let char_budget = anchor_c + mid_c;
+        assert!(char_budget < anchor_c + mid_c + recall_c);
+        // Token budget admits only the anchor (forces mid out too, beyond the
+        // single char-driven recall eviction).
+        let token_budget = estimate_text_tokens(anchor);
+        let mut b = ContextEnvelopeBuilder::new(Some(char_budget))
+            .with_budget_tokens(Some(token_budget));
+        b.push(seg("persona.immutable_anchor", anchor, PRIORITY_IMMUTABLE_ANCHOR))
+            .push(seg("skill_index", mid, PRIORITY_SKILL_INDEX))
+            .push(seg("semantic_recall", recall, PRIORITY_SEMANTIC_RECALL));
+        let env = b.build();
+        assert!(env.pressure);
+        // Both recall and mid evicted, each exactly once, in canonical order.
+        let evicted: Vec<&str> = env.evicted().iter().map(|e| e.source.as_str()).collect();
+        assert_eq!(evicted, vec!["semantic_recall", "skill_index"]);
+        // No double-counting: each evicted source unique.
+        let mut uniq = evicted.clone();
+        uniq.sort_unstable();
+        uniq.dedup();
+        assert_eq!(uniq.len(), evicted.len());
+        // Records carry both char_len and Some(token_len).
+        assert!(env.evicted().iter().all(|e| e.char_len > 0 && e.token_len.is_some()));
+        // Union constraint satisfied where satisfiable: only the anchor remains.
+        let sources: Vec<&str> = env.segments().iter().map(|s| s.source.as_str()).collect();
+        assert_eq!(sources, vec!["persona.immutable_anchor"]);
+        // Retained token total within budget (anchor alone is within token_budget).
+        let total = env.total_tokens().expect("token budget active → Some");
+        assert!(total <= token_budget);
+    }
+
+    #[test]
+    fn token_budget_zero_treated_as_disabled() {
+        // Some(0) token budget mirrors zero_budget_treated_as_unlimited: no
+        // eviction, no token total.
+        let mut b = ContextEnvelopeBuilder::new(None).with_budget_tokens(Some(0));
+        b.push(seg("a", "hello world this is plenty of text", PRIORITY_SKILL_INJECTION));
+        let env = b.build();
+        assert!(!env.pressure);
+        assert_eq!(env.segments().len(), 1);
+        assert!(env.total_tokens().is_none());
+    }
+
+    #[test]
+    fn evicted_token_len_equals_estimate_of_dropped_content() {
+        let anchor = "anchor";
+        let recall = "the recall content that will be dropped";
+        let budget = estimate_text_tokens(anchor);
+        let mut b = ContextEnvelopeBuilder::new(None).with_budget_tokens(Some(budget));
+        b.push(seg("persona.immutable_anchor", anchor, PRIORITY_IMMUTABLE_ANCHOR))
+            .push(seg("semantic_recall", recall, PRIORITY_SEMANTIC_RECALL));
+        let env = b.build();
+        assert!(env.pressure);
+        let evicted = env.evicted();
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0].source, "semantic_recall");
+        assert_eq!(evicted[0].token_len, Some(estimate_text_tokens(recall)));
     }
 }

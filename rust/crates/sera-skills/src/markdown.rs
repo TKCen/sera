@@ -53,8 +53,12 @@ pub struct ParsedSkillMarkdown {
 ///
 /// All fields except `name` are optional — absent fields map to `None`
 /// or empty collections on the produced `SkillDefinition`.
+///
+/// Unknown frontmatter fields are tolerated (collected into `unknown`) so
+/// that skills authored against extended schemas — e.g. Hermes/OpenClaw
+/// skills carrying a `platforms` field — still load. The ignored field
+/// names are logged at debug level.
 #[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
 struct Frontmatter {
     name: String,
 
@@ -81,6 +85,11 @@ struct Frontmatter {
 
     #[serde(default)]
     source: Option<String>,
+
+    /// Catch-all for frontmatter fields not in the known schema. These are
+    /// ignored rather than rejected so externally-authored skills load.
+    #[serde(flatten)]
+    unknown: HashMap<String, serde_yaml::Value>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -198,6 +207,16 @@ pub fn parse_skill_markdown_str(
             e
         ))
     })?;
+
+    if !fm.unknown.is_empty() {
+        let mut ignored: Vec<&str> = fm.unknown.keys().map(String::as_str).collect();
+        ignored.sort_unstable();
+        tracing::debug!(
+            path = %source_path.display(),
+            ignored_fields = ?ignored,
+            "ignoring unknown skill frontmatter fields"
+        );
+    }
 
     // Validate name.
     if !name_regex().is_match(&fm.name) {
@@ -533,10 +552,13 @@ You are a senior code reviewer. When activated, you systematically examine code.
     }
 
     #[test]
-    fn unknown_frontmatter_field_rejected() {
+    fn unknown_frontmatter_field_is_ignored() {
+        // Unknown top-level fields are tolerated rather than rejected so that
+        // externally-authored skills still load.
         let raw = "---\nname: x\nversion: 1.0.0\nunknown_field: 42\n---\n\nbody\n";
-        let err = parse_skill_markdown_str(raw, PathBuf::from("x.md")).unwrap_err();
-        assert!(matches!(err, SkillsError::Format(_)));
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("x.md"))
+            .expect("unknown field should be ignored, not rejected");
+        assert_eq!(parsed.definition.name, "x");
     }
 
     // --- additional gap-filling tests ---
@@ -625,6 +647,18 @@ body
     }
 
     #[test]
+    fn unknown_frontmatter_field_is_tolerated() {
+        // Mirrors externally-authored skills (e.g. Hermes/OpenClaw) that
+        // carry a `platforms` field absent from the known schema. The skill
+        // must still parse and register rather than being skipped.
+        let raw = "---\nname: obsidian\nversion: 1.0.0\ndescription: Obsidian skill\nplatforms: [linux, macos]\n---\nbody text\n";
+        let parsed = parse_skill_markdown_str(raw, PathBuf::from("obsidian/SKILL.md"))
+            .expect("skill with unknown `platforms` field should parse");
+        assert_eq!(parsed.definition.name, "obsidian");
+        assert_eq!(parsed.config.name, "obsidian");
+    }
+
+    #[test]
     fn binary_garbage_wrapped_in_utf8_does_not_panic() {
         // Build a string from ASCII control characters (valid UTF-8, junk content).
         let garbage: String = (0u8..=31)
@@ -641,7 +675,7 @@ body
         // Construct deeply nested YAML that serde_yaml must handle.
         let nested = "a:\n  ".repeat(50) + "b: 1";
         let raw = format!("---\nname: deep\nversion: 1.0.0\nextra:\n  {nested}\n---\nbody\n");
-        // deny_unknown_fields will reject it; we just want no panic.
+        // Unknown nested fields are tolerated; we just want no panic.
         let _ = parse_skill_markdown_str(&raw, PathBuf::from("deep.md"));
     }
 

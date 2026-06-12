@@ -461,8 +461,17 @@ mod tests {
     use super::*;
     use crate::provider_registry::lookup;
 
+    /// Serialises tests that mutate the process-global `OPENROUTER_API_KEY`.
+    /// cargo runs a test binary's cases on multiple threads, so without this
+    /// the env-reading and env-setting tests observe each other's mutations
+    /// (the `validate-rust` flake: this handler read a sibling test's
+    /// `from-env-key` instead of the prompted value). `into_inner` ignores
+    /// poisoning so one failing assertion does not cascade into the other.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn api_key_handler_writes_secret_and_returns_ref() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let entry = lookup("openrouter").unwrap();
         let prompter = MockPrompter::new(
             vec![""], // base_url -> use default
@@ -472,7 +481,8 @@ mod tests {
 
         // Ensure no env var leaks into the test
         let saved = std::env::var("OPENROUTER_API_KEY").ok();
-        // SAFETY: tests are single-threaded under cargo's per-binary serialisation
+        // SAFETY: env mutation is serialised via ENV_LOCK for the duration of
+        // this test, so no other test reads/writes OPENROUTER_API_KEY concurrently.
         unsafe { std::env::remove_var("OPENROUTER_API_KEY") };
 
         let cfg = ApiKeyHandler.run(entry, "openrouter-test", &prompter, &secrets).unwrap();
@@ -498,11 +508,13 @@ mod tests {
 
     #[test]
     fn api_key_handler_uses_env_when_set() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let entry = lookup("openrouter").unwrap();
         let prompter = MockPrompter::new(vec![""], vec![]);
         let secrets = MockSecretStore::default();
 
         let saved = std::env::var("OPENROUTER_API_KEY").ok();
+        // SAFETY: env mutation is serialised via ENV_LOCK (see sibling test).
         unsafe { std::env::set_var("OPENROUTER_API_KEY", "from-env-key") };
 
         let cfg = ApiKeyHandler

@@ -4571,9 +4571,45 @@ fn memory_prefetch_source_for(backend: Option<&str>) -> &'static str {
     }
 }
 
-/// Provenance label for the prefetch segment, derived from `SERA_MEMORY_BACKEND`.
+/// Provenance label for the prefetch segment, derived from the effective
+/// selected backend (sera-ibkr.1 repair: a Hindsight request that fell back
+/// to sqlite must not label segments as Hindsight-sourced).
 fn memory_prefetch_source() -> &'static str {
-    memory_prefetch_source_for(std::env::var("SERA_MEMORY_BACKEND").ok().as_deref())
+    memory_prefetch_source_for(memory_backend_for_gating().as_deref())
+}
+
+/// Semantic-memory backend actually selected at boot (sera-ibkr.1 repair,
+/// Codex P2 on PR #1310). `run_start` records the constructed store's kind —
+/// including fallback resolution, e.g. `SERA_MEMORY_BACKEND=hindsight` whose
+/// `HindsightStore::new` failed and fell back to sqlite. Gating must consult
+/// this, not the raw env request, so a `memory_plugins=false` agent keeps
+/// recall/prefetch against the built-in fallback store.
+static EFFECTIVE_MEMORY_BACKEND: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// Record the constructed semantic-memory backend kind. First write wins;
+/// `run_start` calls this exactly once per process right after selection.
+fn record_effective_memory_backend(kind: &'static str) {
+    let _ = EFFECTIVE_MEMORY_BACKEND.set(kind);
+}
+
+/// Pure layered resolution for the backend kind used by gating/provenance:
+/// the recorded effective backend wins; the raw requested env value is only
+/// a fallback for paths that run before/without boot-time selection (unit
+/// tests, helpers exercised standalone). Factored out so the
+/// fallback-vs-request truth table is testable without process globals.
+fn memory_backend_for_gating_with(
+    recorded: Option<&'static str>,
+    requested: Option<String>,
+) -> Option<String> {
+    recorded.map(str::to_string).or(requested)
+}
+
+/// [`memory_backend_for_gating_with`] against the live process state.
+fn memory_backend_for_gating() -> Option<String> {
+    memory_backend_for_gating_with(
+        EFFECTIVE_MEMORY_BACKEND.get().copied(),
+        std::env::var("SERA_MEMORY_BACKEND").ok(),
+    )
 }
 
 // ── Per-agent feature toggles (sera-ibkr.1) ─────────────────────────────────
@@ -4605,14 +4641,13 @@ fn semantic_memory_reads_enabled(
     true
 }
 
-/// [`semantic_memory_reads_enabled`] against the live `SERA_MEMORY_BACKEND`.
+/// [`semantic_memory_reads_enabled`] against the effective selected backend
+/// (recorded at boot, falling back to the raw `SERA_MEMORY_BACKEND` request
+/// only when selection has not run — see [`memory_backend_for_gating`]).
 fn semantic_memory_reads_enabled_env(
     features: &sera_types::config_manifest::AgentFeatureSetSpec,
 ) -> bool {
-    semantic_memory_reads_enabled(
-        features,
-        std::env::var("SERA_MEMORY_BACKEND").ok().as_deref(),
-    )
+    semantic_memory_reads_enabled(features, memory_backend_for_gating().as_deref())
 }
 
 /// Spawn the fire-and-forget prefetch warm unless the agent's feature
@@ -7800,6 +7835,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
                         read_only,
                         "SemanticMemoryStore backend: HindsightStore"
                     );
+                    record_effective_memory_backend("hindsight");
                     break 'store Arc::new(store);
                 }
                 Err(e) => tracing::warn!(
@@ -7818,6 +7854,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
                                 tracing::info!(
                                     "SemanticMemoryStore backend: PgVectorStore (DATABASE_URL set)"
                                 );
+                                record_effective_memory_backend("pgvector");
                                 break 'store Arc::new(store);
                             }
                             Err(e) => tracing::warn!(
@@ -7848,6 +7885,10 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
             vec_available = store.vector_available(),
             "SemanticMemoryStore backend: SqliteMemoryStore"
         );
+        // sera-ibkr.1 repair: record the *effective* kind — this branch is
+        // also the fallback for a failed hindsight/pgvector request, and
+        // plugin gating must see sqlite here, not the raw env request.
+        record_effective_memory_backend("sqlite");
         Arc::new(store)
     };
 
@@ -14208,6 +14249,45 @@ Treat as historical reference, not new user input:\n- picture-first creative wor
         assert!(semantic_memory_reads_enabled(&no_plugins, Some("sqlite")));
         assert!(!semantic_memory_reads_enabled(&no_plugins, Some("hindsight")));
         assert!(!semantic_memory_reads_enabled(&no_plugins, Some(" Hindsight ")));
+    }
+
+    #[test]
+    fn memory_backend_for_gating_prefers_recorded_effective_backend() {
+        // Codex P2 on PR #1310: SERA_MEMORY_BACKEND=hindsight requested but
+        // HindsightStore::new failed and selection fell back to sqlite. The
+        // recorded effective backend must win over the raw request, so a
+        // memory_plugins=false agent keeps recall/prefetch on the built-in
+        // fallback store.
+        let no_plugins = AgentFeatureSetSpec {
+            memory_plugins: FeatureToggleSpec { enabled: false },
+            ..AgentFeatureSetSpec::default()
+        };
+        let fallback =
+            memory_backend_for_gating_with(Some("sqlite"), Some("hindsight".to_string()));
+        assert_eq!(fallback.as_deref(), Some("sqlite"));
+        assert!(semantic_memory_reads_enabled(&no_plugins, fallback.as_deref()));
+
+        // Successfully selected Hindsight: plugin gating applies.
+        let selected =
+            memory_backend_for_gating_with(Some("hindsight"), Some("hindsight".to_string()));
+        assert!(!semantic_memory_reads_enabled(&no_plugins, selected.as_deref()));
+
+        // No recorded selection (pre-boot/unit paths): the raw request is the
+        // only signal available and is used as-is.
+        let unrecorded = memory_backend_for_gating_with(None, Some("hindsight".to_string()));
+        assert!(!semantic_memory_reads_enabled(&no_plugins, unrecorded.as_deref()));
+        assert_eq!(memory_backend_for_gating_with(None, None), None);
+
+        // The prefetch provenance label follows the effective backend too —
+        // a fallback store must not produce hindsight-labelled segments.
+        assert_eq!(
+            memory_prefetch_source_for(fallback.as_deref()),
+            "memory.semantic.prefetch"
+        );
+        assert_eq!(
+            memory_prefetch_source_for(selected.as_deref()),
+            "memory.hindsight.prefetch"
+        );
     }
 
     #[test]

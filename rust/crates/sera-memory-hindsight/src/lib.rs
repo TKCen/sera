@@ -239,9 +239,13 @@ struct ReflectSourceWire {
 
 #[derive(Debug, Deserialize)]
 struct ReflectResponse {
-    #[serde(default)]
+    /// Hindsight's live reflect endpoint returns the generated answer under
+    /// `text`; `answer` is accepted as a compatible alias.
+    #[serde(default, alias = "text")]
     answer: String,
-    #[serde(default, alias = "results")]
+    /// Hindsight's live reflect endpoint returns supporting evidence under
+    /// `based_on`; `sources` / `results` are accepted as compatible aliases.
+    #[serde(default, alias = "based_on", alias = "results")]
     sources: Vec<ReflectSourceWire>,
 }
 
@@ -971,6 +975,37 @@ mod tests {
         assert_eq!(ans.sources[0].id.as_deref(), Some("m-1"));
         assert_eq!(ans.sources[0].content, "user asked for brevity");
         assert!((ans.sources[1].score - 0.6).abs() < 1e-6);
+        assert_eq!(ans.provenance, "hindsight:reflect:agent:agent-1");
+    }
+
+    #[tokio::test]
+    async fn reflect_reads_live_text_and_based_on_shape() {
+        // Regression: the live Hindsight reflect endpoint returns the answer
+        // under `text` and evidence under `based_on` (not `answer`/`sources`).
+        // Before the alias fix both fields defaulted, silently yielding an
+        // empty answer and no sources.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/default/banks/agent:agent-1/reflect"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "text": "You favour terse, direct answers.",
+                "based_on": [
+                    {"id": "m-1", "text": "user asked to keep it short", "score": 0.91},
+                    {"id": "m-2", "content": "dislikes preamble", "score": 0.42},
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let store = HindsightStore::new(fast_config(server.uri())).unwrap();
+        let ans = store.reflect(&reflect_query("how should I answer?")).await.unwrap();
+
+        assert_eq!(ans.answer, "You favour terse, direct answers.");
+        assert_eq!(ans.sources.len(), 2, "based_on evidence must be parsed");
+        assert_eq!(ans.sources[0].id.as_deref(), Some("m-1"));
+        assert_eq!(ans.sources[0].content, "user asked to keep it short");
+        assert!((ans.sources[0].score - 0.91).abs() < 1e-6);
+        assert_eq!(ans.sources[1].content, "dislikes preamble");
         assert_eq!(ans.provenance, "hindsight:reflect:agent:agent-1");
     }
 

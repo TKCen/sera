@@ -207,11 +207,19 @@ impl LlmProvider for FallbackChain {
             })
             .collect();
 
+        // Mirror the direct `LlmClient` adapter (sera-xbmz): embed the assistant
+        // `tool_calls` in the transcript message so the next provider request
+        // carries a well-formed assistant tool-call row before its tool results.
+        let mut response = serde_json::json!({
+            "role": "assistant",
+            "content": result.message.content,
+        });
+        if !tool_calls.is_empty() {
+            response["tool_calls"] = serde_json::Value::Array(tool_calls.clone());
+        }
+
         Ok(ThinkResult {
-            response: serde_json::json!({
-                "role": "assistant",
-                "content": result.message.content,
-            }),
+            response,
             tool_calls,
             tokens: TokenUsage {
                 prompt_tokens: result.prompt_tokens,
@@ -276,5 +284,51 @@ mod tests {
         let client = LlmClient::with_params("http://unused.invalid", "m", None, 1_000);
         let chain = FallbackChain::new(vec![client]);
         assert_eq!(chain.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn fallback_chain_adapter_embeds_tool_calls_in_assistant_transcript() {
+        // sera-xbmz: the FallbackChain LlmProvider adapter must embed assistant
+        // tool_calls in the transcript response, same as the direct LlmClient
+        // adapter — otherwise the SERA_LLM_FALLBACK_* configuration recreates
+        // the orphaned tool-transcript / provider-400 scenario.
+        use crate::turn::LlmProvider;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let sse = concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"file-write\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(sse))
+            .mount(&server)
+            .await;
+
+        let client = LlmClient::with_params(&server.uri(), "test-model", None, 512);
+        let chain = FallbackChain::new(vec![client]);
+        let tool = serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "file-write",
+                "description": "Tool file-write",
+                "parameters": {"type":"object","properties":{}}
+            }
+        });
+        let result = <FallbackChain as LlmProvider>::chat(
+            &chain,
+            &[serde_json::json!({"role":"user","content":"create a file"})],
+            &[tool],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.tool_calls[0]["id"], "call_1");
+        assert_eq!(result.response["role"], "assistant");
+        assert_eq!(result.response["tool_calls"][0]["id"], "call_1");
+        assert_eq!(result.response["tool_calls"][0]["function"]["name"], "file-write");
     }
 }

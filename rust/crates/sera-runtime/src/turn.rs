@@ -376,8 +376,19 @@ pub async fn think(
             rationale,
             created_at_ms,
         };
+        // The planning checkpoint is persisted as an assistant message, but the
+        // tool calls are deferred into `plan` and not dispatched (with matching
+        // tool-result rows) until the next iteration. Strip the embedded
+        // `tool_calls` from the persisted response so it is not an orphaned
+        // assistant tool-call row that strict OpenAI-compatible providers
+        // (e.g. MiniMax) reject on the next request. The calls are preserved
+        // in `plan.tool_calls` and re-surface via `TurnOutcome::PlanEmitted`.
+        let mut response = raw.response;
+        if let Some(obj) = response.as_object_mut() {
+            obj.remove("tool_calls");
+        }
         return ThinkResult {
-            response: raw.response,
+            response,
             // Empty tool_calls so act() does not dispatch in this iteration.
             tool_calls: vec![],
             tokens: raw.tokens,
@@ -419,6 +430,22 @@ impl ThinkResult {
     }
 }
 
+fn tool_call_names(tool_calls: &[serde_json::Value]) -> String {
+    let names = tool_calls
+        .iter()
+        .filter_map(|tc| {
+            tc.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+        })
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        "unknown".to_string()
+    } else {
+        names.join(",")
+    }
+}
+
 /// Act — dispatch tool calls, check for handoffs, doom-loop detection.
 ///
 /// When a `ToolDispatcher` is provided, tool calls from the LLM are dispatched
@@ -447,10 +474,11 @@ pub async fn act(
 
     // Doom loop check applies only when the model is trying another act cycle.
     if ctx.doom_loop_count >= DOOM_LOOP_THRESHOLD {
+        let tools = tool_call_names(&think_result.tool_calls);
         return ActResult::Interruption {
             reason: format!(
-                "doom loop: {} consecutive act cycles",
-                ctx.doom_loop_count
+                "doom loop: {} consecutive act cycles; latest attempted tool(s): {}",
+                ctx.doom_loop_count, tools
             ),
         };
     }
@@ -1216,6 +1244,10 @@ mod tests {
         match result {
             ActResult::Interruption { reason } => {
                 assert!(reason.contains("doom loop"), "unexpected reason: {reason}");
+                assert!(
+                    reason.contains("status_probe"),
+                    "doom-loop interruption should name latest attempted tool: {reason}"
+                );
             }
             other => panic!("expected doom-loop Interruption, got {:?}", other),
         }
@@ -1502,6 +1534,65 @@ mod tests {
                 plan: None,
             })
         }
+    }
+
+    /// Provider whose `response` already embeds `tool_calls` (mirroring the
+    /// real `LlmClient` adapter), used to verify PlanAndAct strips them from
+    /// the persisted planning checkpoint.
+    struct EmbeddedToolCallProvider;
+
+    #[async_trait]
+    impl LlmProvider for EmbeddedToolCallProvider {
+        async fn chat(
+            &self,
+            _messages: &[serde_json::Value],
+            _tools: &[serde_json::Value],
+        ) -> Result<ThinkResult, ThinkError> {
+            let tool_calls = vec![serde_json::json!({
+                "id": "call_1",
+                "type": "function",
+                "function": { "name": "status_probe", "arguments": "{}" }
+            })];
+            Ok(ThinkResult {
+                response: serde_json::json!({
+                    "role": "assistant",
+                    "content": "let me check the status",
+                    "tool_calls": tool_calls,
+                }),
+                tool_calls,
+                tokens: TokenUsage::default(),
+                plan: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_and_act_strips_tool_calls_from_persisted_planning_response() {
+        // sera-xbmz: think() defers dispatch under PlanAndAct, so the persisted
+        // planning checkpoint must not be an orphaned assistant tool-call row.
+        let provider = EmbeddedToolCallProvider;
+        let result = think(
+            &[],
+            &[],
+            &ReactMode::PlanAndAct,
+            Some(&provider),
+            &ToolUseBehavior::Auto,
+        )
+        .await;
+
+        // Plan carries the deferred calls; act() sees none this iteration.
+        assert!(result.tool_calls.is_empty(), "act must not dispatch this iteration");
+        let plan = result.plan.expect("PlanAndAct should produce a plan");
+        assert_eq!(plan.tool_calls.len(), 1);
+        assert_eq!(plan.tool_calls[0]["function"]["name"], "status_probe");
+
+        // The persisted planning response must not carry orphaned tool_calls.
+        assert!(
+            result.response.get("tool_calls").is_none(),
+            "planning checkpoint must not persist an orphaned assistant tool-call row: {:?}",
+            result.response
+        );
+        assert_eq!(result.response["content"], "let me check the status");
     }
 
     #[tokio::test]

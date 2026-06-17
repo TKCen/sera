@@ -501,11 +501,21 @@ impl AgentRuntime for DefaultRuntime {
                     plan_tool_call_count = plan.tool_calls.len(),
                     "PlanAndAct: dispatching staged plan (skipping LLM call)"
                 );
+                // sera-xbmz: embed the staged plan's tool_calls in the synthetic
+                // execution response so the assistant row pushed before the tool
+                // results (RunAgain arm below) is a well-formed OpenAI tool-call
+                // message. Without this, the PlanAndAct dispatch path emits an
+                // assistant row without tool_calls followed by `role:"tool"` rows,
+                // recreating the orphaned transcript strict providers reject.
+                let mut response = serde_json::json!({
+                    "role": "assistant",
+                    "content": plan.rationale.clone(),
+                });
+                if !plan.tool_calls.is_empty() {
+                    response["tool_calls"] = serde_json::Value::Array(plan.tool_calls.clone());
+                }
                 turn::ThinkResult {
-                    response: serde_json::json!({
-                        "role": "assistant",
-                        "content": plan.rationale.clone(),
-                    }),
+                    response,
                     tool_calls: plan.tool_calls.clone(),
                     tokens: sera_types::runtime::TokenUsage::default(),
                     plan: None,
@@ -2007,6 +2017,77 @@ mod tests {
             seen_names,
             vec!["plan-tool-a".to_string(), "plan-tool-b".to_string()],
             "plan's tool calls must dispatch in order during the act phase"
+        );
+    }
+
+    /// LLM that captures the messages it receives on its most recent call, so a
+    /// test can inspect the post-dispatch transcript shape.
+    struct CapturingPlanLlm {
+        rounds: std::sync::Mutex<std::collections::VecDeque<Vec<serde_json::Value>>>,
+        last_messages: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl turn::LlmProvider for CapturingPlanLlm {
+        async fn chat(
+            &self,
+            messages: &[serde_json::Value],
+            _tools: &[serde_json::Value],
+        ) -> Result<turn::ThinkResult, turn::ThinkError> {
+            *self.last_messages.lock().unwrap() = messages.to_vec();
+            let calls = self.rounds.lock().unwrap().pop_front().unwrap_or_default();
+            Ok(turn::ThinkResult {
+                response: serde_json::json!({
+                    "role": "assistant",
+                    "content": "planning",
+                }),
+                tool_calls: calls,
+                tokens: sera_types::runtime::TokenUsage::default(),
+                plan: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_and_act_execution_response_embeds_tool_calls_before_tool_results() {
+        // sera-xbmz: in the PlanAndAct dispatch iteration the synthetic
+        // execution response must carry the plan's tool_calls, so the assistant
+        // row persisted before the tool-result rows is a well-formed OpenAI
+        // tool-call transcript (no orphan that strict providers reject).
+        let last_messages = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let llm = CapturingPlanLlm {
+            rounds: std::sync::Mutex::new(
+                vec![vec![tool_call("p1", "plan-tool-a")], vec![]].into(),
+            ),
+            last_messages: last_messages.clone(),
+        };
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let dispatcher = RecordingDispatcher { seen };
+
+        let runtime = DefaultRuntime::new(make_context_engine())
+            .with_allow_missing_constitutional_gate(true)
+            .with_llm(Box::new(llm))
+            .with_tool_dispatcher(Box::new(dispatcher));
+
+        let _ = runtime
+            .execute_turn(plan_and_act_ctx())
+            .await
+            .expect("execute_turn");
+
+        // The final LLM call sees the conversation after plan dispatch: the
+        // synthetic assistant execution response followed by the tool result.
+        let msgs = last_messages.lock().unwrap().clone();
+        let tool_idx = msgs
+            .iter()
+            .position(|m| m.get("role").and_then(|r| r.as_str()) == Some("tool"))
+            .expect("expected a tool-result row in the post-dispatch transcript");
+        assert!(tool_idx > 0, "tool result must be preceded by an assistant row");
+        let assistant = &msgs[tool_idx - 1];
+        assert_eq!(assistant["role"], "assistant");
+        assert_eq!(
+            assistant["tool_calls"][0]["function"]["name"],
+            "plan-tool-a",
+            "assistant row before tool results must carry the plan's tool_calls (no orphan): {msgs:?}"
         );
     }
 

@@ -1072,7 +1072,12 @@ impl LlmProvider for LlmClient {
             .await
             .map_err(|e| ThinkError::Llm(e.to_string()))?;
 
-        // Convert tool calls to Value
+        // Convert tool calls to Value once, then embed the same OpenAI-shape
+        // calls in the assistant transcript message. Without this, the next
+        // provider request contains a bare `{role:"assistant"}` followed by
+        // tool results, so local OpenAI-compatible models cannot ground the
+        // results and tend to repeat the same tool call until the doom-loop
+        // guard interrupts.
         let tool_calls: Vec<serde_json::Value> = result
             .message
             .tool_calls
@@ -1090,11 +1095,16 @@ impl LlmProvider for LlmClient {
             })
             .collect();
 
+        let mut response = serde_json::json!({
+            "role": "assistant",
+            "content": result.message.content,
+        });
+        if !tool_calls.is_empty() {
+            response["tool_calls"] = serde_json::Value::Array(tool_calls.clone());
+        }
+
         Ok(ThinkResult {
-            response: serde_json::json!({
-                "role": "assistant",
-                "content": result.message.content,
-            }),
+            response,
             tool_calls,
             tokens: TokenUsage {
                 prompt_tokens: result.prompt_tokens,
@@ -1730,6 +1740,33 @@ mod tests {
         }
     }
 
+    fn make_assistant_tool_call_msg(call_id: &str, tool_name: &str) -> ChatMessage {
+        ChatMessage {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: call_id.to_string(),
+                call_type: "function".to_string(),
+                function: ToolCallFunction {
+                    name: tool_name.to_string(),
+                    arguments: "{}".to_string(),
+                },
+            }]),
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    fn make_tool_result_msg(call_id: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            role: "tool".to_string(),
+            content: Some(content.to_string()),
+            tool_calls: None,
+            tool_call_id: Some(call_id.to_string()),
+            name: None,
+        }
+    }
+
     // --- system message coalesce (sera-xbmz) ---
 
     #[test]
@@ -1822,6 +1859,52 @@ mod tests {
         assert_eq!(msgs.len(), 2, "consecutive system rows must coalesce on the wire");
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[1]["role"], "user");
+    }
+
+    #[test]
+    fn request_body_preserves_openai_tool_transcript_wire_keys() {
+        // Live LM Studio/Gemma failure mode: after a tool call SERA used to
+        // send `{role:"assistant"}` followed by `{role:"tool", content:...}`
+        // because `tool_calls` was kept outside the assistant transcript and
+        // `tool_call_id` was lost through camelCase serde. OpenAI-compatible
+        // providers need both snake_case fields to connect result → call.
+        let body = build_streaming_body(
+            "gpt-4",
+            512,
+            &[
+                make_user_msg("create a file"),
+                make_assistant_tool_call_msg("call_1", "file-write"),
+                make_tool_result_msg("call_1", "{\"ok\":true}"),
+            ],
+            &[make_tool("file-write")],
+            &ToolUseBehavior::Auto,
+        )
+        .unwrap();
+
+        let msgs = body["messages"].as_array().expect("messages array");
+        assert_eq!(msgs[1]["role"], "assistant");
+        assert_eq!(msgs[1]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(msgs[1]["tool_calls"][0]["function"]["name"], "file-write");
+        assert!(msgs[1].get("toolCalls").is_none(), "must not emit camelCase toolCalls");
+
+        assert_eq!(msgs[2]["role"], "tool");
+        assert_eq!(msgs[2]["tool_call_id"], "call_1");
+        assert!(msgs[2].get("toolCallId").is_none(), "must not emit camelCase toolCallId");
+    }
+
+    #[test]
+    fn chat_message_accepts_legacy_camel_tool_fields_but_serializes_snake_case() {
+        let msg: ChatMessage = serde_json::from_value(serde_json::json!({
+            "role": "tool",
+            "content": "ok",
+            "toolCallId": "legacy_call"
+        }))
+        .unwrap();
+        assert_eq!(msg.tool_call_id.as_deref(), Some("legacy_call"));
+
+        let out = serde_json::to_value(msg).unwrap();
+        assert_eq!(out["tool_call_id"], "legacy_call");
+        assert!(out.get("toolCallId").is_none());
     }
 
     // --- streaming body ---
@@ -2074,6 +2157,39 @@ mod tests {
         let parsed: NonStreamingResponse = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.choices[0].finish_reason.as_deref(), Some("tool_calls"));
         assert_eq!(parsed.choices[0].message.tool_calls.as_ref().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn llm_provider_adapter_embeds_tool_calls_in_assistant_transcript() {
+        use crate::turn::LlmProvider;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let sse = concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"file-write\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(sse))
+            .mount(&server)
+            .await;
+
+        let client = LlmClient::with_params(&server.uri(), "test-model", None, 512);
+        let result = <LlmClient as LlmProvider>::chat(
+            &client,
+            &[serde_json::json!({"role":"user","content":"create a file"})],
+            &[serde_json::to_value(make_tool("file-write")).unwrap()],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.tool_calls[0]["id"], "call_1");
+        assert_eq!(result.response["role"], "assistant");
+        assert_eq!(result.response["tool_calls"][0]["id"], "call_1");
+        assert_eq!(result.response["tool_calls"][0]["function"]["name"], "file-write");
     }
 
     #[test]

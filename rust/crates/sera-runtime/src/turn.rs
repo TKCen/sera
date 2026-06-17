@@ -419,6 +419,22 @@ impl ThinkResult {
     }
 }
 
+fn tool_call_names(tool_calls: &[serde_json::Value]) -> String {
+    let names = tool_calls
+        .iter()
+        .filter_map(|tc| {
+            tc.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+        })
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        "unknown".to_string()
+    } else {
+        names.join(",")
+    }
+}
+
 /// Act — dispatch tool calls, check for handoffs, doom-loop detection.
 ///
 /// When a `ToolDispatcher` is provided, tool calls from the LLM are dispatched
@@ -447,10 +463,11 @@ pub async fn act(
 
     // Doom loop check applies only when the model is trying another act cycle.
     if ctx.doom_loop_count >= DOOM_LOOP_THRESHOLD {
+        let tools = tool_call_names(&think_result.tool_calls);
         return ActResult::Interruption {
             reason: format!(
-                "doom loop: {} consecutive act cycles",
-                ctx.doom_loop_count
+                "doom loop: {} consecutive act cycles; latest attempted tool(s): {}",
+                ctx.doom_loop_count, tools
             ),
         };
     }
@@ -1216,6 +1233,10 @@ mod tests {
         match result {
             ActResult::Interruption { reason } => {
                 assert!(reason.contains("doom loop"), "unexpected reason: {reason}");
+                assert!(
+                    reason.contains("status_probe"),
+                    "doom-loop interruption should name latest attempted tool: {reason}"
+                );
             }
             other => panic!("expected doom-loop Interruption, got {:?}", other),
         }

@@ -738,6 +738,52 @@ spec: {}
         }
     }
 
+    // sera-eb3n: provider API keys must resolve from the file-backed
+    // SecretResolver, not env-only. This is the path the gateway harness loop
+    // uses to feed LLM_API_KEY to the runtime; the 2026-06-18 MiniMax live
+    // probe hit a 401 because the file-mounted key was ignored.
+    #[test]
+    fn resolve_provider_api_key_with_reads_file_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let resolver = crate::secrets::SecretResolver::new(dir.path());
+        resolver
+            .store("providers/minimax/api-key", "file-minimax-key")
+            .unwrap();
+        let spec = ProviderSpec {
+            kind: "openai".to_string(),
+            base_url: "https://api.minimax.io/v1".to_string(),
+            default_model: Some("MiniMax-M3".to_string()),
+            api_key: Some(sera_types::config_manifest::SecretRef {
+                secret: "providers/minimax/api-key".to_string(),
+            }),
+        };
+        let key = resolve_provider_api_key_with(&spec, &resolver);
+        assert_eq!(key.as_deref(), Some("file-minimax-key"));
+    }
+
+    // Env fallback must remain intact when no file secret is present.
+    #[test]
+    fn resolve_provider_api_key_with_falls_back_to_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let resolver = crate::secrets::SecretResolver::new(dir.path());
+        unsafe {
+            std::env::set_var("SERA_SECRET_PROVIDERS_MINIMAX_API_KEY", "env-minimax-key");
+        }
+        let spec = ProviderSpec {
+            kind: "openai".to_string(),
+            base_url: "https://api.minimax.io/v1".to_string(),
+            default_model: None,
+            api_key: Some(sera_types::config_manifest::SecretRef {
+                secret: "providers/minimax/api-key".to_string(),
+            }),
+        };
+        let key = resolve_provider_api_key_with(&spec, &resolver);
+        unsafe {
+            std::env::remove_var("SERA_SECRET_PROVIDERS_MINIMAX_API_KEY");
+        }
+        assert_eq!(key.as_deref(), Some("env-minimax-key"));
+    }
+
     #[test]
     fn split_yaml_documents_basic() {
         let docs = split_yaml_documents("a: 1\n---\nb: 2");

@@ -90,6 +90,9 @@ services:
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       SERA_LLM_PROVIDER_ID: ${SERA_LLM_PROVIDER_ID:-}
+      # Env-backed Provider SecretRef for the example `llm/minimax-api-key`.
+      # Secret path `llm/minimax-api-key` maps to SERA_SECRET_LLM_MINIMAX_API_KEY.
+      SERA_SECRET_LLM_MINIMAX_API_KEY: ${SERA_SECRET_LLM_MINIMAX_API_KEY:-}
       SERA_LLM_FALLBACK_BASE_URL: ${SERA_LLM_FALLBACK_BASE_URL:-}
       SERA_LLM_FALLBACK_MODEL: ${SERA_LLM_FALLBACK_MODEL:-}
       SERA_LLM_FALLBACK_API_KEY: ${SERA_LLM_FALLBACK_API_KEY:-}

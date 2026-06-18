@@ -9,7 +9,10 @@
 
 use crate::secrets::SecretResolver;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    path::{Component, Path},
+};
 
 /// Top-level providers.json structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,12 +122,32 @@ impl ProviderEntry {
         Ok(if let Some(var) = &self.api_key_env_var {
             CredentialSource::Env(var.clone())
         } else if let Some(path) = &self.api_key_secret {
+            Self::validate_secret_ref(path)?;
             CredentialSource::Secret(path.clone())
         } else if !self.api_key.is_empty() {
             CredentialSource::Inline
         } else {
             CredentialSource::None
         })
+    }
+
+    fn validate_secret_ref(path: &str) -> Result<(), CredentialError> {
+        let parsed = Path::new(path);
+        let invalid = path.trim().is_empty()
+            || parsed.components().any(|component| {
+                matches!(
+                    component,
+                    Component::Prefix(_) | Component::RootDir | Component::ParentDir
+                )
+            });
+
+        if invalid {
+            return Err(CredentialError::InvalidSecretPath {
+                path: path.to_string(),
+            });
+        }
+
+        Ok(())
     }
 
     /// Resolve the API key value, following an `apiKeyEnvVar` env reference or
@@ -140,18 +163,23 @@ impl ProviderEntry {
         match self.credential_source()? {
             CredentialSource::None => Ok(None),
             CredentialSource::Inline => Ok(Some(self.api_key.clone())),
-            CredentialSource::Env(var) => std::env::var(&var).map(Some).map_err(|_| {
-                CredentialError::EnvVarUnset {
-                    model_name: self.model_name.clone(),
-                    var,
-                }
-            }),
-            CredentialSource::Secret(path) => resolver.resolve(&path).map(Some).ok_or(
-                CredentialError::SecretUnresolved {
-                    model_name: self.model_name.clone(),
-                    path,
-                },
-            ),
+            CredentialSource::Env(var) => {
+                std::env::var(&var)
+                    .map(Some)
+                    .map_err(|_| CredentialError::EnvVarUnset {
+                        model_name: self.model_name.clone(),
+                        var,
+                    })
+            }
+            CredentialSource::Secret(path) => {
+                resolver
+                    .resolve(&path)
+                    .map(Some)
+                    .ok_or(CredentialError::SecretUnresolved {
+                        model_name: self.model_name.clone(),
+                        path,
+                    })
+            }
         }
     }
 }
@@ -192,20 +220,25 @@ pub enum CredentialError {
         "provider '{model_name}' declares conflicting credential sources ({sources}); \
          specify exactly one of apiKey, apiKeyEnvVar, apiKeySecret"
     )]
-    ConflictingSources {
-        model_name: String,
-        sources: String,
-    },
+    ConflictingSources { model_name: String, sources: String },
     #[error("provider '{model_name}' references env var '{var}' which is not set")]
     EnvVarUnset { model_name: String, var: String },
     #[error("provider '{model_name}' references secret '{path}' which could not be resolved")]
     SecretUnresolved { model_name: String, path: String },
+    #[error(
+        "provider references invalid apiKeySecret path '{path}'; use a relative path without parent components"
+    )]
+    InvalidSecretPath { path: String },
 }
 
 impl ProvidersConfig {
     /// Add a new provider entry. Returns error if modelName already exists.
     pub fn add_provider(&mut self, entry: ProviderEntry) -> Result<(), String> {
-        if self.providers.iter().any(|p| p.model_name == entry.model_name) {
+        if self
+            .providers
+            .iter()
+            .any(|p| p.model_name == entry.model_name)
+        {
             return Err(format!("Provider '{}' already exists", entry.model_name));
         }
         self.providers.push(entry);
@@ -258,8 +291,8 @@ impl ProvidersConfig {
 
     /// Save to a JSON file.
     pub fn save_to_file(&self, path: &str) -> Result<(), String> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| format!("Failed to serialize: {e}"))?;
+        let json =
+            serde_json::to_string_pretty(self).map_err(|e| format!("Failed to serialize: {e}"))?;
         std::fs::write(path, json).map_err(|e| format!("Failed to write {path}: {e}"))
     }
 }
@@ -449,11 +482,16 @@ mod tests {
         }"#;
         let config = ProvidersConfig::from_json(json).unwrap();
         let entry = &config.providers[0];
-        assert_eq!(entry.api_key_secret.as_deref(), Some("providers/minimax/key"));
+        assert_eq!(
+            entry.api_key_secret.as_deref(),
+            Some("providers/minimax/key")
+        );
 
         let dir = tempfile::tempdir().unwrap();
         let resolver = SecretResolver::new(dir.path());
-        resolver.store("providers/minimax/key", "mm-fake-xyz").unwrap();
+        resolver
+            .store("providers/minimax/key", "mm-fake-xyz")
+            .unwrap();
 
         assert_eq!(
             entry.credential_source().unwrap(),
@@ -496,6 +534,54 @@ mod tests {
         assert!(matches!(
             entry.credential_source(),
             Err(CredentialError::ConflictingSources { .. })
+        ));
+    }
+
+    #[test]
+    fn absolute_api_key_secret_path_is_rejected() {
+        let json = r#"{
+            "providers": [{
+                "modelName": "bad-secret-absolute",
+                "provider": "minimax",
+                "apiKeySecret": "/etc/hostname"
+            }]
+        }"#;
+        let entry = &ProvidersConfig::from_json(json).unwrap().providers[0];
+        assert!(matches!(
+            entry.credential_source(),
+            Err(CredentialError::InvalidSecretPath { .. })
+        ));
+    }
+
+    #[test]
+    fn parent_component_api_key_secret_path_is_rejected() {
+        let json = r#"{
+            "providers": [{
+                "modelName": "bad-secret-parent",
+                "provider": "minimax",
+                "apiKeySecret": "providers/../host-secret"
+            }]
+        }"#;
+        let entry = &ProvidersConfig::from_json(json).unwrap().providers[0];
+        assert!(matches!(
+            entry.resolve_api_key(&SecretResolver::new(tempfile::tempdir().unwrap().path())),
+            Err(CredentialError::InvalidSecretPath { .. })
+        ));
+    }
+
+    #[test]
+    fn blank_api_key_secret_path_is_rejected() {
+        let json = r#"{
+            "providers": [{
+                "modelName": "bad-secret-blank",
+                "provider": "minimax",
+                "apiKeySecret": "   "
+            }]
+        }"#;
+        let entry = &ProvidersConfig::from_json(json).unwrap().providers[0];
+        assert!(matches!(
+            entry.credential_source(),
+            Err(CredentialError::InvalidSecretPath { .. })
         ));
     }
 
@@ -592,8 +678,14 @@ mod tests {
 
     #[test]
     fn extract_provider_rejects_non_matching_names() {
-        assert_eq!(ProviderAccountsConfig::extract_provider("OPENAI_KEYS"), None);
-        assert_eq!(ProviderAccountsConfig::extract_provider("SERA_OPENAI"), None);
+        assert_eq!(
+            ProviderAccountsConfig::extract_provider("OPENAI_KEYS"),
+            None
+        );
+        assert_eq!(
+            ProviderAccountsConfig::extract_provider("SERA_OPENAI"),
+            None
+        );
         assert_eq!(ProviderAccountsConfig::extract_provider("SERA__KEYS"), None);
         assert_eq!(ProviderAccountsConfig::extract_provider("SERA_KEYS"), None);
     }
@@ -611,7 +703,10 @@ mod tests {
         let keys = cfg
             .keys_for("jvi_from_env_test")
             .expect("keys should be present");
-        assert_eq!(keys, &vec!["sk-a".to_string(), "sk-b".to_string(), "sk-c".to_string()]);
+        assert_eq!(
+            keys,
+            &vec!["sk-a".to_string(), "sk-b".to_string(), "sk-c".to_string()]
+        );
     }
 
     #[test]

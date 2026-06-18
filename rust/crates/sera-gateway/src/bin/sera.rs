@@ -32,6 +32,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use sera_config::manifest_loader::{
     ManifestSet, load_manifest_file, parse_manifests, resolve_provider_api_key,
+    resolve_provider_api_key_with,
 };
 use sera_config::secrets::SecretResolver;
 use sera_db::lane_queue::LaneQueue;
@@ -8101,7 +8102,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
 
         let (base_url, model, api_key_val) = match provider_spec {
             Some(ref p) => {
-                let key = resolve_provider_api_key(p).unwrap_or_default();
+                let key = resolve_provider_api_key_with(p, &secret_resolver).unwrap_or_default();
                 let model = agent_spec
                     .model
                     .as_deref()

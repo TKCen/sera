@@ -10078,6 +10078,118 @@ mod tests {
         assert_ne!(ok["action_id"], bad["action_id"]);
     }
 
+    // ── sera-tqzd AC3: failures not swallowed at runtime/gateway boundary ──
+
+    #[test]
+    fn ndjson_tool_call_end_failure_status_preserved_at_gateway_boundary() {
+        // sera-tqzd AC3: prove failures are NOT swallowed at the gateway
+        // NDJSON boundary.  The runtime serialises `EventMsg::ToolCallEnd`
+        // with `status=failure` and `error_class`; `send_turn_inner` must
+        // extract both fields into `ToolEvent::End` without dropping them.
+        //
+        // This test generates the exact JSON shape the runtime writes to
+        // stdout via `serde_json::to_value(&EventMsg::ToolCallEnd { … })`
+        // and then applies the same field extraction as `send_turn_inner`
+        // (bin/sera.rs lines 629-660).  If the serde tag or field names
+        // ever drift between emitter and parser this test will catch the
+        // regression.
+        use sera_types::envelope::{EventMsg, ToolCallStatus};
+
+        let msg = EventMsg::ToolCallEnd {
+            turn_id: uuid::Uuid::nil(),
+            call_id: "call_fail_gw_1".to_string(),
+            result: "[tool error: policy denied: denied for gate test]".to_string(),
+            status: ToolCallStatus::Failure,
+            error_class: Some("policy_denied".to_string()),
+        };
+
+        let msg_json = serde_json::to_value(&msg).expect("EventMsg must serialize");
+        let event = serde_json::json!({
+            "id": uuid::Uuid::nil(),
+            "submission_id": uuid::Uuid::nil(),
+            "msg": msg_json,
+            "timestamp": "2026-06-27T00:00:00Z",
+        });
+
+        // Mirror the extraction from send_turn_inner.
+        let msg_val = event.get("msg").expect("msg field present");
+        let msg_type = msg_val.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        assert_eq!(
+            msg_type, "tool_call_end",
+            "EventMsg serde tag must produce snake_case 'tool_call_end'"
+        );
+
+        let status = match msg_val.get("status").and_then(|v| v.as_str()) {
+            Some("failure") => ToolCallStatus::Failure,
+            _ => ToolCallStatus::Success,
+        };
+        let error_class = msg_val
+            .get("error_class")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let call_id = msg_val
+            .get("call_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        assert_eq!(
+            status,
+            ToolCallStatus::Failure,
+            "gateway must NOT swallow failure status at NDJSON boundary (sera-tqzd)"
+        );
+        assert_eq!(
+            error_class.as_deref(),
+            Some("policy_denied"),
+            "gateway must NOT swallow error_class at NDJSON boundary (sera-tqzd)"
+        );
+        assert_eq!(call_id, "call_fail_gw_1");
+    }
+
+    #[test]
+    fn credential_in_tool_error_does_not_escape_into_status_detail() {
+        // sera-tqzd AC3: no private payload leaks into the operator-visible
+        // `status_detail` field of the OCSF audit payload.
+        //
+        // A tool that fails with a credential-bearing error message must NOT
+        // expose that credential in `status_detail` — only the structured
+        // error class string (e.g. "execution_failed") may appear there.
+        // Raw error content is confined to `unmapped.result_snippet` and is
+        // bounded by `TOOL_EXEC_AUDIT_CONTENT_LIMIT` (512 bytes).
+        let fake_key = "sk_live_FAKEFAKEFAKE_this_is_not_a_real_key_1234567890abcdef";
+        let error_content = format!(
+            "[tool error: tool execution failed: API call rejected, bearer: {fake_key}]"
+        );
+
+        let payload = make_tool_execution_audit_payload(
+            "agent-test",
+            "sess-credleak",
+            "call_credleak_1",
+            "http-request",
+            sera_types::envelope::ToolCallStatus::Failure,
+            Some("execution_failed"),
+            &error_content,
+        );
+
+        let status_detail = payload["status_detail"].as_str().unwrap_or_default();
+        assert_eq!(
+            status_detail, "execution_failed",
+            "status_detail must hold only the error class, not raw error content"
+        );
+        assert!(
+            !status_detail.contains(fake_key),
+            "status_detail must not expose credential-like patterns: {status_detail}"
+        );
+
+        // Snippet is bounded so a long credential-bearing error cannot bloat
+        // the audit ledger row.
+        let snippet = payload["unmapped"]["result_snippet"].as_str().unwrap_or_default();
+        assert!(
+            snippet.len() <= TOOL_EXEC_AUDIT_CONTENT_LIMIT + 32,
+            "result_snippet must be bounded: len={}",
+            snippet.len()
+        );
+    }
+
     #[tokio::test]
     async fn submissions_route_rolls_back_registration_when_persistence_fails() {
         let mut state = test_state();

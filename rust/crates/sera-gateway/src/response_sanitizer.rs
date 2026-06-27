@@ -215,10 +215,11 @@ impl StreamThinkSanitizer {
                             self.state = StreamSanitizerState::InThink;
                         }
                         Some(NextMarker::Close(idx)) => {
-                            // Orphan </think> in Normal state: keep text before
-                            // it (already-emitted bytes can't be recalled) and
-                            // skip the tag itself.
-                            out.push_str(&scannable[..idx]);
+                            // Orphan </think> in Normal state: drop the prefix
+                            // before the closer in this buffer (batch sanitizer
+                            // contract). Bytes already emitted in prior chunks
+                            // cannot be recalled.
+                            let _prefix_discarded = &scannable[..idx];
                             self.stripped_blocks += 1;
                             cursor += idx + CLOSE_TAG.len();
                         }
@@ -669,11 +670,10 @@ mod tests {
         // For balanced <think>…</think> blocks and unclosed openers, the
         // concatenation of stream deltas + flush equals the batch result.
         //
-        // Note: orphan closers (</think> with no opener) intentionally differ.
-        // The batch sanitizer drops everything before the orphan closer; the
-        // stream sanitizer cannot retract already-emitted bytes, so it only
-        // skips the tag itself. This divergence is acceptable — neither path
-        // leaks a `<think>` or `</think>` marker to the operator.
+        // Orphan closers match the batch sanitizer when the prefix and closer
+        // land in the same scannable buffer (e.g. whole input fed in one chunk).
+        // When an orphan closer spans already-emitted chunks, the stream path
+        // cannot retract prior bytes — see `stream_orphan_closer_*` tests.
         let inputs = [
             "<think>a</think>text",
             "no markers here",
@@ -701,24 +701,33 @@ mod tests {
     }
 
     #[test]
-    fn stream_orphan_closer_skips_tag_not_prefix() {
-        // Intentional divergence from batch sanitizer: the stream sanitizer
-        // cannot retract bytes already emitted to the SSE client, so for an
-        // orphan </think> it skips the tag itself rather than the prefix.
-        // The contract ("no <think> or </think> marker in output") is still met.
+    fn stream_many_orphan_closers_terminates() {
         let mut s = StreamThinkSanitizer::new();
-        let out = s.feed("prefix</think>suffix");
-        // prefix is emitted (can't retract), tag is skipped, suffix follows.
-        assert!(
-            !out.to_ascii_lowercase().contains("<think>"),
-            "orphan closer leaked <think>: {out:?}"
-        );
-        assert!(
-            !out.to_ascii_lowercase().contains("</think>"),
-            "orphan closer leaked </think>: {out:?}"
-        );
-        assert!(out.contains("suffix"), "visible suffix missing: {out:?}");
+        let junk = "</think>".repeat(100);
+        let out = s.feed(&junk);
+        assert!(out.is_empty());
+        assert_eq!(s.flush(), "");
+    }
+
+    #[test]
+    fn stream_orphan_closer_drops_prefix_in_buffer() {
+        // Orphan closer in a single chunk: prefix before `</think>` must not
+        // be emitted, matching `sanitize_assistant_response`.
+        let mut s = StreamThinkSanitizer::new();
+        let out = s.feed("leaked reasoning</think>actual reply");
+        assert_eq!(out, "actual reply");
         assert_eq!(s.stripped_blocks(), 1);
+        assert_eq!(s.flush(), "");
+    }
+
+    #[test]
+    fn stream_orphan_closer_matches_batch_when_whole_input_in_one_chunk() {
+        let input = "hidden reasoning</think>visible";
+        let batch = sanitize_assistant_response(input);
+        let mut s = StreamThinkSanitizer::new();
+        let streamed = format!("{}{}", s.feed(input), s.flush());
+        assert_eq!(streamed, batch.text);
+        assert_eq!(s.stripped_blocks(), batch.stripped_blocks);
     }
 
     #[test]

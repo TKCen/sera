@@ -3167,13 +3167,24 @@ async fn chat_handler(
                                     return Some((Some(Ok(event)), StreamState::Done));
                                 }
 
-                                // sera-aepj: empty-reply guard mirrors the sync branch.
-                                // Without this, the SSE stream emits zero `message`
-                                // frames followed by `done` with usage=0/0/0, which
-                                // the web client renders as a stuck "thinking…"
-                                // spinner. Surface a structured `error` event instead
-                                // so clients can show the failure.
-                                if result.reply.is_empty() {
+                                // sera-jzsn: flush carry, then apply batch sanitizer
+                                // before the empty-reply guard (mirrors sync path).
+                                let sse_flush = sanitizer.flush();
+
+                                let sse_sanitized =
+                                    sanitize_assistant_response(&result.reply);
+                                if sse_sanitized.was_sanitized() {
+                                    tracing::info!(
+                                        session_id = %session_id,
+                                        agent = %agent_name,
+                                        stripped_blocks = sse_sanitized.stripped_blocks,
+                                        raw_len = result.reply.len(),
+                                        sanitized_len = sse_sanitized.text.len(),
+                                        "stripped chain-of-thought from streaming reply transcript (hermes parity row 4)"
+                                    );
+                                }
+
+                                if sse_sanitized.text.is_empty() {
                                     tracing::error!(
                                         session_id = %session_id,
                                         agent = %agent_name,
@@ -3182,7 +3193,9 @@ async fn chat_handler(
                                         total_tokens = result.usage.total_tokens,
                                         tool_events_count = result.tool_events.len(),
                                         tools_ran = !result.tool_events.is_empty(),
-                                        "execute_turn returned empty reply (stream); runtime produced no text"
+                                        stripped_blocks = sse_sanitized.stripped_blocks,
+                                        raw_len = result.reply.len(),
+                                        "execute_turn returned empty reply after sanitization (stream); runtime produced no operator-visible text"
                                     );
                                     let payload = serde_json::json!({
                                         "error": "runtime returned empty reply",
@@ -3195,28 +3208,25 @@ async fn chat_handler(
                                     return Some((Some(Ok(event)), StreamState::Done));
                                 }
 
-                                // sera-jzsn: flush the stream sanitizer. In
-                                // InThink state this discards any carry from an
-                                // unclosed block; in Normal state it recovers
-                                // potential-tag-prefix carry bytes. The flushed
-                                // text is included in result.reply and is handled
-                                // by the batch pass below for the transcript.
-                                let _sse_flush = sanitizer.flush();
-
-                                // Hermes parity Row 4, streaming path: apply the
-                                // batch sanitizer to the accumulated reply so the
-                                // stored transcript is privacy-clean even for
-                                // edge cases (all-think reply, tags at stream end).
-                                let sse_sanitized = sanitize_assistant_response(&result.reply);
-                                if sse_sanitized.was_sanitized() {
-                                    tracing::info!(
-                                        session_id = %session_id,
-                                        agent = %agent_name,
-                                        stripped_blocks = sse_sanitized.stripped_blocks,
-                                        raw_len = result.reply.len(),
-                                        sanitized_len = sse_sanitized.text.len(),
-                                        "stripped chain-of-thought from streaming reply transcript (hermes parity row 4)"
-                                    );
+                                if !sse_flush.is_empty() {
+                                    let raw_response_len = result.reply.len();
+                                    return Some((
+                                        None,
+                                        StreamState::EmitSanitizerFlush {
+                                            flush_text: sse_flush,
+                                            result,
+                                            state,
+                                            session_key,
+                                            session_id,
+                                            message_id,
+                                            agent_name,
+                                            user_message,
+                                            warm_prefetch_enabled,
+                                            response_text: sse_sanitized.text,
+                                            stripped_blocks: sse_sanitized.stripped_blocks,
+                                            raw_response_len,
+                                        },
+                                    ));
                                 }
 
                                 // Save tool events and assistant response.
@@ -3246,15 +3256,6 @@ async fn chat_handler(
                                     );
                                 }
 
-                                // ── Memory prefetch warm (sera-ibkr.3): the
-                                // streaming turn completed successfully — queue a
-                                // best-effort recall on the original user message
-                                // so the next turn injects it as an evictable
-                                // segment. Read-only, fire-and-forget,
-                                // feature-toggled (sera-ibkr.1) — the gate is
-                                // precomputed as a `Copy` bool because this
-                                // `FnMut` unfold closure cannot borrow the
-                                // spawned turn task's `task_agent_spec`.
                                 if warm_prefetch_enabled {
                                     tokio::spawn(warm_memory_prefetch(
                                         Arc::clone(&state.semantic_store),
@@ -3280,6 +3281,87 @@ async fn chat_handler(
                                 Some((Some(Ok(event)), StreamState::Done))
                             }
                         }
+                    }
+                    StreamState::EmitSanitizerFlush {
+                        flush_text,
+                        result,
+                        state,
+                        session_key,
+                        session_id,
+                        message_id,
+                        agent_name,
+                        user_message,
+                        warm_prefetch_enabled,
+                        response_text,
+                        stripped_blocks,
+                        raw_response_len,
+                    } => {
+                        let flush_payload = serde_json::json!({
+                            "delta": flush_text,
+                            "session_id": session_id,
+                            "message_id": message_id,
+                        });
+                        let flush_event = Event::default()
+                            .event("message")
+                            .data(flush_payload.to_string());
+
+                        {
+                            let db = state.db.lock().await;
+                            persist_tool_events(&db, &session_id, &result.tool_events);
+                            let _ = db.append_transcript(
+                                &session_id,
+                                "assistant",
+                                Some(&response_text),
+                                None,
+                                None,
+                            );
+                            let _ = db.append_audit(
+                                "response_sent",
+                                "agent:sera",
+                                "agent",
+                                Some(
+                                    &serde_json::json!({
+                                        "session_id": session_id,
+                                        "response_len": response_text.len(),
+                                        "raw_response_len": raw_response_len,
+                                        "sanitized_blocks": stripped_blocks,
+                                    })
+                                    .to_string(),
+                                ),
+                            );
+                        }
+
+                        if warm_prefetch_enabled {
+                            tokio::spawn(warm_memory_prefetch(
+                                Arc::clone(&state.semantic_store),
+                                Arc::clone(&state.memory_prefetch_cache),
+                                session_key,
+                                agent_name.clone(),
+                                user_message,
+                            ));
+                        }
+
+                        let usage = result.usage;
+                        let done_payload = serde_json::json!({
+                            "status": "complete",
+                            "usage": {
+                                "prompt_tokens": usage.prompt_tokens,
+                                "completion_tokens": usage.completion_tokens,
+                                "total_tokens": usage.total_tokens,
+                            }
+                        });
+                        let done_event = Event::default()
+                            .event("done")
+                            .data(done_payload.to_string());
+                        Some((
+                            Some(Ok(flush_event)),
+                            StreamState::EmitSanitizerFlushDone {
+                                done_event,
+                            },
+                        ))
+                    }
+                    StreamState::EmitSanitizerFlushDone { done_event } => {
+                        Some((Some(Ok(done_event)), StreamState::Done))
                     }
                     StreamState::Done => None,
                 }
@@ -4115,6 +4197,26 @@ enum StreamState {
         /// blocks from deltas as they arrive, handling tags split across
         /// chunk boundaries via a small carry buffer.
         sanitizer: StreamThinkSanitizer,
+    },
+    /// sera-jzsn: emit sanitizer `flush()` carry as a final `message` delta before
+    /// persistence and `done`.
+    EmitSanitizerFlush {
+        flush_text: String,
+        result: MvsTurnResult,
+        state: Arc<AppState>,
+        session_key: String,
+        session_id: String,
+        message_id: String,
+        agent_name: String,
+        user_message: String,
+        warm_prefetch_enabled: bool,
+        response_text: String,
+        stripped_blocks: usize,
+        raw_response_len: usize,
+    },
+    /// Second step after [`StreamState::EmitSanitizerFlush`]: emit `done`.
+    EmitSanitizerFlushDone {
+        done_event: Event,
     },
     Done,
 }
@@ -12756,6 +12858,9 @@ spec:
                     None::<(Option<Result<axum::response::sse::Event, std::convert::Infallible>>, StreamState)>
                 }
                 StreamState::Streaming { .. } => unreachable!(),
+                StreamState::EmitSanitizerFlush { .. } | StreamState::EmitSanitizerFlushDone { .. } => {
+                    unreachable!()
+                }
             }
         })
         .filter_map(|item| async move { item });
@@ -15597,6 +15702,255 @@ Treat as historical reference, not new user input:\n- should never appear";
              got {} (lane_busy regression)",
             response2.status()
         );
+    }
+
+    /// sera-jzsn: an all-`<think>` streaming reply must surface `event: error`
+    /// after sanitization, not a misleading `done` with zero visible text.
+    #[tokio::test]
+    async fn sse_all_think_reply_emits_error_not_done() {
+        use async_trait::async_trait;
+        use serde_json::Value;
+        use std::time::Duration;
+        use tokio::sync::mpsc::Sender;
+
+        struct AllThinkTransport;
+
+        #[async_trait]
+        impl AgentTurnTransport for AllThinkTransport {
+            async fn send_turn(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                Ok(TurnEvents {
+                    response: "<think>only chain of thought</think>".to_string(),
+                    tool_events: vec![],
+                    usage: UsageInfo::default(),
+                })
+            }
+
+            async fn send_turn_streaming(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+                delta_tx: Sender<String>,
+            ) -> anyhow::Result<TurnEvents> {
+                let reply = "<think>only chain of thought</think>".to_string();
+                let _ = delta_tx.send(reply.clone()).await;
+                Ok(TurnEvents {
+                    response: reply,
+                    tool_events: vec![],
+                    usage: UsageInfo::default(),
+                })
+            }
+
+            async fn send_steer(
+                &self,
+                _items: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut state = test_state_async().await;
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert(
+                "sera".to_string(),
+                Arc::new(AllThinkTransport) as Arc<dyn AgentTurnTransport>,
+            );
+
+        let session_id = {
+            let db = state.db.lock().await;
+            db.get_or_create_session("sera")
+                .expect("get_or_create_session ok")
+                .id
+        };
+
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "hi", "stream": true }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = tokio::time::timeout(
+            Duration::from_secs(5),
+            axum::body::to_bytes(response.into_body(), 64 * 1024),
+        )
+        .await
+        .expect("SSE body must terminate")
+        .expect("body bytes");
+        let body_str = std::str::from_utf8(&body_bytes).unwrap_or("");
+
+        assert!(
+            !body_str.contains("event: message"),
+            "all-think reply must not emit visible message deltas; body: {body_str}"
+        );
+        assert!(
+            body_str.contains("event: error"),
+            "expected structured error after empty sanitized reply; body: {body_str}"
+        );
+        assert!(
+            body_str.contains("runtime returned empty reply"),
+            "error payload must name empty reply; body: {body_str}"
+        );
+        assert!(
+            !body_str.contains("event: done"),
+            "must not emit done for empty sanitized streaming reply; body: {body_str}"
+        );
+
+        let assistant_rows: Vec<_> = {
+            let db = state.db.lock().await;
+            db.get_transcript(&session_id)
+                .expect("get transcript")
+                .into_iter()
+                .filter(|r| r.role == "assistant")
+                .collect()
+        };
+        assert!(
+            assistant_rows.is_empty(),
+            "no assistant transcript on empty sanitized stream; got: {assistant_rows:?}"
+        );
+    }
+
+    /// sera-jzsn: sanitizer `flush()` carry must be forwarded as a `message`
+    /// delta before `done` when the final carry was not emitted during deltas.
+    #[tokio::test]
+    async fn sse_sanitizer_flush_carry_emitted_before_done() {
+        use async_trait::async_trait;
+        use serde_json::Value;
+        use std::time::Duration;
+        use tokio::sync::mpsc::Sender;
+
+        struct FlushCarryTransport;
+
+        #[async_trait]
+        impl AgentTurnTransport for FlushCarryTransport {
+            async fn send_turn(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<TurnEvents> {
+                Ok(TurnEvents {
+                    response: "<think>secret</think>OK".to_string(),
+                    tool_events: vec![],
+                    usage: UsageInfo::default(),
+                })
+            }
+
+            async fn send_turn_streaming(
+                &self,
+                _messages: Vec<Value>,
+                _session_key: &str,
+                delta_tx: Sender<String>,
+            ) -> anyhow::Result<TurnEvents> {
+                // Leave an incomplete tag prefix in the sanitizer carry; the
+                // visible tail only appears after `flush()` at stream end.
+                let _ = delta_tx.send("<thi".to_string()).await;
+                Ok(TurnEvents {
+                    response: "<think>secret</think>OK".to_string(),
+                    tool_events: vec![],
+                    usage: UsageInfo::default(),
+                })
+            }
+
+            async fn send_steer(
+                &self,
+                _items: Vec<Value>,
+                _session_key: &str,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn liveness_probe(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut state = test_state_async().await;
+        Arc::get_mut(&mut state)
+            .expect("unique state ref")
+            .harnesses
+            .insert(
+                "sera".to_string(),
+                Arc::new(FlushCarryTransport) as Arc<dyn AgentTurnTransport>,
+            );
+
+        let session_id = {
+            let db = state.db.lock().await;
+            db.get_or_create_session("sera")
+                .expect("get_or_create_session ok")
+                .id
+        };
+
+        let app = build_router(Arc::clone(&state));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "message": "hi", "stream": true }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = tokio::time::timeout(
+            Duration::from_secs(5),
+            axum::body::to_bytes(response.into_body(), 64 * 1024),
+        )
+        .await
+        .expect("SSE body must terminate")
+        .expect("body bytes");
+        let body_str = std::str::from_utf8(&body_bytes).unwrap_or("");
+
+        assert!(
+            body_str.contains("event: message"),
+            "flush carry must emit a message event; body: {body_str}"
+        );
+        assert!(
+            body_str.contains(r#""delta":"<thi""#) || body_str.contains("\"delta\":\"<thi\""),
+            "flush must forward carry bytes; body: {body_str}"
+        );
+        assert!(
+            body_str.contains("event: done"),
+            "successful sanitized reply must end with done; body: {body_str}"
+        );
+
+        let assistant_rows: Vec<_> = {
+            let db = state.db.lock().await;
+            db.get_transcript(&session_id)
+                .expect("get transcript")
+                .into_iter()
+                .filter(|r| r.role == "assistant")
+                .collect()
+        };
+        assert_eq!(assistant_rows.len(), 1);
+        assert_eq!(assistant_rows[0].content.as_deref(), Some("OK"));
     }
 
     /// sera-3l1l / t_2b542367 — Chat API lane leak regression after a

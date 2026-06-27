@@ -61,7 +61,9 @@ use sera_gateway::admin::{
     AdminAppState, AdminAuditLogger, AdminAuth, AdminSessionInfo, resolve_admin_bind,
     resolve_admin_port, serve_admin,
 };
-use sera_gateway::agent_transport::{AgentTurnTransport, ToolEvent, TurnEvents, UsageInfo};
+use sera_gateway::agent_transport::{
+    tool_event_end_from_runtime_ndjson_msg, AgentTurnTransport, ToolEvent, TurnEvents, UsageInfo,
+};
 use sera_gateway::capability_enforcement::{CapabilityRegistry, PolicyDenial};
 use sera_gateway::embedded_transport::EmbeddedRuntimeTransport;
 use sera_gateway::external_agent_registry::{DelegatorValidator, ExternalAgentRegistry};
@@ -628,36 +630,9 @@ impl StdioHarness {
                 }
                 "tool_call_end" => {
                     if let Some(msg) = event.get("msg") {
-                        // sera-tqzd / sera-q66q: the runtime sets `status` /
-                        // `error_class` on `EventMsg::ToolCallEnd` when
-                        // dispatch fails. Default to `Success` so older
-                        // runtimes (which never emit the fields) still
-                        // produce sensible audit rows.
-                        let status = match msg
-                            .get("status")
-                            .and_then(|v| v.as_str())
-                        {
-                            Some("failure") => sera_types::envelope::ToolCallStatus::Failure,
-                            _ => sera_types::envelope::ToolCallStatus::Success,
-                        };
-                        let error_class = msg
-                            .get("error_class")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                        result.tool_events.push(ToolEvent::End {
-                            call_id: msg
-                                .get("call_id")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            content: msg
-                                .get("result")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            status,
-                            error_class,
-                        });
+                        result
+                            .tool_events
+                            .push(tool_event_end_from_runtime_ndjson_msg(msg));
                     }
                 }
                 "turn_completed" => {
@@ -10083,16 +10058,9 @@ mod tests {
     #[test]
     fn ndjson_tool_call_end_failure_status_preserved_at_gateway_boundary() {
         // sera-tqzd AC3: prove failures are NOT swallowed at the gateway
-        // NDJSON boundary.  The runtime serialises `EventMsg::ToolCallEnd`
-        // with `status=failure` and `error_class`; `send_turn_inner` must
-        // extract both fields into `ToolEvent::End` without dropping them.
-        //
-        // This test generates the exact JSON shape the runtime writes to
-        // stdout via `serde_json::to_value(&EventMsg::ToolCallEnd { … })`
-        // and then applies the same field extraction as `send_turn_inner`
-        // (bin/sera.rs lines 629-660).  If the serde tag or field names
-        // ever drift between emitter and parser this test will catch the
-        // regression.
+        // NDJSON boundary. Exercise the shared production parser used by
+        // `send_turn_inner`, not a copied extraction block.
+        use sera_gateway::agent_transport::tool_event_end_from_runtime_ndjson_msg;
         use sera_types::envelope::{EventMsg, ToolCallStatus};
 
         let msg = EventMsg::ToolCallEnd {
@@ -10104,45 +10072,38 @@ mod tests {
         };
 
         let msg_json = serde_json::to_value(&msg).expect("EventMsg must serialize");
-        let event = serde_json::json!({
-            "id": uuid::Uuid::nil(),
-            "submission_id": uuid::Uuid::nil(),
-            "msg": msg_json,
-            "timestamp": "2026-06-27T00:00:00Z",
-        });
-
-        // Mirror the extraction from send_turn_inner.
-        let msg_val = event.get("msg").expect("msg field present");
-        let msg_type = msg_val.get("type").and_then(|t| t.as_str()).unwrap_or("");
         assert_eq!(
-            msg_type, "tool_call_end",
+            msg_json.get("type").and_then(|t| t.as_str()),
+            Some("tool_call_end"),
             "EventMsg serde tag must produce snake_case 'tool_call_end'"
         );
 
-        let status = match msg_val.get("status").and_then(|v| v.as_str()) {
-            Some("failure") => ToolCallStatus::Failure,
-            _ => ToolCallStatus::Success,
-        };
-        let error_class = msg_val
-            .get("error_class")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let call_id = msg_val
-            .get("call_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        assert_eq!(
-            status,
-            ToolCallStatus::Failure,
-            "gateway must NOT swallow failure status at NDJSON boundary (sera-tqzd)"
-        );
-        assert_eq!(
-            error_class.as_deref(),
-            Some("policy_denied"),
-            "gateway must NOT swallow error_class at NDJSON boundary (sera-tqzd)"
-        );
-        assert_eq!(call_id, "call_fail_gw_1");
+        let parsed = tool_event_end_from_runtime_ndjson_msg(&msg_json);
+        match parsed {
+            ToolEvent::End {
+                call_id,
+                content,
+                status,
+                error_class,
+            } => {
+                assert_eq!(call_id, "call_fail_gw_1");
+                assert!(
+                    content.contains("policy denied"),
+                    "result content must flow through parser"
+                );
+                assert_eq!(
+                    status,
+                    ToolCallStatus::Failure,
+                    "gateway must NOT swallow failure status at NDJSON boundary (sera-tqzd)"
+                );
+                assert_eq!(
+                    error_class.as_deref(),
+                    Some("policy_denied"),
+                    "gateway must NOT swallow error_class at NDJSON boundary (sera-tqzd)"
+                );
+            }
+            other => panic!("expected ToolEvent::End, got {other:?}"),
+        }
     }
 
     #[test]

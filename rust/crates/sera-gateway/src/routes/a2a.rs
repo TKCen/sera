@@ -187,7 +187,7 @@ mod tests {
         http::{Request, StatusCode},
         routing::{get, post},
     };
-    use sera_a2a::{A2aRequest, A2aResponse, A2aRouter, DynLoopbackTransport, LoopbackTransport};
+    use sera_a2a::{A2aRequest, A2aResponse, A2aRouter, LoopbackTransport};
     use tower::ServiceExt;
 
     // --- minimal AppState for tests ---

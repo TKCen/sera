@@ -61,7 +61,9 @@ use sera_gateway::admin::{
     AdminAppState, AdminAuditLogger, AdminAuth, AdminSessionInfo, resolve_admin_bind,
     resolve_admin_port, serve_admin,
 };
-use sera_gateway::agent_transport::{AgentTurnTransport, ToolEvent, TurnEvents, UsageInfo};
+use sera_gateway::agent_transport::{
+    tool_event_end_from_runtime_ndjson_msg, AgentTurnTransport, ToolEvent, TurnEvents, UsageInfo,
+};
 use sera_gateway::capability_enforcement::{CapabilityRegistry, PolicyDenial};
 use sera_gateway::embedded_transport::EmbeddedRuntimeTransport;
 use sera_gateway::external_agent_registry::{DelegatorValidator, ExternalAgentRegistry};
@@ -628,36 +630,9 @@ impl StdioHarness {
                 }
                 "tool_call_end" => {
                     if let Some(msg) = event.get("msg") {
-                        // sera-tqzd / sera-q66q: the runtime sets `status` /
-                        // `error_class` on `EventMsg::ToolCallEnd` when
-                        // dispatch fails. Default to `Success` so older
-                        // runtimes (which never emit the fields) still
-                        // produce sensible audit rows.
-                        let status = match msg
-                            .get("status")
-                            .and_then(|v| v.as_str())
-                        {
-                            Some("failure") => sera_types::envelope::ToolCallStatus::Failure,
-                            _ => sera_types::envelope::ToolCallStatus::Success,
-                        };
-                        let error_class = msg
-                            .get("error_class")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                        result.tool_events.push(ToolEvent::End {
-                            call_id: msg
-                                .get("call_id")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            content: msg
-                                .get("result")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            status,
-                            error_class,
-                        });
+                        result
+                            .tool_events
+                            .push(tool_event_end_from_runtime_ndjson_msg(msg));
                     }
                 }
                 "turn_completed" => {
@@ -10076,6 +10051,104 @@ mod tests {
         assert_ne!(ok["status_id"], bad["status_id"]);
         assert_ne!(ok["severity_id"], bad["severity_id"]);
         assert_ne!(ok["action_id"], bad["action_id"]);
+    }
+
+    // ── sera-tqzd AC3: failures not swallowed at runtime/gateway boundary ──
+
+    #[test]
+    fn ndjson_tool_call_end_failure_status_preserved_at_gateway_boundary() {
+        // sera-tqzd AC3: prove failures are NOT swallowed at the gateway
+        // NDJSON boundary. Exercise the shared production parser used by
+        // `send_turn_inner`, not a copied extraction block.
+        use sera_gateway::agent_transport::tool_event_end_from_runtime_ndjson_msg;
+        use sera_types::envelope::{EventMsg, ToolCallStatus};
+
+        let msg = EventMsg::ToolCallEnd {
+            turn_id: uuid::Uuid::nil(),
+            call_id: "call_fail_gw_1".to_string(),
+            result: "[tool error: policy denied: denied for gate test]".to_string(),
+            status: ToolCallStatus::Failure,
+            error_class: Some("policy_denied".to_string()),
+        };
+
+        let msg_json = serde_json::to_value(&msg).expect("EventMsg must serialize");
+        assert_eq!(
+            msg_json.get("type").and_then(|t| t.as_str()),
+            Some("tool_call_end"),
+            "EventMsg serde tag must produce snake_case 'tool_call_end'"
+        );
+
+        let parsed = tool_event_end_from_runtime_ndjson_msg(&msg_json);
+        match parsed {
+            ToolEvent::End {
+                call_id,
+                content,
+                status,
+                error_class,
+            } => {
+                assert_eq!(call_id, "call_fail_gw_1");
+                assert!(
+                    content.contains("policy denied"),
+                    "result content must flow through parser"
+                );
+                assert_eq!(
+                    status,
+                    ToolCallStatus::Failure,
+                    "gateway must NOT swallow failure status at NDJSON boundary (sera-tqzd)"
+                );
+                assert_eq!(
+                    error_class.as_deref(),
+                    Some("policy_denied"),
+                    "gateway must NOT swallow error_class at NDJSON boundary (sera-tqzd)"
+                );
+            }
+            other => panic!("expected ToolEvent::End, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn credential_in_tool_error_does_not_escape_into_status_detail() {
+        // sera-tqzd AC3: no private payload leaks into the operator-visible
+        // `status_detail` field of the OCSF audit payload.
+        //
+        // A tool that fails with a credential-bearing error message must NOT
+        // expose that credential in `status_detail` — only the structured
+        // error class string (e.g. "execution_failed") may appear there.
+        // Raw error content is confined to `unmapped.result_snippet` and is
+        // bounded by `TOOL_EXEC_AUDIT_CONTENT_LIMIT` (512 bytes).
+        let fake_key = "sk_live_FAKEFAKEFAKE_this_is_not_a_real_key_1234567890abcdef";
+        let error_content = format!(
+            "[tool error: tool execution failed: API call rejected, bearer: {fake_key}]"
+        );
+
+        let payload = make_tool_execution_audit_payload(
+            "agent-test",
+            "sess-credleak",
+            "call_credleak_1",
+            "http-request",
+            sera_types::envelope::ToolCallStatus::Failure,
+            Some("execution_failed"),
+            &error_content,
+        );
+
+        let status_detail = payload["status_detail"].as_str().unwrap_or_default();
+        assert_eq!(
+            status_detail, "execution_failed",
+            "status_detail must hold only the error class, not raw error content"
+        );
+        assert!(
+            !status_detail.contains(fake_key),
+            "status_detail must not expose credential-like patterns: {status_detail}"
+        );
+
+        // Snippet is bounded so a long credential-bearing error cannot bloat
+        // the audit ledger row.
+        let snippet = payload["unmapped"]["result_snippet"].as_str().unwrap_or_default();
+        assert!(
+            snippet.len() <= TOOL_EXEC_AUDIT_CONTENT_LIMIT + 32,
+            "result_snippet must be bounded: len={}",
+            snippet.len()
+        );
     }
 
     #[tokio::test]

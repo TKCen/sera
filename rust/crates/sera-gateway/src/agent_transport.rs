@@ -47,6 +47,35 @@ pub enum ToolEvent {
     },
 }
 
+/// Parse the `msg` object from a runtime NDJSON `tool_call_end` frame into the
+/// gateway's [`ToolEvent::End`]. This is the production parser used by the
+/// stdio supervisor's `send_turn_inner` read loop — tests must call this helper
+/// rather than duplicating field extraction (`sera-tqzd`).
+pub fn tool_event_end_from_runtime_ndjson_msg(msg: &Value) -> ToolEvent {
+    let status = match msg.get("status").and_then(|v| v.as_str()) {
+        Some("failure") => ToolCallStatus::Failure,
+        _ => ToolCallStatus::Success,
+    };
+    let error_class = msg
+        .get("error_class")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    ToolEvent::End {
+        call_id: msg
+            .get("call_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        content: msg
+            .get("result")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        status,
+        error_class,
+    }
+}
+
 /// Provider-reported token usage extracted from the terminal
 /// `TurnCompleted` frame.
 #[derive(Serialize, Debug, Clone, Copy, Default)]
@@ -221,5 +250,29 @@ mod tests {
     #[test]
     fn trait_is_object_safe() {
         let _: Arc<dyn AgentTurnTransport> = Arc::new(DummyTransport);
+    }
+
+    #[test]
+    fn tool_event_end_from_runtime_ndjson_msg_preserves_failure_markers() {
+        let msg = serde_json::json!({
+            "type": "tool_call_end",
+            "call_id": "call_fail_1",
+            "result": "[tool error: execution_failed]",
+            "status": "failure",
+            "error_class": "execution_failed",
+        });
+        match tool_event_end_from_runtime_ndjson_msg(&msg) {
+            ToolEvent::End {
+                status,
+                error_class,
+                call_id,
+                ..
+            } => {
+                assert_eq!(call_id, "call_fail_1");
+                assert_eq!(status, ToolCallStatus::Failure);
+                assert_eq!(error_class.as_deref(), Some("execution_failed"));
+            }
+            other => panic!("expected End, got {other:?}"),
+        }
     }
 }

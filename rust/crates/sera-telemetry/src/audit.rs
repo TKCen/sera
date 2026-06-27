@@ -61,9 +61,20 @@ static AUDIT_BACKEND: OnceCell<&'static dyn AuditBackend> = OnceCell::new();
 
 /// Register the global audit backend. Panics if called more than once.
 pub fn set_audit_backend(backend: &'static dyn AuditBackend) {
-    if AUDIT_BACKEND.set(backend).is_err() {
+    if try_set_audit_backend(backend).is_err() {
         panic!("audit backend already set — double-set is not permitted");
     }
+}
+
+/// Try to register the global audit backend.
+///
+/// Production boot paths use this to make repeated/embedded startup attempts
+/// non-fatal while preserving [`set_audit_backend`]'s historical panic-on-
+/// double-set contract for callers that want a hard assertion.
+pub fn try_set_audit_backend(backend: &'static dyn AuditBackend) -> Result<(), &'static str> {
+    AUDIT_BACKEND
+        .set(backend)
+        .map_err(|_| "audit backend already set")
 }
 
 /// Append an entry via the global backend. Returns `NotInitialised` if not set.
@@ -104,11 +115,8 @@ mod tests {
             let entries = self.entries.lock().unwrap();
             let mut prev: [u8; 32] = [0u8; 32];
             for (i, entry) in entries.iter().enumerate() {
-                let expected = AuditEntry::compute_hash(
-                    entry.ocsf_class_uid,
-                    &entry.payload,
-                    &prev,
-                );
+                let expected =
+                    AuditEntry::compute_hash(entry.ocsf_class_uid, &entry.payload, &prev);
                 if expected != entry.this_hash {
                     return Err(AuditError::ChainBroken { index: i });
                 }

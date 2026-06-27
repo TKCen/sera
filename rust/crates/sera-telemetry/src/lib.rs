@@ -20,7 +20,9 @@ pub mod provenance;
 pub mod provider_credentials;
 pub mod sera_errors;
 
-pub use audit::{AuditBackend, AuditEntry, AuditError, audit_append, set_audit_backend};
+pub use audit::{
+    AuditBackend, AuditEntry, AuditError, audit_append, set_audit_backend, try_set_audit_backend,
+};
 pub use centrifugo::{CentrifugoClient, CentrifugoError};
 pub use channels::ChannelNamespace;
 pub use hash_chain::{AuditHashChain, AuditVerifyError};

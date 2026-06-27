@@ -152,6 +152,9 @@ pub struct StreamThinkSanitizer {
     state: StreamSanitizerState,
     /// Bytes held from the previous chunk that could be a tag prefix.
     carry: String,
+    /// Normal-state prefix not yet emitted: held until the next chunk or
+    /// `flush` confirms it is visible, or an orphan `</think>` discards it.
+    pending_prefix: String,
     stripped_blocks: usize,
 }
 
@@ -172,6 +175,7 @@ impl StreamThinkSanitizer {
         Self {
             state: StreamSanitizerState::Normal,
             carry: String::new(),
+            pending_prefix: String::new(),
             stripped_blocks: 0,
         }
     }
@@ -182,12 +186,13 @@ impl StreamThinkSanitizer {
     /// was fully inside a `<think>` block (or held as carry for the next
     /// chunk).  Keep calling `feed` for subsequent chunks.
     pub fn feed(&mut self, chunk: &str) -> String {
-        let working = if self.carry.is_empty() {
-            chunk.to_owned()
+        let had_pending_prefix = !self.pending_prefix.is_empty();
+        let mut working = std::mem::take(&mut self.pending_prefix);
+        if self.carry.is_empty() {
+            working.push_str(chunk);
         } else {
-            let mut w = std::mem::take(&mut self.carry);
-            w.push_str(chunk);
-            w
+            working.push_str(&std::mem::take(&mut self.carry));
+            working.push_str(chunk);
         };
 
         let mut out = String::with_capacity(working.len());
@@ -217,14 +222,23 @@ impl StreamThinkSanitizer {
                         Some(NextMarker::Close(idx)) => {
                             // Orphan </think> in Normal state: drop the prefix
                             // before the closer in this buffer (batch sanitizer
-                            // contract). Bytes already emitted in prior chunks
-                            // cannot be recalled.
+                            // contract), including any deferred prefix held from
+                            // prior chunks without markers.
                             let _prefix_discarded = &scannable[..idx];
                             self.stripped_blocks += 1;
                             cursor += idx + CLOSE_TAG.len();
                         }
                         None => {
-                            out.push_str(scannable);
+                            if had_pending_prefix || hold > 0 || self.stripped_blocks > 0 {
+                                // Confirmed visible: continuation chunk after a
+                                // deferred prefix, scannable text before a held
+                                // tag suffix, or suffix after a strip in-stream.
+                                out.push_str(scannable);
+                            } else {
+                                // Ambiguous stream-start prefix with no tag
+                                // suffix — may precede a delayed orphan closer.
+                                self.pending_prefix.push_str(scannable);
+                            }
                             self.carry = remaining[safe_len..].to_owned();
                             break;
                         }
@@ -265,8 +279,13 @@ impl StreamThinkSanitizer {
     ///   discard (orphan opener, same semantics as `sanitize_assistant_response`).
     pub fn flush(&mut self) -> String {
         let carry = std::mem::take(&mut self.carry);
+        let pending = std::mem::take(&mut self.pending_prefix);
         match self.state {
-            StreamSanitizerState::Normal => carry,
+            StreamSanitizerState::Normal => {
+                let mut tail = pending;
+                tail.push_str(&carry);
+                tail
+            }
             StreamSanitizerState::InThink => {
                 if !carry.is_empty() {
                     self.stripped_blocks += 1;
@@ -561,8 +580,9 @@ mod tests {
     #[test]
     fn stream_passthrough_when_no_markers() {
         let mut s = StreamThinkSanitizer::new();
-        assert_eq!(s.feed("hello world"), "hello world");
-        assert_eq!(s.flush(), "");
+        // First chunk with no markers is held until flush (one-chunk latency).
+        assert_eq!(s.feed("hello world"), "");
+        assert_eq!(s.flush(), "hello world");
         assert_eq!(s.stripped_blocks(), 0);
     }
 
@@ -671,9 +691,9 @@ mod tests {
         // concatenation of stream deltas + flush equals the batch result.
         //
         // Orphan closers match the batch sanitizer when the prefix and closer
-        // land in the same scannable buffer (e.g. whole input fed in one chunk).
-        // When an orphan closer spans already-emitted chunks, the stream path
-        // cannot retract prior bytes — see `stream_orphan_closer_*` tests.
+        // land in the same scannable buffer (e.g. whole input fed in one chunk),
+        // or when a deferred prefix is discarded before a delayed orphan closer
+        // (`stream_orphan_closer_split_across_chunks_deferred_prefix_not_leaked`).
         let inputs = [
             "<think>a</think>text",
             "no markers here",
@@ -728,6 +748,25 @@ mod tests {
         let streamed = format!("{}{}", s.feed(input), s.flush());
         assert_eq!(streamed, batch.text);
         assert_eq!(s.stripped_blocks(), batch.stripped_blocks);
+    }
+
+    #[test]
+    fn stream_orphan_closer_split_across_chunks_deferred_prefix_not_leaked() {
+        // Mid-think stream start: first chunk has no marker; orphan closer in
+        // the second chunk must discard the deferred prefix (P1 regression).
+        let mut s = StreamThinkSanitizer::new();
+        assert_eq!(s.feed("hidden reasoning"), "");
+        assert_eq!(s.feed("</think>visible"), "visible");
+        assert_eq!(s.stripped_blocks(), 1);
+        assert_eq!(s.flush(), "");
+    }
+
+    #[test]
+    fn stream_visible_prefix_emits_on_second_chunk_without_marker() {
+        let mut s = StreamThinkSanitizer::new();
+        assert_eq!(s.feed("hello"), "");
+        assert_eq!(s.feed(" world"), "hello world");
+        assert_eq!(s.flush(), "");
     }
 
     #[test]

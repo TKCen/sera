@@ -5162,11 +5162,15 @@ const TOOL_EXECUTION_OCSF_CLASS_UID: u32 = 3006;
 /// silently returning `NotInitialised` in normal local deployments.
 struct GatewayAuditBackend {
     store: Arc<dyn AuditStore>,
+    append_lock: Mutex<()>,
 }
 
 impl GatewayAuditBackend {
     fn new(store: Arc<dyn AuditStore>) -> Self {
-        Self { store }
+        Self {
+            store,
+            append_lock: Mutex::new(()),
+        }
     }
 }
 
@@ -5215,6 +5219,7 @@ impl sera_telemetry::audit::AuditBackend for GatewayAuditBackend {
         &self,
         mut entry: sera_telemetry::audit::AuditEntry,
     ) -> Result<sera_telemetry::audit::AuditEntry, sera_telemetry::audit::AuditError> {
+        let _append_guard = self.append_lock.lock().await;
         let latest = self.store.get_latest().await.map_err(|e| {
             sera_telemetry::audit::AuditError::Write {
                 reason: format!("sqlite audit latest: {e}"),
@@ -10312,6 +10317,58 @@ mod tests {
         let newest = &rows[0];
         let oldest = &rows[1];
         assert_eq!(newest.prev_hash.as_deref(), Some(oldest.hash.as_str()));
+    }
+
+    #[tokio::test]
+    async fn gateway_audit_backend_serializes_concurrent_appends() {
+        use sera_telemetry::audit::{AuditBackend, AuditEntry};
+
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory audit db");
+        SqliteAuditStore::init_schema(&conn).expect("audit schema");
+        let store: Arc<dyn AuditStore> = Arc::new(SqliteAuditStore::new(Arc::new(Mutex::new(conn))));
+        let backend = Arc::new(GatewayAuditBackend::new(Arc::clone(&store)));
+
+        let mut tasks = Vec::new();
+        for i in 0..16 {
+            let backend = Arc::clone(&backend);
+            tasks.push(tokio::spawn(async move {
+                let call_id = format!("call_concurrent_{i}");
+                let payload = make_tool_execution_audit_payload(
+                    "agent-concurrent",
+                    "sess-concurrent",
+                    &call_id,
+                    "file-read",
+                    sera_types::envelope::ToolCallStatus::Success,
+                    None,
+                    "concurrent chain test",
+                );
+                let entry = AuditEntry {
+                    ocsf_class_uid: TOOL_EXECUTION_OCSF_CLASS_UID,
+                    this_hash: AuditEntry::compute_hash(
+                        TOOL_EXECUTION_OCSF_CLASS_UID,
+                        &payload,
+                        &[0u8; 32],
+                    ),
+                    payload,
+                    prev_hash: [0u8; 32],
+                    signature: None,
+                };
+                backend.append(entry).await
+            }));
+        }
+
+        for task in tasks {
+            task.await
+                .expect("task joined")
+                .expect("concurrent audit append");
+        }
+
+        assert_eq!(backend.verify_chain().await.expect("valid chain"), 16);
+        let rows = store
+            .get_entries(Some("agent-concurrent"), Some("tool.execution"), 20, 0)
+            .await
+            .expect("query concurrent audit rows");
+        assert_eq!(rows.len(), 16);
     }
 
     #[tokio::test]

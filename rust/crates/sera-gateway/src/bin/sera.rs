@@ -5213,6 +5213,19 @@ fn audit_payload_class_uid(payload: &serde_json::Value) -> Option<u32> {
         .and_then(|v| u32::try_from(v).ok())
 }
 
+fn audit_payload_with_class_uid(payload: serde_json::Value, class_uid: u32) -> serde_json::Value {
+    match payload {
+        serde_json::Value::Object(mut map) => {
+            map.insert("class_uid".to_string(), serde_json::Value::from(class_uid));
+            serde_json::Value::Object(map)
+        }
+        other => serde_json::json!({
+            "class_uid": class_uid,
+            "payload": other,
+        }),
+    }
+}
+
 #[async_trait::async_trait]
 impl sera_telemetry::audit::AuditBackend for GatewayAuditBackend {
     async fn append(
@@ -5220,6 +5233,7 @@ impl sera_telemetry::audit::AuditBackend for GatewayAuditBackend {
         mut entry: sera_telemetry::audit::AuditEntry,
     ) -> Result<sera_telemetry::audit::AuditEntry, sera_telemetry::audit::AuditError> {
         let _append_guard = self.append_lock.lock().await;
+        entry.payload = audit_payload_with_class_uid(entry.payload, entry.ocsf_class_uid);
         let latest = self.store.get_latest().await.map_err(|e| {
             sera_telemetry::audit::AuditError::Write {
                 reason: format!("sqlite audit latest: {e}"),
@@ -10369,6 +10383,39 @@ mod tests {
             .await
             .expect("query concurrent audit rows");
         assert_eq!(rows.len(), 16);
+    }
+
+    #[tokio::test]
+    async fn gateway_audit_backend_preserves_entry_class_uid_when_payload_omits_it() {
+        use sera_telemetry::audit::{AuditBackend, AuditEntry};
+
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory audit db");
+        SqliteAuditStore::init_schema(&conn).expect("audit schema");
+        let store: Arc<dyn AuditStore> = Arc::new(SqliteAuditStore::new(Arc::new(Mutex::new(conn))));
+        let backend = GatewayAuditBackend::new(Arc::clone(&store));
+        let payload = serde_json::json!({
+            "actor": { "user": { "name": "agent-no-class" } },
+            "api": { "operation": "custom-op" },
+            "message": "payload intentionally omits class_uid"
+        });
+        assert!(payload.get("class_uid").is_none());
+        let entry = AuditEntry {
+            ocsf_class_uid: 4242,
+            this_hash: AuditEntry::compute_hash(4242, &payload, &[0u8; 32]),
+            payload,
+            prev_hash: [0u8; 32],
+            signature: None,
+        };
+
+        backend.append(entry).await.expect("append classless payload");
+        assert_eq!(backend.verify_chain().await.expect("valid chain"), 1);
+        let rows = store
+            .get_entries(Some("agent-no-class"), Some("ocsf.4242.custom-op"), 10, 0)
+            .await
+            .expect("query classless audit row");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].payload["class_uid"], 4242);
+        assert_eq!(rows[0].payload["message"], "payload intentionally omits class_uid");
     }
 
     #[tokio::test]

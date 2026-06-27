@@ -81,6 +81,23 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Ordered provider chain (see .env.example "MiniMax-primary + local fallback").
+      # Primary provider (LLM_*) tried first; runtime falls back to the secondary
+      # (SERA_LLM_FALLBACK_*) only on retryable upstream errors. These must be passed
+      # through here — Compose otherwise uses .env solely for interpolation, so the
+      # gateway child process would never see them. Empty defaults = single-provider.
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      SERA_LLM_PROVIDER_ID: ${SERA_LLM_PROVIDER_ID:-}
+      # Env-backed Provider SecretRef for the example `llm/minimax-api-key`.
+      # Secret path `llm/minimax-api-key` maps to SERA_SECRET_LLM_MINIMAX_API_KEY.
+      SERA_SECRET_LLM_MINIMAX_API_KEY: ${SERA_SECRET_LLM_MINIMAX_API_KEY:-}
+      SERA_LLM_FALLBACK_BASE_URL: ${SERA_LLM_FALLBACK_BASE_URL:-}
+      SERA_LLM_FALLBACK_MODEL: ${SERA_LLM_FALLBACK_MODEL:-}
+      SERA_LLM_FALLBACK_API_KEY: ${SERA_LLM_FALLBACK_API_KEY:-}
+      SERA_LLM_FALLBACK_PROVIDER_ID: ${SERA_LLM_FALLBACK_PROVIDER_ID:-}
+      SERA_LLM_FALLBACK_MAX_TOKENS: ${SERA_LLM_FALLBACK_MAX_TOKENS:-}
       SERA_EMBEDDING_PROVIDER: ${SERA_EMBEDDING_PROVIDER:-ollama}
       SERA_EMBEDDING_MODEL: ${SERA_EMBEDDING_MODEL:-nomic-embed-text}
       SERA_LOG_DIR: /app/logs

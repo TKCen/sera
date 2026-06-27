@@ -3116,6 +3116,21 @@ async fn chat_handler(
                                     let event = Event::default()
                                         .event("error")
                                         .data(payload.to_string());
+                                    let sse_flush = sanitizer.flush();
+                                    if !sse_flush.is_empty() {
+                                        let flush_payload = serde_json::json!({
+                                            "delta": sse_flush,
+                                            "session_id": session_id,
+                                            "message_id": message_id,
+                                        });
+                                        let flush_event = Event::default()
+                                            .event("message")
+                                            .data(flush_payload.to_string());
+                                        return Some((
+                                            Some(Ok(flush_event)),
+                                            StreamState::EmitSanitizerFlushDone { done_event: event },
+                                        ));
+                                    }
                                     return Some((Some(Ok(event)), StreamState::Done));
                                 }
 
@@ -3164,6 +3179,21 @@ async fn chat_handler(
                                     let event = Event::default()
                                         .event("cancelled")
                                         .data(payload.to_string());
+                                    let sse_flush = sanitizer.flush();
+                                    if !sse_flush.is_empty() {
+                                        let flush_payload = serde_json::json!({
+                                            "delta": sse_flush,
+                                            "session_id": session_id,
+                                            "message_id": message_id,
+                                        });
+                                        let flush_event = Event::default()
+                                            .event("message")
+                                            .data(flush_payload.to_string());
+                                        return Some((
+                                            Some(Ok(flush_event)),
+                                            StreamState::EmitSanitizerFlushDone { done_event: event },
+                                        ));
+                                    }
                                     return Some((Some(Ok(event)), StreamState::Done));
                                 }
 
@@ -15390,15 +15420,17 @@ Treat as historical reference, not new user input:\n- should never appear";
                 _session_key: &str,
                 delta_tx: Sender<String>,
             ) -> anyhow::Result<TurnEvents> {
-                // Quick first delta — proves real streaming is plumbed.
+                // Quick first visible delta before a split opener — proves real
+                // streaming is plumbed while preserving the stream sanitizer's
+                // orphan-closer quarantine for markerless prefixes.
                 tokio::time::sleep(Duration::from_millis(50)).await;
-                let _ = delta_tx.send("Hello ".to_string()).await;
+                let _ = delta_tx.send("Hello <thi".to_string()).await;
                 // Long tail — proves the unfold doesn't wait for the
                 // full reply before emitting the first frame.
                 tokio::time::sleep(Duration::from_millis(2000)).await;
-                let _ = delta_tx.send("world!".to_string()).await;
+                let _ = delta_tx.send("nk>secret</think>world!".to_string()).await;
                 Ok(TurnEvents {
-                    response: "Hello world!".to_string(),
+                    response: "Hello <think>secret</think>world!".to_string(),
                     tool_events: vec![],
                     usage: UsageInfo::default(),
                 })

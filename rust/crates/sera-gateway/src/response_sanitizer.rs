@@ -186,7 +186,6 @@ impl StreamThinkSanitizer {
     /// was fully inside a `<think>` block (or held as carry for the next
     /// chunk).  Keep calling `feed` for subsequent chunks.
     pub fn feed(&mut self, chunk: &str) -> String {
-        let had_pending_prefix = !self.pending_prefix.is_empty();
         let mut working = std::mem::take(&mut self.pending_prefix);
         if self.carry.is_empty() {
             working.push_str(chunk);
@@ -229,14 +228,23 @@ impl StreamThinkSanitizer {
                             cursor += idx + CLOSE_TAG.len();
                         }
                         None => {
-                            if had_pending_prefix || hold > 0 || self.stripped_blocks > 0 {
-                                // Confirmed visible: continuation chunk after a
-                                // deferred prefix, scannable text before a held
-                                // tag suffix, or suffix after a strip in-stream.
+                            let held_suffix = &remaining.as_bytes()[safe_len..];
+                            let held_suffix_may_be_close = !held_suffix.is_empty()
+                                && CLOSE_TAG.as_bytes()[..held_suffix.len()]
+                                    .eq_ignore_ascii_case(held_suffix);
+                            if self.stripped_blocks > 0 || (hold > 0 && !held_suffix_may_be_close) {
+                                // Confirmed visible: either we have already
+                                // crossed a real marker in this stream, or the
+                                // held suffix can only become an opener, making
+                                // the text before it visible by construction.
                                 out.push_str(scannable);
                             } else {
-                                // Ambiguous stream-start prefix with no tag
-                                // suffix — may precede a delayed orphan closer.
+                                // Ambiguous Normal-state text may still precede
+                                // a delayed orphan `</think>` in a later chunk.
+                                // Keep it quarantined until a later opener
+                                // proves it is visible, a closer discards it,
+                                // or final `flush()` proves the stream ended
+                                // without an orphan closer.
                                 self.pending_prefix.push_str(scannable);
                             }
                             self.carry = remaining[safe_len..].to_owned();
@@ -762,10 +770,23 @@ mod tests {
     }
 
     #[test]
-    fn stream_visible_prefix_emits_on_second_chunk_without_marker() {
+    fn stream_markerless_prefix_stays_quarantined_until_flush() {
         let mut s = StreamThinkSanitizer::new();
         assert_eq!(s.feed("hello"), "");
-        assert_eq!(s.feed(" world"), "hello world");
+        assert_eq!(s.feed(" world"), "");
+        assert_eq!(s.flush(), "hello world");
+    }
+
+    #[test]
+    fn stream_orphan_closer_after_multiple_markerless_chunks_discards_all_prefix() {
+        // Codex PR #1328 P1 regression: a stream that starts mid-think can
+        // span several markerless chunks before the orphan closer arrives.
+        // None of that pre-closer text may be emitted early.
+        let mut s = StreamThinkSanitizer::new();
+        assert_eq!(s.feed("hidden "), "");
+        assert_eq!(s.feed("reasoning "), "");
+        assert_eq!(s.feed("details</think>visible"), "visible");
+        assert_eq!(s.stripped_blocks(), 1);
         assert_eq!(s.flush(), "");
     }
 

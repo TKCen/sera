@@ -5279,6 +5279,7 @@ impl sera_telemetry::audit::AuditBackend for GatewayAuditBackend {
     }
 
     async fn verify_chain(&self) -> Result<usize, sera_telemetry::audit::AuditError> {
+        let _append_guard = self.append_lock.lock().await;
         let count = self.store.count_entries(None, None).await.map_err(|e| {
             sera_telemetry::audit::AuditError::Write {
                 reason: format!("sqlite audit count: {e}"),
@@ -10383,6 +10384,70 @@ mod tests {
             .await
             .expect("query concurrent audit rows");
         assert_eq!(rows.len(), 16);
+    }
+
+    #[tokio::test]
+    async fn gateway_audit_backend_verifies_during_concurrent_appends() {
+        use sera_telemetry::audit::{AuditBackend, AuditEntry};
+
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory audit db");
+        SqliteAuditStore::init_schema(&conn).expect("audit schema");
+        let store: Arc<dyn AuditStore> = Arc::new(SqliteAuditStore::new(Arc::new(Mutex::new(conn))));
+        let backend = Arc::new(GatewayAuditBackend::new(Arc::clone(&store)));
+
+        let mut append_tasks = Vec::new();
+        for i in 0..32 {
+            let backend = Arc::clone(&backend);
+            append_tasks.push(tokio::spawn(async move {
+                let call_id = format!("call_verify_concurrent_{i}");
+                let payload = make_tool_execution_audit_payload(
+                    "agent-verify-concurrent",
+                    "sess-verify-concurrent",
+                    &call_id,
+                    "file-read",
+                    sera_types::envelope::ToolCallStatus::Success,
+                    None,
+                    "verify concurrent chain test",
+                );
+                let entry = AuditEntry {
+                    ocsf_class_uid: TOOL_EXECUTION_OCSF_CLASS_UID,
+                    this_hash: AuditEntry::compute_hash(
+                        TOOL_EXECUTION_OCSF_CLASS_UID,
+                        &payload,
+                        &[0u8; 32],
+                    ),
+                    payload,
+                    prev_hash: [0u8; 32],
+                    signature: None,
+                };
+                backend.append(entry).await
+            }));
+        }
+
+        let mut verify_tasks = Vec::new();
+        for _ in 0..8 {
+            let backend = Arc::clone(&backend);
+            verify_tasks.push(tokio::spawn(async move {
+                for _ in 0..8 {
+                    backend.verify_chain().await?;
+                    tokio::task::yield_now().await;
+                }
+                Ok::<(), sera_telemetry::audit::AuditError>(())
+            }));
+        }
+
+        for task in append_tasks {
+            task.await
+                .expect("append task joined")
+                .expect("concurrent audit append");
+        }
+        for task in verify_tasks {
+            task.await
+                .expect("verify task joined")
+                .expect("verify while appending");
+        }
+
+        assert_eq!(backend.verify_chain().await.expect("final valid chain"), 32);
     }
 
     #[tokio::test]

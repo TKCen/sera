@@ -503,6 +503,9 @@ pub struct DiscordBotConfig {
 - Emoji reactions for status indication
 - Rich embed support for structured responses
 - File upload and attachment handling
+- Compact operator introspection queries handled in-gateway: `help`, `status`, and `sessions [N]`
+
+Operator introspection queries are intentionally answered from live gateway state rather than routed through a runtime turn. This keeps the response fast, avoids creating transcript/session rows for pure operator checks, redacts session keys and principal IDs, and applies a short per-channel cooldown so repeated status checks do not spam Discord.
 
 ---
 

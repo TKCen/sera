@@ -688,6 +688,8 @@ service ChannelConnector {
 
 Built-in connectors (e.g., Discord in Tier 1) run in-process and implement the same trait, but skip gRPC serialization.
 
+For Discord operator ergonomics, built-in connectors may also answer a narrow set of gateway-owned introspection queries directly from process state without dispatching a runtime turn. The initial MVP query set is `help`, `status`, and `sessions [N]`; responses MUST redact raw session keys and principal identifiers, MUST avoid creating new transcript/session rows for these read-only checks, and SHOULD apply a short per-channel cooldown to prevent status-spam loops.
+
 ---
 
 ## 8. Plugin Registry

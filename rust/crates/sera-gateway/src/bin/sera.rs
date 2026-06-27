@@ -1361,6 +1361,11 @@ struct AppState {
     /// Drives `/api/health/ready` — see `probe_runtime_ready`. Stays `false`
     /// across docker restarts because the gateway process is recreated.
     runtime_ready: Arc<std::sync::atomic::AtomicBool>,
+    /// Per-channel cooldown map for compact operator-side Discord queries
+    /// like `status` / `sessions`. Stored in-process so explicit operator
+    /// introspection stays cheap and cannot spam the channel.
+    operator_query_cooldowns:
+        Arc<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>>,
     /// Shutdown flag observed by long-running background loops. Flipped to
     /// `true` after a SIGTERM/Ctrl+C signal so loops can exit their next
     /// iteration instead of blocking the drain phase. Written by the
@@ -4022,6 +4027,223 @@ fn self_introspection_requested(user_message: &str) -> bool {
     .any(|needle| msg.contains(needle))
 }
 
+const DISCORD_OPERATOR_QUERY_COOLDOWN: std::time::Duration =
+    std::time::Duration::from_secs(5);
+const DISCORD_OPERATOR_SESSIONS_DEFAULT_LIMIT: usize = 3;
+const DISCORD_OPERATOR_SESSIONS_MAX_LIMIT: usize = 5;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DiscordOperatorQueryIntent {
+    Help,
+    Status,
+    Sessions { limit: usize },
+}
+
+impl DiscordOperatorQueryIntent {
+    fn cooldown_bucket(&self) -> &'static str {
+        match self {
+            Self::Help => "help",
+            Self::Status => "status",
+            Self::Sessions { .. } => "sessions",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GatewayOperatorSessionSummary {
+    source: String,
+    agent_id: String,
+    state: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GatewayOperatorSnapshot {
+    runtime_ready: bool,
+    configured_agents: usize,
+    live_transports: usize,
+    active_runs: usize,
+    pending_jobs: usize,
+    total_sessions: usize,
+    sessions: Vec<GatewayOperatorSessionSummary>,
+}
+
+fn parse_discord_operator_query(input: &str) -> Option<DiscordOperatorQueryIntent> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let trimmed = trimmed.trim_end_matches(|c: char| matches!(c, '?' | '!' | '.'));
+    let trimmed = trimmed
+        .strip_prefix('/')
+        .or_else(|| trimmed.strip_prefix('!'))
+        .unwrap_or(trimmed)
+        .trim();
+    let trimmed = trimmed
+        .strip_prefix("sera ")
+        .or_else(|| trimmed.strip_prefix("Sera "))
+        .unwrap_or(trimmed)
+        .trim();
+
+    let mut parts = trimmed.split_whitespace();
+    let command = parts.next()?.to_ascii_lowercase();
+    match command.as_str() {
+        "help" => {
+            if parts.next().is_none() {
+                Some(DiscordOperatorQueryIntent::Help)
+            } else {
+                None
+            }
+        }
+        "status" => {
+            if parts.next().is_none() {
+                Some(DiscordOperatorQueryIntent::Status)
+            } else {
+                None
+            }
+        }
+        "session" | "sessions" => {
+            let limit = parts
+                .next()
+                .map(|raw| raw.parse::<usize>().ok())
+                .unwrap_or(Some(DISCORD_OPERATOR_SESSIONS_DEFAULT_LIMIT))?
+                .clamp(1, DISCORD_OPERATOR_SESSIONS_MAX_LIMIT);
+            if parts.next().is_none() {
+                Some(DiscordOperatorQueryIntent::Sessions { limit })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn operator_query_cooldown_key(channel_id: &str, intent: &DiscordOperatorQueryIntent) -> String {
+    format!("{channel_id}:{}", intent.cooldown_bucket())
+}
+
+fn claim_operator_query_slot_at(
+    cooldowns: &std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    channel_id: &str,
+    intent: &DiscordOperatorQueryIntent,
+    now: std::time::Instant,
+) -> Result<(), u64> {
+    let key = operator_query_cooldown_key(channel_id, intent);
+    let mut map = cooldowns
+        .lock()
+        .expect("operator_query_cooldowns mutex poisoned");
+    if let Some(last) = map.get(&key).copied() {
+        let elapsed = now.saturating_duration_since(last);
+        if elapsed < DISCORD_OPERATOR_QUERY_COOLDOWN {
+            let retry = DISCORD_OPERATOR_QUERY_COOLDOWN - elapsed;
+            return Err(retry.as_secs().max(1));
+        }
+    }
+    map.insert(key, now);
+    Ok(())
+}
+
+async fn collect_gateway_operator_snapshot(
+    state: &AppState,
+    session_limit: usize,
+) -> anyhow::Result<GatewayOperatorSnapshot> {
+    let runtime_ready = state
+        .runtime_ready
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let configured_agents = state.manifests.read().unwrap().agent_names().len();
+    let live_transports = state.harnesses.len();
+    let (active_runs, pending_jobs) = {
+        let lane_queue = state.lane_queue.lock().await;
+        (
+            lane_queue.active_runs(),
+            lane_queue.pending_count().unwrap_or_default(),
+        )
+    };
+    let rows = {
+        let db = state.db.lock().await;
+        db.list_sessions()
+            .map_err(|e| anyhow::anyhow!("list_sessions failed: {e}"))?
+    };
+    let total_sessions = rows.len();
+    let sessions = rows
+        .into_iter()
+        .take(session_limit)
+        .map(|row| GatewayOperatorSessionSummary {
+            source: row
+                .session_key
+                .split(':')
+                .next()
+                .unwrap_or("unknown")
+                .to_string(),
+            agent_id: row.agent_id,
+            state: row.state,
+            updated_at: row.updated_at.unwrap_or(row.created_at),
+        })
+        .collect();
+
+    Ok(GatewayOperatorSnapshot {
+        runtime_ready,
+        configured_agents,
+        live_transports,
+        active_runs,
+        pending_jobs,
+        total_sessions,
+        sessions,
+    })
+}
+
+fn render_discord_operator_query_response(
+    intent: &DiscordOperatorQueryIntent,
+    snapshot: &GatewayOperatorSnapshot,
+) -> String {
+    match intent {
+        DiscordOperatorQueryIntent::Help => format!(
+            "[sera] help: status | sessions [N≤{max}] | help\nstatus = readiness/queue/session totals\nsessions = recent session states with keys/principals redacted",
+            max = DISCORD_OPERATOR_SESSIONS_MAX_LIMIT,
+        ),
+        DiscordOperatorQueryIntent::Status => format!(
+            "[sera] status: runtime={runtime}, agents={agents}, transports={transports}, queue={active} active/{pending} pending, sessions={sessions}\n[sera] keys/principals redacted · try: help | sessions [N]",
+            runtime = if snapshot.runtime_ready { "ready" } else { "warming" },
+            agents = snapshot.configured_agents,
+            transports = snapshot.live_transports,
+            active = snapshot.active_runs,
+            pending = snapshot.pending_jobs,
+            sessions = snapshot.total_sessions,
+        ),
+        DiscordOperatorQueryIntent::Sessions { limit } => {
+            if snapshot.sessions.is_empty() {
+                return "[sera] sessions: none yet".to_string();
+            }
+
+            let mut lines = vec![format!(
+                "[sera] sessions: latest {} of {} (requested {}; keys/principals redacted)",
+                snapshot.sessions.len(),
+                snapshot.total_sessions,
+                limit,
+            )];
+            for (idx, session) in snapshot.sessions.iter().enumerate() {
+                lines.push(format!(
+                    "{}. source={} agent={} state={} updated={}",
+                    idx + 1,
+                    session.source,
+                    session.agent_id,
+                    session.state,
+                    session.updated_at,
+                ));
+            }
+            lines.join("\n")
+        }
+    }
+}
+
+fn render_discord_operator_query_rate_limited(retry_after_secs: u64) -> String {
+    format!(
+        "[sera] operator query rate-limited; retry in {}s",
+        retry_after_secs.max(1),
+    )
+}
+
 fn read_small_probe(path: &str, limit: usize) -> Option<String> {
     std::fs::read_to_string(path).ok().map(|s| {
         let one_line = s
@@ -4710,6 +4932,55 @@ async fn send_error_to_discord(state: &AppState, channel_id: &str, error: &str) 
     }
 }
 
+async fn handle_discord_operator_query(
+    state: &AppState,
+    msg: &DiscordMessage,
+    intent: &DiscordOperatorQueryIntent,
+) -> anyhow::Result<TurnOutcome> {
+    let response = match claim_operator_query_slot_at(
+        &state.operator_query_cooldowns,
+        &msg.channel_id,
+        intent,
+        std::time::Instant::now(),
+    ) {
+        Ok(()) => match intent {
+            DiscordOperatorQueryIntent::Help => render_discord_operator_query_response(
+                intent,
+                &GatewayOperatorSnapshot {
+                    runtime_ready: false,
+                    configured_agents: 0,
+                    live_transports: 0,
+                    active_runs: 0,
+                    pending_jobs: 0,
+                    total_sessions: 0,
+                    sessions: Vec::new(),
+                },
+            ),
+            DiscordOperatorQueryIntent::Status => {
+                let snapshot = collect_gateway_operator_snapshot(state, 0).await?;
+                render_discord_operator_query_response(intent, &snapshot)
+            }
+            DiscordOperatorQueryIntent::Sessions { limit } => {
+                let snapshot = collect_gateway_operator_snapshot(state, *limit).await?;
+                render_discord_operator_query_response(intent, &snapshot)
+            }
+        },
+        Err(retry_after_secs) => render_discord_operator_query_rate_limited(retry_after_secs),
+    };
+
+    if let Some(ref dc) = state.discord {
+        dc.send_message(&msg.channel_id, &response).await?;
+    } else {
+        tracing::debug!(
+            channel = %msg.channel_id,
+            intent = intent.cooldown_bucket(),
+            "Discord operator query handled without live Discord connector"
+        );
+    }
+
+    Ok(TurnOutcome::Success)
+}
+
 /// Execute all hook chains for a given point. Returns the chain result.
 /// On HookError, logs and returns a pass-through result (fail-open in Phase A).
 async fn run_hook_point(
@@ -4955,18 +5226,27 @@ async fn process_message(state: &AppState, msg: &DiscordMessage) -> anyhow::Resu
         )
     };
 
-    // Run the inner turn pipeline. We wrap everything below in an async block
-    // so the typing/reaction lifecycle finalizes consistently (✅ on success,
-    // ❌ on failure) regardless of where the inner pipeline returns.
-    let outcome = process_message_inner(
-        state,
-        msg,
-        is_explicit_handoff,
-        principal_kind,
-        &runtime_content,
-        &peer_directory,
-    )
-    .await;
+    // Compact operator-side introspection commands are handled directly from
+    // gateway state rather than routed through the runtime (sera-yeg.10 MVP).
+    let outcome = if let Some(intent) = (!msg.is_bot)
+        .then(|| parse_discord_operator_query(&runtime_content))
+        .flatten()
+    {
+        handle_discord_operator_query(state, msg, &intent).await
+    } else {
+        // Run the inner turn pipeline. We wrap everything below in an async block
+        // so the typing/reaction lifecycle finalizes consistently (✅ on success,
+        // ❌ on failure) regardless of where the inner pipeline returns.
+        process_message_inner(
+            state,
+            msg,
+            is_explicit_handoff,
+            principal_kind,
+            &runtime_content,
+            &peer_directory,
+        )
+        .await
+    };
     if let Some(handle) = typing_task {
         handle.abort();
     }
@@ -6458,6 +6738,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
         chain_executor,
         harnesses,
         runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        operator_query_cooldowns: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         shutting_down: Arc::clone(&shutting_down),
         mail_correlator,
         mail_lookup,
@@ -7333,6 +7614,9 @@ mod tests {
             chain_executor,
             harnesses: test_harnesses().await,
             runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            operator_query_cooldowns: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -7386,6 +7670,9 @@ mod tests {
             chain_executor,
             harnesses: std::collections::HashMap::new(),
             runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            operator_query_cooldowns: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -7439,6 +7726,9 @@ mod tests {
             chain_executor,
             harnesses: test_harnesses().await,
             runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            operator_query_cooldowns: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -7492,6 +7782,9 @@ mod tests {
             chain_executor,
             harnesses: std::collections::HashMap::new(),
             runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            operator_query_cooldowns: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -8655,6 +8948,9 @@ spec:
             chain_executor,
             harnesses: test_harnesses().await,
             runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            operator_query_cooldowns: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -9279,6 +9575,121 @@ spec:
         assert!(transcript[1].content.is_some());
     }
 
+    #[test]
+    fn parse_discord_operator_query_matches_compact_aliases() {
+        assert_eq!(
+            parse_discord_operator_query("status"),
+            Some(DiscordOperatorQueryIntent::Status)
+        );
+        assert_eq!(
+            parse_discord_operator_query("/help"),
+            Some(DiscordOperatorQueryIntent::Help)
+        );
+        assert_eq!(
+            parse_discord_operator_query("sera sessions 9"),
+            Some(DiscordOperatorQueryIntent::Sessions {
+                limit: DISCORD_OPERATOR_SESSIONS_MAX_LIMIT,
+            })
+        );
+        assert_eq!(
+            parse_discord_operator_query("sessions 0"),
+            Some(DiscordOperatorQueryIntent::Sessions { limit: 1 })
+        );
+        assert_eq!(parse_discord_operator_query("status of lane sera"), None);
+    }
+
+    #[test]
+    fn operator_query_rate_limiter_enforces_per_channel_cooldown() {
+        let cooldowns = std::sync::Mutex::new(std::collections::HashMap::new());
+        let now = std::time::Instant::now();
+        let intent = DiscordOperatorQueryIntent::Status;
+
+        assert!(claim_operator_query_slot_at(&cooldowns, "ch-rate", &intent, now).is_ok());
+        let retry = claim_operator_query_slot_at(&cooldowns, "ch-rate", &intent, now)
+            .expect_err("second immediate query should be rate-limited");
+        assert!(retry >= 1);
+        assert!(
+            claim_operator_query_slot_at(
+                &cooldowns,
+                "ch-rate",
+                &intent,
+                now + DISCORD_OPERATOR_QUERY_COOLDOWN,
+            )
+            .is_ok(),
+            "query should be accepted after the cooldown expires"
+        );
+    }
+
+    #[tokio::test]
+    async fn render_operator_status_and_sessions_redacts_sensitive_ids() {
+        let state = test_state_async().await;
+        state
+            .runtime_ready
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        {
+            let db = state.db.lock().await;
+            db.create_session(
+                "ses_operator_1",
+                "sera",
+                "discord:sera:secret-channel",
+                Some("user-secret-1"),
+            )
+            .unwrap();
+        }
+
+        let status_snapshot = collect_gateway_operator_snapshot(&state, 0)
+            .await
+            .expect("status snapshot");
+        let status = render_discord_operator_query_response(
+            &DiscordOperatorQueryIntent::Status,
+            &status_snapshot,
+        );
+        assert!(status.contains("runtime=ready"));
+        assert!(status.contains("sessions=1"));
+        assert!(!status.contains("secret-channel"));
+        assert!(!status.contains("user-secret-1"));
+
+        let sessions_snapshot = collect_gateway_operator_snapshot(&state, 3)
+            .await
+            .expect("sessions snapshot");
+        let sessions = render_discord_operator_query_response(
+            &DiscordOperatorQueryIntent::Sessions { limit: 3 },
+            &sessions_snapshot,
+        );
+        assert!(sessions.contains("keys/principals redacted"));
+        assert!(sessions.contains("source=discord agent=sera state=active"));
+        assert!(!sessions.contains("discord:sera:secret-channel"));
+        assert!(!sessions.contains("user-secret-1"));
+    }
+
+    #[tokio::test]
+    async fn process_message_operator_status_short_circuits_runtime_session_creation() {
+        let state = test_state_async().await;
+        let msg = DiscordMessage {
+            channel_id: "ch_ops".into(),
+            user_id: "user_001".into(),
+            username: "operator".into(),
+            content: "status".into(),
+            message_id: "msg_ops_status".into(),
+            is_dm: true,
+            mentions_bot: false,
+            is_bot: false,
+            connector_name: None,
+            raw_content: String::new(),
+            mentions: Vec::new(),
+        };
+
+        process_message(&state, &msg)
+            .await
+            .expect("operator status should be handled in-gateway");
+
+        let db = state.db.lock().await;
+        assert!(
+            db.list_sessions().unwrap().is_empty(),
+            "operator status must not create a runtime transcript session"
+        );
+    }
+
     /// Patch the discord connector spec in `state.manifests` to set
     /// `peer_bots = peers`. Tests below need this because the default
     /// `TEMPLATE_YAML` leaves peer_bots empty.
@@ -9825,6 +10236,9 @@ spec:
             chain_executor,
             harnesses: std::collections::HashMap::new(),
             runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            operator_query_cooldowns: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -9881,6 +10295,9 @@ spec:
             chain_executor,
             harnesses: std::collections::HashMap::new(),
             runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            operator_query_cooldowns: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -9938,6 +10355,9 @@ spec:
             chain_executor,
             harnesses: std::collections::HashMap::new(),
             runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            operator_query_cooldowns: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -9998,6 +10418,9 @@ spec:
             chain_executor,
             harnesses: std::collections::HashMap::new(),
             runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            operator_query_cooldowns: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -12882,6 +13305,9 @@ spec:
             chain_executor,
             harnesses: std::collections::HashMap::new(),
             runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            operator_query_cooldowns: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mail_correlator: Arc::new(HeaderMailCorrelator::new(
                 Arc::new(InMemoryEnvelopeIndex::default()),
@@ -12977,6 +13403,9 @@ spec:
                 chain_executor,
                 harnesses: std::collections::HashMap::new(),
                 runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                operator_query_cooldowns: Arc::new(std::sync::Mutex::new(
+                    std::collections::HashMap::new(),
+                )),
                 shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 mail_correlator: Arc::new(HeaderMailCorrelator::new(
                     Arc::new(InMemoryEnvelopeIndex::default()),
@@ -13071,6 +13500,9 @@ spec:
                 chain_executor,
                 harnesses: std::collections::HashMap::new(),
                 runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                operator_query_cooldowns: Arc::new(std::sync::Mutex::new(
+                    std::collections::HashMap::new(),
+                )),
                 shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 mail_correlator: Arc::new(HeaderMailCorrelator::new(
                     Arc::new(InMemoryEnvelopeIndex::default()),
@@ -13823,6 +14255,9 @@ spec:
                 chain_executor,
                 harnesses,
                 runtime_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                operator_query_cooldowns: Arc::new(std::sync::Mutex::new(
+                    std::collections::HashMap::new(),
+                )),
                 shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 mail_correlator: Arc::new(HeaderMailCorrelator::new(
                     Arc::new(InMemoryEnvelopeIndex::default()),

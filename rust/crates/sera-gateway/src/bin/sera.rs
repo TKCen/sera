@@ -37,6 +37,7 @@ use sera_config::manifest_loader::{
 use sera_config::secrets::SecretResolver;
 use sera_db::lane_queue::LaneQueue;
 use sera_queue::QueueMode;
+use sera_db::audit::{AuditStore, SqliteAuditStore};
 use sera_db::lane_queue_counter::{InMemoryLaneCounter, LaneCounterStoreDyn, PostgresLaneCounter};
 use sera_db::sqlite::SqliteDb;
 // sera-vzce: SqliteMemoryStore is the zero-infra SemanticMemoryStore tier
@@ -5155,6 +5156,186 @@ async fn enforce_tool_events(
 /// success and failure without parsing the human-readable detail.
 const TOOL_EXECUTION_OCSF_CLASS_UID: u32 = 3006;
 
+/// Gateway-local bridge from telemetry's process-global audit sink into the
+/// local-first `audit_trail` store. This keeps gateway audit emitters honest:
+/// a successful `audit_append` now means a durable row was inserted instead of
+/// silently returning `NotInitialised` in normal local deployments.
+struct GatewayAuditBackend {
+    store: Arc<dyn AuditStore>,
+    append_lock: Mutex<()>,
+}
+
+impl GatewayAuditBackend {
+    fn new(store: Arc<dyn AuditStore>) -> Self {
+        Self {
+            store,
+            append_lock: Mutex::new(()),
+        }
+    }
+}
+
+fn decode_audit_hash_hex(hash: &str) -> Option<[u8; 32]> {
+    let decoded = hex::decode(hash).ok()?;
+    let bytes: [u8; 32] = decoded.try_into().ok()?;
+    Some(bytes)
+}
+
+fn audit_hash_hex(bytes: &[u8; 32]) -> String {
+    hex::encode(bytes)
+}
+
+fn audit_payload_actor_id(payload: &serde_json::Value) -> String {
+    payload
+        .pointer("/actor/user/name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn audit_payload_event_type(class_uid: u32, payload: &serde_json::Value) -> String {
+    match class_uid {
+        TOOL_EXECUTION_OCSF_CLASS_UID => "tool.execution".to_string(),
+        6003 => "policy.activity".to_string(),
+        _ => payload
+            .pointer("/api/operation")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(|operation| format!("ocsf.{class_uid}.{operation}"))
+            .unwrap_or_else(|| format!("ocsf.{class_uid}")),
+    }
+}
+
+fn audit_payload_class_uid(payload: &serde_json::Value) -> Option<u32> {
+    payload
+        .get("class_uid")
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok())
+}
+
+fn audit_payload_with_class_uid(payload: serde_json::Value, class_uid: u32) -> serde_json::Value {
+    match payload {
+        serde_json::Value::Object(mut map) => {
+            map.insert("class_uid".to_string(), serde_json::Value::from(class_uid));
+            serde_json::Value::Object(map)
+        }
+        other => serde_json::json!({
+            "class_uid": class_uid,
+            "payload": other,
+        }),
+    }
+}
+
+#[async_trait::async_trait]
+impl sera_telemetry::audit::AuditBackend for GatewayAuditBackend {
+    async fn append(
+        &self,
+        mut entry: sera_telemetry::audit::AuditEntry,
+    ) -> Result<sera_telemetry::audit::AuditEntry, sera_telemetry::audit::AuditError> {
+        let _append_guard = self.append_lock.lock().await;
+        entry.payload = audit_payload_with_class_uid(entry.payload, entry.ocsf_class_uid);
+        let latest = self.store.get_latest().await.map_err(|e| {
+            sera_telemetry::audit::AuditError::Write {
+                reason: format!("sqlite audit latest: {e}"),
+            }
+        })?;
+        let (prev_hash, prev_hash_bytes) = match latest {
+            Some(row) => {
+                let bytes = decode_audit_hash_hex(&row.hash).ok_or_else(|| {
+                    sera_telemetry::audit::AuditError::Write {
+                        reason: format!("latest audit hash is not a 32-byte hex digest: {}", row.hash),
+                    }
+                })?;
+                (Some(row.hash), bytes)
+            }
+            None => (None, [0u8; 32]),
+        };
+
+        entry.prev_hash = prev_hash_bytes;
+        entry.this_hash = sera_telemetry::audit::AuditEntry::compute_hash(
+            entry.ocsf_class_uid,
+            &entry.payload,
+            &entry.prev_hash,
+        );
+
+        let actor_id = audit_payload_actor_id(&entry.payload);
+        let event_type = audit_payload_event_type(entry.ocsf_class_uid, &entry.payload);
+        let hash = audit_hash_hex(&entry.this_hash);
+        self.store
+            .append(
+                "agent",
+                &actor_id,
+                None,
+                &event_type,
+                &entry.payload,
+                &hash,
+                prev_hash.as_deref(),
+            )
+            .await
+            .map_err(|e| sera_telemetry::audit::AuditError::Write {
+                reason: format!("sqlite audit insert: {e}"),
+            })?;
+        Ok(entry)
+    }
+
+    async fn verify_chain(&self) -> Result<usize, sera_telemetry::audit::AuditError> {
+        let _append_guard = self.append_lock.lock().await;
+        let count = self.store.count_entries(None, None).await.map_err(|e| {
+            sera_telemetry::audit::AuditError::Write {
+                reason: format!("sqlite audit count: {e}"),
+            }
+        })?;
+        if count <= 0 {
+            return Ok(0);
+        }
+
+        let mut rows = self
+            .store
+            .get_entries(None, None, count, 0)
+            .await
+            .map_err(|e| sera_telemetry::audit::AuditError::Write {
+                reason: format!("sqlite audit scan: {e}"),
+            })?;
+        rows.reverse();
+
+        let mut expected_prev_hash: Option<String> = None;
+        let mut expected_prev_bytes = [0u8; 32];
+        for (idx, row) in rows.iter().enumerate() {
+            if row.prev_hash != expected_prev_hash {
+                return Err(sera_telemetry::audit::AuditError::ChainBroken { index: idx });
+            }
+            let class_uid = audit_payload_class_uid(&row.payload)
+                .ok_or(sera_telemetry::audit::AuditError::ChainBroken { index: idx })?;
+            let expected_hash = audit_hash_hex(
+                &sera_telemetry::audit::AuditEntry::compute_hash(
+                    class_uid,
+                    &row.payload,
+                    &expected_prev_bytes,
+                ),
+            );
+            if row.hash != expected_hash {
+                return Err(sera_telemetry::audit::AuditError::ChainBroken { index: idx });
+            }
+            expected_prev_bytes = decode_audit_hash_hex(&row.hash)
+                .ok_or(sera_telemetry::audit::AuditError::ChainBroken { index: idx })?;
+            expected_prev_hash = Some(row.hash.clone());
+        }
+        Ok(rows.len())
+    }
+}
+
+fn install_sqlite_audit_backend(db_path: &std::path::Path) -> anyhow::Result<()> {
+    let conn = rusqlite::Connection::open(db_path)?;
+    SqliteAuditStore::init_schema(&conn)?;
+    let store: Arc<dyn AuditStore> = Arc::new(SqliteAuditStore::new(Arc::new(Mutex::new(conn))));
+    let backend: &'static GatewayAuditBackend = Box::leak(Box::new(GatewayAuditBackend::new(store)));
+    match sera_telemetry::audit::try_set_audit_backend(backend) {
+        Ok(()) => tracing::info!(path = %db_path.display(), "SQLite audit backend registered"),
+        Err(reason) => tracing::warn!(%reason, "audit backend already registered; keeping existing sink"),
+    }
+    Ok(())
+}
+
 /// Cap on the per-row tool-result snippet stored in the audit payload. The
 /// hash-chain stores the entire payload as the body of a SQL row plus the
 /// SHA-256 — keeping the snippet short keeps row size bounded for high-volume
@@ -7746,6 +7927,7 @@ async fn run_start(config: PathBuf, port: u16, local: bool) -> anyhow::Result<()
             tracing::warn!(error = %e, "sqlite_schema::init_all failed; local-first stores may be unavailable");
         }
     }
+    install_sqlite_audit_backend(&db_path)?;
 
     // 2a. SemanticMemoryStore (Tier-2 recall) backend selection (sera-vzce /
     // sera-clmw). Selection rules, in order:
@@ -10051,6 +10233,302 @@ mod tests {
         assert_ne!(ok["status_id"], bad["status_id"]);
         assert_ne!(ok["severity_id"], bad["severity_id"]);
         assert_ne!(ok["action_id"], bad["action_id"]);
+    }
+
+    #[tokio::test]
+    async fn gateway_audit_backend_persists_tool_failure_row() {
+        use sera_telemetry::audit::{AuditBackend, AuditEntry};
+
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory audit db");
+        SqliteAuditStore::init_schema(&conn).expect("audit schema");
+        let store: Arc<dyn AuditStore> = Arc::new(SqliteAuditStore::new(Arc::new(Mutex::new(conn))));
+        let backend = GatewayAuditBackend::new(Arc::clone(&store));
+
+        let payload = make_tool_execution_audit_payload(
+            "agent-test",
+            "sess-audit-row",
+            "call_fail_row_1",
+            "shell-exec",
+            sera_types::envelope::ToolCallStatus::Failure,
+            Some("execution_failed"),
+            "[tool error: execution failed for audit row test]",
+        );
+        let entry = AuditEntry {
+            ocsf_class_uid: TOOL_EXECUTION_OCSF_CLASS_UID,
+            this_hash: AuditEntry::compute_hash(
+                TOOL_EXECUTION_OCSF_CLASS_UID,
+                &payload,
+                &[0u8; 32],
+            ),
+            payload,
+            prev_hash: [0u8; 32],
+            signature: None,
+        };
+
+        let written = backend.append(entry).await.expect("append audit row");
+        assert_eq!(written.prev_hash, [0u8; 32]);
+        assert_eq!(backend.verify_chain().await.expect("valid chain"), 1);
+
+        let rows = store
+            .get_entries(Some("agent-test"), Some("tool.execution"), 10, 0)
+            .await
+            .expect("query audit rows");
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.actor_type, "agent");
+        assert_eq!(row.actor_id, "agent-test");
+        assert_eq!(row.event_type, "tool.execution");
+        assert!(row.prev_hash.is_none());
+        assert_eq!(row.payload["status_id"], 2);
+        assert_eq!(row.payload["status"], "Failure");
+        assert_eq!(row.payload["status_detail"], "execution_failed");
+        assert_eq!(row.payload["api"]["operation"], "shell-exec");
+        assert_eq!(row.payload["api"]["request"]["uid"], "call_fail_row_1");
+        assert_eq!(row.hash, audit_hash_hex(&written.this_hash));
+    }
+
+    #[tokio::test]
+    async fn gateway_audit_backend_links_multiple_rows() {
+        use sera_telemetry::audit::{AuditBackend, AuditEntry};
+
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory audit db");
+        SqliteAuditStore::init_schema(&conn).expect("audit schema");
+        let store: Arc<dyn AuditStore> = Arc::new(SqliteAuditStore::new(Arc::new(Mutex::new(conn))));
+        let backend = GatewayAuditBackend::new(Arc::clone(&store));
+
+        for (call_id, status) in [
+            ("call_ok_chain_1", sera_types::envelope::ToolCallStatus::Success),
+            ("call_fail_chain_2", sera_types::envelope::ToolCallStatus::Failure),
+        ] {
+            let payload = make_tool_execution_audit_payload(
+                "agent-chain",
+                "sess-chain",
+                call_id,
+                "file-read",
+                status,
+                (status == sera_types::envelope::ToolCallStatus::Failure).then_some("io_error"),
+                "chain test",
+            );
+            let entry = AuditEntry {
+                ocsf_class_uid: TOOL_EXECUTION_OCSF_CLASS_UID,
+                this_hash: AuditEntry::compute_hash(
+                    TOOL_EXECUTION_OCSF_CLASS_UID,
+                    &payload,
+                    &[0u8; 32],
+                ),
+                payload,
+                prev_hash: [0u8; 32],
+                signature: None,
+            };
+            backend.append(entry).await.expect("append chained audit row");
+        }
+
+        assert_eq!(backend.verify_chain().await.expect("valid chain"), 2);
+        let rows = store
+            .get_entries(Some("agent-chain"), Some("tool.execution"), 10, 0)
+            .await
+            .expect("query audit rows");
+        assert_eq!(rows.len(), 2);
+        let newest = &rows[0];
+        let oldest = &rows[1];
+        assert_eq!(newest.prev_hash.as_deref(), Some(oldest.hash.as_str()));
+    }
+
+    #[tokio::test]
+    async fn gateway_audit_backend_serializes_concurrent_appends() {
+        use sera_telemetry::audit::{AuditBackend, AuditEntry};
+
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory audit db");
+        SqliteAuditStore::init_schema(&conn).expect("audit schema");
+        let store: Arc<dyn AuditStore> = Arc::new(SqliteAuditStore::new(Arc::new(Mutex::new(conn))));
+        let backend = Arc::new(GatewayAuditBackend::new(Arc::clone(&store)));
+
+        let mut tasks = Vec::new();
+        for i in 0..16 {
+            let backend = Arc::clone(&backend);
+            tasks.push(tokio::spawn(async move {
+                let call_id = format!("call_concurrent_{i}");
+                let payload = make_tool_execution_audit_payload(
+                    "agent-concurrent",
+                    "sess-concurrent",
+                    &call_id,
+                    "file-read",
+                    sera_types::envelope::ToolCallStatus::Success,
+                    None,
+                    "concurrent chain test",
+                );
+                let entry = AuditEntry {
+                    ocsf_class_uid: TOOL_EXECUTION_OCSF_CLASS_UID,
+                    this_hash: AuditEntry::compute_hash(
+                        TOOL_EXECUTION_OCSF_CLASS_UID,
+                        &payload,
+                        &[0u8; 32],
+                    ),
+                    payload,
+                    prev_hash: [0u8; 32],
+                    signature: None,
+                };
+                backend.append(entry).await
+            }));
+        }
+
+        for task in tasks {
+            task.await
+                .expect("task joined")
+                .expect("concurrent audit append");
+        }
+
+        assert_eq!(backend.verify_chain().await.expect("valid chain"), 16);
+        let rows = store
+            .get_entries(Some("agent-concurrent"), Some("tool.execution"), 20, 0)
+            .await
+            .expect("query concurrent audit rows");
+        assert_eq!(rows.len(), 16);
+    }
+
+    #[tokio::test]
+    async fn gateway_audit_backend_verifies_during_concurrent_appends() {
+        use sera_telemetry::audit::{AuditBackend, AuditEntry};
+
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory audit db");
+        SqliteAuditStore::init_schema(&conn).expect("audit schema");
+        let store: Arc<dyn AuditStore> = Arc::new(SqliteAuditStore::new(Arc::new(Mutex::new(conn))));
+        let backend = Arc::new(GatewayAuditBackend::new(Arc::clone(&store)));
+
+        let mut append_tasks = Vec::new();
+        for i in 0..32 {
+            let backend = Arc::clone(&backend);
+            append_tasks.push(tokio::spawn(async move {
+                let call_id = format!("call_verify_concurrent_{i}");
+                let payload = make_tool_execution_audit_payload(
+                    "agent-verify-concurrent",
+                    "sess-verify-concurrent",
+                    &call_id,
+                    "file-read",
+                    sera_types::envelope::ToolCallStatus::Success,
+                    None,
+                    "verify concurrent chain test",
+                );
+                let entry = AuditEntry {
+                    ocsf_class_uid: TOOL_EXECUTION_OCSF_CLASS_UID,
+                    this_hash: AuditEntry::compute_hash(
+                        TOOL_EXECUTION_OCSF_CLASS_UID,
+                        &payload,
+                        &[0u8; 32],
+                    ),
+                    payload,
+                    prev_hash: [0u8; 32],
+                    signature: None,
+                };
+                backend.append(entry).await
+            }));
+        }
+
+        let mut verify_tasks = Vec::new();
+        for _ in 0..8 {
+            let backend = Arc::clone(&backend);
+            verify_tasks.push(tokio::spawn(async move {
+                for _ in 0..8 {
+                    backend.verify_chain().await?;
+                    tokio::task::yield_now().await;
+                }
+                Ok::<(), sera_telemetry::audit::AuditError>(())
+            }));
+        }
+
+        for task in append_tasks {
+            task.await
+                .expect("append task joined")
+                .expect("concurrent audit append");
+        }
+        for task in verify_tasks {
+            task.await
+                .expect("verify task joined")
+                .expect("verify while appending");
+        }
+
+        assert_eq!(backend.verify_chain().await.expect("final valid chain"), 32);
+    }
+
+    #[tokio::test]
+    async fn gateway_audit_backend_preserves_entry_class_uid_when_payload_omits_it() {
+        use sera_telemetry::audit::{AuditBackend, AuditEntry};
+
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory audit db");
+        SqliteAuditStore::init_schema(&conn).expect("audit schema");
+        let store: Arc<dyn AuditStore> = Arc::new(SqliteAuditStore::new(Arc::new(Mutex::new(conn))));
+        let backend = GatewayAuditBackend::new(Arc::clone(&store));
+        let payload = serde_json::json!({
+            "actor": { "user": { "name": "agent-no-class" } },
+            "api": { "operation": "custom-op" },
+            "message": "payload intentionally omits class_uid"
+        });
+        assert!(payload.get("class_uid").is_none());
+        let entry = AuditEntry {
+            ocsf_class_uid: 4242,
+            this_hash: AuditEntry::compute_hash(4242, &payload, &[0u8; 32]),
+            payload,
+            prev_hash: [0u8; 32],
+            signature: None,
+        };
+
+        backend.append(entry).await.expect("append classless payload");
+        assert_eq!(backend.verify_chain().await.expect("valid chain"), 1);
+        let rows = store
+            .get_entries(Some("agent-no-class"), Some("ocsf.4242.custom-op"), 10, 0)
+            .await
+            .expect("query classless audit row");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].payload["class_uid"], 4242);
+        assert_eq!(rows[0].payload["message"], "payload intentionally omits class_uid");
+    }
+
+    #[tokio::test]
+    async fn install_sqlite_audit_backend_makes_global_append_durable() {
+        use sera_telemetry::audit::{audit_append, AuditEntry};
+
+        let db_path = std::env::temp_dir().join(format!(
+            "sera_gateway_audit_backend_{}_{}.sqlite",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        install_sqlite_audit_backend(&db_path).expect("install sqlite audit backend");
+
+        let payload = make_tool_execution_audit_payload(
+            "agent-global",
+            "sess-global",
+            "call_global_1",
+            "file-read",
+            sera_types::envelope::ToolCallStatus::Success,
+            None,
+            "global audit append test",
+        );
+        let entry = AuditEntry {
+            ocsf_class_uid: TOOL_EXECUTION_OCSF_CLASS_UID,
+            this_hash: AuditEntry::compute_hash(
+                TOOL_EXECUTION_OCSF_CLASS_UID,
+                &payload,
+                &[0u8; 32],
+            ),
+            payload,
+            prev_hash: [0u8; 32],
+            signature: None,
+        };
+
+        let written = audit_append(entry)
+            .await
+            .expect("global audit append should be registered");
+        assert_ne!(written.this_hash, [0u8; 32]);
+
+        let conn = rusqlite::Connection::open(&db_path).expect("open audit db");
+        let store: Arc<dyn AuditStore> = Arc::new(SqliteAuditStore::new(Arc::new(Mutex::new(conn))));
+        let rows = store
+            .get_entries(Some("agent-global"), Some("tool.execution"), 10, 0)
+            .await
+            .expect("read back global audit row");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].payload["api"]["request"]["uid"], "call_global_1");
+        let _ = std::fs::remove_file(db_path);
     }
 
     // ── sera-tqzd AC3: failures not swallowed at runtime/gateway boundary ──

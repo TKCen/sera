@@ -177,6 +177,68 @@ fn build_tool_call_stream(tool_name: &str, args_json: &str) -> String {
     format!("data: {first}\n\ndata: {finish}\n\ndata: [DONE]\n\n")
 }
 
+/// Start a mock LLM that sends `chunks` as separate OpenAI SSE delta events.
+///
+/// Unlike [`start_mock_llm_with_reply`] which sends the entire reply in one
+/// delta, this function emits each element of `chunks` as its own streaming
+/// delta chunk. Use this when a test needs to exercise split-tag handling —
+/// e.g. sending `["<thi", "nk>hidden</think>visible"]` to prove the gateway's
+/// stream sanitizer removes `<think>` even when the tag is split across chunks.
+///
+/// Returns `(url, server)` — the caller must hold `server` alive for the
+/// duration of the test.
+pub async fn start_mock_llm_with_chunks(chunks: &[&str]) -> Result<(String, MockServer)> {
+    let server = MockServer::start().await;
+    let sse_body = build_multi_chunk_sse_stream(chunks);
+
+    for p in ["/v1/chat/completions", "/chat/completions"] {
+        Mock::given(method("POST"))
+            .and(path(p))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .insert_header("cache-control", "no-cache")
+                    .set_body_string(sse_body.clone()),
+            )
+            .mount(&server)
+            .await;
+    }
+
+    let url = server.uri();
+    Ok((url, server))
+}
+
+/// Build a multi-delta SSE stream where each element of `chunks` becomes its
+/// own `content` delta event. A terminal `finish_reason: stop` frame and
+/// `[DONE]` marker are appended automatically.
+fn build_multi_chunk_sse_stream(chunks: &[&str]) -> String {
+    let mut body = String::new();
+    for chunk in chunks {
+        let delta = json!({
+            "id": "chatcmpl-sera-e2e-mc",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "e2e-mock",
+            "choices": [{
+                "index": 0,
+                "delta": { "content": chunk },
+                "finish_reason": null
+            }]
+        });
+        body.push_str(&format!("data: {delta}\n\n"));
+    }
+    let finish = json!({
+        "id": "chatcmpl-sera-e2e-mc",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "e2e-mock",
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 4, "completion_tokens": 4, "total_tokens": 8}
+    });
+    body.push_str(&format!("data: {finish}\n\ndata: [DONE]\n\n"));
+    body
+}
+
 /// Render a minimal well-formed OpenAI-compat streaming completion that
 /// carries `reply` in a single delta.  The runtime's `parse_sse_stream`
 /// accumulates `delta.content` across all chunks and expects a terminal

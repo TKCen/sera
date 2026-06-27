@@ -69,7 +69,7 @@ use sera_gateway::hitl_gateway::{
     HitlAppState, InMemoryTicketStore, TicketStore, resolve_approval_routing, resolve_hitl_mode,
 };
 use sera_gateway::kill_switch::{KillSwitch, admin_sock_path, spawn_admin_socket};
-use sera_gateway::response_sanitizer::sanitize_assistant_response;
+use sera_gateway::response_sanitizer::{StreamThinkSanitizer, sanitize_assistant_response};
 use sera_gateway::scheduler::spawn_scheduler;
 #[cfg(test)]
 use sera_gateway::session_store::InMemorySessionStore;
@@ -2970,6 +2970,7 @@ async fn chat_handler(
                 message_id: mid_clone,
                 agent_name: aname,
                 user_message: message.clone(),
+                sanitizer: StreamThinkSanitizer::new(),
             },
             move |fold_state| async move {
                 match fold_state {
@@ -2983,6 +2984,7 @@ async fn chat_handler(
                         message_id,
                         agent_name,
                         user_message,
+                        mut sanitizer,
                     } => {
                         // Pull the next live delta. `recv()` resolves to
                         // `None` when every Sender is dropped — that
@@ -2991,8 +2993,31 @@ async fn chat_handler(
                         // JoinHandle, persist, emit `done`).
                         match rx.recv().await {
                             Some(delta) => {
+                                // sera-jzsn: sanitize the delta before forwarding.
+                                // `feed()` handles tags split across chunk boundaries
+                                // via a carry buffer. An empty return means this delta
+                                // was entirely inside a `<think>` block — skip the
+                                // SSE emit (the filter_map below drops None items).
+                                let sanitized_delta = sanitizer.feed(&delta);
+                                if sanitized_delta.is_empty() {
+                                    return Some((
+                                        None,
+                                        StreamState::Streaming {
+                                            rx,
+                                            turn_handle,
+                                            cancel_guard,
+                                            state,
+                                            session_key,
+                                            session_id,
+                                            message_id,
+                                            agent_name,
+                                            user_message,
+                                            sanitizer,
+                                        },
+                                    ));
+                                }
                                 let payload = serde_json::json!({
-                                    "delta": delta,
+                                    "delta": sanitized_delta,
                                     "session_id": session_id,
                                     "message_id": message_id,
                                 });
@@ -3011,6 +3036,7 @@ async fn chat_handler(
                                         message_id,
                                         agent_name,
                                         user_message,
+                                        sanitizer,
                                     },
                                 ))
                             }
@@ -3169,6 +3195,30 @@ async fn chat_handler(
                                     return Some((Some(Ok(event)), StreamState::Done));
                                 }
 
+                                // sera-jzsn: flush the stream sanitizer. In
+                                // InThink state this discards any carry from an
+                                // unclosed block; in Normal state it recovers
+                                // potential-tag-prefix carry bytes. The flushed
+                                // text is included in result.reply and is handled
+                                // by the batch pass below for the transcript.
+                                let _sse_flush = sanitizer.flush();
+
+                                // Hermes parity Row 4, streaming path: apply the
+                                // batch sanitizer to the accumulated reply so the
+                                // stored transcript is privacy-clean even for
+                                // edge cases (all-think reply, tags at stream end).
+                                let sse_sanitized = sanitize_assistant_response(&result.reply);
+                                if sse_sanitized.was_sanitized() {
+                                    tracing::info!(
+                                        session_id = %session_id,
+                                        agent = %agent_name,
+                                        stripped_blocks = sse_sanitized.stripped_blocks,
+                                        raw_len = result.reply.len(),
+                                        sanitized_len = sse_sanitized.text.len(),
+                                        "stripped chain-of-thought from streaming reply transcript (hermes parity row 4)"
+                                    );
+                                }
+
                                 // Save tool events and assistant response.
                                 {
                                     let db = state.db.lock().await;
@@ -3176,7 +3226,7 @@ async fn chat_handler(
                                     let _ = db.append_transcript(
                                         &session_id,
                                         "assistant",
-                                        Some(&result.reply),
+                                        Some(&sse_sanitized.text),
                                         None,
                                         None,
                                     );
@@ -3187,7 +3237,9 @@ async fn chat_handler(
                                         Some(
                                             &serde_json::json!({
                                                 "session_id": session_id,
-                                                "response_len": result.reply.len(),
+                                                "response_len": sse_sanitized.text.len(),
+                                                "raw_response_len": result.reply.len(),
+                                                "sanitized_blocks": sse_sanitized.stripped_blocks,
                                             })
                                             .to_string(),
                                         ),
@@ -4059,6 +4111,10 @@ enum StreamState {
         /// sera-ibkr.3: the original user message, carried so the streaming
         /// completion path can warm the next-turn memory prefetch.
         user_message: String,
+        /// sera-jzsn: stream-aware think sanitizer. Strips `<think>…</think>`
+        /// blocks from deltas as they arrive, handling tags split across
+        /// chunk boundaries via a small carry buffer.
+        sanitizer: StreamThinkSanitizer,
     },
     Done,
 }

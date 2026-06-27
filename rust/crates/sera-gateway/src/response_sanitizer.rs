@@ -126,6 +126,184 @@ pub fn sanitize_assistant_response(input: &str) -> SanitizationOutcome {
 const OPEN_TAG: &str = "<think>";
 const CLOSE_TAG: &str = "</think>";
 
+// ── Stream-aware sanitizer ───────────────────────────────────────────────────
+
+/// State machine for stripping `<think>…</think>` blocks from a sequence of
+/// streaming text deltas, where tag boundaries may split across chunk calls.
+///
+/// ## Usage
+///
+/// ```rust,ignore
+/// let mut san = StreamThinkSanitizer::new();
+/// for delta in runtime_chunks {
+///     let safe = san.feed(&delta);
+///     if !safe.is_empty() { sse_emit(safe); }
+/// }
+/// let tail = san.flush(); // emit carry after stream ends
+/// ```
+///
+/// ## Carry buffer
+///
+/// At the end of each chunk, up to `max(OPEN_TAG.len(), CLOSE_TAG.len()) - 1`
+/// bytes are held back if they could be the start of a tag that continues in
+/// the next chunk.  `flush()` releases those bytes (or discards them if the
+/// stream ended inside a `<think>` block).
+pub struct StreamThinkSanitizer {
+    state: StreamSanitizerState,
+    /// Bytes held from the previous chunk that could be a tag prefix.
+    carry: String,
+    stripped_blocks: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StreamSanitizerState {
+    Normal,
+    InThink,
+}
+
+impl Default for StreamThinkSanitizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StreamThinkSanitizer {
+    pub fn new() -> Self {
+        Self {
+            state: StreamSanitizerState::Normal,
+            carry: String::new(),
+            stripped_blocks: 0,
+        }
+    }
+
+    /// Feed one streaming delta. Returns the sanitized fragment safe to emit.
+    ///
+    /// An empty return does not mean the stream is done — it means this chunk
+    /// was fully inside a `<think>` block (or held as carry for the next
+    /// chunk).  Keep calling `feed` for subsequent chunks.
+    pub fn feed(&mut self, chunk: &str) -> String {
+        let working = if self.carry.is_empty() {
+            chunk.to_owned()
+        } else {
+            let mut w = std::mem::take(&mut self.carry);
+            w.push_str(chunk);
+            w
+        };
+
+        let mut out = String::with_capacity(working.len());
+        let mut cursor = 0usize;
+
+        loop {
+            let remaining = &working[cursor..];
+            if remaining.is_empty() {
+                break;
+            }
+
+            match self.state {
+                StreamSanitizerState::Normal => {
+                    let hold = max_tag_prefix_suffix(
+                        remaining.as_bytes(),
+                        &[OPEN_TAG.as_bytes(), CLOSE_TAG.as_bytes()],
+                    );
+                    let safe_len = remaining.len() - hold;
+                    let scannable = &remaining[..safe_len];
+
+                    match find_next_marker(scannable) {
+                        Some(NextMarker::Open(idx)) => {
+                            out.push_str(&scannable[..idx]);
+                            cursor += idx + OPEN_TAG.len();
+                            self.state = StreamSanitizerState::InThink;
+                        }
+                        Some(NextMarker::Close(idx)) => {
+                            // Orphan </think> in Normal state: keep text before
+                            // it (already-emitted bytes can't be recalled) and
+                            // skip the tag itself.
+                            out.push_str(&scannable[..idx]);
+                            self.stripped_blocks += 1;
+                            cursor += idx + CLOSE_TAG.len();
+                        }
+                        None => {
+                            out.push_str(scannable);
+                            self.carry = remaining[safe_len..].to_owned();
+                            break;
+                        }
+                    }
+                }
+                StreamSanitizerState::InThink => {
+                    let hold = max_tag_prefix_suffix(
+                        remaining.as_bytes(),
+                        &[CLOSE_TAG.as_bytes()],
+                    );
+                    let safe_len = remaining.len() - hold;
+                    let scannable = &remaining[..safe_len];
+
+                    match find_close(scannable) {
+                        Some(idx) => {
+                            self.stripped_blocks += 1;
+                            cursor += idx + CLOSE_TAG.len();
+                            self.state = StreamSanitizerState::Normal;
+                        }
+                        None => {
+                            // Still inside think block. Hold potential partial closer.
+                            self.carry = remaining[safe_len..].to_owned();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        out
+    }
+
+    /// Flush carry bytes at end of stream.
+    ///
+    /// - `Normal` state: carry bytes were held as a potential tag prefix but
+    ///   no continuation arrived — they are safe model output, return them.
+    /// - `InThink` state: carry is inside an unclosed `<think>` block —
+    ///   discard (orphan opener, same semantics as `sanitize_assistant_response`).
+    pub fn flush(&mut self) -> String {
+        let carry = std::mem::take(&mut self.carry);
+        match self.state {
+            StreamSanitizerState::Normal => carry,
+            StreamSanitizerState::InThink => {
+                if !carry.is_empty() {
+                    self.stripped_blocks += 1;
+                }
+                String::new()
+            }
+        }
+    }
+
+    /// Number of `<think>` regions stripped so far (updated by `feed`/`flush`).
+    pub fn stripped_blocks(&self) -> usize {
+        self.stripped_blocks
+    }
+}
+
+/// Returns the length of the longest suffix of `haystack` that is a proper
+/// (non-full) prefix of any tag in `tags` (case-insensitive ASCII comparison).
+///
+/// "Proper prefix" means shorter than the full tag — a full match is already
+/// detectable by `find_ci` and does not need to be carried forward.
+fn max_tag_prefix_suffix(haystack: &[u8], tags: &[&[u8]]) -> usize {
+    let max_tag_len = tags.iter().map(|t| t.len()).max().unwrap_or(0);
+    if max_tag_len <= 1 {
+        return 0;
+    }
+    let check_up_to = (max_tag_len - 1).min(haystack.len());
+    // Longest match wins — iterate from longest suffix down.
+    for len in (1..=check_up_to).rev() {
+        let suffix = &haystack[haystack.len() - len..];
+        for &tag in tags {
+            if len < tag.len() && tag[..len].eq_ignore_ascii_case(suffix) {
+                return len;
+            }
+        }
+    }
+    0
+}
+
 enum NextMarker {
     Open(usize),
     Close(usize),
@@ -375,5 +553,186 @@ mod tests {
         );
         assert_eq!(out.text, "prefix\r\n\r\nsuffix");
         assert_eq!(out.stripped_blocks, 1);
+    }
+
+    // ── StreamThinkSanitizer tests ──────────────────────────────────────────
+
+    #[test]
+    fn stream_passthrough_when_no_markers() {
+        let mut s = StreamThinkSanitizer::new();
+        assert_eq!(s.feed("hello world"), "hello world");
+        assert_eq!(s.flush(), "");
+        assert_eq!(s.stripped_blocks(), 0);
+    }
+
+    #[test]
+    fn stream_strips_complete_block_single_chunk() {
+        let mut s = StreamThinkSanitizer::new();
+        assert_eq!(s.feed("<think>secret</think>visible"), "visible");
+        assert_eq!(s.stripped_blocks(), 1);
+        assert_eq!(s.flush(), "");
+    }
+
+    #[test]
+    fn stream_open_tag_split_across_chunks() {
+        // <think> split: chunk 1 ends with '<thi', chunk 2 completes it.
+        let mut s = StreamThinkSanitizer::new();
+        let out1 = s.feed("before<thi");
+        assert_eq!(out1, "before");
+        let out2 = s.feed("nk>secret</think>after");
+        assert_eq!(out2, "after");
+        assert_eq!(s.flush(), "");
+        assert_eq!(s.stripped_blocks(), 1);
+    }
+
+    #[test]
+    fn stream_close_tag_split_across_chunks() {
+        // </think> split: chunk 1 ends with '</thi', chunk 2 completes it.
+        let mut s = StreamThinkSanitizer::new();
+        let out1 = s.feed("<think>secret</thi");
+        assert_eq!(out1, "");
+        let out2 = s.feed("nk>visible");
+        assert_eq!(out2, "visible");
+        assert_eq!(s.stripped_blocks(), 1);
+        assert_eq!(s.flush(), "");
+    }
+
+    #[test]
+    fn stream_open_tag_split_one_byte_at_a_time() {
+        // Worst-case: each byte of <think> arrives in its own chunk.
+        let mut s = StreamThinkSanitizer::new();
+        for ch in ["<", "t", "h", "i", "n", "k", ">"] {
+            let out = s.feed(ch);
+            assert_eq!(out, "", "expected empty while tag is building, got {out:?}");
+        }
+        assert_eq!(s.feed("content</think>done"), "done");
+        assert_eq!(s.stripped_blocks(), 1);
+    }
+
+    #[test]
+    fn stream_multiple_blocks_split_differently() {
+        let mut s = StreamThinkSanitizer::new();
+        // Block 1 split at open tag, block 2 split at close tag.
+        let out1 = s.feed("<think>a</");
+        assert_eq!(out1, "");
+        let out2 = s.feed("think>one<think>b<");
+        assert_eq!(out2, "one");
+        let out3 = s.feed("/think>two");
+        assert_eq!(out3, "two");
+        assert_eq!(s.stripped_blocks(), 2);
+        assert_eq!(s.flush(), "");
+    }
+
+    #[test]
+    fn stream_flush_in_normal_state_emits_carry() {
+        // Stream ends with bytes that looked like a tag start but aren't.
+        let mut s = StreamThinkSanitizer::new();
+        let out = s.feed("text<thi");
+        assert_eq!(out, "text");
+        // '<thi' held as carry; flush releases it (not a real tag).
+        assert_eq!(s.flush(), "<thi");
+        assert_eq!(s.stripped_blocks(), 0);
+    }
+
+    #[test]
+    fn stream_flush_in_think_state_discards_carry() {
+        // Unclosed <think> at end of stream: content must be dropped.
+        let mut s = StreamThinkSanitizer::new();
+        let out = s.feed("<think>hidden content");
+        assert_eq!(out, "");
+        // InThink state: flush discards.
+        assert_eq!(s.flush(), "");
+    }
+
+    #[test]
+    fn stream_case_insensitive() {
+        let mut s = StreamThinkSanitizer::new();
+        assert_eq!(s.feed("<THINK>hidden</THINK>visible"), "visible");
+        assert_eq!(s.stripped_blocks(), 1);
+    }
+
+    #[test]
+    fn stream_single_byte_chunks_close_tag_split() {
+        let input = "<think>secret</think>reply";
+        let mut s = StreamThinkSanitizer::new();
+        let mut combined = String::new();
+        for byte in input.as_bytes() {
+            combined.push_str(&s.feed(&(*byte as char).to_string()));
+        }
+        combined.push_str(&s.flush());
+        assert_eq!(combined, "reply");
+        assert_eq!(s.stripped_blocks(), 1);
+    }
+
+    #[test]
+    fn stream_result_matches_batch_sanitizer_for_balanced_blocks() {
+        // For balanced <think>…</think> blocks and unclosed openers, the
+        // concatenation of stream deltas + flush equals the batch result.
+        //
+        // Note: orphan closers (</think> with no opener) intentionally differ.
+        // The batch sanitizer drops everything before the orphan closer; the
+        // stream sanitizer cannot retract already-emitted bytes, so it only
+        // skips the tag itself. This divergence is acceptable — neither path
+        // leaks a `<think>` or `</think>` marker to the operator.
+        let inputs = [
+            "<think>a</think>text",
+            "no markers here",
+            "<think>a</think><think>b</think>x",
+            "<think>unclosed",
+            "<thi",
+        ];
+        for input in inputs {
+            let batch = sanitize_assistant_response(input);
+            let mut s = StreamThinkSanitizer::new();
+            // Feed in 3-byte chunks to exercise split-tag paths.
+            let mut streamed = String::new();
+            let mut idx = 0;
+            while idx < input.len() {
+                let end = (idx + 3).min(input.len());
+                streamed.push_str(&s.feed(&input[idx..end]));
+                idx = end;
+            }
+            streamed.push_str(&s.flush());
+            assert_eq!(
+                streamed, batch.text,
+                "stream vs batch mismatch for input: {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn stream_orphan_closer_skips_tag_not_prefix() {
+        // Intentional divergence from batch sanitizer: the stream sanitizer
+        // cannot retract bytes already emitted to the SSE client, so for an
+        // orphan </think> it skips the tag itself rather than the prefix.
+        // The contract ("no <think> or </think> marker in output") is still met.
+        let mut s = StreamThinkSanitizer::new();
+        let out = s.feed("prefix</think>suffix");
+        // prefix is emitted (can't retract), tag is skipped, suffix follows.
+        assert!(
+            !out.to_ascii_lowercase().contains("<think>"),
+            "orphan closer leaked <think>: {out:?}"
+        );
+        assert!(
+            !out.to_ascii_lowercase().contains("</think>"),
+            "orphan closer leaked </think>: {out:?}"
+        );
+        assert!(out.contains("suffix"), "visible suffix missing: {out:?}");
+        assert_eq!(s.stripped_blocks(), 1);
+    }
+
+    #[test]
+    fn max_tag_prefix_suffix_finds_correct_lengths() {
+        let tags: &[&[u8]] = &[OPEN_TAG.as_bytes(), CLOSE_TAG.as_bytes()];
+        // Full suffix matching open tag prefix
+        assert_eq!(max_tag_prefix_suffix(b"abc<thi", tags), 4);
+        // Single < could start either tag
+        assert_eq!(max_tag_prefix_suffix(b"abc<", tags), 1);
+        // No suffix matches
+        assert_eq!(max_tag_prefix_suffix(b"abcxyz", tags), 0);
+        // Close tag prefix
+        assert_eq!(max_tag_prefix_suffix(b"abc</thi", tags), 5);
+        // Full tag at end is NOT a partial (it's a full match, no carry needed)
+        assert_eq!(max_tag_prefix_suffix(b"abc<think>", tags), 0);
     }
 }

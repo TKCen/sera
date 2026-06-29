@@ -14,6 +14,8 @@ use sha2::{Digest, Sha256};
 use sera_cli::config::CliConfig;
 use sera_cli::token_store::best_available_store;
 
+mod circle_replay;
+
 /// SERA — Sandboxed Extensible Reasoning Agent CLI
 #[derive(Parser)]
 #[command(
@@ -161,6 +163,18 @@ enum CircleCommand {
         /// Path to a CollaborationProofBundle JSON artifact
         #[arg(long, value_name = "PATH", num_args = 0..=1)]
         bundle: Option<PathBuf>,
+        /// Emit a compact JSON report before the machine-parseable footer
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replay captured Circle role fixtures into a proof bundle
+    Replay {
+        /// Directory containing summary.json plus one <role_id>.json file per role
+        #[arg(long, value_name = "DIR", num_args = 0..=1)]
+        fixture_dir: Option<PathBuf>,
+        /// Path to write the generated CollaborationProofBundle JSON artifact
+        #[arg(long, value_name = "PATH", num_args = 0..=1)]
+        bundle_out: Option<PathBuf>,
         /// Emit a compact JSON report before the machine-parseable footer
         #[arg(long)]
         json: bool,
@@ -398,14 +412,18 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
 
-    // Offline Circle proof-bundle validation must not depend on gateway config
-    // or token stores. Keep this path usable in CI and stale/corrupt operator
-    // environments, and always emit the `circle-validate:` footer.
-    if let Commands::Circle {
-        command: CircleCommand::Validate { bundle, json },
-    } = &cli.command
-    {
-        let exit_code = run_circle_validate(bundle.clone(), *json);
+    // Offline Circle proof-bundle operations must not depend on gateway config
+    // or token stores. Keep these paths usable in CI and stale/corrupt operator
+    // environments, and always emit their machine footers.
+    if let Commands::Circle { command } = &cli.command {
+        let exit_code = match command {
+            CircleCommand::Validate { bundle, json } => run_circle_validate(bundle.clone(), *json),
+            CircleCommand::Replay {
+                fixture_dir,
+                bundle_out,
+                json,
+            } => circle_replay::run_circle_replay(fixture_dir.clone(), bundle_out.clone(), *json),
+        };
         if exit_code != 0 {
             std::process::exit(exit_code);
         }
@@ -766,6 +784,16 @@ async fn main() -> Result<()> {
         Commands::Circle { command } => match command {
             CircleCommand::Validate { bundle, json } => {
                 let exit_code = run_circle_validate(bundle, json);
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+            }
+            CircleCommand::Replay {
+                fixture_dir,
+                bundle_out,
+                json,
+            } => {
+                let exit_code = circle_replay::run_circle_replay(fixture_dir, bundle_out, json);
                 if exit_code != 0 {
                     std::process::exit(exit_code);
                 }

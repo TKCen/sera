@@ -320,7 +320,7 @@ pub enum InvalidResultRule {
     /// Run cannot be independently verified (no receipts, missing lineage).
     UnverifiableRun,
     /// Custom invalidation rule (operator-defined).
-    Custom(String),
+    Custom { description: String },
 }
 
 /// Default visibility of proposals, runs, reviews, and side-channel communication.
@@ -1142,5 +1142,27 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         let parsed: LineageRelation = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, r);
+    }
+
+    #[test]
+    fn invalid_result_rule_custom_round_trip() {
+        let rule = InvalidResultRule::Custom {
+            description: "no external oracles allowed".to_string(),
+        };
+        let json = serde_json::to_string(&rule).unwrap();
+        assert!(
+            json.contains(r#""kind":"custom""#),
+            "expected kind tag, got: {json}"
+        );
+        assert!(
+            json.contains(r#""description""#),
+            "expected description field, got: {json}"
+        );
+        let parsed: InvalidResultRule = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, rule);
+
+        let yaml = serde_yaml::to_string(&rule).unwrap();
+        let parsed_yaml: InvalidResultRule = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed_yaml, rule);
     }
 }

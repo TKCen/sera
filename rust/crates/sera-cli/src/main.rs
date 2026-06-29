@@ -159,8 +159,8 @@ enum CircleCommand {
     /// Validate a mixed-provider Circle collaboration proof bundle
     Validate {
         /// Path to a CollaborationProofBundle JSON artifact
-        #[arg(long, value_name = "PATH")]
-        bundle: PathBuf,
+        #[arg(long, value_name = "PATH", num_args = 0..=1)]
+        bundle: Option<PathBuf>,
         /// Emit a compact JSON report before the machine-parseable footer
         #[arg(long)]
         json: bool,
@@ -294,7 +294,13 @@ fn print_circle_footer(verdict: &str, bundle_sha256: &str) {
     println!("circle-validate: {verdict} {bundle_sha256}");
 }
 
-fn run_circle_validate(bundle_path: PathBuf, json: bool) -> i32 {
+fn run_circle_validate(bundle_path: Option<PathBuf>, json: bool) -> i32 {
+    let Some(bundle_path) = bundle_path else {
+        eprintln!("missing required --bundle <PATH> for Circle proof validation");
+        print_circle_footer("USAGE_ERROR", "unknown");
+        return 3;
+    };
+
     let bytes = match std::fs::read(&bundle_path) {
         Ok(bytes) => bytes,
         Err(err) => {

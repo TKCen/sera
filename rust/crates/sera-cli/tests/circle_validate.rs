@@ -59,8 +59,6 @@ fn circle_validate_cli_fails_receipt_provider_mismatch() {
     );
 }
 
-
-
 #[test]
 fn circle_validate_cli_bypasses_corrupt_config() {
     let bad_config = std::env::temp_dir().join(format!(
@@ -77,7 +75,9 @@ fn circle_validate_cli_bypasses_corrupt_config() {
             "circle",
             "validate",
             "--bundle",
-            fixture("circle_valid_mixed_provider.json").to_str().unwrap(),
+            fixture("circle_valid_mixed_provider.json")
+                .to_str()
+                .unwrap(),
         ])
         .output()
         .expect("run sera circle validate with corrupt config");
@@ -91,6 +91,46 @@ fn circle_validate_cli_bypasses_corrupt_config() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("circle-validate: PASS "), "stdout={stdout}");
+}
+
+#[test]
+fn circle_validate_cli_usage_error_footer_when_bundle_is_omitted() {
+    let output = Command::new(env!("CARGO_BIN_EXE_sera"))
+        .args(["circle", "validate"])
+        .output()
+        .expect("run sera circle validate without bundle");
+
+    assert_eq!(output.status.code(), Some(3));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("circle-validate: USAGE_ERROR unknown"),
+        "stdout={stdout}"
+    );
+    assert!(
+        stderr.contains("missing required --bundle"),
+        "stderr={stderr}"
+    );
+}
+
+#[test]
+fn circle_validate_cli_usage_error_footer_when_bundle_value_is_omitted() {
+    let output = Command::new(env!("CARGO_BIN_EXE_sera"))
+        .args(["circle", "validate", "--bundle"])
+        .output()
+        .expect("run sera circle validate with value-less bundle flag");
+
+    assert_eq!(output.status.code(), Some(3));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("circle-validate: USAGE_ERROR unknown"),
+        "stdout={stdout}"
+    );
+    assert!(
+        stderr.contains("missing required --bundle"),
+        "stderr={stderr}"
+    );
 }
 
 #[test]

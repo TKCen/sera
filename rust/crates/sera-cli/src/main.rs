@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use sera_commands::{CommandArgs, CommandContext};
+use sera_types::{circle::CollaborationProofBundle, circle_validator::validate_proof_bundle};
+use sha2::{Digest, Sha256};
 
 use sera_cli::config::CliConfig;
 use sera_cli::token_store::best_available_store;
@@ -94,6 +96,11 @@ enum Commands {
         #[command(subcommand)]
         command: KillswitchCommand,
     },
+    /// Validate Circle proof bundles offline
+    Circle {
+        #[command(subcommand)]
+        command: CircleCommand,
+    },
     /// Read or modify config.yaml locally (no gateway round-trip)
     Config {
         #[command(subcommand)]
@@ -106,17 +113,11 @@ enum WorkflowCommand {
     /// List workflows
     List,
     /// Show one workflow by id
-    Show {
-        id: String,
-    },
+    Show { id: String },
     /// Create a workflow from a manifest file (deferred to L.5)
-    Create {
-        file: PathBuf,
-    },
+    Create { file: PathBuf },
     /// Delete a workflow by id (deferred to L.5)
-    Delete {
-        id: String,
-    },
+    Delete { id: String },
 }
 
 #[derive(Subcommand)]
@@ -124,9 +125,7 @@ enum PolicyCommand {
     /// List capability policies
     List,
     /// Show one policy by name
-    Show {
-        name: String,
-    },
+    Show { name: String },
     /// Reload policies from disk
     Reload,
     /// Validate every policy YAML
@@ -138,13 +137,9 @@ enum SessionCommand {
     /// List active sessions
     List,
     /// Show one session by id
-    Show {
-        id: String,
-    },
+    Show { id: String },
     /// Cancel a session
-    Kill {
-        id: String,
-    },
+    Kill { id: String },
     /// Paginated browser (TTY-aware)
     Browse,
 }
@@ -160,16 +155,24 @@ enum KillswitchCommand {
 }
 
 #[derive(Subcommand)]
+enum CircleCommand {
+    /// Validate a mixed-provider Circle collaboration proof bundle
+    Validate {
+        /// Path to a CollaborationProofBundle JSON artifact
+        #[arg(long, value_name = "PATH")]
+        bundle: PathBuf,
+        /// Emit a compact JSON report before the machine-parseable footer
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum ConfigCommand {
     /// Read a value by dotted path
-    Get {
-        key: String,
-    },
+    Get { key: String },
     /// Write a string value at a dotted path
-    Set {
-        key: String,
-        value: String,
-    },
+    Set { key: String, value: String },
     /// Open config.yaml in $EDITOR
     Edit,
     /// Print the resolved config.yaml path
@@ -279,6 +282,100 @@ enum AuthCommand {
     },
     /// Remove the stored token
     Logout,
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+fn print_circle_footer(verdict: &str, bundle_sha256: &str) {
+    println!("circle-validate: {verdict} {bundle_sha256}");
+}
+
+fn run_circle_validate(bundle_path: PathBuf, json: bool) -> i32 {
+    let bytes = match std::fs::read(&bundle_path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            eprintln!(
+                "failed to read Circle proof bundle {}: {err}",
+                bundle_path.display()
+            );
+            print_circle_footer("USAGE_ERROR", "unknown");
+            return 3;
+        }
+    };
+
+    let bundle_sha256 = sha256_hex(&bytes);
+    let bundle: CollaborationProofBundle = match serde_json::from_slice(&bytes) {
+        Ok(bundle) => bundle,
+        Err(err) => {
+            eprintln!(
+                "failed to parse Circle proof bundle {}: {err}",
+                bundle_path.display()
+            );
+            print_circle_footer("USAGE_ERROR", &bundle_sha256);
+            return 3;
+        }
+    };
+
+    match validate_proof_bundle(&bundle) {
+        Ok(()) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "verdict": "PASS",
+                        "bundle_sha256": bundle_sha256,
+                        "entries": bundle.entries.len(),
+                        "execution_receipts": bundle.execution_receipts.len(),
+                        "lineage_edges": bundle.lineage.len(),
+                        "circle_id": bundle.circle_id,
+                        "run_id": bundle.run_id,
+                    })
+                );
+            } else {
+                println!(
+                    "Circle proof bundle PASS: entries={} receipts={} lineage={} run_id={} circle_id={}",
+                    bundle.entries.len(),
+                    bundle.execution_receipts.len(),
+                    bundle.lineage.len(),
+                    bundle.run_id,
+                    bundle.circle_id
+                );
+            }
+            print_circle_footer("PASS", &bundle_sha256);
+            0
+        }
+        Err(errors) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "verdict": "FAIL",
+                        "bundle_sha256": bundle_sha256,
+                        "entries": bundle.entries.len(),
+                        "execution_receipts": bundle.execution_receipts.len(),
+                        "lineage_edges": bundle.lineage.len(),
+                        "circle_id": bundle.circle_id,
+                        "run_id": bundle.run_id,
+                        "errors": errors.iter().map(|e| format!("{:?}", e.kind)).collect::<Vec<_>>(),
+                    })
+                );
+            } else {
+                eprintln!(
+                    "Circle proof bundle FAIL: {} validation error(s)",
+                    errors.len()
+                );
+                for error in &errors {
+                    eprintln!("- {:?}", error.kind);
+                }
+            }
+            print_circle_footer("FAIL", &bundle_sha256);
+            1
+        }
+    }
 }
 
 #[tokio::main]
@@ -430,7 +527,13 @@ async fn main() -> Result<()> {
                 }
             }
 
-            AgentCommand::Run { id, prompt, endpoint, raw, no_stream } => {
+            AgentCommand::Run {
+                id,
+                prompt,
+                endpoint,
+                raw,
+                no_stream,
+            } => {
                 let mut args = CommandArgs::new();
                 let resolved = endpoint.unwrap_or_else(|| config.endpoint.clone());
                 args.insert("endpoint", resolved);
@@ -639,6 +742,15 @@ async fn main() -> Result<()> {
                 std::process::exit(result.exit_code);
             }
         }
+
+        Commands::Circle { command } => match command {
+            CircleCommand::Validate { bundle, json } => {
+                let exit_code = run_circle_validate(bundle, json);
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+            }
+        },
 
         Commands::Config { command } => {
             let (cmd_name, args) = match command {

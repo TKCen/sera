@@ -3,7 +3,7 @@
 //! All checks are pure in-memory computations — no provider calls, no I/O,
 //! no credentials required. Safe to run in CI.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::circle::{CollaborationProofBundle, ProofBundleEntry};
 
@@ -19,11 +19,17 @@ pub enum ValidationErrorKind {
     /// Two or more entries share the same `entry_id`.
     DuplicateEntryId { entry_id: u64 },
     /// A lineage edge references an `entry_id` not present in `entries`.
-    BrokenLineageRef { from_entry_id: u64, to_entry_id: u64 },
+    BrokenLineageRef {
+        from_entry_id: u64,
+        to_entry_id: u64,
+    },
     /// An entry has a `payload.response` field that is blank (empty or whitespace-only).
     BlankPayloadResponse { entry_id: u64 },
     /// A provider-attributed entry has no corresponding execution receipt from its author.
     MissingReceiptForEntry { entry_id: u64, author: String },
+    /// A provider-attributed entry has a receipt, but the receipt does not prove
+    /// the same provider class (local vs cloud/non-local), or has no provider label.
+    ReceiptProviderEvidenceMismatch { entry_id: u64, author: String },
     /// The bundle has no verdict.
     MissingVerdict,
     /// The bundle lacks evidence of at least one local provider and one cloud/non-local provider.
@@ -52,7 +58,9 @@ impl ValidationError {
 /// (except when the entry list is empty, which makes further checks meaningless).
 ///
 /// Returns `Ok(())` when every check passes, `Err(errors)` otherwise.
-pub fn validate_proof_bundle(bundle: &CollaborationProofBundle) -> Result<(), Vec<ValidationError>> {
+pub fn validate_proof_bundle(
+    bundle: &CollaborationProofBundle,
+) -> Result<(), Vec<ValidationError>> {
     let mut errors: Vec<ValidationError> = Vec::new();
 
     if bundle.entries.is_empty() {
@@ -85,9 +93,11 @@ fn check_unique_entry_ids(bundle: &CollaborationProofBundle, errors: &mut Vec<Va
     let mut seen: HashSet<u64> = HashSet::new();
     for entry in &bundle.entries {
         if !seen.insert(entry.entry_id) {
-            errors.push(ValidationError::new(ValidationErrorKind::DuplicateEntryId {
-                entry_id: entry.entry_id,
-            }));
+            errors.push(ValidationError::new(
+                ValidationErrorKind::DuplicateEntryId {
+                    entry_id: entry.entry_id,
+                },
+            ));
         }
     }
 }
@@ -98,13 +108,14 @@ fn check_lineage_refs(
     errors: &mut Vec<ValidationError>,
 ) {
     for edge in &bundle.lineage {
-        if !entry_id_set.contains(&edge.from_entry_id)
-            || !entry_id_set.contains(&edge.to_entry_id)
+        if !entry_id_set.contains(&edge.from_entry_id) || !entry_id_set.contains(&edge.to_entry_id)
         {
-            errors.push(ValidationError::new(ValidationErrorKind::BrokenLineageRef {
-                from_entry_id: edge.from_entry_id,
-                to_entry_id: edge.to_entry_id,
-            }));
+            errors.push(ValidationError::new(
+                ValidationErrorKind::BrokenLineageRef {
+                    from_entry_id: edge.from_entry_id,
+                    to_entry_id: edge.to_entry_id,
+                },
+            ));
         }
     }
 }
@@ -112,9 +123,11 @@ fn check_lineage_refs(
 fn check_blank_responses(bundle: &CollaborationProofBundle, errors: &mut Vec<ValidationError>) {
     for entry in &bundle.entries {
         if is_blank_response(entry) {
-            errors.push(ValidationError::new(ValidationErrorKind::BlankPayloadResponse {
-                entry_id: entry.entry_id,
-            }));
+            errors.push(ValidationError::new(
+                ValidationErrorKind::BlankPayloadResponse {
+                    entry_id: entry.entry_id,
+                },
+            ));
         }
     }
 }
@@ -123,21 +136,34 @@ fn check_receipts_for_provider_entries(
     bundle: &CollaborationProofBundle,
     errors: &mut Vec<ValidationError>,
 ) {
-    let receipts_by_executor: HashSet<&str> = bundle
+    let receipts_by_executor: HashMap<&str, Option<&str>> = bundle
         .execution_receipts
         .iter()
-        .map(|r| r.executor.as_str())
+        .map(|r| {
+            (
+                r.executor.as_str(),
+                r.parameters.get("provider").and_then(|v| v.as_str()),
+            )
+        })
         .collect();
     for entry in &bundle.entries {
-        if entry.payload.get("provider").and_then(|v| v.as_str()).is_some()
-            && !receipts_by_executor.contains(entry.author.as_str())
-        {
-            errors.push(ValidationError::new(
-                ValidationErrorKind::MissingReceiptForEntry {
-                    entry_id: entry.entry_id,
-                    author: entry.author.clone(),
-                },
-            ));
+        if let Some(entry_provider) = entry.payload.get("provider").and_then(|v| v.as_str()) {
+            match receipts_by_executor.get(entry.author.as_str()) {
+                None => errors.push(ValidationError::new(
+                    ValidationErrorKind::MissingReceiptForEntry {
+                        entry_id: entry.entry_id,
+                        author: entry.author.clone(),
+                    },
+                )),
+                Some(Some(receipt_provider))
+                    if provider_classes_match(entry_provider, receipt_provider) => {}
+                Some(_) => errors.push(ValidationError::new(
+                    ValidationErrorKind::ReceiptProviderEvidenceMismatch {
+                        entry_id: entry.entry_id,
+                        author: entry.author.clone(),
+                    },
+                )),
+            }
         }
     }
 }
@@ -155,16 +181,9 @@ fn check_mixed_provider_evidence(
     let mut has_local = false;
     let mut has_cloud = false;
 
-    for entry in &bundle.entries {
-        if let Some(p) = entry.payload.get("provider").and_then(|v| v.as_str()) {
-            if is_local_provider(p) {
-                has_local = true;
-            } else {
-                has_cloud = true;
-            }
-        }
-    }
-
+    // Provider evidence must be anchored in execution receipts. Entry payload
+    // labels are useful blackboard metadata, but they are self-reported and can
+    // be fabricated or go stale; receipts are the auditable call evidence.
     for receipt in &bundle.execution_receipts {
         if let Some(p) = receipt.parameters.get("provider").and_then(|v| v.as_str()) {
             if is_local_provider(p) {
@@ -188,9 +207,14 @@ fn check_mixed_provider_evidence(
 
 /// Returns `true` if `payload.response` is present and blank.
 fn is_blank_response(entry: &ProofBundleEntry) -> bool {
+    let provider_attributed = entry
+        .payload
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .is_some();
     match entry.payload.get("response").and_then(|v| v.as_str()) {
         Some(s) => s.trim().is_empty(),
-        None => false,
+        None => provider_attributed,
     }
 }
 
@@ -198,6 +222,10 @@ fn is_blank_response(entry: &ProofBundleEntry) -> bool {
 fn is_local_provider(provider: &str) -> bool {
     let lc = provider.to_ascii_lowercase();
     lc.contains("local") || lc.contains("ollama") || lc.contains("lmstudio")
+}
+
+fn provider_classes_match(entry_provider: &str, receipt_provider: &str) -> bool {
+    is_local_provider(entry_provider) == is_local_provider(receipt_provider)
 }
 
 // =========================================================================
@@ -481,6 +509,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn missing_response_field_for_provider_entry_fails() {
+        let mut bundle = mixed_provider_fixture();
+        bundle.entries[1].payload = serde_json::json!({
+            "role": "Builder / local implementation",
+            "provider": "local-lmstudio",
+            "model": "gemma4-26b-a4b-qat-uncensored"
+        });
+        let errors = validate_proof_bundle(&bundle).unwrap_err();
+        assert!(
+            errors.iter().any(|e| matches!(
+                e.kind,
+                ValidationErrorKind::BlankPayloadResponse { entry_id: 2 }
+            )),
+            "expected BlankPayloadResponse when provider entry omits response"
+        );
+    }
+
+    #[test]
+    fn null_response_for_provider_entry_fails() {
+        let mut bundle = mixed_provider_fixture();
+        bundle.entries[2].payload = serde_json::json!({
+            "provider": "minimax",
+            "response": null
+        });
+        let errors = validate_proof_bundle(&bundle).unwrap_err();
+        assert!(
+            errors.iter().any(|e| matches!(
+                e.kind,
+                ValidationErrorKind::BlankPayloadResponse { entry_id: 3 }
+            )),
+            "expected BlankPayloadResponse when provider entry has null response"
+        );
+    }
+
     // -----------------------------------------------------------------
     // Negative: missing mixed-provider evidence
     // -----------------------------------------------------------------
@@ -491,7 +554,10 @@ mod tests {
         // Replace cloud provider entries with local-only
         for entry in &mut bundle.entries {
             if let Some(obj) = entry.payload.as_object_mut() {
-                obj.insert("provider".into(), serde_json::Value::String("local-lmstudio".into()));
+                obj.insert(
+                    "provider".into(),
+                    serde_json::Value::String("local-lmstudio".into()),
+                );
             }
         }
         for receipt in &mut bundle.execution_receipts {
@@ -516,12 +582,18 @@ mod tests {
         let mut bundle = mixed_provider_fixture();
         for entry in &mut bundle.entries {
             if let Some(obj) = entry.payload.as_object_mut() {
-                obj.insert("provider".into(), serde_json::Value::String("minimax".into()));
+                obj.insert(
+                    "provider".into(),
+                    serde_json::Value::String("minimax".into()),
+                );
             }
         }
         for receipt in &mut bundle.execution_receipts {
             if let Some(obj) = receipt.parameters.as_object_mut() {
-                obj.insert("provider".into(), serde_json::Value::String("minimax".into()));
+                obj.insert(
+                    "provider".into(),
+                    serde_json::Value::String("minimax".into()),
+                );
             }
         }
         let errors = validate_proof_bundle(&bundle).unwrap_err();
@@ -530,6 +602,51 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e.kind, ValidationErrorKind::MissingMixedProviderEvidence)),
             "expected MissingMixedProviderEvidence when all providers are cloud"
+        );
+    }
+
+    #[test]
+    fn self_reported_entry_provider_labels_do_not_satisfy_mixed_provider_check() {
+        let mut bundle = mixed_provider_fixture();
+        // Keep entry payload labels mixed, but make every receipt local. The
+        // validator must trust receipts, not self-reported blackboard labels.
+        for receipt in &mut bundle.execution_receipts {
+            if let Some(obj) = receipt.parameters.as_object_mut() {
+                obj.insert(
+                    "provider".into(),
+                    serde_json::Value::String("custom/local-lmstudio".into()),
+                );
+            }
+        }
+        let errors = validate_proof_bundle(&bundle).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e.kind, ValidationErrorKind::MissingMixedProviderEvidence)),
+            "expected MissingMixedProviderEvidence when only self-reported entries are mixed"
+        );
+        assert!(
+            errors.iter().any(|e| matches!(
+                e.kind,
+                ValidationErrorKind::ReceiptProviderEvidenceMismatch { entry_id: 1, .. }
+            )),
+            "expected receipt/provider mismatch for MiniMax entry backed by local receipt"
+        );
+    }
+
+    #[test]
+    fn receipt_without_provider_fails_provider_evidence_check() {
+        let mut bundle = mixed_provider_fixture();
+        if let Some(obj) = bundle.execution_receipts[0].parameters.as_object_mut() {
+            obj.remove("provider");
+        }
+        let errors = validate_proof_bundle(&bundle).unwrap_err();
+        assert!(
+            errors.iter().any(|e| matches!(
+                e.kind,
+                ValidationErrorKind::ReceiptProviderEvidenceMismatch { entry_id: 1, .. }
+            )),
+            "expected receipt/provider evidence mismatch when receipt omits provider"
         );
     }
 
@@ -607,9 +724,10 @@ mod tests {
         bundle.entries[1].entry_id = 1;
         let errors = validate_proof_bundle(&bundle).unwrap_err();
         assert!(
-            errors
-                .iter()
-                .any(|e| matches!(e.kind, ValidationErrorKind::DuplicateEntryId { entry_id: 1 })),
+            errors.iter().any(|e| matches!(
+                e.kind,
+                ValidationErrorKind::DuplicateEntryId { entry_id: 1 }
+            )),
             "expected DuplicateEntryId for entry_id=1"
         );
     }

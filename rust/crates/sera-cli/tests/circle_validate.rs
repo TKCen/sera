@@ -367,6 +367,12 @@ fn circle_replay_cli_ignores_colocated_metadata_when_summary_is_complete() {
     let fixture_dir = temp.path().join("fixtures");
     std::fs::create_dir(&fixture_dir).unwrap();
     write_replay_fixture(&fixture_dir);
+
+    let summary_path = fixture_dir.join("summary.json");
+    let mut summary: Value =
+        serde_json::from_slice(&std::fs::read(&summary_path).unwrap()).unwrap();
+    summary.as_object_mut().unwrap().remove("budget_snapshot");
+    std::fs::write(&summary_path, serde_json::to_vec_pretty(&summary).unwrap()).unwrap();
     std::fs::write(fixture_dir.join("proof_bundle.json"), b"not valid json").unwrap();
 
     let bundle_out = temp.path().join("proof_bundle.json");

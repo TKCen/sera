@@ -351,7 +351,6 @@ fn replay_metadata_source(fixture_dir: &Path, summary: &Value) -> Result<Option<
     let needs_fallback = ["run_id", "circle_id", "objective", "success_metric"]
         .into_iter()
         .any(|field| summary.get(field).is_none())
-        || (summary.get("budget_snapshot").is_none() && local.exists())
         || summary.get("verdict_type").is_none();
 
     if needs_fallback && local.exists() {

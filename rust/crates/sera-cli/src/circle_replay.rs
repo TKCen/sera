@@ -164,7 +164,16 @@ fn build_replay_bundle(fixture_dir: &Path) -> Result<CollaborationProofBundle, S
             .unwrap_or("unknown");
         let explicit_provider = non_blank_str(&role_fixture, "provider")
             .or_else(|| non_blank_str(role_summary, "provider"));
-        let provider_source = explicit_provider.or(provider_cli).ok_or_else(|| {
+        if let (Some(explicit_provider), Some(provider_cli)) = (explicit_provider, provider_cli) {
+            let explicit_provider = canonical_provider(explicit_provider, model);
+            let provider_cli = canonical_provider(provider_cli, model);
+            if explicit_provider != provider_cli {
+                return Err(format!(
+                    "{role_id} fixture has conflicting provider evidence: provider={explicit_provider} provider_cli={provider_cli}"
+                ));
+            }
+        }
+        let provider_source = provider_cli.or(explicit_provider).ok_or_else(|| {
             format!("{role_id} fixture must contain provider or provider_cli evidence")
         })?;
         let provider_cli = provider_cli.unwrap_or(provider_source);

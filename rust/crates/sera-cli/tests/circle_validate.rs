@@ -583,6 +583,50 @@ fn circle_replay_cli_rejects_missing_provider_evidence() {
 }
 
 #[test]
+fn circle_replay_cli_rejects_conflicting_provider_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture_dir = temp.path().join("fixtures");
+    std::fs::create_dir(&fixture_dir).unwrap();
+    write_replay_fixture(&fixture_dir);
+
+    let specifier_path = fixture_dir.join("specifier_minimax.json");
+    let mut specifier: Value =
+        serde_json::from_slice(&std::fs::read(&specifier_path).unwrap()).unwrap();
+    specifier["provider"] = json!("local-lmstudio");
+    specifier["provider_cli"] = json!("minimax");
+    std::fs::write(
+        &specifier_path,
+        serde_json::to_vec_pretty(&specifier).unwrap(),
+    )
+    .unwrap();
+
+    let bundle_out = temp.path().join("proof_bundle.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_sera"))
+        .args([
+            "circle",
+            "replay",
+            "--fixture-dir",
+            fixture_dir.to_str().unwrap(),
+            "--bundle-out",
+            bundle_out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run sera circle replay with conflicting provider evidence");
+
+    assert_eq!(output.status.code(), Some(3));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("circle-replay: USAGE_ERROR unknown"),
+        "stdout={stdout}"
+    );
+    assert!(
+        stderr.contains("conflicting provider evidence"),
+        "stderr={stderr}"
+    );
+}
+
+#[test]
 fn circle_replay_cli_bypasses_corrupt_config() {
     let temp = tempfile::tempdir().unwrap();
     let fixture_dir = temp.path().join("fixtures");

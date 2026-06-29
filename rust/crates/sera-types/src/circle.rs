@@ -276,6 +276,305 @@ pub struct PartyOutcome {
 }
 
 // =========================================================================
+// Collaboration envelope types (sera-nqh3 / SPEC-circles §3j)
+// =========================================================================
+
+/// Reference to a success metric or evaluator.
+///
+/// May be an inline description or a pointer to an external evaluator id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MetricRef {
+    /// Human-readable inline description of what counts as success.
+    Inline { description: String },
+    /// Reference to a named evaluator (benchmark, checklist, policy id).
+    Evaluator {
+        evaluator_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+}
+
+/// Noise/significance threshold for tie decisions.
+///
+/// Results whose delta is below `min_delta` are considered a tie regardless of
+/// absolute score difference.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TiePolicy {
+    /// Minimum meaningful delta; results within this band are ties.
+    pub min_delta: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// A rule that can invalidate a submitted result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InvalidResultRule {
+    /// Result exploited a metric loophole without achieving the actual goal.
+    MetricLoophole { description: String },
+    /// Result was produced using or revealing private/confidential data.
+    PrivateDataLeakage,
+    /// Result overfits the evaluation criterion in a way not generalisable.
+    Overfitting { description: String },
+    /// Run cannot be independently verified (no receipts, missing lineage).
+    UnverifiableRun,
+    /// Custom invalidation rule (operator-defined).
+    Custom(String),
+}
+
+/// Default visibility of proposals, runs, reviews, and side-channel communication.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VisibilityPolicy {
+    /// All events are public to circle members by default.
+    PublicToCircleByDefault,
+    /// Events are private by default; must be explicitly disclosed.
+    PrivateByDefaultWithDisclosure,
+    /// Mixed: named event kinds are public; others are private.
+    Mixed {
+        public_kinds: Vec<String>,
+        private_kinds: Vec<String>,
+    },
+}
+
+/// Pointer to the principal or policy surface able to issue rulings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RefereeRef {
+    /// A specific principal (agent or human) identified by id.
+    Principal { principal_id: String },
+    /// A policy description (e.g. "majority of lead agents" or "operator approval").
+    Policy { description: String },
+}
+
+/// Scarce-resource budget envelope for a collaboration run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuotaPolicy {
+    /// Total token budget for the run (across all members).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_token_limit: Option<u64>,
+    /// Per-member token budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_member_token_limit: Option<u64>,
+    /// Maximum number of deliberation iterations before forced termination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_iterations: Option<u32>,
+    /// Maximum number of tool/probe calls for the run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_calls: Option<u32>,
+}
+
+/// Attribution and derivative-work rules for staged proposals and reused artifacts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreditPolicy {
+    /// Whether attribution to originating participant is required on accepted results.
+    pub attribution_required: bool,
+    /// Whether participants may build on or reference each other's proposals.
+    pub derivative_work_allowed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Where compute-poor or spec-rich agents can stage candidates for agents with budget.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StagingPolicy {
+    /// Whether a shared staging area is active for this run.
+    pub enabled: bool,
+    /// Optional identifier for the staging workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staging_area_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Required proof-bundle fields that every accepted result must provide.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CircleReceiptPolicy {
+    /// Require at least one `ExecutionReceipt` per accepted result.
+    pub require_run_evidence: bool,
+    /// Require at least one `LineageEdge` linking the result to a prior entry.
+    pub require_lineage: bool,
+    /// Require a `CollaborationVerdictRecord` before a result is considered final.
+    pub require_verdict: bool,
+    /// Additional named fields that must be present in the proof bundle.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_required_fields: Vec<String>,
+}
+
+/// Rules governing private side-channel communication among members.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AntiCollusionPolicy {
+    /// Private side channels are fully disallowed.
+    DisallowPrivateSideChannels,
+    /// Private coordination is allowed but must be flagged as non-verifiable in the bundle.
+    AllowButMarkNonVerifiable,
+    /// Private coordination requires explicit referee approval before use.
+    RequireRefereeApproval,
+}
+
+/// Common-goal collaboration envelope for a Circle (SPEC-circles §3j).
+///
+/// Presence of this envelope is what distinguishes a SERA Circle from generic
+/// parallel prompting. Every field encodes one institutional constraint:
+/// shared goal, measurement, authority, identity, receipts, lineage,
+/// scarcity, staging, verification, and anti-collusion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CircleCollaborationEnvelope {
+    /// Shared objective visible to every member. Different from individual task titles.
+    pub objective: String,
+
+    /// How progress and success are measured.
+    pub success_metric: MetricRef,
+
+    /// Minimum meaningful delta / noise threshold. Below this, competing results are ties.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tie_policy: Option<TiePolicy>,
+
+    /// Rules that invalidate a result (loophole, leakage, unverifiable run, etc.).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invalid_result_policy: Vec<InvalidResultRule>,
+
+    /// Default visibility for proposals, runs, reviews, and side-channel communication.
+    pub visibility_policy: VisibilityPolicy,
+
+    /// Principal or policy surface that can issue rulings when agents dispute validity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referee: Option<RefereeRef>,
+
+    /// Scarce-resource accounting: token budget, tool calls, wall-clock, external credits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_policy: Option<QuotaPolicy>,
+
+    /// Attribution and derivative-work rules for staged proposals and reused artifacts.
+    pub credit_policy: CreditPolicy,
+
+    /// Where compute-poor/spec-rich agents can stage candidates for others with budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staging_policy: Option<StagingPolicy>,
+
+    /// Required proof-bundle fields for every accepted result.
+    pub receipt_policy: CircleReceiptPolicy,
+
+    /// Rules governing private side channels.
+    pub anti_collusion_policy: AntiCollusionPolicy,
+}
+
+// =========================================================================
+// Proof-bundle types (sera-nqh3 golden fixture)
+// =========================================================================
+
+/// Role of a participant in a collaboration proof bundle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProofBundleMember {
+    pub participant_id: String,
+    pub role: String,
+}
+
+/// Snapshot of the resource budget at the end of a collaboration run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BudgetSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_token_limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_iterations: Option<u32>,
+    pub current_usage: u64,
+}
+
+/// A single entry in the collaboration proof bundle's blackboard transcript.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProofBundleEntry {
+    pub entry_id: u64,
+    pub author: String,
+    pub timestamp: DateTime<Utc>,
+    pub artifact_type: String,
+    pub payload: serde_json::Value,
+}
+
+/// Semantic relationship between two proof-bundle entries.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LineageRelation {
+    Criticizes,
+    Resolves,
+    DerivesFrom,
+    Supersedes,
+    Custom(String),
+}
+
+/// Directed edge in the proof-bundle lineage DAG.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LineageEdge {
+    pub from_entry_id: u64,
+    pub to_entry_id: u64,
+    pub relation: LineageRelation,
+}
+
+/// Outcome of an execution receipt.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiptOutcome {
+    Success,
+    Failure { reason: String },
+    Partial { note: String },
+}
+
+/// Auditable evidence of a single tool call or probe during a collaboration run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionReceipt {
+    pub receipt_id: String,
+    pub executor: String,
+    pub timestamp: DateTime<Utc>,
+    pub action: String,
+    pub parameters: serde_json::Value,
+    pub outcome: ReceiptOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_tokens: Option<u64>,
+}
+
+/// Verdict type for a collaboration proof bundle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VerdictType {
+    Approved,
+    Rejected { reason: String },
+    Tie { note: String },
+    Invalid { rule: String },
+    RevisionRequired { feedback: String },
+}
+
+/// Structured verdict record produced by a referee or reviewer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CollaborationVerdictRecord {
+    pub reviewer: String,
+    pub timestamp: DateTime<Utc>,
+    pub verdict_type: VerdictType,
+    pub rationale: String,
+}
+
+/// Complete proof bundle for a collaboration run.
+///
+/// Serialises to / deserialises from JSON as the golden fixture format for
+/// `sera-nqh3` acceptance tests. Contains the full audit trail: objective,
+/// roster, blackboard transcript, lineage DAG, execution receipts, and verdict.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CollaborationProofBundle {
+    pub run_id: String,
+    pub circle_id: String,
+    pub objective: String,
+    pub success_metric: MetricRef,
+    pub roster: Vec<ProofBundleMember>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_snapshot: Option<BudgetSnapshot>,
+    pub entries: Vec<ProofBundleEntry>,
+    pub lineage: Vec<LineageEdge>,
+    pub execution_receipts: Vec<ExecutionReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<CollaborationVerdictRecord>,
+}
+
+// =========================================================================
 // serde adapters
 // =========================================================================
 
@@ -540,5 +839,308 @@ mod tests {
             !json.contains("constitution"),
             "field should be omitted: {json}"
         );
+    }
+
+    // ── Collaboration envelope serde tests (sera-nqh3 / SPEC-circles §3j) ──
+
+    fn minimal_envelope() -> CircleCollaborationEnvelope {
+        CircleCollaborationEnvelope {
+            objective: "Verify and deduplicate the Hermes-parity gap map".to_string(),
+            success_metric: MetricRef::Inline {
+                description: "Zero duplicated tasks, all gap items cited with source paths."
+                    .to_string(),
+            },
+            tie_policy: None,
+            invalid_result_policy: vec![],
+            visibility_policy: VisibilityPolicy::PublicToCircleByDefault,
+            referee: None,
+            quota_policy: None,
+            credit_policy: CreditPolicy {
+                attribution_required: true,
+                derivative_work_allowed: true,
+                description: None,
+            },
+            staging_policy: None,
+            receipt_policy: CircleReceiptPolicy {
+                require_run_evidence: true,
+                require_lineage: true,
+                require_verdict: true,
+                additional_required_fields: vec![],
+            },
+            anti_collusion_policy: AntiCollusionPolicy::DisallowPrivateSideChannels,
+        }
+    }
+
+    #[test]
+    fn collaboration_envelope_json_round_trip_minimal() {
+        let env = minimal_envelope();
+        let json = serde_json::to_string(&env).unwrap();
+        let parsed: CircleCollaborationEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, env);
+    }
+
+    #[test]
+    fn collaboration_envelope_yaml_round_trip_full() {
+        let env = CircleCollaborationEnvelope {
+            objective: "Prove the collaboration envelope shape".to_string(),
+            success_metric: MetricRef::Evaluator {
+                evaluator_id: "metric_dedup_complete".to_string(),
+                description: Some("Zero duplicated tasks".to_string()),
+            },
+            tie_policy: Some(TiePolicy {
+                min_delta: 0.01,
+                description: Some("Results within 1% are ties".to_string()),
+            }),
+            invalid_result_policy: vec![
+                InvalidResultRule::MetricLoophole {
+                    description: "Fabricated citations".to_string(),
+                },
+                InvalidResultRule::UnverifiableRun,
+            ],
+            visibility_policy: VisibilityPolicy::Mixed {
+                public_kinds: vec!["proposal".to_string(), "objection".to_string()],
+                private_kinds: vec!["draft".to_string()],
+            },
+            referee: Some(RefereeRef::Principal {
+                principal_id: "referee".to_string(),
+            }),
+            quota_policy: Some(QuotaPolicy {
+                total_token_limit: Some(100_000),
+                per_member_token_limit: Some(20_000),
+                max_iterations: Some(3),
+                max_tool_calls: None,
+            }),
+            credit_policy: CreditPolicy {
+                attribution_required: true,
+                derivative_work_allowed: true,
+                description: Some("SERA standard attribution".to_string()),
+            },
+            staging_policy: Some(StagingPolicy {
+                enabled: true,
+                staging_area_id: Some("sera-nqh3-staging".to_string()),
+                description: None,
+            }),
+            receipt_policy: CircleReceiptPolicy {
+                require_run_evidence: true,
+                require_lineage: true,
+                require_verdict: true,
+                additional_required_fields: vec!["cited_paths".to_string()],
+            },
+            anti_collusion_policy: AntiCollusionPolicy::RequireRefereeApproval,
+        };
+        let yaml = serde_yaml::to_string(&env).unwrap();
+        let parsed: CircleCollaborationEnvelope = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed, env);
+    }
+
+    #[test]
+    fn anti_collusion_policy_all_variants_round_trip() {
+        for policy in [
+            AntiCollusionPolicy::DisallowPrivateSideChannels,
+            AntiCollusionPolicy::AllowButMarkNonVerifiable,
+            AntiCollusionPolicy::RequireRefereeApproval,
+        ] {
+            let json = serde_json::to_string(&policy).unwrap();
+            let parsed: AntiCollusionPolicy = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, policy);
+        }
+    }
+
+    #[test]
+    fn visibility_policy_variants_round_trip() {
+        let policies = vec![
+            VisibilityPolicy::PublicToCircleByDefault,
+            VisibilityPolicy::PrivateByDefaultWithDisclosure,
+            VisibilityPolicy::Mixed {
+                public_kinds: vec!["proposal".to_string()],
+                private_kinds: vec!["draft".to_string()],
+            },
+        ];
+        for p in policies {
+            let json = serde_json::to_string(&p).unwrap();
+            let parsed: VisibilityPolicy = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, p);
+        }
+    }
+
+    #[test]
+    fn proof_bundle_golden_fixture_round_trip() {
+        let bundle = CollaborationProofBundle {
+            run_id: "run_sera_nqh3_001".to_string(),
+            circle_id: "sera-nqh3-circle".to_string(),
+            objective: "Verify and deduplicate the Hermes-parity gap map for sera-nqh3"
+                .to_string(),
+            success_metric: MetricRef::Evaluator {
+                evaluator_id: "metric_dedup_complete".to_string(),
+                description: Some(
+                    "Zero duplicated tasks, all gap items cited with source code file paths, \
+                     and no outstanding critic objections."
+                        .to_string(),
+                ),
+            },
+            roster: vec![
+                ProofBundleMember {
+                    participant_id: "sera_lead".to_string(),
+                    role: "Lead".to_string(),
+                },
+                ProofBundleMember {
+                    participant_id: "specifier".to_string(),
+                    role: "TaskSpecifier".to_string(),
+                },
+                ProofBundleMember {
+                    participant_id: "builder".to_string(),
+                    role: "Worker".to_string(),
+                },
+                ProofBundleMember {
+                    participant_id: "critic".to_string(),
+                    role: "Critic".to_string(),
+                },
+                ProofBundleMember {
+                    participant_id: "referee".to_string(),
+                    role: "Reviewer".to_string(),
+                },
+            ],
+            budget_snapshot: Some(BudgetSnapshot {
+                total_token_limit: Some(100_000),
+                max_iterations: Some(3),
+                current_usage: 42_050,
+            }),
+            entries: vec![
+                ProofBundleEntry {
+                    entry_id: 1,
+                    author: "specifier".to_string(),
+                    timestamp: "2026-06-29T16:00:00Z".parse().unwrap(),
+                    artifact_type: "sharpened_specification".to_string(),
+                    payload: serde_json::json!({
+                        "requirements": [
+                            "Cite exact file path in sera-types and sera-workflow for the circle gap",
+                            "Ensure no overlapping tasks with the existing PartyMode feature"
+                        ]
+                    }),
+                },
+                ProofBundleEntry {
+                    entry_id: 2,
+                    author: "builder".to_string(),
+                    timestamp: "2026-06-29T16:01:00Z".parse().unwrap(),
+                    artifact_type: "proposal".to_string(),
+                    payload: serde_json::json!({
+                        "proposal_text": "First iteration of gap map. Identified lack of \
+                                          CircleCollaborationEnvelope in \
+                                          rust/crates/sera-types/src/circle.rs.",
+                        "version": 1
+                    }),
+                },
+                ProofBundleEntry {
+                    entry_id: 3,
+                    author: "critic".to_string(),
+                    timestamp: "2026-06-29T16:02:00Z".parse().unwrap(),
+                    artifact_type: "objection".to_string(),
+                    payload: serde_json::json!({
+                        "objection_text": "The builder's proposal misses citing the specific \
+                                           ResultAggregator files in sera-workflow.",
+                        "target_entry_id": 2
+                    }),
+                },
+                ProofBundleEntry {
+                    entry_id: 4,
+                    author: "builder".to_string(),
+                    timestamp: "2026-06-29T16:03:00Z".parse().unwrap(),
+                    artifact_type: "proposal".to_string(),
+                    payload: serde_json::json!({
+                        "proposal_text": "Updated gap map: added citation to \
+                                          rust/crates/sera-workflow/src/coordination.rs \
+                                          for ResultAggregator.",
+                        "version": 2
+                    }),
+                },
+            ],
+            lineage: vec![
+                LineageEdge {
+                    from_entry_id: 2,
+                    to_entry_id: 3,
+                    relation: LineageRelation::Criticizes,
+                },
+                LineageEdge {
+                    from_entry_id: 3,
+                    to_entry_id: 4,
+                    relation: LineageRelation::Resolves,
+                },
+            ],
+            execution_receipts: vec![ExecutionReceipt {
+                receipt_id: "rcpt_grep_001".to_string(),
+                executor: "builder".to_string(),
+                timestamp: "2026-06-29T16:00:30Z".parse().unwrap(),
+                action: "grep_search".to_string(),
+                parameters: serde_json::json!({"query": "ResultAggregator"}),
+                outcome: ReceiptOutcome::Success,
+                cost_tokens: Some(120),
+            }],
+            verdict: Some(CollaborationVerdictRecord {
+                reviewer: "referee".to_string(),
+                timestamp: "2026-06-29T16:04:00Z".parse().unwrap(),
+                verdict_type: VerdictType::Approved,
+                rationale: "Critic objections resolved, citations verified against the workspace."
+                    .to_string(),
+            }),
+        };
+
+        let json = serde_json::to_string_pretty(&bundle).unwrap();
+        let parsed: CollaborationProofBundle = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, bundle);
+
+        // Spot-check structure
+        assert_eq!(parsed.roster.len(), 5);
+        assert_eq!(parsed.entries.len(), 4);
+        assert_eq!(parsed.lineage.len(), 2);
+        assert_eq!(parsed.execution_receipts.len(), 1);
+        assert!(matches!(
+            parsed.verdict,
+            Some(CollaborationVerdictRecord {
+                verdict_type: VerdictType::Approved,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn proof_bundle_no_verdict_omits_field() {
+        let bundle = CollaborationProofBundle {
+            run_id: "r1".to_string(),
+            circle_id: "c1".to_string(),
+            objective: "test".to_string(),
+            success_metric: MetricRef::Inline {
+                description: "pass".to_string(),
+            },
+            roster: vec![],
+            budget_snapshot: None,
+            entries: vec![],
+            lineage: vec![],
+            execution_receipts: vec![],
+            verdict: None,
+        };
+        let json = serde_json::to_string(&bundle).unwrap();
+        assert!(!json.contains("verdict"), "verdict should be absent: {json}");
+        assert!(
+            !json.contains("budget_snapshot"),
+            "budget_snapshot should be absent: {json}"
+        );
+    }
+
+    #[test]
+    fn verdict_type_rejected_round_trip() {
+        let v = VerdictType::Rejected {
+            reason: "fabricated citations".to_string(),
+        };
+        let json = serde_json::to_string(&v).unwrap();
+        let parsed: VerdictType = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, v);
+    }
+
+    #[test]
+    fn lineage_relation_custom_round_trip() {
+        let r = LineageRelation::Custom("annotates".to_string());
+        let json = serde_json::to_string(&r).unwrap();
+        let parsed: LineageRelation = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, r);
     }
 }

@@ -158,18 +158,18 @@ fn build_replay_bundle(fixture_dir: &Path) -> Result<CollaborationProofBundle, S
         let provider_cli = role_fixture
             .get("provider_cli")
             .and_then(Value::as_str)
-            .or_else(|| role_summary.get("provider_cli").and_then(Value::as_str))
-            .unwrap_or("unknown");
+            .or_else(|| role_summary.get("provider_cli").and_then(Value::as_str));
         let model = role_fixture
             .get("model")
             .and_then(Value::as_str)
             .or_else(|| role_summary.get("model").and_then(Value::as_str))
             .unwrap_or("unknown");
-        let provider = role_fixture
-            .get("provider")
-            .and_then(Value::as_str)
-            .map(|provider| canonical_provider(provider, model))
-            .unwrap_or_else(|| canonical_provider(provider_cli, model));
+        let explicit_provider = role_fixture.get("provider").and_then(Value::as_str);
+        let provider_source = explicit_provider.or(provider_cli).ok_or_else(|| {
+            format!("{role_id} fixture must contain provider or provider_cli evidence")
+        })?;
+        let provider_cli = provider_cli.unwrap_or(provider_source);
+        let provider = canonical_provider(provider_source, model);
         let session_id = role_fixture
             .get("session_id")
             .and_then(Value::as_str)

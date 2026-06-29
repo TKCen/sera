@@ -473,6 +473,64 @@ fn circle_replay_cli_does_not_infer_local_from_open_source_model_name() {
 }
 
 #[test]
+fn circle_replay_cli_rejects_missing_provider_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture_dir = temp.path().join("fixtures");
+    std::fs::create_dir(&fixture_dir).unwrap();
+    write_replay_fixture(&fixture_dir);
+
+    let summary_path = fixture_dir.join("summary.json");
+    let mut summary: Value =
+        serde_json::from_slice(&std::fs::read(&summary_path).unwrap()).unwrap();
+    let roles = summary["roles"].as_array_mut().unwrap();
+    roles[0].as_object_mut().unwrap().remove("provider_cli");
+    roles[2]["provider_cli"] = json!("custom");
+    roles[2]["model"] = json!("gemma4-local");
+    std::fs::write(&summary_path, serde_json::to_vec_pretty(&summary).unwrap()).unwrap();
+
+    let specifier_path = fixture_dir.join("specifier_minimax.json");
+    let mut specifier: Value =
+        serde_json::from_slice(&std::fs::read(&specifier_path).unwrap()).unwrap();
+    specifier.as_object_mut().unwrap().remove("provider_cli");
+    std::fs::write(
+        &specifier_path,
+        serde_json::to_vec_pretty(&specifier).unwrap(),
+    )
+    .unwrap();
+
+    let critic_path = fixture_dir.join("critic_minimax.json");
+    let mut critic: Value = serde_json::from_slice(&std::fs::read(&critic_path).unwrap()).unwrap();
+    critic["provider_cli"] = json!("custom");
+    critic["model"] = json!("gemma4-local");
+    std::fs::write(&critic_path, serde_json::to_vec_pretty(&critic).unwrap()).unwrap();
+
+    let bundle_out = temp.path().join("proof_bundle.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_sera"))
+        .args([
+            "circle",
+            "replay",
+            "--fixture-dir",
+            fixture_dir.to_str().unwrap(),
+            "--bundle-out",
+            bundle_out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run sera circle replay with missing provider evidence");
+
+    assert_eq!(output.status.code(), Some(3));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("circle-replay: USAGE_ERROR unknown"),
+        "stdout={stdout}"
+    );
+    assert!(
+        stderr.contains("provider or provider_cli evidence"),
+        "stderr={stderr}"
+    );
+}
+
+#[test]
 fn circle_replay_cli_bypasses_corrupt_config() {
     let temp = tempfile::tempdir().unwrap();
     let fixture_dir = temp.path().join("fixtures");

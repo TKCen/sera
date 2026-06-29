@@ -392,6 +392,20 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
 
+    // Offline Circle proof-bundle validation must not depend on gateway config
+    // or token stores. Keep this path usable in CI and stale/corrupt operator
+    // environments, and always emit the `circle-validate:` footer.
+    if let Commands::Circle {
+        command: CircleCommand::Validate { bundle, json },
+    } = &cli.command
+    {
+        let exit_code = run_circle_validate(bundle.clone(), *json);
+        if exit_code != 0 {
+            std::process::exit(exit_code);
+        }
+        return Ok(());
+    }
+
     // Load config (graceful if file absent).
     let config_path = cli.config.unwrap_or_else(CliConfig::default_path);
     let config = CliConfig::load(&config_path)

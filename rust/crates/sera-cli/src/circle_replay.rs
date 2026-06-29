@@ -378,22 +378,14 @@ fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
         .ok_or_else(|| format!("role summary missing string field {field}"))
 }
 
-fn canonical_provider(provider_cli: &str, model: &str) -> String {
+fn canonical_provider(provider_cli: &str, _model: &str) -> String {
     let provider = provider_cli.trim().to_ascii_lowercase();
-    let model = model.trim().to_ascii_lowercase();
 
     if provider.contains("ollama") {
         return "ollama".to_string();
     }
     let provider_compact = provider.replace(['-', '_'], "");
-    if provider.contains("local")
-        || provider_compact.contains("lmstudio")
-        || provider == "custom"
-        || model.contains("gemma")
-        || model.contains("qwen")
-        || model.contains("llama")
-        || model.contains("mistral")
-    {
+    if provider.contains("local") || provider_compact.contains("lmstudio") || provider == "custom" {
         return "local-lmstudio".to_string();
     }
 

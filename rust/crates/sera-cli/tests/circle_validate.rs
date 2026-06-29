@@ -427,6 +427,52 @@ fn circle_replay_cli_treats_lm_studio_provider_as_local() {
 }
 
 #[test]
+fn circle_replay_cli_does_not_infer_local_from_open_source_model_name() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture_dir = temp.path().join("fixtures");
+    std::fs::create_dir(&fixture_dir).unwrap();
+    write_replay_fixture(&fixture_dir);
+
+    for path in [
+        fixture_dir.join("builder_local_gemma.json"),
+        fixture_dir.join("referee_local_gemma.json"),
+    ] {
+        let mut fixture: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        fixture["provider_cli"] = json!("openrouter");
+        fixture["model"] = json!("mistral-large-cloud");
+        std::fs::write(&path, serde_json::to_vec_pretty(&fixture).unwrap()).unwrap();
+    }
+
+    let bundle_out = temp.path().join("proof_bundle.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_sera"))
+        .args([
+            "circle",
+            "replay",
+            "--fixture-dir",
+            fixture_dir.to_str().unwrap(),
+            "--bundle-out",
+            bundle_out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run sera circle replay with cloud open-source model names");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("circle-replay: FAIL "), "stdout={stdout}");
+    assert!(
+        stderr.contains("MissingMixedProviderEvidence"),
+        "stderr={stderr}"
+    );
+
+    let bundle: Value = serde_json::from_slice(&std::fs::read(&bundle_out).unwrap()).unwrap();
+    let provider = bundle["execution_receipts"][1]["parameters"]["provider"]
+        .as_str()
+        .unwrap();
+    assert_eq!(provider, "openrouter");
+}
+
+#[test]
 fn circle_replay_cli_bypasses_corrupt_config() {
     let temp = tempfile::tempdir().unwrap();
     let fixture_dir = temp.path().join("fixtures");

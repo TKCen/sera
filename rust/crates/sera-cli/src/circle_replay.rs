@@ -155,16 +155,15 @@ fn build_replay_bundle(fixture_dir: &Path) -> Result<CollaborationProofBundle, S
             .and_then(Value::as_str)
             .or_else(|| role_summary.get("role").and_then(Value::as_str))
             .unwrap_or_else(|| default_role_label(&role_id));
-        let provider_cli = role_fixture
-            .get("provider_cli")
-            .and_then(Value::as_str)
-            .or_else(|| role_summary.get("provider_cli").and_then(Value::as_str));
+        let provider_cli = non_blank_str(&role_fixture, "provider_cli")
+            .or_else(|| non_blank_str(role_summary, "provider_cli"));
         let model = role_fixture
             .get("model")
             .and_then(Value::as_str)
             .or_else(|| role_summary.get("model").and_then(Value::as_str))
             .unwrap_or("unknown");
-        let explicit_provider = role_fixture.get("provider").and_then(Value::as_str);
+        let explicit_provider = non_blank_str(&role_fixture, "provider")
+            .or_else(|| non_blank_str(role_summary, "provider"));
         let provider_source = explicit_provider.or(provider_cli).ok_or_else(|| {
             format!("{role_id} fixture must contain provider or provider_cli evidence")
         })?;
@@ -369,6 +368,14 @@ fn read_json(path: &Path) -> Result<Value, String> {
         std::fs::read(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
     serde_json::from_slice(&bytes)
         .map_err(|err| format!("failed to parse {}: {err}", path.display()))
+}
+
+fn non_blank_str<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {

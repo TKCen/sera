@@ -473,6 +473,58 @@ fn circle_replay_cli_does_not_infer_local_from_open_source_model_name() {
 }
 
 #[test]
+fn circle_replay_cli_uses_summary_provider_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture_dir = temp.path().join("fixtures");
+    std::fs::create_dir(&fixture_dir).unwrap();
+    write_replay_fixture(&fixture_dir);
+
+    let summary_path = fixture_dir.join("summary.json");
+    let mut summary: Value =
+        serde_json::from_slice(&std::fs::read(&summary_path).unwrap()).unwrap();
+    let roles = summary["roles"].as_array_mut().unwrap();
+    for index in [1usize, 3usize] {
+        roles[index].as_object_mut().unwrap().remove("provider_cli");
+        roles[index]["provider"] = json!("lm-studio");
+    }
+    std::fs::write(&summary_path, serde_json::to_vec_pretty(&summary).unwrap()).unwrap();
+
+    for path in [
+        fixture_dir.join("builder_local_gemma.json"),
+        fixture_dir.join("referee_local_gemma.json"),
+    ] {
+        let mut fixture: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        fixture.as_object_mut().unwrap().remove("provider_cli");
+        std::fs::write(&path, serde_json::to_vec_pretty(&fixture).unwrap()).unwrap();
+    }
+
+    let bundle_out = temp.path().join("proof_bundle.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_sera"))
+        .args([
+            "circle",
+            "replay",
+            "--fixture-dir",
+            fixture_dir.to_str().unwrap(),
+            "--bundle-out",
+            bundle_out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run sera circle replay with summary provider evidence");
+
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bundle: Value = serde_json::from_slice(&std::fs::read(&bundle_out).unwrap()).unwrap();
+    let provider = bundle["execution_receipts"][1]["parameters"]["provider"]
+        .as_str()
+        .unwrap();
+    assert_eq!(provider, "local-lmstudio");
+}
+
+#[test]
 fn circle_replay_cli_rejects_missing_provider_evidence() {
     let temp = tempfile::tempdir().unwrap();
     let fixture_dir = temp.path().join("fixtures");
@@ -483,7 +535,7 @@ fn circle_replay_cli_rejects_missing_provider_evidence() {
     let mut summary: Value =
         serde_json::from_slice(&std::fs::read(&summary_path).unwrap()).unwrap();
     let roles = summary["roles"].as_array_mut().unwrap();
-    roles[0].as_object_mut().unwrap().remove("provider_cli");
+    roles[0]["provider_cli"] = json!("   ");
     roles[2]["provider_cli"] = json!("custom");
     roles[2]["model"] = json!("gemma4-local");
     std::fs::write(&summary_path, serde_json::to_vec_pretty(&summary).unwrap()).unwrap();
@@ -491,7 +543,7 @@ fn circle_replay_cli_rejects_missing_provider_evidence() {
     let specifier_path = fixture_dir.join("specifier_minimax.json");
     let mut specifier: Value =
         serde_json::from_slice(&std::fs::read(&specifier_path).unwrap()).unwrap();
-    specifier.as_object_mut().unwrap().remove("provider_cli");
+    specifier["provider_cli"] = json!("\t ");
     std::fs::write(
         &specifier_path,
         serde_json::to_vec_pretty(&specifier).unwrap(),

@@ -388,6 +388,15 @@ fn circle_replay_cli_treats_lm_studio_provider_as_local() {
         .unwrap();
     }
 
+    for path in [
+        fixture_dir.join("builder_local_gemma.json"),
+        fixture_dir.join("referee_local_gemma.json"),
+    ] {
+        let mut fixture: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        fixture["provider"] = json!("lm-studio");
+        std::fs::write(&path, serde_json::to_vec_pretty(&fixture).unwrap()).unwrap();
+    }
+
     let bundle_out = temp.path().join("proof_bundle.json");
     let output = Command::new(env!("CARGO_BIN_EXE_sera"))
         .args([

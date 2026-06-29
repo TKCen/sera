@@ -168,7 +168,7 @@ fn build_replay_bundle(fixture_dir: &Path) -> Result<CollaborationProofBundle, S
         let provider = role_fixture
             .get("provider")
             .and_then(Value::as_str)
-            .map(str::to_owned)
+            .map(|provider| canonical_provider(provider, model))
             .unwrap_or_else(|| canonical_provider(provider_cli, model));
         let session_id = role_fixture
             .get("session_id")

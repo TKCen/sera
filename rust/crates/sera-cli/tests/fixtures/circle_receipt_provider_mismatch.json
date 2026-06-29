@@ -1,0 +1,53 @@
+{
+  "run_id": "cli-valid-mixed-provider",
+  "circle_id": "sera-nqh3-cli-test",
+  "objective": "Validate mixed-provider proof bundle through CLI",
+  "success_metric": { "kind": "inline", "description": "CLI accepts receipt-anchored local+cloud evidence" },
+  "roster": [
+    { "participant_id": "cloud_minimax", "role": "cloud perspective" },
+    { "participant_id": "local_gemma", "role": "local perspective" }
+  ],
+  "entries": [
+    {
+      "entry_id": 1,
+      "author": "cloud_minimax",
+      "timestamp": "2026-06-29T15:53:02Z",
+      "artifact_type": "provider_response",
+      "payload": { "provider": "minimax", "model": "MiniMax-M3", "response": "cloud answer" }
+    },
+    {
+      "entry_id": 2,
+      "author": "local_gemma",
+      "timestamp": "2026-06-29T15:53:20Z",
+      "artifact_type": "provider_response",
+      "payload": { "provider": "local-lmstudio", "model": "gemma-local", "response": "local answer" }
+    }
+  ],
+  "lineage": [
+    { "from_entry_id": 1, "to_entry_id": 2, "relation": "derives_from" }
+  ],
+  "execution_receipts": [
+    {
+      "receipt_id": "rcpt_cloud",
+      "executor": "cloud_minimax",
+      "timestamp": "2026-06-29T15:53:02Z",
+      "action": "hermes_chat",
+      "parameters": { "provider": "minimax", "model": "MiniMax-M3", "returncode": 0 },
+      "outcome": "success"
+    },
+    {
+      "receipt_id": "rcpt_local_wrong",
+      "executor": "local_gemma",
+      "timestamp": "2026-06-29T15:53:20Z",
+      "action": "hermes_chat",
+      "parameters": { "provider": "minimax", "model": "MiniMax-M3", "returncode": 0 },
+      "outcome": "success"
+    }
+  ],
+  "verdict": {
+    "reviewer": "referee",
+    "timestamp": "2026-06-29T15:54:00Z",
+    "verdict_type": { "kind": "approved" },
+    "rationale": "fixture passes"
+  }
+}

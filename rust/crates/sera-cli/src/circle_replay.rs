@@ -320,7 +320,14 @@ fn replay_metadata_source(fixture_dir: &Path, summary: &Value) -> Result<Option<
     let explicit = summary
         .get("artifact")
         .and_then(Value::as_str)
-        .map(PathBuf::from);
+        .map(|artifact| {
+            let path = PathBuf::from(artifact);
+            if path.is_absolute() {
+                path
+            } else {
+                fixture_dir.join(path)
+            }
+        });
     let local = fixture_dir.join("proof_bundle.json");
     let candidate = explicit.or_else(|| local.exists().then_some(local));
 
@@ -378,7 +385,9 @@ fn canonical_provider(provider_cli: &str, model: &str) -> String {
     if provider.contains("ollama") {
         return "ollama".to_string();
     }
+    let provider_compact = provider.replace(['-', '_'], "");
     if provider.contains("local")
+        || provider_compact.contains("lmstudio")
         || provider == "custom"
         || model.contains("gemma")
         || model.contains("qwen")

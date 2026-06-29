@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde_json::{Value, json};
+
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -292,6 +294,127 @@ fn circle_replay_cli_generates_valid_bundle_from_fixture_dir() {
         validate_stdout.contains("circle-validate: PASS "),
         "stdout={validate_stdout}"
     );
+}
+
+#[test]
+fn circle_replay_cli_resolves_relative_artifact_metadata_under_fixture_dir() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture_dir = temp.path().join("fixtures");
+    std::fs::create_dir(&fixture_dir).unwrap();
+    write_replay_fixture(&fixture_dir);
+
+    let metadata_dir = fixture_dir.join("metadata");
+    std::fs::create_dir(&metadata_dir).unwrap();
+    std::fs::write(
+        metadata_dir.join("proof_bundle.json"),
+        serde_json::to_vec_pretty(&json!({
+            "run_id": "relative-artifact-run",
+            "circle_id": "relative-artifact-circle",
+            "objective": "Metadata came from a relative artifact path under fixture_dir.",
+            "success_metric": {
+                "kind": "inline",
+                "description": "relative artifact metadata resolved"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let summary_path = fixture_dir.join("summary.json");
+    let mut summary: Value =
+        serde_json::from_slice(&std::fs::read(&summary_path).unwrap()).unwrap();
+    for field in [
+        "run_id",
+        "circle_id",
+        "objective",
+        "success_metric",
+        "budget_snapshot",
+    ] {
+        summary.as_object_mut().unwrap().remove(field);
+    }
+    summary["artifact"] = json!("metadata/proof_bundle.json");
+    std::fs::write(&summary_path, serde_json::to_vec_pretty(&summary).unwrap()).unwrap();
+
+    let bundle_out = temp.path().join("out").join("proof_bundle.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_sera"))
+        .current_dir(temp.path())
+        .args([
+            "circle",
+            "replay",
+            "--fixture-dir",
+            fixture_dir.to_str().unwrap(),
+            "--bundle-out",
+            bundle_out.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .expect("run sera circle replay with relative artifact metadata");
+
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("relative-artifact-run"), "stdout={stdout}");
+    assert!(stdout.contains("circle-replay: PASS "), "stdout={stdout}");
+}
+
+#[test]
+fn circle_replay_cli_treats_lm_studio_provider_as_local() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture_dir = temp.path().join("fixtures");
+    std::fs::create_dir(&fixture_dir).unwrap();
+    write_replay_fixture(&fixture_dir);
+
+    for path in [
+        fixture_dir.join("summary.json"),
+        fixture_dir.join("builder_local_gemma.json"),
+        fixture_dir.join("referee_local_gemma.json"),
+    ] {
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            text.replace(
+                "\"provider_cli\":\"custom\"",
+                "\"provider_cli\":\"lm-studio\"",
+            )
+            .replace(
+                "\"provider_cli\": \"custom\"",
+                "\"provider_cli\": \"lm-studio\"",
+            ),
+        )
+        .unwrap();
+    }
+
+    let bundle_out = temp.path().join("proof_bundle.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_sera"))
+        .args([
+            "circle",
+            "replay",
+            "--fixture-dir",
+            fixture_dir.to_str().unwrap(),
+            "--bundle-out",
+            bundle_out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run sera circle replay with lm-studio fixtures");
+
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("circle-replay: PASS "), "stdout={stdout}");
+
+    let bundle: Value = serde_json::from_slice(&std::fs::read(&bundle_out).unwrap()).unwrap();
+    let provider = bundle["execution_receipts"][1]["parameters"]["provider"]
+        .as_str()
+        .unwrap();
+    assert_eq!(provider, "local-lmstudio");
 }
 
 #[test]

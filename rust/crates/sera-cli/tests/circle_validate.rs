@@ -362,6 +362,38 @@ fn circle_replay_cli_resolves_relative_artifact_metadata_under_fixture_dir() {
 }
 
 #[test]
+fn circle_replay_cli_ignores_colocated_metadata_when_summary_is_complete() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture_dir = temp.path().join("fixtures");
+    std::fs::create_dir(&fixture_dir).unwrap();
+    write_replay_fixture(&fixture_dir);
+    std::fs::write(fixture_dir.join("proof_bundle.json"), b"not valid json").unwrap();
+
+    let bundle_out = temp.path().join("proof_bundle.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_sera"))
+        .args([
+            "circle",
+            "replay",
+            "--fixture-dir",
+            fixture_dir.to_str().unwrap(),
+            "--bundle-out",
+            bundle_out.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .expect("run sera circle replay with stale colocated proof bundle");
+
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("circle-replay: PASS "), "stdout={stdout}");
+}
+
+#[test]
 fn circle_replay_cli_treats_lm_studio_provider_as_local() {
     let temp = tempfile::tempdir().unwrap();
     let fixture_dir = temp.path().join("fixtures");

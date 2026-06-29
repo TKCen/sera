@@ -336,16 +336,28 @@ fn replay_metadata_source(fixture_dir: &Path, summary: &Value) -> Result<Option<
                 fixture_dir.join(path)
             }
         });
-    let local = fixture_dir.join("proof_bundle.json");
-    let candidate = explicit.or_else(|| local.exists().then_some(local));
 
-    match candidate {
-        Some(path) if path.exists() => read_json(&path).map(Some),
-        Some(path) => Err(format!(
-            "summary artifact metadata source does not exist: {}",
-            path.display()
-        )),
-        None => Ok(None),
+    if let Some(path) = explicit {
+        return match path.exists() {
+            true => read_json(&path).map(Some),
+            false => Err(format!(
+                "summary artifact metadata source does not exist: {}",
+                path.display()
+            )),
+        };
+    }
+
+    let local = fixture_dir.join("proof_bundle.json");
+    let needs_fallback = ["run_id", "circle_id", "objective", "success_metric"]
+        .into_iter()
+        .any(|field| summary.get(field).is_none())
+        || (summary.get("budget_snapshot").is_none() && local.exists())
+        || summary.get("verdict_type").is_none();
+
+    if needs_fallback && local.exists() {
+        read_json(&local).map(Some)
+    } else {
+        Ok(None)
     }
 }
 

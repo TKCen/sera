@@ -48,15 +48,14 @@ pub fn run_circle_replay(
     if let Some(parent) = bundle_out
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
+        && let Err(err) = std::fs::create_dir_all(parent)
     {
-        if let Err(err) = std::fs::create_dir_all(parent) {
-            eprintln!(
-                "failed to create Circle replay output directory {}: {err}",
-                parent.display()
-            );
-            print_circle_replay_footer("USAGE_ERROR", "unknown");
-            return 3;
-        }
+        eprintln!(
+            "failed to create Circle replay output directory {}: {err}",
+            parent.display()
+        );
+        print_circle_replay_footer("USAGE_ERROR", "unknown");
+        return 3;
     }
 
     if let Err(err) = std::fs::write(&bundle_out, &bytes) {

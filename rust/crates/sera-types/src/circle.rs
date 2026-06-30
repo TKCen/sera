@@ -553,6 +553,54 @@ pub struct CollaborationVerdictRecord {
     pub rationale: String,
 }
 
+/// Severity of a peer challenge raised during Circle deliberation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerChallengeSeverity {
+    Low,
+    Medium,
+    High,
+    Blocking,
+}
+
+/// Current disposition of a peer challenge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerChallengeDisposition {
+    Open,
+    Accepted,
+    Rejected,
+    Resolved,
+    Superseded,
+}
+
+fn default_peer_challenge_disposition() -> PeerChallengeDisposition {
+    PeerChallengeDisposition::Open
+}
+
+/// Structured challenge object preserving dissent before final integration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PeerChallenge {
+    /// Stable id for this challenge within the run.
+    pub challenge_id: String,
+    /// Participant that raised the challenge.
+    pub challenger: String,
+    /// Blackboard entry being challenged.
+    pub target_entry_id: u64,
+    /// Claim under dispute.
+    pub claim: String,
+    /// Concrete challenge or objection.
+    pub challenge: String,
+    /// Receipt ids, file paths, quotes, or other compact evidence pointers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<String>,
+    pub severity: PeerChallengeSeverity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_by: Option<String>,
+    #[serde(default = "default_peer_challenge_disposition")]
+    pub disposition: PeerChallengeDisposition,
+}
+
 /// Complete proof bundle for a collaboration run.
 ///
 /// Serialises to / deserialises from JSON as the golden fixture format for
@@ -570,6 +618,9 @@ pub struct CollaborationProofBundle {
     pub entries: Vec<ProofBundleEntry>,
     pub lineage: Vec<LineageEdge>,
     pub execution_receipts: Vec<ExecutionReceipt>,
+    /// Structured challenges raised by peers before referee integration.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peer_challenges: Vec<PeerChallenge>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<CollaborationVerdictRecord>,
 }
@@ -968,8 +1019,7 @@ mod tests {
         let bundle = CollaborationProofBundle {
             run_id: "run_sera_nqh3_001".to_string(),
             circle_id: "sera-nqh3-circle".to_string(),
-            objective: "Verify and deduplicate the Hermes-parity gap map for sera-nqh3"
-                .to_string(),
+            objective: "Verify and deduplicate the Hermes-parity gap map for sera-nqh3".to_string(),
             success_metric: MetricRef::Evaluator {
                 evaluator_id: "metric_dedup_complete".to_string(),
                 description: Some(
@@ -1075,6 +1125,19 @@ mod tests {
                 outcome: ReceiptOutcome::Success,
                 cost_tokens: Some(120),
             }],
+            peer_challenges: vec![PeerChallenge {
+                challenge_id: "challenge_critic_001".to_string(),
+                challenger: "critic".to_string(),
+                target_entry_id: 2,
+                claim: "The builder proposal cited every relevant Circle coordination file."
+                    .to_string(),
+                challenge: "The proposal missed ResultAggregator evidence in sera-workflow."
+                    .to_string(),
+                evidence: vec!["rust/crates/sera-workflow/src/coordination.rs".to_string()],
+                severity: PeerChallengeSeverity::High,
+                response_by: Some("builder".to_string()),
+                disposition: PeerChallengeDisposition::Resolved,
+            }],
             verdict: Some(CollaborationVerdictRecord {
                 reviewer: "referee".to_string(),
                 timestamp: "2026-06-29T16:04:00Z".parse().unwrap(),
@@ -1116,10 +1179,14 @@ mod tests {
             entries: vec![],
             lineage: vec![],
             execution_receipts: vec![],
+            peer_challenges: vec![],
             verdict: None,
         };
         let json = serde_json::to_string(&bundle).unwrap();
-        assert!(!json.contains("verdict"), "verdict should be absent: {json}");
+        assert!(
+            !json.contains("verdict"),
+            "verdict should be absent: {json}"
+        );
         assert!(
             !json.contains("budget_snapshot"),
             "budget_snapshot should be absent: {json}"

@@ -129,7 +129,7 @@ pub fn run_circle_replay(
     }
 }
 
-fn build_replay_bundle(fixture_dir: &Path) -> Result<CollaborationProofBundle, String> {
+pub(crate) fn build_replay_bundle(fixture_dir: &Path) -> Result<CollaborationProofBundle, String> {
     let summary_path = fixture_dir.join("summary.json");
     let summary = read_json(&summary_path)?;
     let metadata_source = replay_metadata_source(fixture_dir, &summary)?;
@@ -315,6 +315,11 @@ fn build_replay_bundle(fixture_dir: &Path) -> Result<CollaborationProofBundle, S
         value_from_summary_or_metadata(&summary, metadata_source.as_ref(), "budget_snapshot")
     {
         bundle["budget_snapshot"] = snapshot.clone();
+    }
+    if let Some(peer_challenges) =
+        value_from_summary_or_metadata(&summary, metadata_source.as_ref(), "peer_challenges")
+    {
+        bundle["peer_challenges"] = peer_challenges;
     }
     if let Some(verdict) = verdict {
         bundle["verdict"] = verdict;

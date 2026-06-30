@@ -15,6 +15,7 @@ use sera_cli::config::CliConfig;
 use sera_cli::token_store::best_available_store;
 
 mod circle_replay;
+mod circle_run;
 
 /// SERA — Sandboxed Extensible Reasoning Agent CLI
 #[derive(Parser)]
@@ -172,6 +173,21 @@ enum CircleCommand {
         /// Directory containing summary.json plus one <role_id>.json file per role
         #[arg(long, value_name = "DIR", num_args = 0..=1)]
         fixture_dir: Option<PathBuf>,
+        /// Path to write the generated CollaborationProofBundle JSON artifact
+        #[arg(long, value_name = "PATH", num_args = 0..=1)]
+        bundle_out: Option<PathBuf>,
+        /// Emit a compact JSON report before the machine-parseable footer
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run a configured Circle roster through capture -> replay -> validate
+    Run {
+        /// JSON/YAML Circle run spec containing roles[] with captured outputs
+        #[arg(long, value_name = "PATH", num_args = 0..=1)]
+        spec: Option<PathBuf>,
+        /// Directory where role fixtures and summary.json are captured
+        #[arg(long, value_name = "DIR", num_args = 0..=1)]
+        capture_dir: Option<PathBuf>,
         /// Path to write the generated CollaborationProofBundle JSON artifact
         #[arg(long, value_name = "PATH", num_args = 0..=1)]
         bundle_out: Option<PathBuf>,
@@ -423,6 +439,17 @@ async fn main() -> Result<()> {
                 bundle_out,
                 json,
             } => circle_replay::run_circle_replay(fixture_dir.clone(), bundle_out.clone(), *json),
+            CircleCommand::Run {
+                spec,
+                capture_dir,
+                bundle_out,
+                json,
+            } => circle_run::run_circle_run(
+                spec.clone(),
+                capture_dir.clone(),
+                bundle_out.clone(),
+                *json,
+            ),
         };
         if exit_code != 0 {
             std::process::exit(exit_code);
@@ -794,6 +821,17 @@ async fn main() -> Result<()> {
                 json,
             } => {
                 let exit_code = circle_replay::run_circle_replay(fixture_dir, bundle_out, json);
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+            }
+            CircleCommand::Run {
+                spec,
+                capture_dir,
+                bundle_out,
+                json,
+            } => {
+                let exit_code = circle_run::run_circle_run(spec, capture_dir, bundle_out, json);
                 if exit_code != 0 {
                     std::process::exit(exit_code);
                 }

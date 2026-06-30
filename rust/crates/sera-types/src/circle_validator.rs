@@ -34,6 +34,21 @@ pub enum ValidationErrorKind {
     MissingVerdict,
     /// The bundle lacks evidence of at least one local provider and one cloud/non-local provider.
     MissingMixedProviderEvidence,
+    /// A peer challenge references an entry id not present in `entries`.
+    BrokenPeerChallengeRef {
+        challenge_id: String,
+        target_entry_id: u64,
+    },
+    /// Two or more peer challenges share the same stable challenge id.
+    DuplicatePeerChallengeId { challenge_id: String },
+    /// A peer challenge actor is not present in the run roster/authors.
+    UnknownPeerChallengeActor {
+        challenge_id: String,
+        field: String,
+        actor: String,
+    },
+    /// A peer challenge is missing the concrete disputed claim, challenge, or challenger.
+    BlankPeerChallengeField { challenge_id: String, field: String },
 }
 
 /// A single validation failure produced by [`validate_proof_bundle`].
@@ -71,10 +86,17 @@ pub fn validate_proof_bundle(
     check_unique_entry_ids(bundle, &mut errors);
 
     let entry_id_set: HashSet<u64> = bundle.entries.iter().map(|e| e.entry_id).collect();
+    let actor_set: HashSet<&str> = bundle
+        .roster
+        .iter()
+        .map(|member| member.participant_id.as_str())
+        .chain(bundle.entries.iter().map(|entry| entry.author.as_str()))
+        .collect();
 
     check_lineage_refs(bundle, &entry_id_set, &mut errors);
     check_blank_responses(bundle, &mut errors);
     check_receipts_for_provider_entries(bundle, &mut errors);
+    check_peer_challenges(bundle, &entry_id_set, &actor_set, &mut errors);
     check_verdict_present(bundle, &mut errors);
     check_mixed_provider_evidence(bundle, &mut errors);
 
@@ -168,6 +190,72 @@ fn check_receipts_for_provider_entries(
     }
 }
 
+fn check_peer_challenges(
+    bundle: &CollaborationProofBundle,
+    entry_id_set: &HashSet<u64>,
+    actor_set: &HashSet<&str>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let mut seen_challenge_ids: HashSet<&str> = HashSet::new();
+    for challenge in &bundle.peer_challenges {
+        if !seen_challenge_ids.insert(challenge.challenge_id.as_str()) {
+            errors.push(ValidationError::new(
+                ValidationErrorKind::DuplicatePeerChallengeId {
+                    challenge_id: challenge.challenge_id.clone(),
+                },
+            ));
+        }
+        if !entry_id_set.contains(&challenge.target_entry_id) {
+            errors.push(ValidationError::new(
+                ValidationErrorKind::BrokenPeerChallengeRef {
+                    challenge_id: challenge.challenge_id.clone(),
+                    target_entry_id: challenge.target_entry_id,
+                },
+            ));
+        }
+        if !challenge.challenger.trim().is_empty()
+            && !actor_set.contains(challenge.challenger.as_str())
+        {
+            errors.push(ValidationError::new(
+                ValidationErrorKind::UnknownPeerChallengeActor {
+                    challenge_id: challenge.challenge_id.clone(),
+                    field: "challenger".to_string(),
+                    actor: challenge.challenger.clone(),
+                },
+            ));
+        }
+        if let Some(response_by) = challenge
+            .response_by
+            .as_deref()
+            .filter(|response_by| !response_by.trim().is_empty())
+            && !actor_set.contains(response_by)
+        {
+            errors.push(ValidationError::new(
+                ValidationErrorKind::UnknownPeerChallengeActor {
+                    challenge_id: challenge.challenge_id.clone(),
+                    field: "response_by".to_string(),
+                    actor: response_by.to_string(),
+                },
+            ));
+        }
+        for (field, value) in [
+            ("challenge_id", challenge.challenge_id.as_str()),
+            ("challenger", challenge.challenger.as_str()),
+            ("claim", challenge.claim.as_str()),
+            ("challenge", challenge.challenge.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                errors.push(ValidationError::new(
+                    ValidationErrorKind::BlankPeerChallengeField {
+                        challenge_id: challenge.challenge_id.clone(),
+                        field: field.to_string(),
+                    },
+                ));
+            }
+        }
+    }
+}
+
 fn check_verdict_present(bundle: &CollaborationProofBundle, errors: &mut Vec<ValidationError>) {
     if bundle.verdict.is_none() {
         errors.push(ValidationError::new(ValidationErrorKind::MissingVerdict));
@@ -239,8 +327,8 @@ mod tests {
     use super::*;
     use crate::circle::{
         BudgetSnapshot, CollaborationProofBundle, CollaborationVerdictRecord, ExecutionReceipt,
-        LineageEdge, LineageRelation, MetricRef, ProofBundleEntry, ProofBundleMember,
-        ReceiptOutcome, VerdictType,
+        LineageEdge, LineageRelation, MetricRef, PeerChallenge, PeerChallengeDisposition,
+        PeerChallengeSeverity, ProofBundleEntry, ProofBundleMember, ReceiptOutcome, VerdictType,
     };
 
     // -----------------------------------------------------------------
@@ -420,6 +508,7 @@ mod tests {
                     cost_tokens: None,
                 },
             ],
+            peer_challenges: vec![],
             verdict: Some(CollaborationVerdictRecord {
                 reviewer: "referee_local_gemma".into(),
                 timestamp: ts("2026-06-29T15:07:41Z"),
@@ -647,6 +736,127 @@ mod tests {
                 ValidationErrorKind::ReceiptProviderEvidenceMismatch { entry_id: 1, .. }
             )),
             "expected receipt/provider evidence mismatch when receipt omits provider"
+        );
+    }
+
+    #[test]
+    fn peer_challenge_to_nonexistent_entry_fails() {
+        let mut bundle = mixed_provider_fixture();
+        bundle.peer_challenges.push(PeerChallenge {
+            challenge_id: "challenge_missing_target".into(),
+            challenger: "critic_minimax".into(),
+            target_entry_id: 999,
+            claim: "Builder output is fully grounded.".into(),
+            challenge: "Target entry is not present in the bundle.".into(),
+            evidence: vec!["test fixture".into()],
+            severity: PeerChallengeSeverity::Blocking,
+            response_by: None,
+            disposition: PeerChallengeDisposition::Open,
+        });
+        let errors = validate_proof_bundle(&bundle).unwrap_err();
+        assert!(
+            errors.iter().any(|e| matches!(
+                e.kind,
+                ValidationErrorKind::BrokenPeerChallengeRef {
+                    target_entry_id: 999,
+                    ..
+                }
+            )),
+            "expected BrokenPeerChallengeRef for target_entry_id=999"
+        );
+    }
+
+    #[test]
+    fn duplicate_peer_challenge_id_fails() {
+        let mut bundle = mixed_provider_fixture();
+        bundle.peer_challenges.push(PeerChallenge {
+            challenge_id: "challenge_duplicate".into(),
+            challenger: "critic_minimax".into(),
+            target_entry_id: 2,
+            claim: "Builder output is fully grounded.".into(),
+            challenge: "First challenge with this id.".into(),
+            evidence: vec!["test fixture".into()],
+            severity: PeerChallengeSeverity::High,
+            response_by: Some("referee_local_gemma".into()),
+            disposition: PeerChallengeDisposition::Open,
+        });
+        bundle.peer_challenges.push(PeerChallenge {
+            challenge_id: "challenge_duplicate".into(),
+            challenger: "specifier_minimax".into(),
+            target_entry_id: 3,
+            claim: "Critic output is fully grounded.".into(),
+            challenge: "Second challenge with conflicting content but same id.".into(),
+            evidence: vec!["test fixture".into()],
+            severity: PeerChallengeSeverity::Medium,
+            response_by: Some("referee_local_gemma".into()),
+            disposition: PeerChallengeDisposition::Resolved,
+        });
+        let errors = validate_proof_bundle(&bundle).unwrap_err();
+        assert!(
+            errors.iter().any(|e| matches!(
+                e.kind,
+                ValidationErrorKind::DuplicatePeerChallengeId { ref challenge_id }
+                    if challenge_id == "challenge_duplicate"
+            )),
+            "expected DuplicatePeerChallengeId for challenge_duplicate"
+        );
+    }
+
+    #[test]
+    fn peer_challenge_unknown_actor_fails() {
+        let mut bundle = mixed_provider_fixture();
+        bundle.peer_challenges.push(PeerChallenge {
+            challenge_id: "challenge_unknown_actor".into(),
+            challenger: "invented_critic".into(),
+            target_entry_id: 2,
+            claim: "Builder output is fully grounded.".into(),
+            challenge: "Challenger must be a real run participant.".into(),
+            evidence: vec!["test fixture".into()],
+            severity: PeerChallengeSeverity::High,
+            response_by: Some("invented_referee".into()),
+            disposition: PeerChallengeDisposition::Open,
+        });
+        let errors = validate_proof_bundle(&bundle).unwrap_err();
+        assert!(
+            errors.iter().any(|e| matches!(
+                e.kind,
+                ValidationErrorKind::UnknownPeerChallengeActor { ref field, ref actor, .. }
+                    if field == "challenger" && actor == "invented_critic"
+            )),
+            "expected UnknownPeerChallengeActor for challenger"
+        );
+        assert!(
+            errors.iter().any(|e| matches!(
+                e.kind,
+                ValidationErrorKind::UnknownPeerChallengeActor { ref field, ref actor, .. }
+                    if field == "response_by" && actor == "invented_referee"
+            )),
+            "expected UnknownPeerChallengeActor for response_by"
+        );
+    }
+
+    #[test]
+    fn blank_peer_challenge_claim_fails() {
+        let mut bundle = mixed_provider_fixture();
+        bundle.peer_challenges.push(PeerChallenge {
+            challenge_id: "challenge_blank_claim".into(),
+            challenger: "critic_minimax".into(),
+            target_entry_id: 2,
+            claim: " ".into(),
+            challenge: "The disputed claim must be explicit.".into(),
+            evidence: vec![],
+            severity: PeerChallengeSeverity::High,
+            response_by: Some("referee_local_gemma".into()),
+            disposition: PeerChallengeDisposition::Open,
+        });
+        let errors = validate_proof_bundle(&bundle).unwrap_err();
+        assert!(
+            errors.iter().any(|e| matches!(
+                e.kind,
+                ValidationErrorKind::BlankPeerChallengeField { ref field, .. }
+                    if field == "claim"
+            )),
+            "expected BlankPeerChallengeField for claim"
         );
     }
 

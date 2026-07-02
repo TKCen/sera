@@ -207,15 +207,14 @@ impl Command for ProviderAddCommand {
         let id = args
             .get("id")
             .ok_or_else(|| {
-                CommandError::InvalidArgs(
-                    "registry id required (use one of: ".to_string()
-                        + &provider_registry::registry()
-                            .iter()
-                            .map(|e| e.id)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                        + ")",
-                )
+                CommandError::InvalidArgs(format!(
+                    "registry id required (use one of: {})",
+                    provider_registry::registry()
+                        .iter()
+                        .map(|e| e.id)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
             })?
             .to_owned();
 

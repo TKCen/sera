@@ -981,26 +981,93 @@ fn make_closeout_receipt(
     }
 }
 
+/// Classify a referee verdict string into a [`VerdictType`].
+///
+/// Codex review thread (rust/crates/sera-runtime/src/circle_ingress.rs
+/// line 987 — fourth pass): substring matching on the word "approve"
+/// would happily classify "not approved", "disapproved", "unapproved",
+/// and "not approve" as `VerdictType::Approved`, so the closeout
+/// report / footer / JSON all reported `PASS` even though the
+/// referee's text was explicitly negative. We now classify by:
+///   1. trimmed whole-token matching for the rejection/negative forms
+///      (rejected, decline, deny, fail, refuse, ...).
+///   2. trimmed whole-token matching for the tie / invalid forms.
+///   3. trimmed whole-token matching for the affirmative forms
+///      (approved, approve, accept, accepted) — and only those,
+///      after confirming no negation prefix ("not", "no", "never")
+///      precedes the approval token. Words containing "approve"
+///      as a substring but NOT in the affirmative set (e.g.
+///      "disapproved", "unapproved") are NOT tokenized into the
+///      affirmative token because "dis" / "un" prefixes join with
+///      "approved" into a single dashed token that is NOT in the
+///      affirmative set. The ambiguous short approvals (pass, ok,
+///      yes, lgtm) are NOT allowed because the same words appear
+///      in non-approval contexts ("needs another pass", "ok we will
+///      revisit").
 fn classify_verdict(verdict_text: &str, rationale: &str) -> VerdictType {
-    let lc = verdict_text.to_ascii_lowercase();
-    if lc.contains("approve") {
-        VerdictType::Approved
-    } else if lc.contains("reject") {
-        VerdictType::Rejected {
-            reason: rationale.to_string(),
+    let lc = verdict_text.trim().to_ascii_lowercase();
+    // Strip outer punctuation/quotes so a caller passing `--verdict '"approved"'`
+    // still resolves correctly without admitting "dis" prefixes.
+    let lc = lc
+        .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != ' ' && c != '-')
+        .to_string();
+
+    // 1. Explicit rejection/negative forms. Checked BEFORE approval so a
+    //    verdict like "rejected - do not approve" classifies as Rejected,
+    //    not Approved.
+    for token in lc.split([' ', '-', '_']) {
+        match token {
+            "rejected" | "reject" | "declined" | "decline" | "denied" | "deny"
+            | "refused" | "refuse" | "fail" | "failed" | "blocking" | "block" => {
+                return VerdictType::Rejected {
+                    reason: rationale.to_string(),
+                };
+            }
+            "tie" | "tied" | "draw" => {
+                return VerdictType::Tie {
+                    note: rationale.to_string(),
+                };
+            }
+            "invalid" | "illegal" | "illegitimate" => {
+                return VerdictType::Invalid {
+                    rule: rationale.to_string(),
+                };
+            }
+            _ => {}
         }
-    } else if lc.contains("tie") {
-        VerdictType::Tie {
-            note: rationale.to_string(),
+    }
+
+    // 2. Explicit affirmative forms. Whole-token matching so the
+    //    substring "approve" inside "disapproved" or "unapproved"
+    //    does NOT trip Approved (those become single dashed tokens
+    //    like "disapproved" / "unapproved" that are NOT in the
+    //    affirmative set). We also require that no preceding token
+    //    is a negation ("not", "no", "never"), so "not approved"
+    //    does NOT trip Approved.
+    let negation_prefixes = ["not", "no", "never", "neither", "nor"];
+    let tokens: Vec<&str> = lc.split([' ', '-', '_']).collect();
+    for (idx, token) in tokens.iter().enumerate() {
+        match *token {
+            "approved" | "approve" | "approval" | "accepted" | "accept" => {
+                // Check that the immediately preceding token (if any)
+                // is not a negation prefix. This catches "not approved",
+                // "no approve", "never approved", etc.
+                if idx > 0 && negation_prefixes.contains(&tokens[idx - 1]) {
+                    break;
+                }
+                return VerdictType::Approved;
+            }
+            _ => {}
         }
-    } else if lc.contains("invalid") {
-        VerdictType::Invalid {
-            rule: rationale.to_string(),
-        }
-    } else {
-        VerdictType::RevisionRequired {
-            feedback: rationale.to_string(),
-        }
+    }
+
+    // 3. Default — fall through to revision required. This catches
+    //    "needs another pass", free-form referee notes, and crucially
+    //    the negated/derived approval forms ("not approved",
+    //    "disapproved", "unapproved", "not approve") that must NOT
+    //    surface as PASS.
+    VerdictType::RevisionRequired {
+        feedback: rationale.to_string(),
     }
 }
 
@@ -1389,6 +1456,118 @@ mod tests {
             assert!(
                 kind.contains(expected_kind),
                 "verdict text {text:?} should classify as {expected_kind}, got {kind}",
+            );
+        }
+    }
+
+    #[test]
+    fn classify_verdict_rejects_negated_approval_phrases() {
+        // Codex review thread (rust/crates/sera-runtime/src/circle_ingress.rs
+        // line 987 — fourth pass): substring matching on "approve" used
+        // to classify "not approved", "disapproved", and "unapproved"
+        // as Approved, so the closeout footer / JSON / bundle all
+        // reported PASS even when the referee's text was explicitly
+        // negative. The classifier now uses whole-token matching, so
+        // every negated/derived approval form must NOT surface as
+        // Approved; it must surface as either Rejected (preferred when
+        // a rejection token is present) or RevisionRequired (the
+        // default for free-form negatives like "not approved").
+        for text in [
+            "not approved",
+            "not approve",
+            "disapproved",
+            "unapproved",
+            "Not Approved",
+            "NOT APPROVE",
+            "DISAPPROVED",
+            "do not approve",
+        ] {
+            let verdict = classify_verdict(text, "rationale for the verdict");
+            let kind = format!("{verdict:?}");
+            let kind_token = kind.split_whitespace().next().unwrap_or("").trim_end_matches('{');
+            assert_ne!(
+                kind_token, "Approved",
+                "negated/derived approval text {text:?} must NOT classify as Approved; \
+                 got {kind:?}",
+            );
+            assert_ne!(
+                verdict_label_for_verdicttype(&verdict),
+                "PASS",
+                "negated/derived approval text {text:?} must NOT produce a PASS footer; \
+                 got verdict {verdict:?}",
+            );
+        }
+    }
+
+    /// Tiny helper that mirrors `sera_cli::circle_closeout::verdict_label_for`
+    /// without forcing the runtime test crate to depend on the CLI. Kept
+    /// local to the test module so the runtime remains CLI-independent.
+    fn verdict_label_for_verdicttype(v: &VerdictType) -> &'static str {
+        match v {
+            VerdictType::Approved => "PASS",
+            VerdictType::Rejected { .. } => "FAIL",
+            VerdictType::Tie { .. } => "TIE",
+            VerdictType::Invalid { .. } => "INVALID",
+            VerdictType::RevisionRequired { .. } => "REVISION_REQUIRED",
+        }
+    }
+
+    #[test]
+    fn classify_verdict_keeps_affirmative_inputs_working() {
+        // Codex review thread (rust/crates/sera-runtime/src/circle_ingress.rs
+        // line 987 — fourth pass): the new whole-token classifier must
+        // still classify the canonical affirmative inputs as Approved,
+        // including the bare, cased, and punctuated forms operators
+        // actually pass on the CLI.
+        for text in [
+            "approved",
+            "approve",
+            "APPROVED",
+            "approved.",
+            "approved!",
+            "accepted",
+            "accepted.",
+            "  approved  ",
+        ] {
+            let verdict = classify_verdict(text, "rationale for the verdict");
+            assert!(
+                matches!(verdict, VerdictType::Approved),
+                "affirmative text {text:?} must classify as Approved; got {verdict:?}",
+            );
+            assert_eq!(
+                verdict_label_for_verdicttype(&verdict),
+                "PASS",
+                "affirmative text {text:?} must produce a PASS footer",
+            );
+        }
+    }
+
+    #[test]
+    fn classify_verdict_keeps_rejection_tie_invalid_working() {
+        // The whole-token classifier must keep the prior rejection/tie/
+        // invalid classification paths reachable too — the regression
+        // guard is for negated approval, NOT for removal of negative
+        // verdict kinds.
+        let cases = [
+            ("rejected", "FAIL", "Rejected"),
+            ("declined", "FAIL", "Rejected"),
+            ("denied", "FAIL", "Rejected"),
+            ("failed", "FAIL", "Rejected"),
+            ("tie", "TIE", "Tie"),
+            ("invalid", "INVALID", "Invalid"),
+        ];
+        for (text, footer, kind_token) in cases {
+            let verdict = classify_verdict(text, "rationale for the verdict");
+            let kind = format!("{verdict:?}");
+            let first_token = kind.split_whitespace().next().unwrap_or("").trim_end_matches('{');
+            assert_eq!(
+                first_token, kind_token,
+                "verdict text {text:?} must classify as {kind_token}; got {kind:?}",
+            );
+            assert_eq!(
+                verdict_label_for_verdicttype(&verdict),
+                footer,
+                "verdict text {text:?} must produce footer {footer}",
             );
         }
     }

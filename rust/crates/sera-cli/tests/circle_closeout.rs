@@ -580,6 +580,117 @@ fn closeout_rejects_identical_bundle_and_report_out_paths() {
 }
 
 /// Codex review thread (rust/crates/sera-cli/src/circle_closeout.rs
+/// line 171 — fourth pass, "Normalize artifact paths before comparing
+/// them"): a raw `Path::eq` equality check missed lexical aliases
+/// such as `bundle.json` vs `./bundle.json` and `dir/../bundle.json`
+/// vs `bundle.json`. The operator seam must therefore compare
+/// normalized target paths and refuse the collision BEFORE writing
+/// either artifact. This test covers the load-bearing alias shapes
+/// without creating any files (so it does not mask the regression by
+/// making the equal-looking paths trivially "identical" via the
+/// filesystem).
+#[test]
+fn closeout_rejects_lexically_aliased_bundle_and_report_out_paths() {
+    // Pick a parent directory we know exists (the system temp dir)
+    // and a non-existing target inside it so `canonicalize` would
+    // fail on either path. Lexical normalization must catch the
+    // aliases anyway.
+    let tmp_root = std::env::temp_dir().join(format!(
+        "sera-circle-closeout-alias-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    let bundle_path = tmp_root.join("bundle.json");
+    let report_path = tmp_root.join(".").join("bundle.json");
+    let report_path_dotdot = tmp_root.join("nested").join("..").join("bundle.json");
+
+    // Sanity: none of the targets exist yet — the lexical alias
+    // check must catch the collision WITHOUT touching the disk.
+    let _ = std::fs::remove_dir_all(&tmp_root);
+    assert!(!bundle_path.exists(), "bundle target must not exist pre-call");
+    assert!(!report_path.exists(), "alias target must not exist pre-call");
+
+    // Alias shape #1: `--bundle-out <tmp>/bundle.json` vs
+    // `--report-out <tmp>/./bundle.json`.
+    let exit_code = run_circle_closeout(
+        Some("to:circle:sera-nqh3".to_string()),
+        Some("alice".to_string()),
+        Some("lead".to_string()),
+        Some("open the run and submit proposal".to_string()),
+        Some("session:parent-task-e".to_string()),
+        Some("agent-007".to_string()),
+        Some("ref".to_string()),
+        Some("approved".to_string()),
+        Some("Lead alice claimed the role and posted a non-blank summary.".to_string()),
+        Some("Resident closeout: lexical alias #1 (./)".to_string()),
+        Some(bundle_path.clone()),
+        Some(report_path.clone()),
+        Some("8".to_string()),
+        false,
+    );
+    assert_eq!(
+        exit_code, 3,
+        "lexically aliased paths (./ prefix) must exit 3 (USAGE_ERROR); \
+         bundle={} report={}",
+        bundle_path.display(),
+        report_path.display(),
+    );
+    assert!(
+        !bundle_path.exists(),
+        "no file must be written when alias #1 collides; found {} unexpectedly",
+        bundle_path.display(),
+    );
+    assert!(
+        !report_path.exists(),
+        "no file must be written when alias #1 collides; found {} unexpectedly",
+        report_path.display(),
+    );
+
+    // Alias shape #2: `--bundle-out <tmp>/bundle.json` vs
+    // `--report-out <tmp>/nested/../bundle.json` (parent traversal
+    // that resolves back to the same lexical target).
+    let exit_code = run_circle_closeout(
+        Some("to:circle:sera-nqh3".to_string()),
+        Some("alice".to_string()),
+        Some("lead".to_string()),
+        Some("open the run and submit proposal".to_string()),
+        Some("session:parent-task-e".to_string()),
+        Some("agent-007".to_string()),
+        Some("ref".to_string()),
+        Some("approved".to_string()),
+        Some("Lead alice claimed the role and posted a non-blank summary.".to_string()),
+        Some("Resident closeout: lexical alias #2 (nested/..)".to_string()),
+        Some(bundle_path.clone()),
+        Some(report_path_dotdot.clone()),
+        Some("8".to_string()),
+        false,
+    );
+    assert_eq!(
+        exit_code, 3,
+        "lexically aliased paths (nested/..) must exit 3 (USAGE_ERROR); \
+         bundle={} report={}",
+        bundle_path.display(),
+        report_path_dotdot.display(),
+    );
+    assert!(
+        !bundle_path.exists(),
+        "no file must be written when alias #2 collides; found {} unexpectedly",
+        bundle_path.display(),
+    );
+    assert!(
+        !report_path_dotdot.exists(),
+        "no file must be written when alias #2 collides; found {} unexpectedly",
+        report_path_dotdot.display(),
+    );
+
+    // Clean up the temp tree so the test does not leak.
+    let _ = std::fs::remove_dir_all(&tmp_root);
+}
+
+/// Codex review thread (rust/crates/sera-cli/src/circle_closeout.rs
 /// line 176 — "Use the closeout verdict in JSON output"): for
 /// non-approved verdicts the bundle still structurally validates, so
 /// the previous implementation emitted `verdict: "PASS"` in the JSON

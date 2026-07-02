@@ -163,12 +163,21 @@ pub fn run_circle_closeout(
     // while the footer still advertises the bundle sha. Detect the
     // collision BEFORE writing either file: surface `USAGE_ERROR`
     // with the footer (using the computed bundle sha when available)
-    // and leave the path untouched. Exact path equality is the
-    // minimum acceptable check; symlinks/aliases will be caught by
-    // the on-disk overwrite at write time, which would still surface
-    // as a usage error from `write_bundle` / `write_report`.
+    // and leave the path untouched.
+    //
+    // Codex review thread (circle_closeout.rs line 171 — fourth pass,
+    // "Normalize artifact paths before comparing them"): a raw
+    // `Path` equality check missed lexical aliases such as
+    // `bundle.json` vs `./bundle.json` and `dir/../bundle.json` vs
+    // `bundle.json`. We now compare the lexically-normalized target
+    // paths (and only fall back to a canonical comparison when both
+    // targets exist, so we never `touch` a file just to compare).
+    // The normalised form collapses `.`, `..`, and redundant
+    // separators; `canonicalize` further resolves symlinks for
+    // existing files but is intentionally not used on non-existing
+    // paths (it would `Err`).
     if let (Some(bundle_path), Some(report_path)) = (bundle_out.as_deref(), report_out.as_deref())
-        && bundle_path == report_path
+        && artifact_paths_collide(bundle_path, report_path)
     {
         eprintln!(
             "--bundle-out and --report-out must point to different paths; got {} for both",
@@ -308,6 +317,72 @@ fn verdict_label_for(verdict_type: &VerdictType) -> &'static str {
         VerdictType::Invalid { .. } => "INVALID",
         VerdictType::RevisionRequired { .. } => "REVISION_REQUIRED",
     }
+}
+
+/// Decide whether two artifact target paths would write to the same
+/// on-disk location, so the operator seam can refuse the collision
+/// BEFORE writing either file.
+///
+/// Codex review thread (circle_closeout.rs line 171 — fourth pass,
+/// "Normalize artifact paths before comparing them"): a raw
+/// `Path::eq` (or string equality on `Path`) is too lax — lexical
+/// aliases such as `bundle.json` vs `./bundle.json` and
+/// `dir/../bundle.json` vs `bundle.json` would slip through and
+/// the report write would clobber the bundle. We compare the
+/// lexically-normalized targets (collapsing `.`, `..`, and
+/// redundant separators) and, when both targets already exist on
+/// disk, fall through to `canonicalize` so symlink aliases are
+/// caught too. `canonicalize` is intentionally NOT called on
+/// non-existing paths because it would error out — we don't want
+/// to create files just to compare them.
+fn artifact_paths_collide(bundle_path: &Path, report_path: &Path) -> bool {
+    let bundle_lex = lex_normalize(bundle_path);
+    let report_lex = lex_normalize(report_path);
+    if bundle_lex == report_lex {
+        return true;
+    }
+    // Both targets exist -> resolve symlinks too. We deliberately do
+    // not create files just to satisfy canonicalize.
+    if let (Ok(bundle_canon), Ok(report_canon)) = (
+        std::fs::canonicalize(&bundle_lex),
+        std::fs::canonicalize(&report_lex),
+    ) {
+        return bundle_canon == report_canon;
+    }
+    false
+}
+
+/// Lexically normalize a path without touching the filesystem.
+/// Equivalent to `std::path::Path::components` collapsed: `.` is
+/// dropped, `..` pops the previous non-`..` component, redundant
+/// separators are removed. Works for both existing and non-existing
+/// paths.
+fn lex_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                let popped = out.components().next_back();
+                match popped {
+                    Some(std::path::Component::Normal(_)) => {
+                        out.pop();
+                    }
+                    Some(std::path::Component::RootDir) | None => {
+                        // Cannot pop further; preserve the `..` so
+                        // `../foo` and `foo` still compare unequal
+                        // even though the lexical form is the same.
+                        out.push("..");
+                    }
+                    _ => {
+                        out.push("..");
+                    }
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 fn write_bundle(

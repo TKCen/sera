@@ -429,21 +429,17 @@ fn assemble_bundle(
             provider,
         ));
 
-        // Worker → critic lineage: criticises
-        if idx == 1 && members.len() > 2 {
-            lineage.push(LineageEdge {
-                from_entry_id: 1,
-                to_entry_id: entry_id,
-                relation: LineageRelation::DerivesFrom,
-            });
-        }
-        if idx == 2 {
-            lineage.push(LineageEdge {
-                from_entry_id: (idx) as u64,
-                to_entry_id: entry_id,
-                relation: LineageRelation::Criticizes,
-            });
-        }
+        // Connect every member contribution into the proof chain so every
+        // entry has a path to the referee verdict.
+        lineage.push(LineageEdge {
+            from_entry_id: entry_id - 1,
+            to_entry_id: entry_id,
+            relation: if idx == 2 {
+                LineageRelation::Criticizes
+            } else {
+                LineageRelation::DerivesFrom
+            },
+        });
     }
 
     // Referee entry — last

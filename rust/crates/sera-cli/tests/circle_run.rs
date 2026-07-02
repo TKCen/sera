@@ -500,6 +500,9 @@ fn circle_run_cli_two_member_run_resolves_worker_entry_to_referee() {
     let bundle: Value = serde_json::from_slice(&std::fs::read(&bundle_out).unwrap()).unwrap();
     let lineage = bundle["lineage"].as_array().unwrap();
     assert!(lineage.iter().any(|edge| {
+        edge["from_entry_id"] == 1 && edge["to_entry_id"] == 2 && edge["relation"] == "derives_from"
+    }));
+    assert!(lineage.iter().any(|edge| {
         edge["from_entry_id"] == 2 && edge["to_entry_id"] == 3 && edge["relation"] == "resolves"
     }));
 }
@@ -541,4 +544,13 @@ fn circle_run_cli_extra_members_are_proposals_not_verdict_entries() {
             "verdict"
         ]
     );
+    let lineage = bundle["lineage"].as_array().unwrap();
+    for (from, to) in [(1, 2), (2, 3), (3, 4), (4, 5)] {
+        assert!(
+            lineage
+                .iter()
+                .any(|edge| edge["from_entry_id"] == from && edge["to_entry_id"] == to),
+            "missing lineage edge {from}->{to}: {lineage:?}"
+        );
+    }
 }

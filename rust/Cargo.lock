@@ -5057,6 +5057,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "bytes",
+ "chrono",
  "clap",
  "comfy-table",
  "dirs 5.0.1",

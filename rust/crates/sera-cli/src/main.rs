@@ -15,6 +15,7 @@ use sera_cli::config::CliConfig;
 use sera_cli::token_store::best_available_store;
 
 mod circle_replay;
+mod circle_run;
 
 /// SERA — Sandboxed Extensible Reasoning Agent CLI
 #[derive(Parser)]
@@ -174,6 +175,27 @@ enum CircleCommand {
         fixture_dir: Option<PathBuf>,
         /// Path to write the generated CollaborationProofBundle JSON artifact
         #[arg(long, value_name = "PATH", num_args = 0..=1)]
+        bundle_out: Option<PathBuf>,
+        /// Emit a compact JSON report before the machine-parseable footer
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run a Circle collaboration proof pipeline addressed as `to:circle:<name>`
+    Run {
+        /// Target Circle channel address (`to:circle:<name>`, `circle:<name>`, or bare `<name>`)
+        #[arg(long, value_name = "NAME|to:circle:NAME")]
+        to: Option<String>,
+        /// Objective visible to every member (overrides the default)
+        #[arg(long, value_name = "TEXT")]
+        objective: Option<String>,
+        /// Comma-separated member ids; first id is the lead
+        #[arg(long, value_name = "a,b,c")]
+        members: Option<String>,
+        /// Referee principal id
+        #[arg(long, value_name = "NAME")]
+        referee: Option<String>,
+        /// Path to write the generated CollaborationProofBundle JSON artifact
+        #[arg(long, value_name = "PATH")]
         bundle_out: Option<PathBuf>,
         /// Emit a compact JSON report before the machine-parseable footer
         #[arg(long)]
@@ -423,6 +445,21 @@ async fn main() -> Result<()> {
                 bundle_out,
                 json,
             } => circle_replay::run_circle_replay(fixture_dir.clone(), bundle_out.clone(), *json),
+            CircleCommand::Run {
+                to,
+                objective,
+                members,
+                referee,
+                bundle_out,
+                json,
+            } => circle_run::run_circle_run(
+                to.clone(),
+                objective.clone(),
+                members.clone(),
+                referee.clone(),
+                bundle_out.clone(),
+                *json,
+            ),
         };
         if exit_code != 0 {
             std::process::exit(exit_code);
@@ -794,6 +831,21 @@ async fn main() -> Result<()> {
                 json,
             } => {
                 let exit_code = circle_replay::run_circle_replay(fixture_dir, bundle_out, json);
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+            }
+            CircleCommand::Run {
+                to,
+                objective,
+                members,
+                referee,
+                bundle_out,
+                json,
+            } => {
+                let exit_code = circle_run::run_circle_run(
+                    to, objective, members, referee, bundle_out, json,
+                );
                 if exit_code != 0 {
                     std::process::exit(exit_code);
                 }

@@ -8,6 +8,24 @@ use std::sync::{Arc, Mutex};
 
 use sera_types::circle_activity::{CircleActivityEntry, InMemoryCircleActivityLog, CIRCLE_ACTIVITY_DEFAULT_LIMIT};
 
+/// Outcome of a [`SharedCircleActivityLog::record`] call.
+///
+/// `record` returns this enum so callers can refuse to claim a write that
+/// did not actually land. Historically the wrapper silently swallowed lock
+/// failures and forced every caller to set `activity_writes = 1`
+/// unconditionally — which claimed successful writes for entries that never
+/// reached the inner log. The wrapper now surfaces that failure honestly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActivityLogRecordOutcome {
+    /// The entry was written to the inner log.
+    Recorded,
+    /// The mutex was poisoned; the inner write was *not* applied.
+    ///
+    /// Callers should treat this as a hard failure for accounting
+    /// purposes — i.e. do not increment `activity_writes`.
+    Poisoned,
+}
+
 /// Thread-safe, cheaply-cloneable handle to the in-memory circle activity log.
 #[derive(Debug, Clone, Default)]
 pub struct SharedCircleActivityLog {
@@ -21,10 +39,47 @@ impl SharedCircleActivityLog {
     }
 
     /// Record a peer activity event.
-    pub fn record(&self, agent_id: impl Into<String>, circle_id: impl Into<String>, summary: impl Into<String>) {
-        if let Ok(mut log) = self.inner.lock() {
-            log.record(agent_id, circle_id, summary);
+    ///
+    /// Returns [`ActivityLogRecordOutcome::Poisoned`] when the inner mutex
+    /// is poisoned (a panic in another thread while holding the lock); the
+    /// write is not applied in that case. Callers should propagate the
+    /// outcome so success accounting cannot lie about a swallowed write.
+    pub fn record(
+        &self,
+        agent_id: impl Into<String>,
+        circle_id: impl Into<String>,
+        summary: impl Into<String>,
+    ) -> ActivityLogRecordOutcome {
+        match self.inner.lock() {
+            Ok(mut log) => {
+                log.record(agent_id, circle_id, summary);
+                ActivityLogRecordOutcome::Recorded
+            }
+            Err(_) => ActivityLogRecordOutcome::Poisoned,
         }
+    }
+
+    /// Total number of entries across all circles.
+    ///
+    /// Used by tests to assert no-mutation invariants when a request fails
+    /// to parse — the existing `recent_for_circle` filter only proves
+    /// "no entry for *this* circle" and would silently pass if a regression
+    /// wrote to a different circle_id.
+    pub fn total_entries(&self) -> usize {
+        self.inner
+            .lock()
+            .map(|log| log.len())
+            .unwrap_or(0)
+    }
+
+    /// `pub(crate)` accessor for the inner `Arc<Mutex<_>>` — exposed so
+    /// sibling tests in the runtime crate can poison the mutex without
+    /// weakening the wrapper's public surface. External callers must use
+    /// [`Self::record`] / [`Self::recent_for_circle`] / [`Self::total_entries`]
+    /// so the wrapper's invariants stay intact.
+    #[cfg(test)]
+    pub(crate) fn inner_arc(&self) -> Arc<Mutex<InMemoryCircleActivityLog>> {
+        Arc::clone(&self.inner)
     }
 
     /// Return up to `limit` most-recent peer entries for `circle_id`, excluding `exclude_agent`.

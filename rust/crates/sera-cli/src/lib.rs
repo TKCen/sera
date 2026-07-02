@@ -1,6 +1,7 @@
 //! `sera-cli` library — exposes internals for integration tests.
 
 pub mod admin_client;
+pub mod circle_closeout;
 pub mod commands;
 pub mod config;
 pub mod http;

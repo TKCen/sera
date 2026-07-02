@@ -33,6 +33,7 @@
 // New modules (Lane D, P0-6)
 pub mod agent_tool_registry;
 pub mod circle_activity;
+pub mod circle_ingress;
 pub mod compaction;
 pub mod context_engine;
 pub mod delegation;

@@ -12,6 +12,7 @@ path = "src/main.rs"
 sera-commands = { workspace = true }
 sera-config = { workspace = true }
 sera-types = { workspace = true }
+sera-runtime = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }

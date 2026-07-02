@@ -50,6 +50,7 @@ tiktoken-rs.workspace = true
 
 fs2 = "0.4"
 rand.workspace = true
+sha2.workspace = true
 
 # Optional: pure-local CPU embeddings via fastembed-rs (ONNX Runtime + tokenizers).
 # Gated behind the `local-embedding` feature so default builds pay zero binary

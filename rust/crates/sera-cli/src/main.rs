@@ -183,7 +183,12 @@ enum CircleCommand {
     /// Run a Circle collaboration proof pipeline addressed as `to:circle:<name>`
     Run {
         /// Target Circle channel address (`to:circle:<name>`, `circle:<name>`, or bare `<name>`)
-        #[arg(long, value_name = "NAME|to:circle:NAME")]
+        #[arg(
+            long,
+            value_name = "NAME|to:circle:NAME",
+            num_args = 0..=1,
+            default_missing_value = ""
+        )]
         to: Option<String>,
         /// Objective visible to every member (overrides the default)
         #[arg(long, value_name = "TEXT")]
@@ -843,9 +848,8 @@ async fn main() -> Result<()> {
                 bundle_out,
                 json,
             } => {
-                let exit_code = circle_run::run_circle_run(
-                    to, objective, members, referee, bundle_out, json,
-                );
+                let exit_code =
+                    circle_run::run_circle_run(to, objective, members, referee, bundle_out, json);
                 if exit_code != 0 {
                     std::process::exit(exit_code);
                 }

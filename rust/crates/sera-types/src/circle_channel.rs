@@ -99,7 +99,19 @@ impl CircleChannelAddress {
         if trimmed.is_empty() {
             return Err(CircleAddressParseError::MissingKind);
         }
+        let had_to_prefix = trimmed.starts_with("to:");
         let without_to = trimmed.strip_prefix("to:").unwrap_or(trimmed);
+        if had_to_prefix && !without_to.contains(':') {
+            if without_to == CIRCLE_CHANNEL_KIND {
+                return Err(CircleAddressParseError::InvalidName {
+                    found: String::new(),
+                    reason: "name must not be empty",
+                });
+            }
+            return Err(CircleAddressParseError::UnsupportedKind {
+                found: without_to.to_string(),
+            });
+        }
         // split on the first ':' to peel off the kind
         let (kind, rest) = match without_to.split_once(':') {
             Some(pair) => pair,

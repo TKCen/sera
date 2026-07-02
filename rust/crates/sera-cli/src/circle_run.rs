@@ -410,7 +410,7 @@ fn assemble_bundle(
             entry_id,
             author: member.clone(),
             timestamp: ts,
-            artifact_type: artifact_type_for_index(idx, members.len()),
+            artifact_type: artifact_type_for_index(idx),
             payload: json!({
                 "role": match idx {
                     1 => CircleChannelRole::Worker.default_label(),
@@ -473,10 +473,10 @@ fn assemble_bundle(
     ));
 
     // Resolve lineage: last member entry → referee entry
-    if members.len() > 2 {
-        let critic_entry = 2_u64;
+    if members.len() > 1 {
+        let final_member_entry = members.len() as u64;
         lineage.push(LineageEdge {
-            from_entry_id: critic_entry,
+            from_entry_id: final_member_entry,
             to_entry_id: referee_entry_id,
             relation: LineageRelation::Resolves,
         });
@@ -546,12 +546,10 @@ fn model_for(provider: &str) -> &'static str {
     }
 }
 
-fn artifact_type_for_index(idx: usize, total: usize) -> String {
+fn artifact_type_for_index(idx: usize) -> String {
     match idx {
         1 => "proposal".to_string(),
         2 => "critique".to_string(),
-        // If there are more than 3 members, fall back to proposal.
-        _ if idx + 1 == total => "verdict".to_string(),
         _ => "proposal".to_string(),
     }
 }

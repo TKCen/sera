@@ -434,3 +434,111 @@ fn circle_run_cli_roster_reflects_cli_inputs() {
     assert_eq!(roles[2], "Critic");
     assert!(roles[3].contains("Referee"));
 }
+
+#[test]
+fn circle_run_cli_rejects_malformed_to_prefix_without_treating_it_as_bare_name() {
+    for target in ["to:circle", "to:foo"] {
+        let output = bin()
+            .args([
+                "circle",
+                "run",
+                "--to",
+                target,
+                "--members",
+                "a,b",
+                "--referee",
+                "r",
+            ])
+            .output()
+            .expect("run");
+        assert_eq!(output.status.code(), Some(3), "target={target}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_circle_run_footer(&stdout, "USAGE_ERROR");
+    }
+}
+
+#[test]
+fn circle_run_cli_to_without_value_preserves_usage_error_footer() {
+    let output = bin()
+        .args([
+            "circle",
+            "run",
+            "--to",
+            "--members",
+            "a,b",
+            "--referee",
+            "r",
+        ])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(3));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_circle_run_footer(&stdout, "USAGE_ERROR");
+}
+
+#[test]
+fn circle_run_cli_two_member_run_resolves_worker_entry_to_referee() {
+    let temp = tempfile::tempdir().unwrap();
+    let bundle_out = temp.path().join("b.json");
+    let output = bin()
+        .args([
+            "circle",
+            "run",
+            "--to",
+            "sera-nqh3",
+            "--members",
+            "alpha,beta",
+            "--referee",
+            "judge",
+            "--bundle-out",
+            bundle_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let bundle: Value = serde_json::from_slice(&std::fs::read(&bundle_out).unwrap()).unwrap();
+    let lineage = bundle["lineage"].as_array().unwrap();
+    assert!(lineage.iter().any(|edge| {
+        edge["from_entry_id"] == 2 && edge["to_entry_id"] == 3 && edge["relation"] == "resolves"
+    }));
+}
+
+#[test]
+fn circle_run_cli_extra_members_are_proposals_not_verdict_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    let bundle_out = temp.path().join("b.json");
+    let output = bin()
+        .args([
+            "circle",
+            "run",
+            "--to",
+            "sera-nqh3",
+            "--members",
+            "alpha,beta,gamma,delta",
+            "--referee",
+            "judge",
+            "--bundle-out",
+            bundle_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let bundle: Value = serde_json::from_slice(&std::fs::read(&bundle_out).unwrap()).unwrap();
+    let entries = bundle["entries"].as_array().unwrap();
+    let artifact_types: Vec<&str> = entries
+        .iter()
+        .map(|entry| entry["artifact_type"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        artifact_types,
+        vec![
+            "lead_specification",
+            "proposal",
+            "critique",
+            "proposal",
+            "verdict"
+        ]
+    );
+}

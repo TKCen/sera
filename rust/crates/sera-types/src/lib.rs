@@ -8,6 +8,7 @@ pub mod capability;
 pub mod circle;
 pub mod circle_activity;
 pub mod circle_validator;
+pub mod circle_channel;
 pub mod config_manifest;
 pub mod connector;
 pub mod content_block;

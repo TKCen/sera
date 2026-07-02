@@ -336,6 +336,24 @@ fn verdict_label_for(verdict_type: &VerdictType) -> &'static str {
 /// failure (rare — propagated from the OS) falls through to the
 /// existing lexical-only comparison so the function stays robust.
 ///
+/// Codex review thread (circle_closeout.rs line 360 — sixth pass,
+/// "Reject dangling symlink artifact aliases"): when
+/// `--bundle-out link.json` is an existing symlink to
+/// `shared.json` and `shared.json` does not yet exist on disk,
+/// `std::fs::canonicalize("link.json")` follows the symlink and
+/// returns `Err` (because the final target is missing), so the
+/// paired `canonicalize` check returned `false` and the seam
+/// classified the two paths as distinct. `std::fs::write` then
+/// followed the symlink and created `shared.json`, after which
+/// `--report-out shared.json` overwrote the bundle while the
+/// footer still advertised the bundle SHA. We now resolve each
+/// target's symlink chain via `read_link` + `canonicalize`
+/// recursion (`resolve_symlink_chain`) BEFORE the comparison so a
+/// symlink to a non-existing target collapses to its real parent
+/// target (i.e. `link.json` → `shared.json` even when only the
+/// symlink exists). The lexical-compare, anchor, and
+/// canonicalize-both-exist fallbacks are preserved.
+///
 /// Codex review thread (circle_closeout.rs line 171 — fourth pass,
 /// "Normalize artifact paths before comparing them"): we also
 /// compare the lexically-normalized targets (collapsing `.`,
@@ -357,10 +375,131 @@ fn artifact_paths_collide(bundle_path: &Path, report_path: &Path) -> bool {
     if let (Ok(bundle_canon), Ok(report_canon)) = (
         std::fs::canonicalize(&bundle_lex),
         std::fs::canonicalize(&report_lex),
+    ) && bundle_canon == report_canon
+    {
+        return true;
+    }
+    // Dangling-symlink resolution: even when canonicalize errors
+    // out (because the symlink's final target doesn't exist yet),
+    // we can still determine whether two paths resolve to the same
+    // physical file by walking the symlink chain via `read_link`
+    // and recursing. This catches `--bundle-out link.json` /
+    // `--report-out shared.json` where `link.json` is a symlink
+    // to the non-existing `shared.json`. The chain depth is
+    // bounded by `MAX_SYMLINK_DEPTH` to defend against cycles.
+    if let (Some(bundle_final), Some(report_final)) = (
+        resolve_symlink_chain(&bundle_lex, 0),
+        resolve_symlink_chain(&report_lex, 0),
     ) {
-        return bundle_canon == report_canon;
+        return bundle_final == report_final;
     }
     false
+}
+
+/// Bound the symlink-chain walk so a pathological cycle (e.g.
+/// `a -> b`, `b -> a`) cannot spin the resolver forever. Linux's
+/// `PATH_MAX` is 4096; symlink chains in practice are a handful of
+/// hops. 40 is generous and matches the kernel's own soft limit
+/// on most filesystems.
+const MAX_SYMLINK_DEPTH: usize = 40;
+
+/// Walk a path's symlink chain and return the final on-disk target
+/// WITHOUT creating any file. Returns:
+/// - `Some(canonical_path)` when the path itself or its final
+///   target exists on disk (canonicalized). This is the common
+///   case for existing files / existing-symlink-to-existing-target.
+/// - `Some(resolved_target)` when the path is a symlink whose
+///   final target does NOT yet exist — we resolve through the
+///   chain via `read_link` and return the absolute path the
+///   kernel would write to. This is the load-bearing case for
+///   `--bundle-out link.json` / `--report-out shared.json` where
+///   `link.json` exists as a symlink to a non-existing
+///   `shared.json`.
+/// - `None` only when the path itself is not a symlink AND
+///   canonicalize failed (i.e. the path doesn't exist and isn't
+///   a dangling link). The caller treats this as "can't resolve"
+///   and falls back to the lexical/canonicalize comparison
+///   paths.
+///
+/// Recursion is depth-bounded by `MAX_SYMLINK_DEPTH`; if the
+/// chain exceeds that bound the resolver returns `None` rather
+/// than spin.
+///
+/// The `is_already_resolved` flag distinguishes the recursive
+/// entry point (where the parent has already read the link and
+/// resolved the target relative to itself) from the public
+/// entry point. Without this distinction, an existing file
+/// would short-circuit before the chain walk and a non-existing
+/// file's missing `symlink_metadata` would mask the recursion
+/// case.
+fn resolve_symlink_chain(path: &Path, depth: usize) -> Option<PathBuf> {
+    if depth > MAX_SYMLINK_DEPTH {
+        return None;
+    }
+    // Fast path: canonicalize succeeds when the path (or its
+    // final symlink target) already exists on disk. This covers
+    // the existing-symlink case without touching `read_link`.
+    if let Ok(canon) = std::fs::canonicalize(path) {
+        return Some(canon);
+    }
+    // canonicalize failed. Inspect via symlink_metadata (which
+    // does NOT follow the link) so we can distinguish "is a
+    // dangling symlink" from "doesn't exist at all".
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        // Path doesn't exist and isn't a symlink. Return the
+        // path itself so two distinct inputs that BOTH don't
+        // exist can still be compared by path equality. This
+        // catches `--bundle-out link.json` (symlink to missing
+        // target) vs `--report-out shared.json` (the missing
+        // target itself) — `link.json`'s chain resolves to
+        // `shared.json`, and `shared.json` resolves to itself.
+        Err(_) => return Some(path.to_path_buf()),
+    };
+    if !meta.file_type().is_symlink() {
+        // Not a symlink and canonicalize failed — likely the
+        // path doesn't exist and isn't a symlink. Return the
+        // path itself for the same reason as above (caller
+        // compares path equality, so two identical non-existing
+        // inputs collide and two distinct non-existing inputs
+        // don't).
+        return Some(path.to_path_buf());
+    }
+    // It's a symlink; read its target. Resolve relative links
+    // against the symlink's parent directory (matches kernel
+    // semantics for relative symlinks).
+    let target = std::fs::read_link(path).ok()?;
+    let resolved_target = if target.is_absolute() {
+        target
+    } else {
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        parent.join(target)
+    };
+    // We have a symlink chain. Three sub-cases:
+    //
+    // 1. resolved_target exists -> canonicalize it directly.
+    //    This handles `a -> b -> c` where `c` already exists.
+    if let Ok(canon) = std::fs::canonicalize(&resolved_target) {
+        return Some(canon);
+    }
+    // 2. resolved_target is itself a symlink -> recurse so we
+    //    follow the chain to its terminus. The recursion will
+    //    return Some(canon) for an existing final target or
+    //    Some(resolved_final_target) for a dangling chain.
+    if let Ok(target_meta) = std::fs::symlink_metadata(&resolved_target)
+        && target_meta.file_type().is_symlink()
+    {
+        return resolve_symlink_chain(&resolved_target, depth + 1);
+    }
+    // 3. resolved_target is NOT a symlink and canonicalize
+    //    failed -> the chain terminates at a non-existing file.
+    //    Return the resolved target path itself so the caller
+    //    can compare it against the other input's final target.
+    //    This is the load-bearing case for
+    //    `--bundle-out link.json` / `--report-out shared.json`
+    //    where `link.json -> shared.json` and `shared.json` does
+    //    not yet exist.
+    Some(resolved_target)
 }
 
 /// Anchor a path that is NOT already absolute against

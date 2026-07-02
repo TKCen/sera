@@ -1059,15 +1059,64 @@ fn classify_verdict(verdict_text: &str, rationale: &str) -> VerdictType {
     //    for `not` / `no` / `never`. Bare `approved` and
     //    `approve please` (no preceding token) still classify as
     //    Approved because the negation check requires `idx > 0`.
+    //
+    //    Codex review thread (line 1073 — sixth pass, "Handle
+    //    intervening negation tokens"): the prior check only
+    //    inspected `tokens[idx - 1]`, so a referee wording like
+    //    `not yet approved` (a single non-negation filler
+    //    `yet` between `not` and `approved`) or `not  approved`
+    //    (an empty token from double spacing) would slip through:
+    //    the approval token reached the return path and the
+    //    verdict was classified as PASS despite the explicitly
+    //    negative text. We now scan back through ALL preceding
+    //    tokens, skipping empty tokens (which arise from
+    //    adjacent delimiters like `not  approved`) and
+    //    whitespace-only tokens, and if ANY non-skipped preceding
+    //    token is a negation prefix we treat the approval as
+    //    negated. The check is "any preceding non-filler token
+    //    is a negation prefix" — `yet` (non-negation filler)
+    //    does NOT short-circuit the search; we keep walking
+    //    until we either find a negation prefix or run out of
+    //    preceding tokens.
     let negation_prefixes = ["not", "no", "never", "neither", "nor", "non"];
     let tokens: Vec<&str> = lc.split([' ', '-', '_']).collect();
     for (idx, token) in tokens.iter().enumerate() {
         match *token {
             "approved" | "approve" | "approval" | "accepted" | "accept" => {
-                // Check that the immediately preceding token (if any)
-                // is not a negation prefix. This catches "not approved",
-                // "no approve", "never approved", etc.
-                if idx > 0 && negation_prefixes.contains(&tokens[idx - 1]) {
+                // Scan back through ALL preceding tokens and skip
+                // empty tokens (delimiter runs like `not
+                // approved` double-spacing produce `["not", "",
+                // "approved"]`) and whitespace-only tokens. If
+                // ANY of the remaining preceding tokens (any
+                // non-empty, non-whitespace-only token) is a
+                // negation prefix, the approval is negated. This
+                // catches `not yet approved` (single non-negation
+                // filler `yet` between `not` and `approved`),
+                // `not  approved` (empty token from double
+                // spacing), and the canonical `not approved`
+                // (immediate preceding negation). A leading
+                // approval (`approved`, `approve please`) has
+                // no preceding tokens so the scan returns false.
+                let mut negated = false;
+                for prev_idx in (0..idx).rev() {
+                    let prev = tokens[prev_idx];
+                    if prev.is_empty() || prev.chars().all(|c| c.is_whitespace()) {
+                        // Skip empty/whitespace-only filler
+                        // tokens — they arise from delimiter
+                        // runs and carry no semantic content.
+                        continue;
+                    }
+                    if negation_prefixes.contains(&prev) {
+                        negated = true;
+                    }
+                    // Keep walking back so a non-negation
+                    // non-filler (e.g. `yet` in `not yet
+                    // approved`) does NOT mask an earlier
+                    // negation prefix. The check is "any
+                    // preceding non-filler token is a negation
+                    // prefix" per the sixth-pass thread.
+                }
+                if negated {
                     break;
                 }
                 return VerdictType::Approved;
@@ -1654,6 +1703,112 @@ mod tests {
                 verdict_label_for_verdicttype(&verdict),
                 "PASS",
                 "bare/affirmative text {text:?} must produce a PASS footer",
+            );
+        }
+    }
+
+    #[test]
+    fn classify_verdict_treats_intervening_negation_tokens_as_negative() {
+        // Codex review thread (rust/crates/sera-runtime/src/circle_ingress.rs
+        // line 1073 — sixth pass, "Handle intervening negation tokens"):
+        // the prior check only inspected the immediately-preceding
+        // token (`tokens[idx - 1]`), so a referee wording that put
+        // a non-negation filler between the negation and the
+        // approval token — or that produced an empty token from a
+        // double-space — would slip through and classify as
+        // Approved / PASS despite the explicitly negative text.
+        //
+        // The fix scans back through ALL preceding tokens, skipping
+        // empty tokens (from `not  approved` double-spacing) and
+        // whitespace-only tokens, and treats the approval as
+        // negated if the closest preceding non-filler token is a
+        // negation prefix. This test exercises both intervening
+        // filler cases (`not yet approved`) and empty-token cases
+        // (`not  approved`) and asserts that NONE of them
+        // classify as Approved / PASS.
+        let cases = [
+            "not yet approved",
+            "not  approved", // double-space -> empty middle token
+            "no, not approved, sorry",
+            "I am not yet approved to sign off",
+            "still not approved, please revise",
+        ];
+        for text in cases {
+            let verdict = classify_verdict(text, "rationale for the verdict");
+            let kind = format!("{verdict:?}");
+            let kind_token = kind.split_whitespace().next().unwrap_or("").trim_end_matches('{');
+            assert_ne!(
+                kind_token, "Approved",
+                "intervening-negation text {text:?} must NOT classify as Approved; got {kind:?}",
+            );
+            assert_ne!(
+                verdict_label_for_verdicttype(&verdict),
+                "PASS",
+                "intervening-negation text {text:?} must NOT produce a PASS footer; \
+                 got verdict {verdict:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn classify_verdict_keeps_prior_positive_and_negative_forms_working() {
+        // Companion guard for the sixth-pass scan-back fix: the
+        // prior positive phrases (`approved`, `approve`,
+        // `approve please`, `approved and proceed`, `approved.`,
+        // padded `  approved  `) MUST still classify as Approved /
+        // PASS — the scan-back logic must not over-trigger and
+        // reject these. The prior negative forms
+        // (`not approved`, `disapproved`, `unapproved`,
+        // `non-approved`, `non_approved`, `non approval`) must
+        // continue to NOT classify as Approved / PASS so the
+        // fifth-pass and fourth-pass fixes are preserved. This
+        // single test exercises both directions so a future change
+        // that drifts either way is caught.
+        let positives = [
+            "approved",
+            "approve",
+            "approve please",
+            "approved and proceed",
+            "approved.",
+            "  approved  ",
+            "Approved",
+            "APPROVED",
+            "\"approved\"",
+        ];
+        for text in positives {
+            let verdict = classify_verdict(text, "rationale for the verdict");
+            assert!(
+                matches!(verdict, VerdictType::Approved),
+                "positive text {text:?} must classify as Approved; got {verdict:?}",
+            );
+            assert_eq!(
+                verdict_label_for_verdicttype(&verdict),
+                "PASS",
+                "positive text {text:?} must produce a PASS footer",
+            );
+        }
+
+        let negatives = [
+            "not approved",
+            "disapproved",
+            "unapproved",
+            "non-approved",
+            "non_approved",
+            "non approval",
+        ];
+        for text in negatives {
+            let verdict = classify_verdict(text, "rationale for the verdict");
+            let kind = format!("{verdict:?}");
+            let kind_token = kind.split_whitespace().next().unwrap_or("").trim_end_matches('{');
+            assert_ne!(
+                kind_token, "Approved",
+                "negative text {text:?} must NOT classify as Approved; got {kind:?}",
+            );
+            assert_ne!(
+                verdict_label_for_verdicttype(&verdict),
+                "PASS",
+                "negative text {text:?} must NOT produce a PASS footer; \
+                 got verdict {verdict:?}",
             );
         }
     }

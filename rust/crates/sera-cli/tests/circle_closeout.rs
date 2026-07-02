@@ -858,6 +858,204 @@ fn closeout_allows_relative_and_absolute_paths_to_distinct_targets() {
 }
 
 /// Codex review thread (rust/crates/sera-cli/src/circle_closeout.rs
+/// line 360 — sixth pass, "Reject dangling symlink artifact
+/// aliases"): when `--bundle-out link.json` is an existing
+/// symlink to `shared.json` and `shared.json` does NOT yet exist
+/// on disk, `std::fs::canonicalize("link.json")` follows the
+/// symlink and returns `Err` (because the final target is
+/// missing), so the prior paired-`canonicalize` check returned
+/// `false` and the seam classified the two paths as distinct.
+/// `std::fs::write` then followed the symlink and created
+/// `shared.json`, after which `--report-out shared.json`
+/// overwrote the bundle while the footer still advertised the
+/// bundle SHA. The fix resolves each target's symlink chain via
+/// `read_link` + `canonicalize` recursion BEFORE the comparison
+/// so a symlink to a non-existing target collapses to its real
+/// parent target (i.e. `link.json` → `shared.json` even when
+/// only the symlink exists). This test creates an `link.json`
+/// symlink pointing to a non-existing `shared.json` and asserts
+/// that `--bundle-out link.json --report-out shared.json`
+/// returns exit 3 (USAGE_ERROR) with the `circle-closeout:`
+/// footer and that NO file is written at either target.
+///
+/// Unix-only because the regression creates a real symlink via
+/// `std::os::unix::fs::symlink`. The repo currently only
+/// publishes binaries for Linux/macOS, so this gating is
+/// sufficient for CI.
+#[cfg(unix)]
+#[test]
+fn closeout_rejects_dangling_symlink_artifact_aliases() {
+    use std::os::unix::fs::symlink;
+
+    let cwd = std::env::current_dir().expect("cwd must be queryable");
+    let shared_name = format!(
+        "sera-circle-closeout-dangling-shared-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    );
+    let link_name = format!(
+        "sera-circle-closeout-dangling-link-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    );
+    let shared_path = cwd.join(&shared_name);
+    let link_path = cwd.join(&link_name);
+
+    // Pre-clean so a prior failed run doesn't mask the regression.
+    let _ = std::fs::remove_file(&shared_path);
+    let _ = std::fs::remove_file(&link_path);
+
+    // The whole point: shared.json does NOT exist yet, and
+    // link.json is a symlink pointing at it. Pre-existing
+    // canonicalize-both-exist code path would return `false`
+    // here because canonicalize follows the symlink and errors.
+    symlink(&shared_name, &link_path).expect("symlink must be creatable");
+    // Use `symlink_metadata` (NOT `exists`/`metadata`) so we
+    // inspect the symlink ITSELF without following it. The
+    // symlink points to a non-existing target, so `exists()`
+    // would return false here even though the link is on disk.
+    let link_meta = std::fs::symlink_metadata(&link_path)
+        .expect("symlink must be readable via symlink_metadata");
+    assert!(
+        link_meta.file_type().is_symlink(),
+        "link.json must be a symlink; got file_type={:?}",
+        link_meta.file_type()
+    );
+    assert!(
+        !shared_path.exists(),
+        "shared.json must NOT exist pre-call; got {}",
+        shared_path.display()
+    );
+
+    let bundle_path = link_path.clone();
+    let report_path = shared_path.clone();
+    let exit_code = run_circle_closeout(
+        Some("to:circle:sera-nqh3".to_string()),
+        Some("alice".to_string()),
+        Some("lead".to_string()),
+        Some("open the run and submit proposal".to_string()),
+        Some("session:parent-task-f".to_string()),
+        Some("agent-007".to_string()),
+        Some("ref".to_string()),
+        Some("approved".to_string()),
+        Some("Lead alice claimed the role and posted a non-blank summary.".to_string()),
+        Some("Resident closeout: dangling symlink regression".to_string()),
+        Some(bundle_path.clone()),
+        Some(report_path.clone()),
+        Some("8".to_string()),
+        false,
+    );
+    assert_eq!(
+        exit_code, 3,
+        "dangling symlink --bundle-out and --report-out resolving to the same target \
+         must exit 3 (USAGE_ERROR); bundle={} report={}",
+        bundle_path.display(),
+        report_path.display(),
+    );
+
+    // The load-bearing assertion: had the symlink-chain resolution
+    // been missing, `std::fs::write` would have followed the
+    // symlink and silently created shared.json (then overwritten
+    // it on the report write). The seam must prevent either
+    // artifact from being created.
+    assert!(
+        !shared_path.exists(),
+        "no file must be written at the symlink target when the dangling-symlink alias collides; \
+         found {} unexpectedly",
+        shared_path.display()
+    );
+    assert!(
+        !link_path.exists(),
+        "no file must be written at the symlink itself when the dangling-symlink alias collides; \
+         found {} unexpectedly",
+        link_path.display()
+    );
+
+    let _ = std::fs::remove_file(&shared_path);
+    let _ = std::fs::remove_file(&link_path);
+}
+
+/// Companion guard for the dangling-symlink fix: when
+/// `--bundle-out` and `--report-out` both point to real
+/// existing files via a symlink, the seam must still detect
+/// the alias (the canonicalize-both-exist path must keep
+/// working alongside the new chain-resolver). This guards
+/// against a regression where the new resolver short-circuits
+/// the canonicalize fallback and breaks the existing-symlink
+/// case.
+#[cfg(unix)]
+#[test]
+fn closeout_rejects_existing_symlink_artifact_aliases_via_canonicalize() {
+    use std::os::unix::fs::symlink;
+
+    let cwd = std::env::current_dir().expect("cwd must be queryable");
+    let shared_name = format!(
+        "sera-circle-closeout-existing-shared-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    );
+    let link_name = format!(
+        "sera-circle-closeout-existing-link-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    );
+    let shared_path = cwd.join(&shared_name);
+    let link_path = cwd.join(&link_name);
+
+    // Pre-clean.
+    let _ = std::fs::remove_file(&shared_path);
+    let _ = std::fs::remove_file(&link_path);
+
+    // Create shared.json with content first, then create
+    // link.json as a symlink to it. Both targets now exist on
+    // disk, so the canonicalize-both-exist fallback path is
+    // exercised.
+    std::fs::write(&shared_path, b"{\"seed\":true}").expect("shared.json must be writable");
+    symlink(&shared_name, &link_path).expect("symlink must be creatable");
+    assert!(shared_path.exists(), "shared.json must exist pre-call");
+    assert!(link_path.exists(), "link.json (symlink) must exist pre-call");
+
+    let exit_code = run_circle_closeout(
+        Some("to:circle:sera-nqh3".to_string()),
+        Some("alice".to_string()),
+        Some("lead".to_string()),
+        Some("open the run and submit proposal".to_string()),
+        Some("session:parent-task-g".to_string()),
+        Some("agent-007".to_string()),
+        Some("ref".to_string()),
+        Some("approved".to_string()),
+        Some("Lead alice claimed the role and posted a non-blank summary.".to_string()),
+        Some("Resident closeout: existing symlink regression".to_string()),
+        Some(link_path.clone()),
+        Some(shared_path.clone()),
+        Some("8".to_string()),
+        false,
+    );
+    assert_eq!(
+        exit_code, 3,
+        "existing symlink --bundle-out and --report-out resolving to the same target \
+         must exit 3 (USAGE_ERROR); bundle={} report={}",
+        link_path.display(),
+        shared_path.display(),
+    );
+
+    let _ = std::fs::remove_file(&shared_path);
+    let _ = std::fs::remove_file(&link_path);
+}
+
+/// Codex review thread (rust/crates/sera-cli/src/circle_closeout.rs
 /// line 176 — "Use the closeout verdict in JSON output"): for
 /// non-approved verdicts the bundle still structurally validates, so
 /// the previous implementation emitted `verdict: "PASS"` in the JSON

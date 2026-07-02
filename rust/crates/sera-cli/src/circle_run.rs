@@ -21,7 +21,6 @@
 //! monotonic but stable per-event so re-runs with identical args produce
 //! byte-identical bundle bytes (sha256 stable across runs).
 
-use std::path::{Path, PathBuf};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use sera_types::circle::{
     CollaborationProofBundle, CollaborationVerdictRecord, ExecutionReceipt, LineageEdge,
@@ -33,6 +32,7 @@ use sera_types::circle_channel::{
 };
 use sera_types::circle_validator::validate_proof_bundle;
 use serde_json::json;
+use std::path::{Path, PathBuf};
 
 use crate::sha256_hex;
 
@@ -145,15 +145,18 @@ pub fn run_circle_run(
     };
     let bundle_sha256 = sha256_hex(&bytes);
 
-    if let Some(bundle_out) = bundle_out.as_deref() {
-        if let Err(err) = write_bundle(bundle_out, &bytes) {
-            eprintln!(
-                "failed to write Circle run bundle {}: {err}",
-                bundle_out.display()
-            );
-            print_circle_run_footer("USAGE_ERROR", &bundle_sha256);
-            return 3;
-        }
+    let bundle_write_error = bundle_out.as_deref().and_then(|bundle_out| {
+        write_bundle(bundle_out, &bytes)
+            .err()
+            .map(|err| (bundle_out, err))
+    });
+    if let Some((bundle_out, err)) = bundle_write_error {
+        eprintln!(
+            "failed to write Circle run bundle {}: {err}",
+            bundle_out.display()
+        );
+        print_circle_run_footer("USAGE_ERROR", &bundle_sha256);
+        return 3;
     }
 
     match validate_proof_bundle(&bundle) {
@@ -244,10 +247,11 @@ fn validate_roster_inputs(
             }
         }
     }
-    if let Some(referee) = referee.as_deref() {
-        if referee.trim().is_empty() {
-            return Err("--referee must not be blank".to_string());
-        }
+    if referee
+        .as_deref()
+        .is_some_and(|referee| referee.trim().is_empty())
+    {
+        return Err("--referee must not be blank".to_string());
     }
     Ok(())
 }
@@ -470,7 +474,7 @@ fn assemble_bundle(
 
     // Resolve lineage: last member entry → referee entry
     if members.len() > 2 {
-        let critic_entry = (2) as u64;
+        let critic_entry = 2_u64;
         lineage.push(LineageEdge {
             from_entry_id: critic_entry,
             to_entry_id: referee_entry_id,

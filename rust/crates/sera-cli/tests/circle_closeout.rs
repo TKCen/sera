@@ -527,3 +527,182 @@ fn closeout_binary_emits_machine_footer_when_audit_limit_invalid_value() {
          stdout={stdout:?} stderr={stderr:?}",
     );
 }
+
+/// Codex review thread (rust/crates/sera-cli/src/circle_closeout.rs
+/// line 167 — "Reject identical output artifact paths"): when the
+/// operator points `--bundle-out` and `--report-out` at the same path,
+/// the CLI must refuse BEFORE writing either artifact, emit the
+/// `circle-closeout:` footer (carrying the computed bundle sha), and
+/// exit with USAGE_ERROR (3). Critically, no file should appear on
+/// disk at the offending path — the bug shape was bundle clobbered
+/// by report while the footer still advertised the bundle sha, so the
+/// "no file written" assertion is the load-bearing one for the
+/// regression.
+#[test]
+fn closeout_rejects_identical_bundle_and_report_out_paths() {
+    let shared = temp_path("shared");
+
+    // Sanity: confirm the path does not exist before the call. If a
+    // prior failed run left cruft behind, this test would silently
+    // mask the regression.
+    let _ = std::fs::remove_file(&shared);
+    assert!(!shared.exists(), "shared path must not exist pre-call");
+
+    let exit_code = run_circle_closeout(
+        Some("to:circle:sera-nqh3".to_string()),
+        Some("alice".to_string()),
+        Some("lead".to_string()),
+        Some("open the run and submit proposal".to_string()),
+        Some("session:parent-task-e".to_string()),
+        Some("agent-007".to_string()),
+        Some("ref".to_string()),
+        Some("approved".to_string()),
+        Some("Lead alice claimed the role and posted a non-blank summary.".to_string()),
+        Some("Resident closeout: same path for both artifacts".to_string()),
+        Some(shared.clone()),
+        Some(shared.clone()),
+        Some("8".to_string()),
+        false,
+    );
+    assert_eq!(
+        exit_code, 3,
+        "identical --bundle-out and --report-out must exit 3 (USAGE_ERROR)"
+    );
+    // The pre-write guard MUST prevent either artifact from being
+    // written. The bug shape is a report overwriting a bundle, so the
+    // assertion below is the load-bearing one for the regression.
+    assert!(
+        !shared.exists(),
+        "no file must be written when --bundle-out and --report-out collide; \
+         found {} unexpectedly",
+        shared.display(),
+    );
+}
+
+/// Codex review thread (rust/crates/sera-cli/src/circle_closeout.rs
+/// line 176 — "Use the closeout verdict in JSON output"): for
+/// non-approved verdicts the bundle still structurally validates, so
+/// the previous implementation emitted `verdict: "PASS"` in the JSON
+/// while the text summary and the `circle-closeout:` footer used
+/// `verdict_label_for(...)` and reported `REVISION_REQUIRED` (or
+/// `FAIL` / `TIE` / `INVALID`). Machine consumers reading the JSON
+/// must see the same verdict label as the footer, while the
+/// `validation` field still exposes the structural validation
+/// status.
+///
+/// This drives the `sera` binary directly so we can capture the
+/// compact stdout JSON (`--json` is printed, not file-written) and
+/// the `circle-closeout:` footer that follows it.
+#[test]
+fn closeout_json_verdict_matches_footer_label_for_non_approved_verdict() {
+    let tmp_root = std::env::temp_dir().join(format!(
+        "sera-circle-closeout-json-verdict-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    let bundle_out = tmp_root.join("bundle.json");
+    let report_out = tmp_root.join("report.json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sera"))
+        .args([
+            "circle",
+            "closeout",
+            "--to",
+            "to:circle:sera-nqh3",
+            "--member",
+            "alice",
+            "--role",
+            "lead",
+            "--summary",
+            "need another pass before approval",
+            "--referee",
+            "ref",
+            // "needs another pass" maps to a non-approved verdict
+            // (RevisionRequired) while the bundle still structurally
+            // validates — exactly the shape the bug report flagged.
+            "--verdict",
+            "needs another pass",
+            "--rationale",
+            "Non-approved referee verdict for the JSON path regression.",
+            "--objective",
+            "Resident closeout: non-approved verdict",
+            "--bundle-out",
+            bundle_out.to_str().unwrap(),
+            "--report-out",
+            report_out.to_str().unwrap(),
+            "--audit-limit",
+            "8",
+            "--json",
+        ])
+        .output()
+        .expect("run sera circle closeout");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    // Structural validation passes (CLI exits 0). Validation
+    // (structural) and verdict (referee) are intentionally separate.
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "structural validation pass must exit 0; stdout={stdout:?} stderr={stderr:?}"
+    );
+
+    // The compact JSON summary is the first non-empty stdout line;
+    // the `circle-closeout:` footer is the last line that begins
+    // with that prefix.
+    let json_line = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with('{'))
+        .expect("compact JSON summary must be on stdout");
+    let footer_label = stdout
+        .lines()
+        .rev()
+        .find(|line| line.starts_with("circle-closeout: "))
+        .and_then(|line| line.split_whitespace().nth(1))
+        .map(str::to_string)
+        .expect("circle-closeout: footer must be present");
+
+    let json: Value = serde_json::from_str(json_line).expect("compact JSON must parse");
+
+    // JSON verdict must match the footer label.
+    // REVISION_REQUIRED here, NOT PASS.
+    assert_eq!(
+        json["verdict"], "REVISION_REQUIRED",
+        "JSON verdict must follow verdict_label_for and not be coerced to PASS; \
+         got json={json:?}",
+    );
+    assert_eq!(
+        footer_label, "REVISION_REQUIRED",
+        "footer label must match the JSON verdict field"
+    );
+    assert_eq!(
+        json["verdict_type"], "RevisionRequired { feedback: \"Non-approved referee verdict for the JSON path regression.\" }",
+        "verdict_type Debug print must reflect the closeout verdict"
+    );
+    // Structural validation is still surfaced separately as `null`
+    // in the compact JSON when the bundle validates cleanly.
+    assert!(
+        json["validation"].is_null(),
+        "structural validation must remain in the validation field; got {}",
+        json["validation"]
+    );
+
+    // Sanity: both artifacts written (the regression concerns
+    // judgment, not write semantics), and the report file's
+    // full-shaped validation uses the struct `{"Ok": null}` shape.
+    assert!(bundle_out.exists(), "bundle must be written");
+    assert!(report_out.exists(), "report must be written");
+    let report_bytes = std::fs::read(&report_out).expect("report file must exist");
+    let report: Value =
+        serde_json::from_slice(&report_bytes).expect("report must parse as JSON");
+    assert_eq!(
+        report["validation"]["Ok"],
+        Value::Null,
+        "full OperatorCloseoutReport validation field must remain {{\"Ok\": null}}"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp_root);
+}

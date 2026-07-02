@@ -156,6 +156,28 @@ pub fn run_circle_closeout(
     let validation_ok = report.validation.is_ok();
     let verdict_label = verdict_label_for(&report.verdict_type);
 
+    // Codex review thread (circle_closeout.rs line 167 — "Reject
+    // identical output artifact paths"): if the operator points
+    // `--bundle-out` and `--report-out` at the same path, the bundle
+    // write and the report write would clobber each other on disk
+    // while the footer still advertises the bundle sha. Detect the
+    // collision BEFORE writing either file: surface `USAGE_ERROR`
+    // with the footer (using the computed bundle sha when available)
+    // and leave the path untouched. Exact path equality is the
+    // minimum acceptable check; symlinks/aliases will be caught by
+    // the on-disk overwrite at write time, which would still surface
+    // as a usage error from `write_bundle` / `write_report`.
+    if let (Some(bundle_path), Some(report_path)) = (bundle_out.as_deref(), report_out.as_deref())
+        && bundle_path == report_path
+    {
+        eprintln!(
+            "--bundle-out and --report-out must point to different paths; got {} for both",
+            bundle_path.display(),
+        );
+        print_circle_closeout_footer("USAGE_ERROR", &report.bundle_sha256);
+        return 3;
+    }
+
     if let Some(bundle_path) = bundle_out.as_deref()
         && let Err(err) = write_bundle(bundle_path, &report)
     {
@@ -172,8 +194,16 @@ pub fn run_circle_closeout(
     }
 
     if json_out {
+        // Codex review thread (circle_closeout.rs line 176 — "Use the
+        // closeout verdict in JSON output"): machine consumers reading
+        // the compact JSON must see the same verdict label as the
+        // text summary and the `circle-closeout:` footer (`PASS` /
+        // `FAIL` / `TIE` / `INVALID` / `REVISION_REQUIRED`). The
+        // `validation` field below still carries the structural
+        // validation result (Ok / Err) so the two concerns stay
+        // separable.
         let summary_json = json!({
-            "verdict": if validation_ok { "PASS" } else { "FAIL" },
+            "verdict": verdict_label,
             "circle_id": report.circle_id,
             "address": report.address,
             "member_id": report.member_id,

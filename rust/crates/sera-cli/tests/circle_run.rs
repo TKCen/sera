@@ -554,3 +554,61 @@ fn circle_run_cli_extra_members_are_proposals_not_verdict_entries() {
         );
     }
 }
+
+#[test]
+fn circle_run_cli_run_id_varies_with_inputs_for_same_circle() {
+    let temp = tempfile::tempdir().unwrap();
+    let out_a = temp.path().join("a.json");
+    let out_b = temp.path().join("b.json");
+
+    for (out, objective) in [(&out_a, "Objective A"), (&out_b, "Objective B")] {
+        let output = bin()
+            .args([
+                "circle",
+                "run",
+                "--to",
+                "sera-nqh3",
+                "--objective",
+                objective,
+                "--members",
+                "alpha,beta",
+                "--referee",
+                "judge",
+                "--bundle-out",
+                out.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+    }
+
+    let bundle_a: Value = serde_json::from_slice(&std::fs::read(&out_a).unwrap()).unwrap();
+    let bundle_b: Value = serde_json::from_slice(&std::fs::read(&out_b).unwrap()).unwrap();
+    assert_ne!(bundle_a["run_id"], bundle_b["run_id"]);
+    assert!(
+        bundle_a["run_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("sera-circle-run-sera-nqh3-")
+    );
+}
+
+#[test]
+fn circle_run_cli_bundle_out_without_value_preserves_usage_error_footer() {
+    let output = bin()
+        .args([
+            "circle",
+            "run",
+            "--to",
+            "sera-nqh3",
+            "--bundle-out",
+            "--json",
+        ])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(3));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_circle_run_footer(&stdout, "USAGE_ERROR");
+    assert!(stderr.contains("--bundle-out"), "stderr={stderr}");
+}

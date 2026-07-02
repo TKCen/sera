@@ -200,8 +200,13 @@ enum CircleCommand {
         #[arg(long, value_name = "NAME")]
         referee: Option<String>,
         /// Path to write the generated CollaborationProofBundle JSON artifact
-        #[arg(long, value_name = "PATH")]
-        bundle_out: Option<PathBuf>,
+        #[arg(
+            long,
+            value_name = "PATH",
+            num_args = 0..=1,
+            default_missing_value = ""
+        )]
+        bundle_out: Option<String>,
         /// Emit a compact JSON report before the machine-parseable footer
         #[arg(long)]
         json: bool,
@@ -462,7 +467,7 @@ async fn main() -> Result<()> {
                 objective.clone(),
                 members.clone(),
                 referee.clone(),
-                bundle_out.clone(),
+                bundle_out.clone().map(PathBuf::from),
                 *json,
             ),
         };
@@ -848,8 +853,14 @@ async fn main() -> Result<()> {
                 bundle_out,
                 json,
             } => {
-                let exit_code =
-                    circle_run::run_circle_run(to, objective, members, referee, bundle_out, json);
+                let exit_code = circle_run::run_circle_run(
+                    to,
+                    objective,
+                    members,
+                    referee,
+                    bundle_out.map(PathBuf::from),
+                    json,
+                );
                 if exit_code != 0 {
                     std::process::exit(exit_code);
                 }

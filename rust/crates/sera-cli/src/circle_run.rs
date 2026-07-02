@@ -108,14 +108,28 @@ pub fn run_circle_run(
         print_circle_run_footer("USAGE_ERROR", "unknown");
         return 3;
     }
+    if bundle_out
+        .as_deref()
+        .is_some_and(|path| path.as_os_str().is_empty())
+    {
+        eprintln!("--bundle-out must not be blank");
+        print_circle_run_footer("USAGE_ERROR", "unknown");
+        return 3;
+    }
 
     let objective = objective.unwrap_or_else(|| {
         "Synthesise a Circle proof bundle from channel-addressed events.".to_string()
     });
 
+    let run_fingerprint_input = format!(
+        "address={address}\nobjective={objective}\nmembers={}\nreferee={referee_id}",
+        member_ids.join(",")
+    );
+    let run_fingerprint = sha256_hex(run_fingerprint_input.as_bytes());
     let run_id = format!(
-        "sera-circle-run-{}",
-        address.name.to_ascii_lowercase().replace('.', "-")
+        "sera-circle-run-{}-{}",
+        address.name.to_ascii_lowercase().replace('.', "-"),
+        &run_fingerprint[..12]
     );
 
     let events = build_channel_events(&address, &member_ids, &referee_id);

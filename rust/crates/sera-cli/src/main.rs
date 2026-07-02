@@ -191,13 +191,13 @@ enum CircleCommand {
         )]
         to: Option<String>,
         /// Objective visible to every member (overrides the default)
-        #[arg(long, value_name = "TEXT")]
+        #[arg(long, value_name = "TEXT", num_args = 0..=1, default_missing_value = "")]
         objective: Option<String>,
         /// Comma-separated member ids; first id is the lead
-        #[arg(long, value_name = "a,b,c")]
+        #[arg(long, value_name = "a,b,c", num_args = 0..=1, default_missing_value = "")]
         members: Option<String>,
         /// Referee principal id
-        #[arg(long, value_name = "NAME")]
+        #[arg(long, value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
         referee: Option<String>,
         /// Path to write the generated CollaborationProofBundle JSON artifact
         #[arg(

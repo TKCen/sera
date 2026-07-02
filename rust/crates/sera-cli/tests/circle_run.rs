@@ -594,6 +594,62 @@ fn circle_run_cli_run_id_varies_with_inputs_for_same_circle() {
 }
 
 #[test]
+fn circle_run_cli_text_output_reports_actual_run_id() {
+    let temp = tempfile::tempdir().unwrap();
+    let bundle_out = temp.path().join("proof_bundle.json");
+    let output = bin()
+        .args([
+            "circle",
+            "run",
+            "--to",
+            "sera-nqh3",
+            "--objective",
+            "Text output should identify this exact run",
+            "--members",
+            "alpha,beta",
+            "--referee",
+            "judge",
+            "--bundle-out",
+            bundle_out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{:?}", output);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let bundle: Value = serde_json::from_slice(&std::fs::read(&bundle_out).unwrap()).unwrap();
+    let run_id = bundle["run_id"].as_str().unwrap();
+    assert!(
+        stdout.contains(&format!("run_id={run_id}")),
+        "stdout={stdout}"
+    );
+    assert!(stdout.contains("circle_id=sera-nqh3"), "stdout={stdout}");
+    assert!(!stdout.contains("run_id=sera-nqh3 "), "stdout={stdout}");
+}
+
+#[test]
+fn circle_run_cli_missing_run_option_values_preserve_usage_error_footer() {
+    for (flag, expected_stderr) in [
+        ("--objective", "--objective"),
+        ("--members", "--members"),
+        ("--referee", "--referee"),
+    ] {
+        let output = bin()
+            .args(["circle", "run", "--to", "sera-nqh3", flag, "--json"])
+            .output()
+            .expect("run");
+        assert_eq!(output.status.code(), Some(3), "flag={flag}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_circle_run_footer(&stdout, "USAGE_ERROR");
+        assert!(
+            stderr.contains(expected_stderr),
+            "flag={flag} stderr={stderr}"
+        );
+    }
+}
+
+#[test]
 fn circle_run_cli_bundle_out_without_value_preserves_usage_error_footer() {
     let output = bin()
         .args([

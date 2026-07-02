@@ -80,7 +80,7 @@ pub fn run_circle_run(
         }
     };
 
-    if let Err(err) = validate_roster_inputs(&members, &referee) {
+    if let Err(err) = validate_run_inputs(&objective, &members, &referee) {
         eprintln!("{err}");
         print_circle_run_footer("USAGE_ERROR", "unknown");
         return 3;
@@ -201,8 +201,9 @@ pub fn run_circle_run(
             } else {
                 println!(
                     "Circle run PASS: addressed {address} members={} referee={referee_id:?} \
-                     entries={entries} receipts={receipts} lineage={lineage} run_id={circle_id}",
-                    member_ids.len()
+                     entries={entries} receipts={receipts} lineage={lineage} circle_id={circle_id} run_id={}",
+                    member_ids.len(),
+                    bundle.run_id
                 );
             }
             print_circle_run_footer("PASS", &bundle_sha256);
@@ -242,10 +243,17 @@ pub fn run_circle_run(
     }
 }
 
-fn validate_roster_inputs(
+fn validate_run_inputs(
+    objective: &Option<String>,
     members: &Option<String>,
     referee: &Option<String>,
 ) -> Result<(), String> {
+    if objective
+        .as_deref()
+        .is_some_and(|objective| objective.trim().is_empty())
+    {
+        return Err("--objective must not be blank".to_string());
+    }
     if let Some(raw) = members.as_deref() {
         if raw.trim().is_empty() {
             return Err("--members must not be blank".to_string());

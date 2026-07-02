@@ -323,21 +323,32 @@ fn verdict_label_for(verdict_type: &VerdictType) -> &'static str {
 /// on-disk location, so the operator seam can refuse the collision
 /// BEFORE writing either file.
 ///
+/// Codex review thread (circle_closeout.rs line 340 — fifth pass,
+/// "Reject relative/absolute artifact aliases"): a relative path
+/// such as `bundle.json` and its absolute equivalent
+/// `$PWD/bundle.json` did not compare equal under `lex_normalize`
+/// when the target file did not yet exist — `canonicalize` errors
+/// on non-existing paths and lexical normalization leaves a bare
+/// relative path starting from `CurDir`, while an absolute path
+/// starts from `RootDir`. We now anchor every relative-path input
+/// against `std::env::current_dir()` BEFORE lexical normalization
+/// so the two cases collapse to the same form. `current_dir`
+/// failure (rare — propagated from the OS) falls through to the
+/// existing lexical-only comparison so the function stays robust.
+///
 /// Codex review thread (circle_closeout.rs line 171 — fourth pass,
-/// "Normalize artifact paths before comparing them"): a raw
-/// `Path::eq` (or string equality on `Path`) is too lax — lexical
-/// aliases such as `bundle.json` vs `./bundle.json` and
-/// `dir/../bundle.json` vs `bundle.json` would slip through and
-/// the report write would clobber the bundle. We compare the
-/// lexically-normalized targets (collapsing `.`, `..`, and
-/// redundant separators) and, when both targets already exist on
-/// disk, fall through to `canonicalize` so symlink aliases are
-/// caught too. `canonicalize` is intentionally NOT called on
-/// non-existing paths because it would error out — we don't want
-/// to create files just to compare them.
+/// "Normalize artifact paths before comparing them"): we also
+/// compare the lexically-normalized targets (collapsing `.`,
+/// `..`, and redundant separators) and, when both targets already
+/// exist on disk, fall through to `canonicalize` so symlink
+/// aliases are caught too. `canonicalize` is intentionally NOT
+/// called on non-existing paths because it would error out — we
+/// don't want to create files just to compare them.
 fn artifact_paths_collide(bundle_path: &Path, report_path: &Path) -> bool {
-    let bundle_lex = lex_normalize(bundle_path);
-    let report_lex = lex_normalize(report_path);
+    let bundle_anchored = anchor_relative_path(bundle_path);
+    let report_anchored = anchor_relative_path(report_path);
+    let bundle_lex = lex_normalize(&bundle_anchored);
+    let report_lex = lex_normalize(&report_anchored);
     if bundle_lex == report_lex {
         return true;
     }
@@ -350,6 +361,32 @@ fn artifact_paths_collide(bundle_path: &Path, report_path: &Path) -> bool {
         return bundle_canon == report_canon;
     }
     false
+}
+
+/// Anchor a path that is NOT already absolute against
+/// `std::env::current_dir()` so relative and absolute
+/// representations of the same target (e.g. `bundle.json` vs
+/// `$PWD/bundle.json`) collapse to the same normalized form
+/// before lexical comparison. Absolute paths are returned
+/// unchanged. If `current_dir` itself fails (very rare; only on
+/// platforms where the OS cannot resolve the cwd), the original
+/// path is returned unchanged so lexical comparison can still
+/// attempt to detect obvious `.`/`..` aliases.
+///
+/// Codex review thread (circle_closeout.rs line 340 — fifth pass):
+/// without this anchor step, a non-existing `bundle.json`
+/// (relative) and a non-existing `$PWD/bundle.json` (absolute)
+/// would compare UNEQUAL because `lex_normalize` cannot bridge a
+/// `CurDir` root vs a `RootDir` root — they remain two distinct
+/// lexical trees even after canonicalization refuses to run.
+fn anchor_relative_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => cwd.join(path),
+        Err(_) => path.to_path_buf(),
+    }
 }
 
 /// Lexically normalize a path without touching the filesystem.

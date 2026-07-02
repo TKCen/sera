@@ -691,6 +691,173 @@ fn closeout_rejects_lexically_aliased_bundle_and_report_out_paths() {
 }
 
 /// Codex review thread (rust/crates/sera-cli/src/circle_closeout.rs
+/// line 340 — fifth pass, "Reject relative/absolute artifact
+/// aliases"): an operator pointing `--bundle-out <relative>` and
+/// `--report-out <absolute-cwd-equivalent>` would have the same
+/// physical target, but the previous lexical normalizer compared
+/// `bundle.json` (relative — `CurDir`-rooted) against
+/// `$PWD/bundle.json` (absolute — `RootDir`-rooted) and declared
+/// them DIFFERENT — `canonicalize` errors on non-existing paths
+/// and lexical normalization alone cannot bridge a relative vs
+/// absolute root. The seam must anchor relative inputs to
+/// `current_dir()` BEFORE lexical comparison so the two
+/// representations collide even when neither target exists yet.
+/// Critically, the seam must still refuse to write either artifact
+/// (no overwritten file on disk after the call).
+#[test]
+fn closeout_rejects_relative_and_absolute_alias_of_same_target() {
+    // Use a non-existing target under the cwd so the canonicalize
+    // fallback path is exercised; the absolute path must be the
+    // resolved `cwd.join(relative)` form. We deliberately do NOT
+    // pre-create any file — that is the whole point of the
+    // regression (a prior regression would silently let the report
+    // overwrite the bundle because the canonicalize fallback
+    // returned `false`, classifying them as "different").
+    let cwd = std::env::current_dir().expect("cwd must be queryable");
+    let bundle_relative = PathBuf::from(format!(
+        "sera-circle-closeout-relabs-{}-{}-bundle.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    let bundle_absolute = cwd.join(&bundle_relative);
+    let report_absolute = cwd.join(&bundle_relative);
+
+    // Sanity: the targets do not exist yet. If a prior failed
+    // run left cruft behind, this test would silently mask the
+    // regression (the canonicalize-both-exist fallback would
+    // catch the collision trivially).
+    let _ = std::fs::remove_file(&bundle_absolute);
+    assert!(
+        !bundle_absolute.exists(),
+        "alias target must not exist pre-call; got {}",
+        bundle_absolute.display()
+    );
+
+    // Run with `--bundle-out <relative>` and
+    // `--report-out <absolute cwd-equivalent>` — the two strings
+    // resolve to the same on-disk location, but neither input is
+    // already-canonicalized because the target file does not exist.
+    let exit_code = run_circle_closeout(
+        Some("to:circle:sera-nqh3".to_string()),
+        Some("alice".to_string()),
+        Some("lead".to_string()),
+        Some("open the run and submit proposal".to_string()),
+        Some("session:parent-task-e".to_string()),
+        Some("agent-007".to_string()),
+        Some("ref".to_string()),
+        Some("approved".to_string()),
+        Some("Lead alice claimed the role and posted a non-blank summary.".to_string()),
+        Some("Resident closeout: relative/absolute alias regression".to_string()),
+        Some(bundle_relative.clone()),
+        Some(report_absolute.clone()),
+        Some("8".to_string()),
+        false,
+    );
+    assert_eq!(
+        exit_code, 3,
+        "relative --bundle-out and absolute --report-out resolving to the same target \
+         must exit 3 (USAGE_ERROR); bundle={} report={}",
+        bundle_relative.display(),
+        report_absolute.display(),
+    );
+
+    // The pre-write alias guard MUST prevent either artifact from
+    // being written. This is the load-bearing assertion: had the
+    // anchor step been missing, the report write would have
+    // silently clobbered the bundle while the footer still
+    // advertised the (now-corrupt) bundle sha.
+    assert!(
+        !bundle_absolute.exists(),
+        "no file must be written when relative-vs-absolute alias collides; \
+         found {} unexpectedly",
+        bundle_absolute.display()
+    );
+    assert!(
+        !report_absolute.exists(),
+        "no file must be written when relative-vs-absolute alias collides; \
+         found {} unexpectedly",
+        report_absolute.display()
+    );
+
+    // Cleanup: we never created anything, but the temp dir invariant
+    // above is the only one that matters.
+    let _ = std::fs::remove_file(&bundle_absolute);
+}
+
+/// Companion guard for the relative/absolute alias: when
+/// `--bundle-out` and `--report-out` point to DIFFERENT real
+/// locations (one relative, one absolute under a different leaf),
+/// the seam must NOT reject on the alias guard — the regression
+/// fix must not over-trigger. This test exercises the negative
+/// case so a future change that always returns `true` from
+/// `artifact_paths_collide` is caught.
+#[test]
+fn closeout_allows_relative_and_absolute_paths_to_distinct_targets() {
+    let cwd = std::env::current_dir().expect("cwd must be queryable");
+    let bundle_relative = PathBuf::from(format!(
+        "sera-circle-closeout-relabs-distinct-bundle-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    let bundle_absolute = cwd.join(&bundle_relative);
+    // Distinct absolute path under a different leaf so the
+    // anchored relative path can never collide with it.
+    let report_absolute = cwd.join(format!(
+        "sera-circle-closeout-relabs-distinct-report-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+
+    // Pre-clean so we don't mask with pre-existing files.
+    let _ = std::fs::remove_file(&bundle_absolute);
+    let _ = std::fs::remove_file(&report_absolute);
+
+    let exit_code = run_circle_closeout(
+        Some("to:circle:sera-nqh3".to_string()),
+        Some("alice".to_string()),
+        Some("lead".to_string()),
+        Some("open the run and submit proposal".to_string()),
+        Some("session:parent-task-e".to_string()),
+        Some("agent-007".to_string()),
+        Some("ref".to_string()),
+        Some("approved".to_string()),
+        Some("Lead alice claimed the role and posted a non-blank summary.".to_string()),
+        Some("Resident closeout: distinct relative/absolute targets".to_string()),
+        Some(bundle_relative.clone()),
+        Some(report_absolute.clone()),
+        Some("8".to_string()),
+        false,
+    );
+    assert_eq!(
+        exit_code, 0,
+        "distinct relative/absolute targets must NOT trigger the alias guard; \
+         bundle={} report={}",
+        bundle_relative.display(),
+        report_absolute.display(),
+    );
+    assert!(
+        bundle_absolute.exists(),
+        "relative-bundle target must be written at its anchored absolute path"
+    );
+    assert!(
+        report_absolute.exists(),
+        "absolute report target must be written"
+    );
+
+    let _ = std::fs::remove_file(&bundle_absolute);
+    let _ = std::fs::remove_file(&report_absolute);
+}
+
+/// Codex review thread (rust/crates/sera-cli/src/circle_closeout.rs
 /// line 176 — "Use the closeout verdict in JSON output"): for
 /// non-approved verdicts the bundle still structurally validates, so
 /// the previous implementation emitted `verdict: "PASS"` in the JSON

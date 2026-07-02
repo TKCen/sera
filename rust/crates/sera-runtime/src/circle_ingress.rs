@@ -1042,9 +1042,24 @@ fn classify_verdict(verdict_text: &str, rationale: &str) -> VerdictType {
     //    does NOT trip Approved (those become single dashed tokens
     //    like "disapproved" / "unapproved" that are NOT in the
     //    affirmative set). We also require that no preceding token
-    //    is a negation ("not", "no", "never"), so "not approved"
-    //    does NOT trip Approved.
-    let negation_prefixes = ["not", "no", "never", "neither", "nor"];
+    //    is a negation (space-separated "not approved", or dashed
+    //    "non-approved" / "non_approved") so common English negative
+    //    operator wording does NOT trip Approved.
+    //
+    //    Codex review thread (line 1058 — fifth pass, "Treat
+    //    hyphenated non-approval as negative"): `non-approved`
+    //    tokenizes to `["non", "approved"]` because the tokenizer
+    //    splits on ` `, `-`, and `_`. `non` was missing from
+    //    `negation_prefixes`, so the approval token returned
+    //    Approved/PASS even though the referee text was
+    //    explicitly negative. We now include `non` so both
+    //    `non-approved` and `non approval` (space-separated form)
+    //    classify as a non-affirmative verdict — matching the
+    //    space-separated `not approved` behavior already covered
+    //    for `not` / `no` / `never`. Bare `approved` and
+    //    `approve please` (no preceding token) still classify as
+    //    Approved because the negation check requires `idx > 0`.
+    let negation_prefixes = ["not", "no", "never", "neither", "nor", "non"];
     let tokens: Vec<&str> = lc.split([' ', '-', '_']).collect();
     for (idx, token) in tokens.iter().enumerate() {
         match *token {
@@ -1568,6 +1583,77 @@ mod tests {
                 verdict_label_for_verdicttype(&verdict),
                 footer,
                 "verdict text {text:?} must produce footer {footer}",
+            );
+        }
+    }
+
+    #[test]
+    fn classify_verdict_treats_hyphenated_non_approval_as_negative() {
+        // Codex review thread (rust/crates/sera-runtime/src/circle_ingress.rs
+        // line 1058 — fifth pass, "Treat hyphenated non-approval as
+        // negative"): the tokenizer splits `non-approved` into
+        // `["non", "approved"]` because it treats ` `, `-`, and `_`
+        // as separators. `non` was missing from the negation-prefix
+        // set, so the classifier returned Approved / PASS even
+        // though the referee's text was explicitly negative. The
+        // fix adds `non` to the negation-prefix set, so the
+        // immediate-prior-token check trips and the verdict falls
+        // through to the default (RevisionRequired). This test
+        // covers the dashed, underscored, and space-separated forms
+        // and explicitly asserts both the variant kind and the
+        // footer label so the JSON / footer / bundle verdict stay
+        // consistent across all three closeout surfaces.
+        let cases = [
+            "non-approved",
+            "non_approved",
+            "non approval",
+            "Non-Approved",
+            "NON-APPROVED",
+            "non-approve",
+        ];
+        for text in cases {
+            let verdict = classify_verdict(text, "rationale for the verdict");
+            let kind = format!("{verdict:?}");
+            let kind_token = kind.split_whitespace().next().unwrap_or("").trim_end_matches('{');
+            assert_ne!(
+                kind_token, "Approved",
+                "non-approval text {text:?} must NOT classify as Approved; got {kind:?}",
+            );
+            assert_ne!(
+                verdict_label_for_verdicttype(&verdict),
+                "PASS",
+                "non-approval text {text:?} must NOT produce a PASS footer; \
+                 got verdict {verdict:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn classify_verdict_keeps_bare_approved_and_approve_please_working() {
+        // Companion guard for the `non` prefix addition: a bare
+        // `approved` (idx 0) has no prior token so the negation
+        // check must NOT trip, and `approve please` (idx 0 for
+        // `approve`) must still classify as Approved. This test
+        // catches a future change that over-triggers the negation
+        // guard (e.g. checking `idx >= 0` instead of `idx > 0`).
+        for text in [
+            "approved",
+            "approve",
+            "approve please",
+            "approved and proceed",
+            "  approved  ",
+            "approved.",
+        ] {
+            let verdict = classify_verdict(text, "rationale for the verdict");
+            assert!(
+                matches!(verdict, VerdictType::Approved),
+                "bare/affirmative text {text:?} must classify as Approved; \
+                 got {verdict:?}",
+            );
+            assert_eq!(
+                verdict_label_for_verdicttype(&verdict),
+                "PASS",
+                "bare/affirmative text {text:?} must produce a PASS footer",
             );
         }
     }

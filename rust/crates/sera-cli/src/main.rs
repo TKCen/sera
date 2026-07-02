@@ -38,6 +38,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     /// Check gateway liveness (GET /api/health)
     Ping {
@@ -214,43 +215,48 @@ enum CircleCommand {
     /// Drive the resident Circle ingress seam and close out the resulting record into a proof bundle for operator inspection.
     Closeout {
         /// Target Circle channel address (`to:circle:<name>`, `circle:<name>`, or bare `<name>`)
-        #[arg(long, value_name = "NAME|to:circle:NAME")]
+        #[arg(
+            long,
+            value_name = "NAME|to:circle:NAME",
+            num_args = 0..=1,
+            default_missing_value = ""
+        )]
         to: Option<String>,
         /// Caller member id (e.g. `alice`)
-        #[arg(long, value_name = "MEMBER")]
+        #[arg(long, value_name = "MEMBER", num_args = 0..=1, default_missing_value = "")]
         member: Option<String>,
         /// Caller role claim (lead | worker | critic | referee)
-        #[arg(long, value_name = "ROLE")]
+        #[arg(long, value_name = "ROLE", num_args = 0..=1, default_missing_value = "")]
         role: Option<String>,
         /// Short summary recorded on the channel `Post` event and the activity log
-        #[arg(long, value_name = "TEXT")]
+        #[arg(long, value_name = "TEXT", num_args = 0..=1, default_missing_value = "")]
         summary: Option<String>,
         /// Optional parent session key for lineage
-        #[arg(long, value_name = "SESSION_KEY")]
+        #[arg(long, value_name = "SESSION_KEY", num_args = 0..=1, default_missing_value = "")]
         parent_session_key: Option<String>,
         /// Optional agent id surfaced on the activity log entry
-        #[arg(long, value_name = "AGENT")]
+        #[arg(long, value_name = "AGENT", num_args = 0..=1, default_missing_value = "")]
         agent_id: Option<String>,
         /// Referee principal id producing the verdict
-        #[arg(long, value_name = "NAME")]
+        #[arg(long, value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
         referee: Option<String>,
         /// Short headline for the verdict (e.g. `approved`)
-        #[arg(long, value_name = "TEXT")]
+        #[arg(long, value_name = "TEXT", num_args = 0..=1, default_missing_value = "")]
         verdict: Option<String>,
         /// Human-readable rationale for the verdict
-        #[arg(long, value_name = "TEXT")]
+        #[arg(long, value_name = "TEXT", num_args = 0..=1, default_missing_value = "")]
         rationale: Option<String>,
         /// Optional override for the bundle's objective
-        #[arg(long, value_name = "TEXT")]
+        #[arg(long, value_name = "TEXT", num_args = 0..=1, default_missing_value = "")]
         objective: Option<String>,
         /// Path to write the generated CollaborationProofBundle JSON artifact
-        #[arg(long, value_name = "PATH")]
+        #[arg(long, value_name = "PATH", num_args = 0..=1, default_missing_value = "")]
         bundle_out: Option<PathBuf>,
         /// Path to write the full OperatorCloseoutReport JSON artifact
-        #[arg(long, value_name = "PATH")]
+        #[arg(long, value_name = "PATH", num_args = 0..=1, default_missing_value = "")]
         report_out: Option<PathBuf>,
         /// Maximum number of recent activity-log entries to include in the report's audit tail
-        #[arg(long, value_name = "N")]
+        #[arg(long, value_name = "N", num_args = 0..=1, default_missing_value = "")]
         audit_limit: Option<usize>,
         /// Emit a compact JSON summary before the machine-parseable footer
         #[arg(long)]

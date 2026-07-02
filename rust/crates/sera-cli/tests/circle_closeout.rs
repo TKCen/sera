@@ -314,3 +314,108 @@ fn closeout_bundle_sha256_matches_disk_bytes_and_validate_footer() {
         );
     }
 }
+
+/// Codex review thread (rust/crates/sera-cli/src/circle_closeout.rs
+/// nested `--bundle-out`/`--report-out` paths): the operator seam must
+/// create missing parent directories for both the proof bundle and the
+/// report file so callers don't have to mkdir before every
+/// `--bundle-out nested/path.json`. Without the `ensure_parent_dir`
+/// guard the file write would fail with `No such file or directory`.
+#[test]
+fn closeout_creates_parent_directories_for_bundle_and_report() {
+    let tmp_root = std::env::temp_dir().join(format!(
+        "sera-circle-closeout-nested-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    let bundle_out = tmp_root.join("nested").join("deep").join("bundle.json");
+    let report_out = tmp_root.join("nested").join("deep").join("report.json");
+
+    let exit_code = run_circle_closeout(
+        Some("to:circle:sera-nqh3".to_string()),
+        Some("alice".to_string()),
+        Some("lead".to_string()),
+        Some("open the run and submit proposal".to_string()),
+        Some("session:parent-task-e".to_string()),
+        Some("agent-007".to_string()),
+        Some("ref".to_string()),
+        Some("approved".to_string()),
+        Some("Lead alice claimed the role and posted a non-blank summary.".to_string()),
+        Some("Resident closeout: lead + post + referee verdict".to_string()),
+        Some(bundle_out.clone()),
+        Some(report_out.clone()),
+        Some(8),
+        true,
+    );
+    assert_eq!(exit_code, 0, "nested-path closeout must succeed");
+    assert!(
+        bundle_out.exists(),
+        "nested bundle path must be created by the CLI, got {}",
+        bundle_out.display(),
+    );
+    assert!(
+        report_out.exists(),
+        "nested report path must be created by the CLI, got {}",
+        report_out.display(),
+    );
+
+    // Clean up the temp tree so the test does not leak.
+    let _ = std::fs::remove_dir_all(&tmp_root);
+}
+
+/// Codex review thread (rust/crates/sera-cli/src/main.rs line 218 —
+/// "Preserve closeout footer for missing option values"): when a known
+/// closeout option is supplied without its value (e.g.
+/// `sera circle closeout --to --member alice ...`), clap must not
+/// reject the invocation outright; the handler-level
+/// `require_some(...)` validation is what should fail, and the
+/// `circle-closeout:` machine footer must still be emitted so log
+/// parsers keep one parsing vocabulary. This test invokes the
+/// `sera` binary directly (the existing parser-test pattern in
+/// `circle_closeout.rs`) to prove the footer is preserved.
+#[test]
+fn closeout_binary_emits_machine_footer_when_required_option_missing_value() {
+    let output = Command::new(env!("CARGO_BIN_EXE_sera"))
+        .args([
+            "circle",
+            "closeout",
+            "--to", // missing value: clap should accept the flag (default_missing_value=""),
+            "--member",
+            "alice",
+            "--role",
+            "lead",
+            "--summary",
+            "open the run",
+            "--referee",
+            "ref",
+            "--verdict",
+            "approved",
+            "--rationale",
+            "ok",
+        ])
+        .output()
+        .expect("run sera circle closeout");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    // The required-value footer must appear on stdout — the parser
+    // must not have rejected the invocation outright before the
+    // handler validation path runs.
+    assert!(
+        stdout.lines().any(|line| line.starts_with("circle-closeout: "))
+            || stderr.lines().any(|line| line.starts_with("circle-closeout: ")),
+        "missing-option-value path must still emit the `circle-closeout:` footer; \
+         stdout={stdout:?} stderr={stderr:?}",
+    );
+    // `--to` was provided without a value, so the handler-level
+    // `require_some("--to", "")` rejects it as USAGE_ERROR (exit 3).
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "missing --to value must surface as USAGE_ERROR exit code 3; \
+         stdout={stdout:?} stderr={stderr:?}",
+    );
+}

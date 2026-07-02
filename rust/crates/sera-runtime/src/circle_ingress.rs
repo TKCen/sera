@@ -324,7 +324,7 @@ fn closeout_event_time(t0: chrono::DateTime<Utc>, offset_secs: i64) -> chrono::D
 /// downstream consumers do not need two different provider-class schemes
 /// to reconcile.
 fn closeout_provider_for(idx: usize) -> &'static str {
-    if idx % 2 == 0 {
+    if idx.is_multiple_of(2) {
         "custom/local-lmstudio"
     } else {
         "minimax"
@@ -430,11 +430,12 @@ pub fn closeout_into_proof_bundle(
     // Canonical-only guard (Task E carryforward #1). The operator-facing
     // surface is built on top of the canonical Task C ingress shape
     // (`ClaimRole + Post` for one caller). Records with any other event
-    // body variant (Receipt / Lineage / Verdict) or a different event
-    // count are not on the proven happy path for the operator seam —
-    // refuse loudly rather than silently emitting a bundle whose
-    // roster/role attribution no longer matches the input.
-    if !is_canonical_claim_role_post_shape(&record.channel_events) {
+    // body variant (Receipt / Lineage / Verdict), a different event
+    // count, or a member-mismatched pair (`ClaimRole(alice)` followed
+    // by `Post(bob)`, for example) are not on the proven happy path for
+    // the operator seam — refuse loudly rather than silently emitting a
+    // bundle whose roster/role attribution no longer matches the input.
+    if !is_canonical_claim_role_post_shape(&record.channel_events, record.caller.member_id.as_str()) {
         return Err(format!(
             "closeout_into_proof_bundle refuses non-canonical ingress shape: \
              expected exactly two events (ClaimRole + Post) from one caller, \
@@ -607,15 +608,16 @@ pub fn closeout_into_proof_bundle(
         });
     }
 
-    let mut roster = Vec::with_capacity(2);
-    roster.push(ProofBundleMember {
-        participant_id: caller_member.to_string(),
-        role: record.caller.role.default_label().to_string(),
-    });
-    roster.push(ProofBundleMember {
-        participant_id: closeout.referee_member_id.clone(),
-        role: CircleChannelRole::Referee.default_label().to_string(),
-    });
+    let roster = vec![
+        ProofBundleMember {
+            participant_id: caller_member.to_string(),
+            role: record.caller.role.default_label().to_string(),
+        },
+        ProofBundleMember {
+            participant_id: closeout.referee_member_id.clone(),
+            role: CircleChannelRole::Referee.default_label().to_string(),
+        },
+    ];
 
     let verdict = Some(CollaborationVerdictRecord {
         reviewer: closeout.referee_member_id.clone(),
@@ -666,19 +668,32 @@ pub fn closeout_into_proof_bundle(
 
 /// Returns true iff the supplied channel-event list matches the canonical
 /// Task C ingress shape: exactly two events, the first a `ClaimRole` and
-/// the second a `Post`.
+/// the second a `Post`, **both** authored by `caller_member_id`. The caller
+/// match is what stops a record like `ClaimRole(alice) → Post(bob)` from
+/// sliding through into a bundle whose roster, role attribution, and
+/// receipt layout no longer describe one accountable agent.
 ///
 /// Used by [`closeout_into_proof_bundle`] (canonical-only guard) and by
 /// [`address_circle`] (operator-surface guarantee) so the bundle's
 /// roster, role attribution, and receipt layout always match the
 /// one-caller + one-role-claim + one-post contract that the validator
 /// and the closeout helper were designed against.
-fn is_canonical_claim_role_post_shape(events: &[CircleChannelEvent]) -> bool {
+fn is_canonical_claim_role_post_shape(
+    events: &[CircleChannelEvent],
+    caller_member_id: &str,
+) -> bool {
     if events.len() != 2 {
         return false;
     }
-    matches!(events[0].body, CircleChannelEventKind::ClaimRole { .. })
-        && matches!(events[1].body, CircleChannelEventKind::Post { .. })
+    let claim_member = match &events[0].body {
+        CircleChannelEventKind::ClaimRole { member, .. } => member.as_str(),
+        _ => return false,
+    };
+    let post_member = match &events[1].body {
+        CircleChannelEventKind::Post { member, .. } => member.as_str(),
+        _ => return false,
+    };
+    claim_member == caller_member_id && post_member == caller_member_id
 }
 
 // =========================================================================
@@ -882,15 +897,15 @@ fn record_summary_from_record(record: &CircleIngressRecord) -> String {
     // summary; fall back to the first non-empty string we can find so the
     // bundle always has a non-blank objective.
     for event in &record.channel_events {
-        if let CircleChannelEventKind::Post { summary, .. } = &event.body {
-            if !summary.trim().is_empty() {
-                return summary.clone();
-            }
+        if let CircleChannelEventKind::Post { summary, .. } = &event.body
+            && !summary.trim().is_empty()
+        {
+            return summary.clone();
         }
-        if let CircleChannelEventKind::Verdict { verdict, .. } = &event.body {
-            if !verdict.trim().is_empty() {
-                return verdict.clone();
-            }
+        if let CircleChannelEventKind::Verdict { verdict, .. } = &event.body
+            && !verdict.trim().is_empty()
+        {
+            return verdict.clone();
         }
     }
     "resident Circle ingress run".to_string()
@@ -1558,6 +1573,40 @@ mod tests {
         assert!(
             err.contains("non-canonical ingress shape"),
             "closeout must refuse the non-canonical shape explicitly, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn canonical_only_guard_rejects_member_mismatch_between_claim_role_and_post() {
+        // Codex review thread (rust/crates/sera-runtime/src/circle_ingress.rs
+        // line 681): the canonical guard must also reject a record whose
+        // ClaimRole and Post events are authored by different members
+        // (`ClaimRole(alice) → Post(bob)`). Without this check, the
+        // helper would happily assemble a bundle whose roster lists
+        // alice as Lead but whose entries are authored by bob —
+        // i.e. roster/role attribution and entry authorship disagree.
+        let funnel = CircleIngress::new();
+        let outcome = funnel.accept(&operator_request()).unwrap();
+        let mut mutated_record = outcome.record.clone();
+
+        // Reach into the second event and rewrite its author to a
+        // different member while keeping the canonical
+        // (ClaimRole, Post) body shape — only the member id changes.
+        if let Some(event) = mutated_record.channel_events.get_mut(1) {
+            event.body = CircleChannelEventKind::Post {
+                member: CircleMemberId::from("bob"),
+                artifact_type: RESIDENT_INGRESS_POST_KIND.to_string(),
+                summary: "open the run and submit proposal".to_string(),
+            };
+        } else {
+            panic!("canonical record should have at least two events");
+        }
+
+        let err = closeout_into_proof_bundle(&mutated_record, &operator_closeout())
+            .expect_err("closeout must refuse a member-mismatched canonical shape");
+        assert!(
+            err.contains("non-canonical ingress shape"),
+            "closeout must refuse the member-mismatched canonical shape explicitly, got {err:?}",
         );
     }
 }

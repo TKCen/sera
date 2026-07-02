@@ -97,22 +97,22 @@ pub fn run_circle_closeout(
     };
 
     let mut request = CircleIngressRequest::new(&to, &member, role, &summary);
-    if let Some(parent) = parent_session_key {
-        if !parent.trim().is_empty() {
-            request = request.with_parent_session_key(parent);
-        }
+    if let Some(parent) = parent_session_key
+        && !parent.trim().is_empty()
+    {
+        request = request.with_parent_session_key(parent);
     }
-    if let Some(agent) = agent_id {
-        if !agent.trim().is_empty() {
-            request = request.with_agent_id(agent);
-        }
+    if let Some(agent) = agent_id
+        && !agent.trim().is_empty()
+    {
+        request = request.with_agent_id(agent);
     }
 
     let mut closeout = CircleIngressCloseout::new(referee, verdict_text, rationale);
-    if let Some(obj) = objective {
-        if !obj.trim().is_empty() {
-            closeout = closeout.with_objective(obj);
-        }
+    if let Some(obj) = objective
+        && !obj.trim().is_empty()
+    {
+        closeout = closeout.with_objective(obj);
     }
 
     let audit_limit = audit_limit.unwrap_or(OPERATOR_REPORT_DEFAULT_AUDIT_LIMIT);
@@ -130,19 +130,19 @@ pub fn run_circle_closeout(
     let validation_ok = report.validation.is_ok();
     let verdict_label = verdict_label_for(&report.verdict_type);
 
-    if let Some(bundle_path) = bundle_out.as_deref() {
-        if let Err(err) = write_bundle(bundle_path, &report) {
-            eprintln!("failed to write bundle {}: {err}", bundle_path.display());
-            print_circle_closeout_footer("USAGE_ERROR", &report.bundle_sha256);
-            return 3;
-        }
+    if let Some(bundle_path) = bundle_out.as_deref()
+        && let Err(err) = write_bundle(bundle_path, &report)
+    {
+        eprintln!("failed to write bundle {}: {err}", bundle_path.display());
+        print_circle_closeout_footer("USAGE_ERROR", &report.bundle_sha256);
+        return 3;
     }
-    if let Some(report_path) = report_out.as_deref() {
-        if let Err(err) = write_report(report_path, &report) {
-            eprintln!("failed to write report {}: {err}", report_path.display());
-            print_circle_closeout_footer("USAGE_ERROR", &report.bundle_sha256);
-            return 3;
-        }
+    if let Some(report_path) = report_out.as_deref()
+        && let Err(err) = write_report(report_path, &report)
+    {
+        eprintln!("failed to write report {}: {err}", report_path.display());
+        print_circle_closeout_footer("USAGE_ERROR", &report.bundle_sha256);
+        return 3;
     }
 
     if json_out {
@@ -194,8 +194,8 @@ pub fn run_circle_closeout(
             report.activity_writes,
         );
         println!(
-            "verdict: {} (rationale: {})",
-            format!("{:?}", report.verdict_type),
+            "verdict: {:?} (rationale: {})",
+            report.verdict_type,
             report.verdict_rationale,
         );
         if !report.audit_tail.is_empty() {
@@ -266,6 +266,7 @@ fn write_bundle(
     };
     let bytes = serde_json::to_vec_pretty(&bundle_out.bundle)
         .map_err(|err| format!("serialize bundle: {err}"))?;
+    ensure_parent_dir(path).map_err(|err| format!("create parent for bundle: {err}"))?;
     std::fs::write(path, &bytes).map_err(|err| format!("write bundle: {err}"))?;
     Ok(())
 }
@@ -273,6 +274,22 @@ fn write_bundle(
 fn write_report(path: &Path, report: &OperatorCloseoutReport) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(report)
         .map_err(|err| format!("serialize report: {err}"))?;
+    ensure_parent_dir(path).map_err(|err| format!("create parent for report: {err}"))?;
     std::fs::write(path, &bytes).map_err(|err| format!("write report: {err}"))?;
+    Ok(())
+}
+
+/// Ensure the parent directory of `path` exists. Mirrors the behaviour
+/// of the offline Circle artifact writers (`sera circle run --bundle-out`)
+/// so `--bundle-out nested/path.json` and `--report-out nested/path.json`
+/// just work — the operator doesn't have to mkdir beforehand. Returns
+/// `Ok(())` for paths that have no parent (e.g. bare filenames), and
+/// surfaces the underlying IO error when `create_dir_all` fails.
+fn ensure_parent_dir(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
     Ok(())
 }

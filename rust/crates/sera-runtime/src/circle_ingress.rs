@@ -41,7 +41,8 @@ use sera_types::circle::{
     LineageRelation, MetricRef, ProofBundleEntry, ProofBundleMember, ReceiptOutcome, VerdictType,
 };
 use sera_types::circle_channel::{
-    CircleAddressParseError, CircleChannelEvent, CircleChannelEventKind, CircleChannelRole,
+    CircleAddressParseError, CircleChannelAddress, CircleChannelEvent, CircleChannelEventKind,
+    CircleChannelRole,
 };
 use sera_types::circle_ingress::{
     CircleIngressCaller, CircleIngressRecord, CircleIngressRequest, CIRCLE_INGRESS_DEFAULT_EVENT_LIMIT,
@@ -435,13 +436,22 @@ pub fn closeout_into_proof_bundle(
     // by `Post(bob)`, for example) are not on the proven happy path for
     // the operator seam — refuse loudly rather than silently emitting a
     // bundle whose roster/role attribution no longer matches the input.
-    if !is_canonical_claim_role_post_shape(&record.channel_events, record.caller.member_id.as_str()) {
+    if !is_canonical_claim_role_post_shape(
+        &record.channel_events,
+        &record.address,
+        &record.caller,
+    ) {
         return Err(format!(
-            "closeout_into_proof_bundle refuses non-canonical ingress shape: \
-             expected exactly two events (ClaimRole + Post) from one caller, \
-             got {} events with mixed body variants. \
+            "closeout_into_proof_bundle refuses non-canonical ingress envelope: \
+             expected exactly two events (ClaimRole + Post) authored on the record's address {} \
+             by caller {} claiming role {:?}, got {} events with mismatched \
+             body variants / addresses / members / roles. \
              The operator seam only supports the canonical Task C shape; \
-             broaden the seam in a later slice if multi-author ingress is needed.",
+             broaden the seam in a later slice if multi-author or multi-address \
+             ingress is needed.",
+            record.address,
+            record.caller.member_id.as_str(),
+            record.caller.role,
             record.channel_events.len(),
         ));
     }
@@ -667,33 +677,53 @@ pub fn closeout_into_proof_bundle(
 }
 
 /// Returns true iff the supplied channel-event list matches the canonical
-/// Task C ingress shape: exactly two events, the first a `ClaimRole` and
-/// the second a `Post`, **both** authored by `caller_member_id`. The caller
-/// match is what stops a record like `ClaimRole(alice) → Post(bob)` from
-/// sliding through into a bundle whose roster, role attribution, and
-/// receipt layout no longer describe one accountable agent.
+/// Task C ingress envelope: exactly two events; both authored on
+/// `record_address`; the first a `ClaimRole { member == caller_member_id,
+/// role == caller_role }`; the second a `Post { member == caller_member_id }`.
+///
+/// The full envelope check (member, role, address — not just member) is
+/// what stops a record like `ClaimRole(alice, role=Lead) → Post(bob)` or
+/// `ClaimRole(alice) → Post(alice)` against a different circle address
+/// from sliding through into a bundle whose roster, role attribution,
+/// `circle_id`, and receipt layout no longer describe one accountable
+/// agent on one address. Without the address/role match, a hand-built
+/// or deserialised `CircleIngressRecord` whose events disagree with the
+/// record-level `caller` / `address` would still produce a structurally
+/// valid bundle whose entries no longer describe the circle or the role
+/// the record claims to have come from.
 ///
 /// Used by [`closeout_into_proof_bundle`] (canonical-only guard) and by
 /// [`address_circle`] (operator-surface guarantee) so the bundle's
-/// roster, role attribution, and receipt layout always match the
-/// one-caller + one-role-claim + one-post contract that the validator
-/// and the closeout helper were designed against.
+/// roster, role attribution, `circle_id`, and receipt layout always
+/// match the one-address + one-caller + one-role-claim + one-post
+/// contract that the validator and the closeout helper were designed
+/// against.
 fn is_canonical_claim_role_post_shape(
     events: &[CircleChannelEvent],
-    caller_member_id: &str,
+    record_address: &CircleChannelAddress,
+    caller: &CircleIngressCaller,
 ) -> bool {
     if events.len() != 2 {
         return false;
     }
-    let claim_member = match &events[0].body {
-        CircleChannelEventKind::ClaimRole { member, .. } => member.as_str(),
+    // Both events must live on the record's address — otherwise the
+    // bundle's `circle_id` (derived from the record) would disagree with
+    // the events feeding the proof entries.
+    if events[0].address != *record_address || events[1].address != *record_address {
+        return false;
+    }
+    let caller_member_id = caller.member_id.as_str();
+    let (claim_member, claim_role) = match &events[0].body {
+        CircleChannelEventKind::ClaimRole { member, role } => (member.as_str(), *role),
         _ => return false,
     };
     let post_member = match &events[1].body {
         CircleChannelEventKind::Post { member, .. } => member.as_str(),
         _ => return false,
     };
-    claim_member == caller_member_id && post_member == caller_member_id
+    claim_member == caller_member_id
+        && claim_role == caller.role
+        && post_member == caller_member_id
 }
 
 // =========================================================================
@@ -1571,8 +1601,8 @@ mod tests {
         let err = closeout_into_proof_bundle(&mutated_record, &operator_closeout())
             .unwrap_err();
         assert!(
-            err.contains("non-canonical ingress shape"),
-            "closeout must refuse the non-canonical shape explicitly, got {err:?}",
+            err.contains("non-canonical ingress envelope"),
+            "closeout must refuse the non-canonical envelope explicitly, got {err:?}",
         );
     }
 
@@ -1605,8 +1635,75 @@ mod tests {
         let err = closeout_into_proof_bundle(&mutated_record, &operator_closeout())
             .expect_err("closeout must refuse a member-mismatched canonical shape");
         assert!(
-            err.contains("non-canonical ingress shape"),
+            err.contains("non-canonical ingress envelope"),
             "closeout must refuse the member-mismatched canonical shape explicitly, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn canonical_only_guard_rejects_role_mismatch_between_caller_and_claim_role_event() {
+        // Codex review thread (rust/crates/sera-runtime/src/circle_ingress.rs
+        // line 681 — second Codex review pass): the canonical guard must
+        // reject a hand-built / deserialised record whose `ClaimRole`
+        // event carries a *different* role from `record.caller.role`.
+        // Without this check, the bundle's roster would attribute one
+        // role to the caller while the proof entries claim another,
+        // yielding a structurally valid bundle whose role attribution
+        // disagrees about the role the evidence came from.
+        let funnel = CircleIngress::new();
+        let outcome = funnel.accept(&operator_request()).unwrap();
+        let mut mutated_record = outcome.record.clone();
+
+        // Mutate the first event's ClaimRole body to claim a different
+        // role (`Worker` instead of `Lead`) while keeping the member id
+        // and the post event intact. Only the role on the ClaimRole
+        // envelope diverges from `record.caller.role`.
+        if let Some(event) = mutated_record.channel_events.get_mut(0) {
+            event.body = CircleChannelEventKind::ClaimRole {
+                member: CircleMemberId::from("alice"),
+                role: CircleChannelRole::Worker,
+            };
+        } else {
+            panic!("canonical record should have at least two events");
+        }
+
+        let err = closeout_into_proof_bundle(&mutated_record, &operator_closeout())
+            .expect_err("closeout must refuse a role-mismatched ClaimRole envelope");
+        assert!(
+            err.contains("non-canonical ingress envelope"),
+            "closeout must refuse the role-mismatched envelope explicitly, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn canonical_only_guard_rejects_address_mismatch_on_events() {
+        // Codex review thread (rust/crates/sera-runtime/src/circle_ingress.rs
+        // line 681 — second Codex review pass): the canonical guard must
+        // reject a hand-built / deserialised record whose channel events
+        // are authored on a *different* address from `record.address`.
+        // Without this check, the bundle's `circle_id` (derived from the
+        // record) would disagree with the events feeding the proof
+        // entries, yielding a structurally valid bundle whose
+        // `circle_id` does not describe the channel the evidence came
+        // from.
+        let funnel = CircleIngress::new();
+        let outcome = funnel.accept(&operator_request()).unwrap();
+        let mut mutated_record = outcome.record.clone();
+
+        // Re-author both events on a *different* circle address while
+        // keeping the canonical (ClaimRole, Post) bodies, members, and
+        // roles intact. Only the per-event `address` diverges from
+        // `record.address`.
+        let foreign_addr = CircleChannelAddress::parse("to:circle:sera-other").unwrap();
+        for event in mutated_record.channel_events.iter_mut() {
+            event.address = foreign_addr.clone();
+        }
+
+        let err = closeout_into_proof_bundle(&mutated_record, &operator_closeout())
+            .expect_err("closeout must refuse an address-mismatched envelope");
+        assert!(
+            err.contains("non-canonical ingress envelope"),
+            "closeout must refuse the address-mismatched envelope explicitly, got {err:?}",
         );
     }
 }

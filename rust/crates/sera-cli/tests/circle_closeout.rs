@@ -39,7 +39,7 @@ fn run_minimal_closeout(json_out: bool) -> (i32, PathBuf) {
         Some("Resident closeout: lead + post + referee verdict".to_string()),
         Some(bundle_out.clone()),
         Some(report_out.clone()),
-        Some(8),
+        Some("8".to_string()),
         json_out,
     );
     (exit_code, bundle_out)
@@ -248,7 +248,7 @@ fn closeout_bundle_sha256_matches_disk_bytes_and_validate_footer() {
         Some("Resident closeout: lead + post + referee verdict".to_string()),
         Some(bundle_out.clone()),
         Some(report_out.clone()),
-        Some(8),
+        Some("8".to_string()),
         true,
     );
     assert_eq!(exit_code, 0, "happy path must exit 0");
@@ -347,7 +347,7 @@ fn closeout_creates_parent_directories_for_bundle_and_report() {
         Some("Resident closeout: lead + post + referee verdict".to_string()),
         Some(bundle_out.clone()),
         Some(report_out.clone()),
-        Some(8),
+        Some("8".to_string()),
         true,
     );
     assert_eq!(exit_code, 0, "nested-path closeout must succeed");
@@ -416,6 +416,114 @@ fn closeout_binary_emits_machine_footer_when_required_option_missing_value() {
         output.status.code(),
         Some(3),
         "missing --to value must surface as USAGE_ERROR exit code 3; \
+         stdout={stdout:?} stderr={stderr:?}",
+    );
+}
+
+/// Codex review thread (rust/crates/sera-cli/src/main.rs line 260 —
+/// "Parse audit-limit in the handler"): when `--audit-limit` is
+/// supplied without a value, clap must accept the flag (it does — the
+/// `default_missing_value = ""` is now consumed by the handler parser,
+/// not clap's `usize` parser) and the handler must still emit the
+/// `circle-closeout:` footer. We assert the binary path: `sera circle
+/// closeout ... --audit-limit` (no value) MUST exit 3 with the footer
+/// on stdout.
+#[test]
+fn closeout_binary_emits_machine_footer_when_audit_limit_missing_value() {
+    let output = Command::new(env!("CARGO_BIN_EXE_sera"))
+        .args([
+            "circle",
+            "closeout",
+            "--to",
+            "to:circle:sera-nqh3",
+            "--member",
+            "alice",
+            "--role",
+            "lead",
+            "--summary",
+            "open the run",
+            "--referee",
+            "ref",
+            "--verdict",
+            "approved",
+            "--rationale",
+            "ok",
+            "--audit-limit", // missing value: clap should accept it, handler uses default
+        ])
+        .output()
+        .expect("run sera circle closeout");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    // The footer must be emitted on stdout — clap must not have
+    // rejected the invocation before the handler ran.
+    assert!(
+        stdout.lines().any(|line| line.starts_with("circle-closeout: "))
+            || stderr.lines().any(|line| line.starts_with("circle-closeout: ")),
+        "missing-audit-limit-value path must still emit the `circle-closeout:` footer; \
+         stdout={stdout:?} stderr={stderr:?}",
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "missing --audit-limit value must fall back to the operator-report default \
+         and exit 0 (NOT a USAGE_ERROR); \
+         stdout={stdout:?} stderr={stderr:?}",
+    );
+}
+
+/// Codex review thread (rust/crates/sera-cli/src/main.rs line 260 —
+/// "Parse audit-limit in the handler"): when `--audit-limit` is
+/// supplied with a non-numeric value, the handler-level parser must
+/// reject it as USAGE_ERROR (exit 3) and STILL emit the
+/// `circle-closeout:` footer so log parsers keep one vocabulary.
+#[test]
+fn closeout_binary_emits_machine_footer_when_audit_limit_invalid_value() {
+    let output = Command::new(env!("CARGO_BIN_EXE_sera"))
+        .args([
+            "circle",
+            "closeout",
+            "--to",
+            "to:circle:sera-nqh3",
+            "--member",
+            "alice",
+            "--role",
+            "lead",
+            "--summary",
+            "open the run",
+            "--referee",
+            "ref",
+            "--verdict",
+            "approved",
+            "--rationale",
+            "ok",
+            "--audit-limit",
+            "not-a-number",
+        ])
+        .output()
+        .expect("run sera circle closeout");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    // The footer must be emitted on stdout — clap must not have
+    // rejected the invocation before the handler ran.
+    assert!(
+        stdout.lines().any(|line| line.starts_with("circle-closeout: "))
+            || stderr.lines().any(|line| line.starts_with("circle-closeout: ")),
+        "invalid-audit-limit path must still emit the `circle-closeout:` footer; \
+         stdout={stdout:?} stderr={stderr:?}",
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "invalid --audit-limit value must surface as USAGE_ERROR exit code 3; \
+         stdout={stdout:?} stderr={stderr:?}",
+    );
+    // The handler error message should mention the bad value so
+    // operators can debug it from the stderr log.
+    assert!(
+        stderr.contains("invalid --audit-limit"),
+        "invalid --audit-limit path must explain the rejection on stderr; \
          stdout={stdout:?} stderr={stderr:?}",
     );
 }

@@ -257,7 +257,7 @@ enum CircleCommand {
         report_out: Option<PathBuf>,
         /// Maximum number of recent activity-log entries to include in the report's audit tail
         #[arg(long, value_name = "N", num_args = 0..=1, default_missing_value = "")]
-        audit_limit: Option<usize>,
+        audit_limit: Option<String>,
         /// Emit a compact JSON summary before the machine-parseable footer
         #[arg(long)]
         json: bool,
@@ -549,7 +549,7 @@ async fn main() -> Result<()> {
                 objective.clone(),
                 bundle_out.clone(),
                 report_out.clone(),
-                *audit_limit,
+                audit_limit.clone(),
                 *json,
             ),
         };

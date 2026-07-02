@@ -41,6 +41,14 @@ use sera_types::circle_ingress::CircleIngressRequest;
 /// (`circle-closeout: <verdict> <bundle_sha256>`) is always emitted, even
 /// on failure, so downstream log parsers do not need a separate success
 /// channel.
+///
+/// `audit_limit` is accepted as `Option<String>` (and parsed in this
+/// handler) rather than `Option<usize>` so `--audit-limit` with no value
+/// still reaches this function and emits the `circle-closeout:` footer
+/// instead of being rejected by clap's `usize` parser before we ever
+/// run. Invalid numeric values surface as `USAGE_ERROR` exit 3 with the
+/// footer; missing/blank values fall through to the operator-report
+/// default.
 #[allow(clippy::too_many_arguments)]
 pub fn run_circle_closeout(
     to: Option<String>,
@@ -55,7 +63,7 @@ pub fn run_circle_closeout(
     objective: Option<String>,
     bundle_out: Option<PathBuf>,
     report_out: Option<PathBuf>,
-    audit_limit: Option<usize>,
+    audit_limit: Option<String>,
     json_out: bool,
 ) -> i32 {
     let to = match require_some("--to", to) {
@@ -94,6 +102,24 @@ pub fn run_circle_closeout(
             print_circle_closeout_footer("USAGE_ERROR", "unknown");
             return 3;
         }
+    };
+
+    // Parse --audit-limit in the handler (not via clap's `usize` parser)
+    // so a missing value still reaches the footer path. `Some("")` and
+    // `None` both fall back to the operator-report default; any other
+    // string must parse as `usize` or we surface a usage error WITH the
+    // footer — matching the other handler-level error paths above.
+    let audit_limit: Option<usize> = match audit_limit.as_deref().map(str::trim) {
+        None => None,
+        Some("") => None,
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(n) => Some(n),
+            Err(err) => {
+                eprintln!("invalid --audit-limit {raw:?}: {err}");
+                print_circle_closeout_footer("USAGE_ERROR", "unknown");
+                return 3;
+            }
+        },
     };
 
     let mut request = CircleIngressRequest::new(&to, &member, role, &summary);

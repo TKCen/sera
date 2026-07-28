@@ -25,7 +25,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "force-graph": "^1.51.2",
-    "js-yaml": "^4.1.0",
+    "js-yaml": "^4.3.0",
     "lucide-react": "^0.577.0",
     "postcss": "^8.5.8",
     "react": "^19.2.4",
